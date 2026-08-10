@@ -16,6 +16,7 @@ export const users = pgTable('users', {
   title: text('title'),
   role: userRole('role').notNull().default('member'),
   active: boolean('active').notNull().default(true),
+  passwordHash: text('password_hash'),
   googleRefreshToken: text('google_refresh_token'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
