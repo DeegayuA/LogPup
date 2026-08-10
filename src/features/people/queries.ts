@@ -1,6 +1,6 @@
-import { asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, ilike } from 'drizzle-orm'
 import { db } from '@/db'
-import { apps, assignments, users } from '@/db/schema'
+import { apps, assignments, meetingAttendees, meetings, tasks, users } from '@/db/schema'
 import { summarizeAllocations } from '@/features/people/allocation'
 
 export type TeamMember = {
@@ -22,6 +22,41 @@ export type UserCapacity = {
 
 export type ActiveUser = { id: string; name: string }
 
+export type PersonBreakdownEntry = {
+  appId: string
+  appName: string
+  slug: string
+  role: string
+  allocationPct: number
+}
+
+export type PersonTask = {
+  id: string
+  title: string
+  status: 'todo' | 'in_progress' | 'done'
+  appName: string
+  appSlug: string
+}
+
+export type PersonMeeting = { id: string; title: string; startsAt: Date }
+
+export type PersonDetail = {
+  user: {
+    id: string
+    name: string
+    email: string
+    title: string | null
+    avatarUrl: string | null
+    role: 'admin' | 'member'
+    active: boolean
+  }
+  totalPct: number
+  overallocated: boolean
+  breakdown: PersonBreakdownEntry[]
+  tasks: PersonTask[]
+  meetings: PersonMeeting[]
+}
+
 export async function getTeamForApp(appId: string): Promise<TeamMember[]> {
   return db
     .select({
@@ -39,7 +74,7 @@ export async function getTeamForApp(appId: string): Promise<TeamMember[]> {
     .orderBy(desc(assignments.allocationPct))
 }
 
-export async function getUserCapacities(): Promise<UserCapacity[]> {
+export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
   const rows = await db
     .select({
       userId: users.id,
@@ -55,7 +90,7 @@ export async function getUserCapacities(): Promise<UserCapacity[]> {
     .from(users)
     .leftJoin(assignments, eq(assignments.userId, users.id))
     .leftJoin(apps, eq(assignments.appId, apps.id))
-    .where(eq(users.active, true))
+    .where(and(eq(users.active, true), q ? ilike(users.name, `%${q}%`) : undefined))
     .orderBy(asc(users.name))
 
   const totalsByUser = new Map(
@@ -99,4 +134,70 @@ export async function listActiveUsers(): Promise<ActiveUser[]> {
     .from(users)
     .where(eq(users.active, true))
     .orderBy(asc(users.name))
+}
+
+export async function getPersonDetail(userId: string): Promise<PersonDetail | null> {
+  const [userRow] = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      title: users.title,
+      avatarUrl: users.avatarUrl,
+      role: users.role,
+      active: users.active,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+  if (!userRow) return null
+
+  const [breakdown, taskRows, meetingRows] = await Promise.all([
+    db
+      .select({
+        appId: apps.id,
+        appName: apps.name,
+        slug: apps.slug,
+        role: assignments.role,
+        allocationPct: assignments.allocationPct,
+      })
+      .from(assignments)
+      .innerJoin(apps, eq(assignments.appId, apps.id))
+      .where(eq(assignments.userId, userId))
+      .orderBy(desc(assignments.allocationPct)),
+    db
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        status: tasks.status,
+        appName: apps.name,
+        appSlug: apps.slug,
+      })
+      .from(tasks)
+      .innerJoin(apps, eq(tasks.appId, apps.id))
+      .where(eq(tasks.assigneeId, userId))
+      .orderBy(asc(tasks.status), desc(tasks.createdAt)),
+    db
+      .select({
+        id: meetings.id,
+        title: meetings.title,
+        startsAt: meetings.startsAt,
+      })
+      .from(meetingAttendees)
+      .innerJoin(meetings, eq(meetingAttendees.meetingId, meetings.id))
+      .where(and(eq(meetingAttendees.userId, userId), gte(meetings.startsAt, new Date())))
+      .orderBy(asc(meetings.startsAt)),
+  ])
+
+  const [summary] = summarizeAllocations(
+    breakdown.map((b) => ({ userId, allocationPct: b.allocationPct })),
+  )
+
+  return {
+    user: userRow,
+    totalPct: summary?.totalPct ?? 0,
+    overallocated: summary?.overallocated ?? false,
+    breakdown,
+    tasks: taskRows,
+    meetings: meetingRows,
+  }
 }
