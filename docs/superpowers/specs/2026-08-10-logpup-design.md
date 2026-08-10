@@ -14,7 +14,8 @@ Internal webapp for a tech lead managing 30+ people across many internal apps. A
 
 ## Stack (Approach A — Next.js monolith)
 
-- **Next.js 15** — App Router, React Server Components, Server Actions. No separate API layer (no REST/tRPC).
+- **Next.js 16** — App Router, React 19 Server Components, Server Actions, Turbopack (default). No separate API layer (no REST/tRPC). Route guard via `src/proxy.ts` (Next 16 rename of middleware; Node.js runtime).
+- **TypeScript** — latest stable, `strict: true`; optional `@typescript/native-preview` (tsgo, the TS 7 native compiler preview) for faster typechecks.
 - **Neon Postgres + Drizzle ORM** — schema, migrations, type-safe queries.
 - **Auth.js v5** — Google provider, domain-restricted sign-in callback, middleware route guard.
 - **shadcn/ui + Tailwind CSS v4** — dark/light themes.
@@ -50,7 +51,7 @@ src/
 ```
 
 - Server Components read the DB directly via Drizzle. All mutations are Server Actions colocated per feature.
-- Middleware guards all routes; the sign-in callback rejects emails outside the company domain.
+- The proxy route guard (`src/proxy.ts`) protects all routes; the sign-in callback rejects emails outside the company domain.
 - Google OAuth requests the `calendar.events` scope with offline access; refresh tokens are stored. Meeting creation places the event on the organizer's calendar; attendees receive standard Google invites.
 - Notion export is one-way: a button pushes a sprint/app summary page to the Notion workspace via the official SDK and stores the page id.
 - Integration failures (Notion, Google Calendar) never block core saves — the record persists, the export/calendar error surfaces as a toast with retry.
