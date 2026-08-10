@@ -16,6 +16,7 @@ import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
 import { Board } from '@/features/sprints/components/board'
+import { ExportButton } from '@/features/notion/components/export-button'
 
 const STATUS_VARIANT = {
   active: 'default',
@@ -126,8 +127,11 @@ export default async function AppDetailPage(props: {
                 </Link>
               </div>
               <div className="flex items-center gap-2">
-                {/* Reserved for Task 16's board export button. */}
-                <div id="board-export-slot" />
+                <div id="board-export-slot">
+                  {isAdmin && !isBacklog && selectedSprint ? (
+                    <ExportButton sprintId={selectedSprint.id} />
+                  ) : null}
+                </div>
                 {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
               </div>
             </div>
