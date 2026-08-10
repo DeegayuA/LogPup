@@ -8,6 +8,7 @@ import { apps } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { buildAppUpdate } from '@/features/apps/update-input'
 
 const appInput = z.object({
   name: z.string().min(2).max(80),
@@ -40,9 +41,9 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
 
 export async function updateApp(appId: string, input: unknown): Promise<ActionResult> {
   if (!(await requireAdmin())) return err('Admins only')
-  const parsed = appInput.partial().safeParse(input)
-  if (!parsed.success) return err(parsed.error.issues[0].message)
-  await db.update(apps).set({ ...parsed.data, repoUrl: parsed.data.repoUrl || null }).where(eq(apps.id, appId))
+  const result = buildAppUpdate(input)
+  if (!result.ok) return err(result.error)
+  await db.update(apps).set(result.set).where(eq(apps.id, appId))
   revalidatePath('/apps')
   return ok(undefined)
 }
