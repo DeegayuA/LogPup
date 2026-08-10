@@ -38,19 +38,23 @@ export function BoardColumn({
     const title = draft.trim()
     if (!title || isPending) return
     startTransition(async () => {
-      const res = await createTask({
-        appId,
-        sprintId,
-        title,
-        assigneeId: null,
-        priority: 0,
-        status,
-      })
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      try {
+        const res = await createTask({
+          appId,
+          sprintId,
+          title,
+          assigneeId: null,
+          priority: 0,
+          status,
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setDraft('')
+      } catch {
+        toast.error('Something went wrong — try again')
       }
-      setDraft('')
     })
   }
 

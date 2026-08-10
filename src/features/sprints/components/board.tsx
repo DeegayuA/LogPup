@@ -128,8 +128,20 @@ export function Board({
 
     startTransition(async () => {
       applyOptimisticMove({ taskId, status: targetStatus, sortOrder })
-      const res = await moveTask(taskId, targetStatus, sortOrder)
-      if (!res.ok) toast.error(res.error)
+      // moveTask can also reject outright (e.g. a DB outage — task-actions
+      // rethrows anything that isn't a handled foreign-key violation), not
+      // just resolve with `{ ok: false }`. Without this catch, that becomes
+      // an unhandled promise rejection: no toast, and the optimistic move
+      // still visually "succeeds" until the next unrelated render. Catching
+      // it here means the transition still settles either way, so
+      // useOptimistic reverts to the real (unmoved) board once this async
+      // callback returns/throws — no stuck pending state.
+      try {
+        const res = await moveTask(taskId, targetStatus, sortOrder)
+        if (!res.ok) toast.error(res.error)
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
     })
   }
 

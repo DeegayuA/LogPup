@@ -94,33 +94,44 @@ export function TaskDialog({
     event.preventDefault()
     if (!task) return
     startTransition(async () => {
-      const res = await updateTask(task.id, {
-        title: form.title,
-        description: form.description,
-        assigneeId: form.assigneeId === UNASSIGNED ? null : form.assigneeId,
-        priority: Number(form.priority),
-      })
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      try {
+        const res = await updateTask(task.id, {
+          title: form.title,
+          description: form.description,
+          assigneeId: form.assigneeId === UNASSIGNED ? null : form.assigneeId,
+          priority: Number(form.priority),
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Task updated')
+        onOpenChange(false)
+        router.refresh()
+      } catch {
+        // A thrown error (e.g. DB outage) is not `{ ok: false }` — without
+        // this catch it's an unhandled rejection and Save silently does
+        // nothing.
+        toast.error('Something went wrong — try again')
       }
-      toast.success('Task updated')
-      onOpenChange(false)
-      router.refresh()
     })
   }
 
   function handleDelete() {
     if (!task) return
     startTransition(async () => {
-      const res = await deleteTask(task.id)
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      try {
+        const res = await deleteTask(task.id)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Task deleted')
+        onOpenChange(false)
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong — try again')
       }
-      toast.success('Task deleted')
-      onOpenChange(false)
-      router.refresh()
     })
   }
 
