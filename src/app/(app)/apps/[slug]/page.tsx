@@ -1,17 +1,21 @@
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ExternalLink } from 'lucide-react'
 import { format } from 'date-fns'
 import { auth } from '@/lib/auth'
 import { Badge } from '@/components/ui/badge'
+import { buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { getAppBySlug } from '@/features/apps/queries'
 import { getTeamForApp, listActiveUsers } from '@/features/people/queries'
-import { getSprintsForApp } from '@/features/sprints/queries'
+import { getBoard, getSprintsForApp } from '@/features/sprints/queries'
 import { AppTabs } from '@/features/apps/components/app-tabs'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { TeamPanel } from '@/features/people/components/team-panel'
 import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
+import { Board } from '@/features/sprints/components/board'
 
 const STATUS_VARIANT = {
   active: 'default',
@@ -63,10 +67,18 @@ export default async function AppDetailPage(props: {
   const isAdmin = session?.user?.role === 'admin'
   const lead = app.leadId ? activeUsers.find((user) => user.id === app.leadId) : undefined
 
-  const selectedSprint =
-    (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
-    sprints.find((s) => s.status === 'active') ??
-    sprints[0]
+  // A `sprint=backlog` query param is a synthetic selection, not a real
+  // sprint id: it maps to `getBoard(appId, null)`, which returns tasks that
+  // aren't attached to any sprint.
+  const isBacklog = sprintParam === 'backlog'
+  const selectedSprint = isBacklog
+    ? undefined
+    : (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
+      sprints.find((s) => s.status === 'active') ??
+      sprints[0]
+  const showBoard = isBacklog || Boolean(selectedSprint)
+  const boardSprintId = isBacklog ? null : (selectedSprint?.id ?? null)
+  const board = showBoard ? await getBoard(app.id, boardSprintId) : null
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-6">
@@ -97,10 +109,29 @@ export default async function AppDetailPage(props: {
         board={
           <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <SprintSwitcher sprints={sprints} selectedId={selectedSprint?.id ?? ''} />
-              {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <SprintSwitcher
+                  sprints={sprints}
+                  selectedId={isBacklog ? '' : (selectedSprint?.id ?? '')}
+                />
+                <Link
+                  href={
+                    isBacklog ? `/apps/${slug}` : `/apps/${slug}?sprint=backlog`
+                  }
+                  className={cn(
+                    buttonVariants({ variant: isBacklog ? 'default' : 'outline', size: 'sm' }),
+                  )}
+                >
+                  Backlog
+                </Link>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Reserved for Task 16's board export button. */}
+                <div id="board-export-slot" />
+                {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              </div>
             </div>
-            {selectedSprint ? (
+            {!isBacklog && selectedSprint ? (
               <div className="flex flex-col gap-2 rounded-lg border p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="font-medium">{selectedSprint.name}</h2>
@@ -123,12 +154,25 @@ export default async function AppDetailPage(props: {
                   {formatSprintDate(selectedSprint.endDate)}
                 </p>
               </div>
+            ) : null}
+            {isBacklog ? (
+              <p className="text-sm text-muted-foreground">
+                Backlog — tasks not assigned to any sprint.
+              </p>
+            ) : null}
+            {board && session?.user ? (
+              <Board
+                initialBoard={board}
+                team={team.map((member) => ({ userId: member.userId, name: member.name }))}
+                appId={app.id}
+                sprintId={boardSprintId}
+                currentUser={{ id: session.user.id, role: session.user.role }}
+              />
             ) : (
               <p className="text-sm text-muted-foreground">
-                No sprints yet.{isAdmin ? ' Create one to start planning.' : ''}
+                No sprints yet.{isAdmin ? ' Create your first sprint to start planning.' : ''}
               </p>
             )}
-            <p className="text-sm text-muted-foreground">Task board arrives in Task 12</p>
           </div>
         }
         meetings={<p className="text-sm text-muted-foreground">Meetings arrive soon</p>}
