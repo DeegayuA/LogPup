@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { createApp } from '@/features/apps/actions'
+import { createApp, updateApp } from '@/features/apps/actions'
 
 type Status = 'active' | 'paused' | 'archived'
 
@@ -33,29 +33,64 @@ const STATUS_OPTIONS: { value: Status; label: string }[] = [
   { value: 'archived', label: 'Archived' },
 ]
 
-const initialState = {
+type FormState = {
+  name: string
+  description: string
+  repoUrl: string
+  techTags: string
+  status: Status
+}
+
+const emptyState: FormState = {
   name: '',
   description: '',
   repoUrl: '',
   techTags: '',
-  status: 'active' as Status,
+  status: 'active',
 }
 
-export function AppFormDialog() {
+export type AppFormInitialValues = {
+  name: string
+  description?: string | null
+  repoUrl?: string | null
+  techTags: string[]
+  status: Status
+}
+
+function toFormState(values?: AppFormInitialValues): FormState {
+  if (!values) return emptyState
+  return {
+    name: values.name,
+    description: values.description ?? '',
+    repoUrl: values.repoUrl ?? '',
+    techTags: values.techTags.join(', '),
+    status: values.status,
+  }
+}
+
+export function AppFormDialog({
+  appId,
+  initialValues,
+}: {
+  appId?: string
+  initialValues?: AppFormInitialValues
+} = {}) {
+  const isEdit = Boolean(appId)
+  const submitLabel = isEdit ? 'Save changes' : 'Create app'
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
-  const [form, setForm] = useState(initialState)
+  const [form, setForm] = useState<FormState>(() => toFormState(initialValues))
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
-    if (!next) setForm(initialState)
+    if (!next) setForm(toFormState(initialValues))
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     startTransition(async () => {
-      const res = await createApp({
+      const payload = {
         name: form.name,
         description: form.description || undefined,
         repoUrl: form.repoUrl || undefined,
@@ -64,12 +99,13 @@ export function AppFormDialog() {
           .map((tag) => tag.trim())
           .filter(Boolean),
         status: form.status,
-      })
+      }
+      const res = isEdit ? await updateApp(appId as string, payload) : await createApp(payload)
       if (!res.ok) {
         toast.error(res.error)
         return
       }
-      toast.success('App created')
+      toast.success(isEdit ? 'App updated' : 'App created')
       handleOpenChange(false)
       router.refresh()
     })
@@ -77,11 +113,13 @@ export function AppFormDialog() {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button />}>New app</DialogTrigger>
+      <DialogTrigger render={<Button />}>{isEdit ? 'Edit app' : 'New app'}</DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New app</DialogTitle>
-          <DialogDescription>Add a new app for the team to track.</DialogDescription>
+          <DialogTitle>{isEdit ? 'Edit app' : 'New app'}</DialogTitle>
+          <DialogDescription>
+            {isEdit ? "Update this app's details." : 'Add a new app for the team to track.'}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
@@ -143,7 +181,7 @@ export function AppFormDialog() {
           </div>
           <DialogFooter>
             <Button type="submit" disabled={isPending}>
-              {isPending ? 'Creating…' : 'Create app'}
+              {isPending ? 'Saving…' : submitLabel}
             </Button>
           </DialogFooter>
         </form>
