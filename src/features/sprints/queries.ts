@@ -1,8 +1,24 @@
-import { asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { db } from '@/db'
-import { apps, sprints, tasks } from '@/db/schema'
+import { apps, sprints, tasks, users } from '@/db/schema'
 
 export type Sprint = typeof sprints.$inferSelect
+
+export type TaskWithAssignee = {
+  id: string
+  title: string
+  description: string | null
+  status: string
+  priority: number
+  sortOrder: number
+  assignee: { id: string; name: string; avatarUrl: string | null } | null
+}
+
+export type Board = {
+  todo: TaskWithAssignee[]
+  in_progress: TaskWithAssignee[]
+  done: TaskWithAssignee[]
+}
 
 export type ActiveSprintSummary = {
   sprintId: string
@@ -60,4 +76,45 @@ export async function getActiveSprints(): Promise<ActiveSprintSummary[]> {
   }
 
   return [...bySprint.values()]
+}
+
+export async function getBoard(appId: string, sprintId: string | null): Promise<Board> {
+  const rows = await db
+    .select({
+      id: tasks.id,
+      title: tasks.title,
+      description: tasks.description,
+      status: tasks.status,
+      priority: tasks.priority,
+      sortOrder: tasks.sortOrder,
+      assigneeId: users.id,
+      assigneeName: users.name,
+      assigneeAvatarUrl: users.avatarUrl,
+    })
+    .from(tasks)
+    .leftJoin(users, eq(tasks.assigneeId, users.id))
+    .where(
+      and(
+        eq(tasks.appId, appId),
+        // null sprintId means the app's backlog: tasks not assigned to any sprint.
+        sprintId === null ? isNull(tasks.sprintId) : eq(tasks.sprintId, sprintId),
+      ),
+    )
+    .orderBy(asc(tasks.sortOrder))
+
+  const board: Board = { todo: [], in_progress: [], done: [] }
+  for (const row of rows) {
+    board[row.status].push({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      priority: row.priority,
+      sortOrder: row.sortOrder,
+      assignee: row.assigneeId
+        ? { id: row.assigneeId, name: row.assigneeName as string, avatarUrl: row.assigneeAvatarUrl }
+        : null,
+    })
+  }
+  return board
 }
