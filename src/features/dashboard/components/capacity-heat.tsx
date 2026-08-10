@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import type { UserCapacity } from '@/features/people/queries'
+import { sortCapacities } from '@/features/dashboard/sort-capacities'
 
 /**
  * Server-safe: no client-only APIs, so it can render directly from the
@@ -11,10 +12,7 @@ import type { UserCapacity } from '@/features/people/queries'
  * totalPct descending, so the people who need attention float to the top.
  */
 export function CapacityHeat({ capacities }: { capacities: UserCapacity[] }) {
-  const sorted = [...capacities].sort((a, b) => {
-    if (a.overallocated !== b.overallocated) return a.overallocated ? -1 : 1
-    return b.totalPct - a.totalPct
-  })
+  const sorted = sortCapacities(capacities)
 
   return (
     <Card>
