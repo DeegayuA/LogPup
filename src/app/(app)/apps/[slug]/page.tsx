@@ -4,11 +4,12 @@ import { ExternalLink } from 'lucide-react'
 import { format } from 'date-fns'
 import { auth } from '@/lib/auth'
 import { Badge } from '@/components/ui/badge'
-import { buttonVariants } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { getAppBySlug } from '@/features/apps/queries'
+import { getAppBySlug, listApps } from '@/features/apps/queries'
 import { getTeamForApp, listActiveUsers } from '@/features/people/queries'
 import { getBoard, getSprintsForApp } from '@/features/sprints/queries'
+import { getMeetingsForApp } from '@/features/meetings/queries'
 import { AppTabs } from '@/features/apps/components/app-tabs'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { TeamPanel } from '@/features/people/components/team-panel'
@@ -16,6 +17,8 @@ import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
 import { Board } from '@/features/sprints/components/board'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
+import { MeetingList } from '@/features/meetings/components/meeting-list'
 
 const STATUS_VARIANT = {
   active: 'default',
@@ -58,11 +61,13 @@ export default async function AppDetailPage(props: {
   const app = await getAppBySlug(slug)
   if (!app) notFound()
 
-  const [session, team, activeUsers, sprints] = await Promise.all([
+  const [session, team, activeUsers, sprints, appMeetings, allApps] = await Promise.all([
     auth(),
     getTeamForApp(app.id),
     listActiveUsers(),
     getSprintsForApp(app.id),
+    getMeetingsForApp(app.id),
+    listApps(),
   ])
   const isAdmin = session?.user?.role === 'admin'
   const lead = app.leadId ? activeUsers.find((user) => user.id === app.leadId) : undefined
@@ -175,7 +180,24 @@ export default async function AppDetailPage(props: {
             )}
           </div>
         }
-        meetings={<p className="text-sm text-muted-foreground">Meetings arrive soon</p>}
+        meetings={
+          <div className="flex flex-col gap-4">
+            <div className="flex justify-end">
+              <MeetingForm
+                apps={allApps.map((a) => ({ id: a.id, name: a.name }))}
+                activeUsers={activeUsers}
+                defaultAppId={app.id}
+                trigger={<Button size="sm">New meeting</Button>}
+              />
+            </div>
+            <MeetingList
+              meetings={appMeetings}
+              currentUserId={session?.user?.id ?? ''}
+              isAdmin={isAdmin}
+              showAppBadge={false}
+            />
+          </div>
+        }
         settings={
           isAdmin ? (
             <div className="flex flex-col gap-3">
