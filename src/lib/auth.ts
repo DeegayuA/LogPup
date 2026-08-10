@@ -8,10 +8,18 @@ import { users } from '@/db/schema'
 const emailAllowed = (email: string) =>
   email.endsWith('@' + process.env.ALLOWED_EMAIL_DOMAIN)
 
-// Dev-only one-click login: requires NODE_ENV !== 'production' AND an explicit
-// DEV_LOGIN_EMAIL opt-in. Both must be true, so this never silently enables itself.
-const devLoginEnabled =
-  process.env.NODE_ENV !== 'production' && !!process.env.DEV_LOGIN_EMAIL
+// Fail closed: the passwordless provider must NEVER be reachable in a production
+// runtime. Crash at boot rather than silently accept a leaked test flag.
+if (process.env.NODE_ENV === 'production' && process.env.E2E_TEST_MODE === '1') {
+  throw new Error('E2E_TEST_MODE must not be set in a production build')
+}
+
+// Passwordless login for local dev + E2E only. The `NODE_ENV !== 'production'`
+// conjunct is statically inlined by the bundler, so this whole branch is
+// dead-code-eliminated from production builds — verified in the compiled chunk.
+const testLoginEnabled =
+  process.env.NODE_ENV !== 'production' &&
+  (process.env.E2E_TEST_MODE === '1' || !!process.env.DEV_LOGIN_EMAIL)
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -24,11 +32,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         },
       },
     }),
-    // SECURITY INVARIANT: this provider is compiled out entirely in production
-    // builds (NODE_ENV === 'production' and E2E_TEST_MODE unset) — never reachable
-    // in prod. `process.env.NODE_ENV` is statically replaced at build time, so with
-    // both conditions false the bundler drops this branch.
-    ...(process.env.E2E_TEST_MODE === '1' || devLoginEnabled
+    ...(testLoginEnabled
       ? [Credentials({
           credentials: { email: {} },
           async authorize(creds) {
@@ -52,6 +56,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: { signIn: '/sign-in' },
   callbacks: {
     async signIn({ profile, account, user }) {
+      // Reject Google accounts whose email isn't verified by the IdP.
+      if (profile && (profile as { email_verified?: boolean }).email_verified === false) return false
       const email = profile?.email ?? user?.email
       if (!email || !emailAllowed(email)) return false
       const [existing] = await db.select().from(users).where(eq(users.email, email))
