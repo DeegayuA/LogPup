@@ -1,4 +1,5 @@
-import { LogOut } from 'lucide-react'
+import Link from 'next/link'
+import { LogOut, User } from 'lucide-react'
 import { signOut } from '@/lib/auth'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
@@ -35,6 +36,10 @@ export function Header({ user }: { user: HeaderUser }) {
         />
         <DropdownMenuContent align="end">
           <DropdownMenuLabel>{user.name ?? 'Account'}</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem render={<Link href="/profile" />}>
+            <User /> Profile
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <form
             action={async () => {
