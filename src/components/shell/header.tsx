@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { LogOut, User } from 'lucide-react'
+import { LogOut, PawPrint, User } from 'lucide-react'
 import { signOut } from '@/lib/auth'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ThemeToggle } from '@/components/shell/theme-toggle'
+import { CommandCenterTrigger } from '@/features/search/components/command-center'
 
 type HeaderUser = {
   name?: string | null
@@ -21,7 +22,15 @@ export function Header({ user }: { user: HeaderUser }) {
   const initials = (user.name ?? '?').slice(0, 1).toUpperCase()
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-end gap-2 border-b border-border px-4">
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur">
+      <Link href="/" className="flex items-center gap-2 md:hidden" aria-label="LogPup home">
+        <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <PawPrint className="size-3.5" aria-hidden />
+        </span>
+      </Link>
+      <div className="flex flex-1 justify-center">
+        <CommandCenterTrigger />
+      </div>
       <ThemeToggle />
       <DropdownMenu>
         <DropdownMenuTrigger
