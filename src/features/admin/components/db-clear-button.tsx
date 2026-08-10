@@ -25,6 +25,7 @@ export function DbClearButton() {
     if (!state) return
     if (state.ok) {
       toast.success('Database cleared (users kept)')
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- close form in response to server action result
       setOpen(false)
     } else {
       toast.error(state.error)
