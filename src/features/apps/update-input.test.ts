@@ -18,6 +18,23 @@ describe('buildAppUpdate', () => {
     }
   })
 
+  it('maps an empty description to null', () => {
+    const result = buildAppUpdate({ description: '' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.set).toEqual({ description: null })
+    }
+  })
+
+  it('omitting description leaves the key absent from set', () => {
+    const result = buildAppUpdate({ name: 'New Name' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.set).not.toHaveProperty('description')
+      expect(result.set).toEqual({ name: 'New Name' })
+    }
+  })
+
   it('rejects an empty object with nothing to update', () => {
     const result = buildAppUpdate({})
     expect(result.ok).toBe(false)

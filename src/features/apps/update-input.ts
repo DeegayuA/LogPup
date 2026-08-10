@@ -29,7 +29,13 @@ export function buildAppUpdate(input: unknown): AppUpdateResult {
 
   const set: Record<string, unknown> = {}
   for (const key of Object.keys(parsed.data) as (keyof typeof parsed.data)[]) {
-    set[key] = key === 'repoUrl' ? parsed.data.repoUrl || null : parsed.data[key]
+    if (key === 'repoUrl') {
+      set.repoUrl = parsed.data.repoUrl || null
+    } else if (key === 'description') {
+      set.description = parsed.data.description || null
+    } else {
+      set[key] = parsed.data[key]
+    }
   }
 
   if (Object.keys(set).length === 0) return { ok: false, error: 'Nothing to update' }

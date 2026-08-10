@@ -84,23 +84,39 @@ export function AppFormDialog({
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
-    if (!next) setForm(toFormState(initialValues))
+    // Resync from the latest props whenever the dialog opens: `form` is
+    // otherwise a stale closure over whatever `initialValues` looked like
+    // at mount time, so a save-then-reopen would show pre-edit values and
+    // a second save would silently revert the first one.
+    setForm(toFormState(initialValues))
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     startTransition(async () => {
-      const payload = {
-        name: form.name,
-        description: form.description || undefined,
-        repoUrl: form.repoUrl || undefined,
-        techTags: form.techTags
-          .split(',')
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-        status: form.status,
-      }
-      const res = isEdit ? await updateApp(appId as string, payload) : await createApp(payload)
+      const techTags = form.techTags
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+      const res = isEdit
+        ? await updateApp(appId as string, {
+            name: form.name,
+            // Edit mode must send description even when cleared to '' —
+            // buildAppUpdate maps '' to null and persists it. Sending
+            // `undefined` here would drop the key entirely and silently
+            // keep the old description (see update-input.ts).
+            description: form.description,
+            repoUrl: form.repoUrl || undefined,
+            techTags,
+            status: form.status,
+          })
+        : await createApp({
+            name: form.name,
+            description: form.description || undefined,
+            repoUrl: form.repoUrl || undefined,
+            techTags,
+            status: form.status,
+          })
       if (!res.ok) {
         toast.error(res.error)
         return
