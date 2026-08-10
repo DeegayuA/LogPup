@@ -1,12 +1,28 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/shell/theme-provider";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+// Body text — Satoshi (variable). Exposed as --font-sans.
+const satoshi = localFont({
+  src: [
+    { path: "./fonts/Satoshi-Variable.woff2", weight: "300 900", style: "normal" },
+    { path: "./fonts/Satoshi-VariableItalic.woff2", weight: "300 900", style: "italic" },
+  ],
+  variable: "--font-sans",
+  display: "swap",
+  fallback: ["system-ui", "sans-serif"],
+});
+
+// Headings — Cabinet Grotesk (variable). Exposed as --font-heading.
+const cabinet = localFont({
+  src: "./fonts/CabinetGrotesk-Variable.woff2",
+  weight: "400 900",
+  variable: "--font-heading",
+  display: "swap",
+  fallback: ["system-ui", "sans-serif"],
 });
 
 const geistMono = Geist_Mono({
@@ -24,7 +40,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${satoshi.variable} ${cabinet.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
