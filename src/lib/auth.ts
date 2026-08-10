@@ -1,12 +1,17 @@
 import NextAuth from 'next-auth'
 import Google from 'next-auth/providers/google'
+import Notion from 'next-auth/providers/notion'
 import Credentials from 'next-auth/providers/credentials'
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
+import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
+import { verifyPassword } from '@/lib/password'
+import { loginRateLimiter, RateLimitError, LOCKOUT_MESSAGE } from '@/lib/rate-limit'
 
-const emailAllowed = (email: string) =>
-  email.endsWith('@' + process.env.ALLOWED_EMAIL_DOMAIN)
+const MAX_PASSWORD_LENGTH = 200
+
+const authBaseUrl = process.env.AUTH_URL ?? 'http://localhost:3000'
 
 // Fail closed: the passwordless provider must NEVER be reachable in a production
 // runtime. Crash at boot rather than silently accept a leaked test flag.
@@ -32,6 +37,45 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         },
       },
     }),
+    // Username (email) + password login. Always available. Passwords are scrypt-hashed;
+    // authorize returns null on any mismatch so signIn never runs for a bad credential.
+    // Rate-limited per email (see src/lib/rate-limit.ts): fails closed (throws, blocking
+    // the attempt) once the limit is hit, and the counter resets on a successful login.
+    Credentials({
+      id: 'password',
+      name: 'Email & password',
+      credentials: { email: {}, password: {} },
+      async authorize(creds) {
+        const email = String(creds?.email ?? '').trim().toLowerCase()
+        const password = String(creds?.password ?? '').slice(0, MAX_PASSWORD_LENGTH)
+        if (!email || !password || !emailAllowed(email)) return null
+        if (loginRateLimiter.isBlocked(email)) throw new RateLimitError(LOCKOUT_MESSAGE)
+        const [u] = await db.select().from(users).where(eq(users.email, email))
+        if (!u || !u.active || !u.passwordHash) {
+          loginRateLimiter.recordFailure(email)
+          return null
+        }
+        if (!verifyPassword(password, u.passwordHash)) {
+          loginRateLimiter.recordFailure(email)
+          return null
+        }
+        loginRateLimiter.reset(email)
+        return { id: u.id, email: u.email, name: u.name }
+      },
+    }),
+    // Notion OAuth. Requires the public integration's client id/secret and an explicit
+    // redirect URI. Sign-in only succeeds for a Notion account whose email matches an
+    // existing allowed user (see the signIn callback) — never auto-provisioned.
+    // Only registered when both env vars are actually set — constructing it with
+    // possibly-undefined credentials would register a broken "Continue with Notion"
+    // option instead of simply omitting it.
+    ...(process.env.NOTION_OAUTH_CLIENT_ID && process.env.NOTION_OAUTH_CLIENT_SECRET
+      ? [Notion({
+          clientId: process.env.NOTION_OAUTH_CLIENT_ID,
+          clientSecret: process.env.NOTION_OAUTH_CLIENT_SECRET,
+          redirectUri: `${authBaseUrl}/api/auth/callback/notion`,
+        })]
+      : []),
     ...(testLoginEnabled
       ? [Credentials({
           credentials: { email: {} },
@@ -56,13 +100,48 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: { signIn: '/sign-in' },
   callbacks: {
     async signIn({ profile, account, user }) {
+      const provider = account?.provider
+
+      // The password provider already fully validated in authorize(); allow it through.
+      if (provider === 'password' || provider === 'credentials') return true
+
       // Reject Google accounts whose email isn't verified by the IdP.
-      if (profile && (profile as { email_verified?: boolean }).email_verified === false) return false
-      const email = profile?.email ?? user?.email
-      if (!email || !emailAllowed(email)) return false
+      if (provider === 'google' && (profile as { email_verified?: boolean } | undefined)?.email_verified === false) {
+        console.warn('[auth] denied: email not verified by Google')
+        return false
+      }
+
+      const email = (profile?.email ?? user?.email)?.toLowerCase()
+      if (!email) {
+        console.warn('[auth] denied: no email on profile')
+        return false
+      }
+      if (!emailAllowed(email)) {
+        console.warn(`[auth] denied: ${email} not in allowed domains [${allowedDomains().join(', ') || '(none configured)'}]`)
+        return false
+      }
+
       const [existing] = await db.select().from(users).where(eq(users.email, email))
+
+      // Notion: never auto-provision. Only an existing, active allowed user may log in.
+      if (provider === 'notion') {
+        if (!existing) {
+          console.warn(`[auth] denied: Notion account ${email} has no matching user`)
+          return false
+        }
+        if (!existing.active) {
+          console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
+          return false
+        }
+        return true
+      }
+
+      // Google: sign in existing user (refreshing the token) or provision a new one.
       if (existing) {
-        if (!existing.active) return false
+        if (!existing.active) {
+          console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
+          return false
+        }
         if (account?.refresh_token) {
           await db.update(users)
             .set({ googleRefreshToken: account.refresh_token })
