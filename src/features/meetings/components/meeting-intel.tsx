@@ -186,18 +186,30 @@ export function MeetingIntelPanel({
           </>
         ) : null}
         {recording ? (
-          <Button
-            variant="destructive"
-            size="sm"
-            type="button"
-            onClick={() => recorderRef.current?.stop()}
-          >
-            <Square />
-            Stop ·{' '}
-            <span className="font-mono">
-              {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
+          <>
+            <Button
+              variant="destructive"
+              size="sm"
+              type="button"
+              onClick={() => recorderRef.current?.stop()}
+            >
+              <Square />
+              Stop ·{' '}
+              <span className="font-mono">
+                {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
+              </span>
+            </Button>
+            <span
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive"
+              role="status"
+            >
+              <span
+                className="size-2 shrink-0 animate-pulse rounded-full bg-destructive motion-reduce:animate-none"
+                aria-hidden
+              />
+              Recording — audio is sent to Google Gemini for analysis
             </span>
-          </Button>
+          </>
         ) : null}
         {analyzing ? (
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -206,6 +218,13 @@ export function MeetingIntelPanel({
           </span>
         ) : null}
       </div>
+
+      {open && canRecord && !recording && !analyzing ? (
+        <p className="text-xs text-muted-foreground">
+          Audio is processed by Google Gemini using your API key. Make sure attendees consent to
+          recording.
+        </p>
+      ) : null}
 
       {open ? (
         <div className="flex flex-col gap-3 rounded-lg border border-dashed p-3">

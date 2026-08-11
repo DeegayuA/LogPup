@@ -1,5 +1,6 @@
 'use server'
 
+import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { and, desc, eq, isNotNull, lt, ne } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
@@ -9,6 +10,11 @@ import { callGemini, GeminiError } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024 // inline Gemini requests cap around 20MB
+
+// A malformed (non-UUID) meetingId would otherwise reach the DB as a raw
+// `uuid` column comparison and throw a Postgres "invalid input syntax"
+// error instead of a clean ActionResult — validate the shape up front.
+const idInput = z.uuid()
 
 export type PerPersonNote = { name: string; points: string[]; actionItems: string[] }
 export type DeadlineNote = { item: string; owner: string; due: string }
@@ -49,7 +55,11 @@ export async function analyzeMeetingAudio(
   meetingId: string,
   formData: FormData,
 ): Promise<ActionResult> {
-  const ctx = await canManageMeeting(meetingId)
+  const idParsed = idInput.safeParse(meetingId)
+  if (!idParsed.success) return err(idParsed.error.issues[0].message)
+  const id = idParsed.data
+
+  const ctx = await canManageMeeting(id)
   if (!ctx) return err('Only admins or the meeting creator can record analysis')
   const { session, meeting } = ctx
 
@@ -63,7 +73,7 @@ export async function analyzeMeetingAudio(
     .select({ name: users.name })
     .from(meetingAttendees)
     .innerJoin(users, eq(meetingAttendees.userId, users.id))
-    .where(eq(meetingAttendees.meetingId, meetingId))
+    .where(eq(meetingAttendees.meetingId, id))
   const attendeeNames = attendeeRows.map((row) => row.name)
 
   const prompt = `You are LogPup's meeting analyst for a software team.
@@ -108,7 +118,7 @@ commitments, blockers, and deadlines from THIS meeting — they are shown at the
   }
 
   const values = {
-    meetingId,
+    meetingId: id,
     language: typeof parsed.language === 'string' ? parsed.language : 'en',
     transcript: typeof parsed.transcript === 'string' ? parsed.transcript : null,
     summary: typeof parsed.summary === 'string' ? parsed.summary : null,
@@ -134,13 +144,17 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId))
+  const idParsed = idInput.safeParse(meetingId)
+  if (!idParsed.success) return err(idParsed.error.issues[0].message)
+  const id = idParsed.data
+
+  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
   if (!meeting) return err('Meeting not found')
 
   const [notesRow] = await db
     .select()
     .from(meetingAiNotes)
-    .where(eq(meetingAiNotes.meetingId, meetingId))
+    .where(eq(meetingAiNotes.meetingId, id))
 
   // Prep questions come from the most recent EARLIER analyzed meeting,
   // scoped to the same app when this meeting has one.
@@ -154,7 +168,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     .innerJoin(meetings, eq(meetingAiNotes.meetingId, meetings.id))
     .where(
       and(
-        ne(meetings.id, meetingId),
+        ne(meetings.id, id),
         lt(meetings.startsAt, meeting.startsAt),
         meeting.appId ? eq(meetings.appId, meeting.appId) : isNotNull(meetings.id),
       ),

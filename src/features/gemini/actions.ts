@@ -1,5 +1,6 @@
 'use server'
 
+import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { and, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
@@ -11,13 +12,28 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 
 const MAX_KEYS_PER_USER = 5
 
+const idInput = z.uuid()
+
+const addKeyInput = z.object({
+  label: z.string().min(1).max(40),
+  key: z.string().min(20, 'That does not look like a Gemini API key').max(200),
+})
+
+const toggleInput = z.object({
+  id: z.uuid(),
+  active: z.boolean(),
+})
+
 export async function addGeminiKey(label: string, key: string): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
-  const trimmedKey = key.trim()
-  const trimmedLabel = label.trim().slice(0, 60) || 'Gemini key'
-  if (trimmedKey.length < 20) return err('That does not look like a Gemini API key')
+  // Preserve the pre-existing "blank label defaults to Gemini key" UX —
+  // the fallback is applied before validation so addKeyInput's min(1) is
+  // about rejecting truly malformed input, not blank form fields.
+  const parsed = addKeyInput.safeParse({ label: label.trim() || 'Gemini key', key: key.trim() })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const { label: trimmedLabel, key: trimmedKey } = parsed.data
 
   const existing = await db
     .select({ id: geminiKeys.id })
@@ -43,9 +59,11 @@ export async function addGeminiKey(label: string, key: string): Promise<ActionRe
 export async function deleteGeminiKey(id: string): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
+  const parsed = idInput.safeParse(id)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
   await db
     .delete(geminiKeys)
-    .where(and(eq(geminiKeys.id, id), eq(geminiKeys.userId, session.user.id)))
+    .where(and(eq(geminiKeys.id, parsed.data), eq(geminiKeys.userId, session.user.id)))
   revalidatePath('/profile')
   return ok(undefined)
 }
@@ -53,10 +71,12 @@ export async function deleteGeminiKey(id: string): Promise<ActionResult> {
 export async function toggleGeminiKey(id: string, active: boolean): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
+  const parsed = toggleInput.safeParse({ id, active })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
   await db
     .update(geminiKeys)
-    .set({ active })
-    .where(and(eq(geminiKeys.id, id), eq(geminiKeys.userId, session.user.id)))
+    .set({ active: parsed.data.active })
+    .where(and(eq(geminiKeys.id, parsed.data.id), eq(geminiKeys.userId, session.user.id)))
   revalidatePath('/profile')
   return ok(undefined)
 }
