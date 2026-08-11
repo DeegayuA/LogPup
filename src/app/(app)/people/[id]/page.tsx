@@ -42,7 +42,7 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <header className="flex items-center gap-4">
-        <Avatar size="lg" className="size-14">
+        <Avatar size="lg" className="size-14!">
           {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
           <AvatarFallback className="text-lg font-medium">
             {user.name.slice(0, 1).toUpperCase()}

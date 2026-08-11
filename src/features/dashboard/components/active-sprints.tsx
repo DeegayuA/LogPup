@@ -1,8 +1,10 @@
 import Link from 'next/link'
 import { format } from 'date-fns'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PawPrint } from 'lucide-react'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { ActiveSprintSummary } from '@/features/sprints/queries'
 import { sprintProgress, daysRemaining } from '@/features/dashboard/sprint-progress'
+import { cn } from '@/lib/utils'
 
 // Plain YYYY-MM-DD strings from the `date` column must not be handed to
 // `new Date()` directly — that parses as UTC midnight and can render as the
@@ -10,7 +12,7 @@ import { sprintProgress, daysRemaining } from '@/features/dashboard/sprint-progr
 // the shift while keeping the display date correct (same fix as the app
 // detail page's formatSprintDate).
 function formatSprintDate(isoDate: string): string {
-  return format(new Date(`${isoDate}T12:00:00`), 'MMM d, yyyy')
+  return format(new Date(`${isoDate}T12:00:00`), 'MMM d')
 }
 
 function daysRemainingLabel(days: number): string {
@@ -28,47 +30,64 @@ export function ActiveSprints({ sprints }: { sprints: ActiveSprintSummary[] }) {
     <Card>
       <CardHeader>
         <CardTitle>Active sprints</CardTitle>
+        {sprints.length > 0 ? (
+          <CardAction>
+            <span className="font-mono text-xs text-muted-foreground">{sprints.length}</span>
+          </CardAction>
+        ) : null}
       </CardHeader>
       <CardContent>
         {sprints.length === 0 ? (
-          <div className="flex flex-col gap-1 py-4 text-center">
-            <p className="text-sm text-muted-foreground">No active sprints</p>
+          <div className="flex flex-col items-center gap-1.5 py-4 text-center">
+            <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
+            <p className="text-sm font-medium">Nothing on the run.</p>
             <p className="text-xs text-muted-foreground">
-              Start a sprint on an app to see it here.
+              Start a sprint on an app and LogPup will keep watch here.
             </p>
           </div>
         ) : (
-          <ul className="flex flex-col gap-4">
+          <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
             {sprints.map((sprint) => {
               const total = sprint.counts.todo + sprint.counts.in_progress + sprint.counts.done
               const progress = sprintProgress(sprint.counts)
               const remaining = daysRemaining(sprint.endDate)
               return (
-                <li key={sprint.sprintId} className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <Link
-                      href={`/apps/${sprint.appSlug}?tab=board`}
-                      className="truncate text-sm font-medium hover:underline"
-                    >
-                      {sprint.appName}
-                    </Link>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {daysRemainingLabel(remaining)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {sprint.sprintName} · {formatSprintDate(sprint.startDate)} –{' '}
-                    {formatSprintDate(sprint.endDate)}
-                  </p>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-primary"
-                      style={{ width: `${Math.round(progress * 100)}%` }}
-                    />
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    {sprint.counts.done}/{total} tasks done
-                  </p>
+                <li key={sprint.sprintId}>
+                  <Link
+                    href={`/apps/${sprint.appSlug}?tab=board`}
+                    className="flex flex-col gap-1.5 px-3 py-2.5 transition-colors duration-150 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-sm font-medium">{sprint.sprintName}</span>
+                      <span
+                        className={cn(
+                          'shrink-0 font-mono text-xs',
+                          remaining < 0 ? 'font-medium text-destructive' : 'text-muted-foreground',
+                        )}
+                      >
+                        {daysRemainingLabel(remaining)}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="truncate text-xs text-muted-foreground">
+                        {sprint.appName}
+                      </span>
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                        {formatSprintDate(sprint.startDate)} – {formatSprintDate(sprint.endDate)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.round(progress * 100)}%` }}
+                        />
+                      </div>
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                        {sprint.counts.done}/{total}
+                      </span>
+                    </div>
+                  </Link>
                 </li>
               )
             })}

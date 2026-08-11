@@ -11,8 +11,8 @@ import type { ActionResult } from '@/lib/action-result'
 function SubmitButton() {
   const { pending } = useFormStatus()
   return (
-    <Button type="submit" className="w-full" disabled={pending}>
-      {pending ? 'Please wait…' : 'Sign in'}
+    <Button type="submit" variant="secondary" size="lg" className="w-full" disabled={pending}>
+      {pending ? 'Please wait…' : 'Sign in with password'}
     </Button>
   )
 }
@@ -26,12 +26,12 @@ export function PasswordAuth() {
   const error = state && !state.ok ? state.error : null
 
   return (
-    <form action={formAction} className="space-y-3">
-      <div className="space-y-1">
+    <form action={formAction} className="space-y-4">
+      <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
-        <Input id="email" name="email" type="email" autoComplete="email" required placeholder="you@company.com" />
+        <Input id="email" name="email" type="email" autoComplete="email" required className="h-9" />
       </div>
-      <div className="space-y-1">
+      <div className="space-y-2">
         <Label htmlFor="password">Password</Label>
         <Input
           id="password"
@@ -39,10 +39,14 @@ export function PasswordAuth() {
           type="password"
           autoComplete="current-password"
           required
-          placeholder="••••••••"
+          className="h-9"
         />
       </div>
-      {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+      {error && (
+        <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
       <SubmitButton />
     </form>
   )

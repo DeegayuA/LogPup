@@ -71,14 +71,16 @@ function toFormState(values?: AppFormInitialValues): FormState {
 export function AppFormDialog({
   appId,
   initialValues,
+  defaultOpen,
 }: {
   appId?: string
   initialValues?: AppFormInitialValues
+  defaultOpen?: boolean
 } = {}) {
   const isEdit = Boolean(appId)
   const submitLabel = isEdit ? 'Save changes' : 'Create app'
   const router = useRouter()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen ?? false)
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(() => toFormState(initialValues))
 

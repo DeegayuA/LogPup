@@ -8,8 +8,9 @@ import { MeetingList } from '@/features/meetings/components/meeting-list'
 import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 
-export default async function MeetingsPage() {
-  const [session, allMeetings, apps, activeUsers] = await Promise.all([
+export default async function MeetingsPage(props: { searchParams: Promise<{ new?: string }> }) {
+  const [{ new: newParam }, session, allMeetings, apps, activeUsers] = await Promise.all([
+    props.searchParams,
     auth(),
     listMeetings({ upcomingOnly: false }),
     listApps(),
@@ -33,6 +34,7 @@ export default async function MeetingsPage() {
           apps={appOptions}
           activeUsers={activeUsers}
           trigger={<Button>New meeting</Button>}
+          defaultOpen={newParam === '1'}
         />
       </div>
 

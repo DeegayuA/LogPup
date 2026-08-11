@@ -90,7 +90,13 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
     .from(users)
     .leftJoin(assignments, eq(assignments.userId, users.id))
     .leftJoin(apps, eq(assignments.appId, apps.id))
-    .where(and(eq(users.active, true), q ? ilike(users.name, `%${q}%`) : undefined))
+    .where(
+      and(
+        eq(users.active, true),
+        // Escape LIKE metacharacters so "%"/"_" in the search box match literally.
+        q ? ilike(users.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`) : undefined,
+      ),
+    )
     .orderBy(asc(users.name))
 
   const totalsByUser = new Map(

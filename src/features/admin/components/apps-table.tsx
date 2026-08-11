@@ -102,6 +102,13 @@ export function AppsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
+        {apps.length === 0 ? (
+          <TableRow>
+            <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+              No apps yet. Add one from the Apps page to manage it here.
+            </TableCell>
+          </TableRow>
+        ) : null}
         {apps.map((app) => {
           const isArchived = app.status === 'archived'
           return (

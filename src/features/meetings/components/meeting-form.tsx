@@ -118,14 +118,16 @@ export function MeetingForm({
   activeUsers,
   defaultAppId,
   trigger,
+  defaultOpen,
 }: {
   apps: { id: string; name: string }[]
   activeUsers: ActiveUser[]
   defaultAppId?: string
   trigger: ReactElement
+  defaultOpen?: boolean
 }) {
   const router = useRouter()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen ?? false)
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() => emptyState(defaultAppId))

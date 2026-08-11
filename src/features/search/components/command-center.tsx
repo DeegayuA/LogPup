@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from 'next-themes'
+import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
   AppWindow,
@@ -14,6 +15,7 @@ import {
   Monitor,
   Moon,
   PawPrint,
+  Plus,
   Search,
   ShieldCheck,
   SquareKanban,
@@ -38,7 +40,7 @@ import { cn } from '@/lib/utils'
 import { universalSearch, signOutFromPalette, type SearchResults } from '../actions'
 
 type Recent = {
-  type: 'app' | 'person' | 'task' | 'sprint' | 'page'
+  type: 'app' | 'person' | 'task' | 'sprint' | 'meeting' | 'page'
   label: string
   sub?: string
   href: string
@@ -46,7 +48,7 @@ type Recent = {
 
 const RECENTS_KEY = 'logpup.recents.v1'
 const GO_SHORTCUTS_KEY = 'logpup.goShortcuts'
-const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints: [] }
+const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints: [], meetings: [] }
 
 const CommandCenterContext = React.createContext<{ setOpen: (open: boolean) => void } | null>(null)
 
@@ -274,14 +276,27 @@ export function CommandCenterProvider({
     { label: 'Theme: system', value: 'system', icon: Monitor },
   ].filter((action) => !q || action.label.toLowerCase().includes(q) || 'theme'.includes(q))
 
+  const createActions = [
+    { label: 'New app', href: '/apps?new=1', adminOnly: true },
+    { label: 'New meeting', href: '/meetings?new=1', adminOnly: false },
+  ].filter(
+    (action) => (!action.adminOnly || isAdmin) && (!q || action.label.toLowerCase().includes(q)),
+  )
+
   const showSignOut = !q || 'sign out log out'.includes(q)
   const hasEntityResults =
     results.apps.length > 0 ||
     results.people.length > 0 ||
     results.tasks.length > 0 ||
-    results.sprints.length > 0
+    results.sprints.length > 0 ||
+    results.meetings.length > 0
   const nothingAtAll =
-    q.length >= 2 && !searching && !hasEntityResults && pages.length === 0 && themeActions.length === 0
+    q.length >= 2 &&
+    !searching &&
+    !hasEntityResults &&
+    pages.length === 0 &&
+    themeActions.length === 0 &&
+    createActions.length === 0
 
   const contextValue = React.useMemo(() => ({ setOpen }), [])
 
@@ -292,7 +307,7 @@ export function CommandCenterProvider({
         open={open}
         onOpenChange={setOpen}
         title="Command center"
-        description="Search apps, people, tasks, and sprints, or run a command"
+        description="Search apps, people, tasks, sprints, and meetings, or run a command"
         className="top-[20%] sm:max-w-xl"
       >
         <Command shouldFilter={false}>
@@ -435,6 +450,46 @@ export function CommandCenterProvider({
                     <span className="truncate">{sprint.name}</span>
                     <span className="truncate text-xs text-muted-foreground">{sprint.appName}</span>
                     <StatusDot status={sprint.status} />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
+
+            {results.meetings.length > 0 ? (
+              <CommandGroup heading="Meetings">
+                {results.meetings.map((meeting) => (
+                  <CommandItem
+                    key={meeting.id}
+                    value={`meeting-${meeting.id}`}
+                    onSelect={() =>
+                      go(meeting.href, {
+                        type: 'meeting',
+                        label: meeting.title,
+                        sub: meeting.appName ?? undefined,
+                        href: meeting.href,
+                      })
+                    }
+                  >
+                    <CalendarDays />
+                    <span className="truncate">{meeting.title}</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {meeting.appName ?? format(meeting.startsAt, 'MMM d')}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
+
+            {createActions.length > 0 ? (
+              <CommandGroup heading="Create">
+                {createActions.map((action) => (
+                  <CommandItem
+                    key={action.href}
+                    value={`create-${action.href}`}
+                    onSelect={() => go(action.href)}
+                  >
+                    <Plus />
+                    {action.label}
                   </CommandItem>
                 ))}
               </CommandGroup>

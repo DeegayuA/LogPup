@@ -152,6 +152,7 @@ export function TaskDialog({
               minLength={1}
               maxLength={140}
               required
+              className="h-9 font-medium md:text-base"
             />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -161,9 +162,10 @@ export function TaskDialog({
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               maxLength={2000}
+              className="min-h-24"
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="task-assignee">Assignee</Label>
               <Select

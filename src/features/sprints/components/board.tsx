@@ -148,7 +148,7 @@ export function Board({
   return (
     <>
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="flex flex-col gap-4 sm:flex-row">
+        <div className="flex snap-x snap-mandatory items-stretch gap-4 overflow-x-auto pb-2">
           {COLUMNS.map((col) => (
             <BoardColumn
               key={col.status}

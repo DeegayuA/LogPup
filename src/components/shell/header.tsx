@@ -15,7 +15,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -85,7 +84,8 @@ export function Header({ user, isAdmin }: { user: HeaderUser; isAdmin: boolean }
           }
         />
         <DropdownMenuContent align="end">
-          <DropdownMenuLabel>{user.name ?? 'Account'}</DropdownMenuLabel>
+          {/* Plain div: Base UI's GroupLabel primitive now requires a Menu.Group parent. */}
+          <div className="px-2 py-1.5 text-sm font-medium">{user.name ?? 'Account'}</div>
           <DropdownMenuSeparator />
           <DropdownMenuItem render={<Link href="/profile" />}>
             <User /> Profile

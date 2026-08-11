@@ -4,8 +4,12 @@ import { listApps } from '@/features/apps/queries'
 import { AppCard } from '@/features/apps/components/app-card'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 
-export default async function AppsPage() {
-  const [session, apps] = await Promise.all([auth(), listApps()])
+export default async function AppsPage(props: { searchParams: Promise<{ new?: string }> }) {
+  const [{ new: newParam }, session, apps] = await Promise.all([
+    props.searchParams,
+    auth(),
+    listApps(),
+  ])
   const isAdmin = session?.user?.role === 'admin'
 
   return (
@@ -20,7 +24,7 @@ export default async function AppsPage() {
             Every product the team is building, at a glance.
           </p>
         </div>
-        {isAdmin ? <AppFormDialog /> : null}
+        {isAdmin ? <AppFormDialog defaultOpen={newParam === '1'} /> : null}
       </div>
       {apps.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border p-12 text-center">

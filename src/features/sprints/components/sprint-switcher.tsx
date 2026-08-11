@@ -35,7 +35,7 @@ export function SprintSwitcher({
 
   return (
     <Select value={selectedId} onValueChange={handleChange}>
-      <SelectTrigger className="w-56" aria-label="Select sprint">
+      <SelectTrigger className="h-8 w-56" aria-label="Select sprint">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

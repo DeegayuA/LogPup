@@ -3,7 +3,7 @@
 import { ilike, or, eq, and, sql, asc } from 'drizzle-orm'
 import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
-import { apps, sprints, tasks, users } from '@/db/schema'
+import { apps, meetings, sprints, tasks, users } from '@/db/schema'
 
 export type SearchResults = {
   apps: { id: string; name: string; slug: string; status: 'active' | 'paused' | 'archived' }[]
@@ -22,9 +22,16 @@ export type SearchResults = {
     appName: string
     href: string
   }[]
+  meetings: {
+    id: string
+    title: string
+    startsAt: Date
+    appName: string | null
+    href: string
+  }[]
 }
 
-const EMPTY: SearchResults = { apps: [], people: [], tasks: [], sprints: [] }
+const EMPTY: SearchResults = { apps: [], people: [], tasks: [], sprints: [], meetings: [] }
 const LIMIT = 6
 
 export async function universalSearch(q: string): Promise<SearchResults> {
@@ -36,7 +43,7 @@ export async function universalSearch(q: string): Promise<SearchResults> {
   // Escape LIKE metacharacters so "50%" matches literally, not as a wildcard.
   const pattern = `%${query.replace(/[\\%_]/g, '\\$&')}%`
 
-  const [appRows, peopleRows, taskRows, sprintRows] = await Promise.all([
+  const [appRows, peopleRows, taskRows, sprintRows, meetingRows] = await Promise.all([
     db
       .select({ id: apps.id, name: apps.name, slug: apps.slug, status: apps.status })
       .from(apps)
@@ -87,6 +94,18 @@ export async function universalSearch(q: string): Promise<SearchResults> {
       .where(or(ilike(sprints.name, pattern), ilike(sprints.goal, pattern)))
       .orderBy(asc(sprints.status))
       .limit(LIMIT),
+    db
+      .select({
+        id: meetings.id,
+        title: meetings.title,
+        startsAt: meetings.startsAt,
+        appName: apps.name,
+      })
+      .from(meetings)
+      .leftJoin(apps, eq(meetings.appId, apps.id))
+      .where(or(ilike(meetings.title, pattern), ilike(meetings.agenda, pattern)))
+      .orderBy(asc(meetings.startsAt))
+      .limit(LIMIT),
   ])
 
   return {
@@ -97,14 +116,21 @@ export async function universalSearch(q: string): Promise<SearchResults> {
       title: t.title,
       status: t.status,
       appName: t.appName,
-      href: `/apps/${t.appSlug}?sprint=${t.sprintId ?? 'backlog'}`,
+      href: `/apps/${t.appSlug}?tab=board&sprint=${t.sprintId ?? 'backlog'}`,
     })),
     sprints: sprintRows.map((s) => ({
       id: s.id,
       name: s.name,
       status: s.status,
       appName: s.appName,
-      href: `/apps/${s.appSlug}?sprint=${s.id}`,
+      href: `/apps/${s.appSlug}?tab=board&sprint=${s.id}`,
+    })),
+    meetings: meetingRows.map((m) => ({
+      id: m.id,
+      title: m.title,
+      startsAt: m.startsAt,
+      appName: m.appName,
+      href: '/meetings',
     })),
   }
 }
