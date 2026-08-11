@@ -77,5 +77,6 @@ export async function setOwnPassword(
     .set({ passwordHash, mustChangePassword: false })
     .where(eq(users.id, session.user.id))
 
+  revalidatePath('/profile')
   return ok(undefined)
 }

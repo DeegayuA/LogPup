@@ -5,7 +5,7 @@ export const size = { width: 180, height: 180 }
 export const contentType = 'image/png'
 
 export default function AppleIcon() {
-  const pawUri = `data:image/svg+xml;utf8,${encodeURIComponent(pawSvg('#ffffff'))}`
+  const pawUri = `data:image/svg+xml;utf8,${encodeURIComponent(pawSvg())}`
   return new ImageResponse(
     (
       <div

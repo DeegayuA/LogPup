@@ -64,13 +64,12 @@ async function attachAttendees(
   return rows.map((r) => ({ ...r, attendees: byMeeting.get(r.id) ?? [] }))
 }
 
-export async function listMeetings(opts: { upcomingOnly: boolean }): Promise<MeetingSummary[]> {
+export async function listMeetings(): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
     .from(meetings)
     .leftJoin(apps, eq(meetings.appId, apps.id))
-    .where(opts.upcomingOnly ? gte(meetings.startsAt, new Date()) : undefined)
-    .orderBy(opts.upcomingOnly ? asc(meetings.startsAt) : desc(meetings.startsAt))
+    .orderBy(desc(meetings.startsAt))
 
   return attachAttendees(rows)
 }

@@ -8,7 +8,7 @@ export const dynamic = 'force-static'
 export function GET(request: Request) {
   const requested = Number(new URL(request.url).searchParams.get('size'))
   const size = requested === 192 || requested === 512 ? requested : 512
-  const pawUri = `data:image/svg+xml;utf8,${encodeURIComponent(pawSvg('#ffffff'))}`
+  const pawUri = `data:image/svg+xml;utf8,${encodeURIComponent(pawSvg())}`
   const paw = Math.round(size * 0.56)
   return new ImageResponse(
     (

@@ -50,7 +50,9 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
 
 export async function archiveApp(appId: string): Promise<ActionResult> {
   if (!(await requireAdmin())) return err('Admins only')
-  await db.update(apps).set({ status: 'archived' }).where(eq(apps.id, appId))
+  const parsedId = z.uuid().safeParse(appId)
+  if (!parsedId.success) return err('Invalid app')
+  await db.update(apps).set({ status: 'archived' }).where(eq(apps.id, parsedId.data))
   revalidatePath('/apps')
   return ok(undefined)
 }

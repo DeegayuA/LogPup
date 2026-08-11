@@ -11,7 +11,7 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
   const [{ new: newParam }, session, allMeetings, apps, activeUsers] = await Promise.all([
     props.searchParams,
     auth(),
-    listMeetings({ upcomingOnly: false }),
+    listMeetings(),
     listApps(),
     listActiveUsers(),
   ])

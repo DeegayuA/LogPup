@@ -14,15 +14,3 @@ export function pawSvg(color = BRAND_FG): string {
 </g>
 </svg>`
 }
-
-// A rounded brand tile with a centered paw — used for the app icons.
-export function brandTileSvg(size: number): string {
-  const pad = Math.round(size * 0.22)
-  const inner = size - pad * 2
-  const radius = Math.round(size * 0.22)
-  const pawDataUri = `data:image/svg+xml;utf8,${encodeURIComponent(pawSvg(BRAND_FG))}`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-<rect width="${size}" height="${size}" rx="${radius}" fill="${BRAND_BG}"/>
-<image href="${pawDataUri}" x="${pad}" y="${pad}" width="${inner}" height="${inner}"/>
-</svg>`
-}
