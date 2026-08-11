@@ -4,8 +4,7 @@ import { listMeetings } from '@/features/meetings/queries'
 import { listApps } from '@/features/apps/queries'
 import { listActiveUsers } from '@/features/people/queries'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
-import { UpcomingMeetingsFiltered } from '@/features/meetings/components/upcoming-filter'
-import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
+import { MeetingsViews } from '@/features/meetings/components/meetings-views'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 
 export default async function MeetingsPage(props: { searchParams: Promise<{ new?: string }> }) {
@@ -38,18 +37,9 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
         />
       </div>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="font-heading text-base font-medium">Upcoming</h2>
-        <UpcomingMeetingsFiltered
-          meetings={upcoming}
-          currentUserId={currentUserId}
-          isAdmin={isAdmin}
-          users={activeUsers}
-        />
-      </section>
-
-      <PastMeetingsSection
-        meetings={past}
+      <MeetingsViews
+        upcoming={upcoming}
+        past={past}
         currentUserId={currentUserId}
         isAdmin={isAdmin}
         users={activeUsers}
