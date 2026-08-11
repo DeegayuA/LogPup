@@ -298,14 +298,19 @@ function MeetingDetailBody({
         )}
       </Section>
 
+      {/* The written notes as the meeting row carries them. Writing them —
+          along with the transcript, AI summary and follow-ups — happens in the
+          list view's notes timeline, so this panel shows rather than
+          duplicates that surface. */}
       <Section icon={FileTextIcon} title="Notes">
         {meeting.notes ? (
           <p className="text-sm whitespace-pre-wrap">{meeting.notes}</p>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            No notes yet. Notes, transcripts and follow-ups are written in the list view.
-          </p>
+          <p className="text-sm text-muted-foreground">No notes yet.</p>
         )}
+        <p className="text-xs text-muted-foreground">
+          Notes, transcripts and follow-ups are written in the list view.
+        </p>
       </Section>
 
       {canManage ? (

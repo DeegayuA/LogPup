@@ -156,6 +156,55 @@ describe('parseMeetingIntent', () => {
     expect(intent?.startsAt).toEqual(aug(12, 10))
   })
 
+  it('lifts a pasted link out of the title, without its trailing punctuation', () => {
+    const intent = parseMeetingIntent(
+      'standup tomorrow 10am https://meet.google.com/abc-defg-hij.',
+      PEOPLE,
+      NOW,
+    )
+    // The sentence-ending period is not part of the link.
+    expect(intent?.meetingUrl).toBe('https://meet.google.com/abc-defg-hij')
+    expect(intent?.title).toBe('standup')
+    expect(intent?.startsAt).toEqual(aug(12, 10))
+  })
+
+  it('takes a link from the middle of a phrase without disturbing the rest', () => {
+    const intent = parseMeetingIntent(
+      'sync https://zoom.us/j/9876543210 with shanika at 2pm',
+      PEOPLE,
+      NOW,
+    )
+    expect(intent?.meetingUrl).toBe('https://zoom.us/j/9876543210')
+    expect(intent?.title).toBe('sync')
+    expect(intent?.startsAt).toEqual(aug(11, 14))
+    expect(intent?.attendees.map((a) => a.id)).toEqual(['u1'])
+  })
+
+  it('reads a link alongside attendees and a time range in one line', () => {
+    const intent = parseMeetingIntent(
+      'design review friday 2-3pm https://teams.microsoft.com/l/meetup-join/19 with shanika and deeghayu',
+      PEOPLE,
+      NOW,
+    )
+    expect(intent?.meetingUrl).toBe('https://teams.microsoft.com/l/meetup-join/19')
+    expect(intent?.title).toBe('design review')
+    expect(intent?.startsAt).toEqual(aug(14, 14))
+    expect(intent?.endsAt).toEqual(aug(14, 15))
+    expect(intent?.attendees.map((a) => a.id)).toEqual(['u1', 'u2'])
+  })
+
+  it('takes the link out before the clock reader runs, so a port is not a time', () => {
+    const intent = parseMeetingIntent('war room https://meet.example.com:8443/room today', PEOPLE, NOW)
+    expect(intent?.meetingUrl).toBe('https://meet.example.com:8443/room')
+    expect(intent?.title).toBe('war room')
+    // ":8443" must not be read as 8:44 — the day-only 9am fallback still applies.
+    expect(intent?.startsAt).toEqual(aug(11, 9))
+  })
+
+  it('leaves the link null when the phrase has none', () => {
+    expect(parseMeetingIntent('standup tomorrow 10am with shanika', PEOPLE, NOW)?.meetingUrl).toBeNull()
+  })
+
   it('returns null when nothing is left to title the meeting', () => {
     expect(parseMeetingIntent('tomorrow 10am with shanika', PEOPLE, NOW)).toBeNull()
     expect(parseMeetingIntent('   ', PEOPLE, NOW)).toBeNull()

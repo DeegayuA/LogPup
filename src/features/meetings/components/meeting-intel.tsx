@@ -46,10 +46,11 @@ import {
   type MeetingIntel,
 } from '@/features/meetings/ai-actions'
 import {
-  CONFIDENCE_WINDOW_SIZE,
-  otherLanguage,
-  shouldSwitchLanguage,
+  pickUtterance,
+  shouldFlush,
+  UTTERANCE_PAIR_WINDOW_MS,
   type ActiveLanguage,
+  type UtteranceCandidate,
 } from '@/features/meetings/language-switch'
 
 // --- Minimal Web Speech API typings ------------------------------------
@@ -100,25 +101,41 @@ declare global {
   }
 }
 
-// The user-facing preference: "Auto" lets the recognizer switch languages
-// mid-meeting on its own; the other two pin it, same as before this
-// feature existed. `ActiveLanguage` (imported above) is the narrower set
-// SpeechRecognition itself can actually run — "auto" is never sent to it.
-type LanguagePreference = 'auto' | ActiveLanguage
+// The user-facing preference: "Bilingual" (the default) runs BOTH
+// recognizers at once and picks the better result per utterance — see
+// pickUtterance in language-switch.ts. The other two pin it down to a
+// single engine, for meetings that really are one language throughout.
+// `ActiveLanguage` (imported above) is the narrower set a single
+// SpeechRecognition instance actually runs — "bilingual" is never sent to
+// one directly, it means "start both".
+type LanguagePreference = 'bilingual' | ActiveLanguage
 const LANGUAGE_OPTIONS: { value: LanguagePreference; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
+  { value: 'bilingual', label: 'Bilingual (auto)' },
   { value: 'en-US', label: 'English' },
   { value: 'si-LK', label: 'Sinhala' },
 ]
 const LANGUAGE_STORAGE_KEY = 'logpup:transcribe-language'
-// Which language Auto mode last settled on, so the next recording starts
-// there instead of always assuming English — "start with the last
-// successful language (or English)".
+// Reads a stored language preference, migrating the old single-recognizer
+// feature's 'auto' value to today's 'bilingual' — same meaning ("don't pin
+// me to one language"), new name now that it runs two engines instead of
+// switching one.
+function parseLanguagePreference(value: string | null): LanguagePreference | null {
+  if (value === 'auto') return 'bilingual'
+  if (value === 'bilingual' || value === 'en-US' || value === 'si-LK') return value
+  return null
+}
+// Which language last "won" an utterance, so the next recording seeds its
+// conversation-inertia tie-break (see pickUtterance) from somewhere sane
+// instead of an arbitrary default on the very first ambiguous utterance.
 const LAST_ACTIVE_LANGUAGE_STORAGE_KEY = 'logpup:transcribe-last-active-language'
 const ACTIVE_LANGUAGE_LABEL: Record<ActiveLanguage, string> = {
   'en-US': 'English',
   'si-LK': 'Sinhala',
 }
+// Recognizer engines dual mode runs, in the fixed order they are started
+// and the order candidates are handed to pickUtterance — that order is
+// also what its documented tie-break relies on being stable.
+const DUAL_ENGINE_LANGUAGES: ActiveLanguage[] = ['en-US', 'si-LK']
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return ''
@@ -215,11 +232,20 @@ export function MeetingIntelPanel({
   const [analyzing, startAnalyzing] = useTransition()
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
-  const [language, setLanguageState] = useState<LanguagePreference>('auto')
-  // The language actually in use right now — equals `language` in manual
-  // mode, but drifts from it in Auto mode as the recognizer switches.
-  // Surfaced in the UI so a mid-recording switch is visible, not silent.
-  const [activeLang, setActiveLangState] = useState<ActiveLanguage>('en-US')
+  const [language, setLanguageState] = useState<LanguagePreference>('bilingual')
+  // Which language most recently WON an utterance (dual mode) or the fixed
+  // language in use (manual mode) — surfaced subtly in the UI so which
+  // engine is currently leading is visible, not silent.
+  const [lastWinnerLang, setLastWinnerLang] = useState<ActiveLanguage | null>(null)
+  // Which engine's INTERIM (provisional) text is currently leading, updated
+  // on every partial result — see refreshInterimDisplay. Separate from
+  // lastWinnerLang because the leader can flip word-by-word while a final
+  // hasn't landed yet.
+  const [interimLeaderLang, setInterimLeaderLang] = useState<ActiveLanguage | null>(null)
+  // Set when dual mode couldn't start both engines (see startBilingualRecognition)
+  // and fell back to a single engine — a quiet, one-line, non-blocking notice.
+  // The meeting keeps recording regardless.
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null)
   const [liveUnavailable, setLiveUnavailable] = useState(false)
   const [finalText, setFinalText] = useState('')
   const [interimText, setInterimText] = useState('')
@@ -250,46 +276,67 @@ export function MeetingIntelPanel({
   const audioCtxRef = useRef<AudioContext | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  // One recognizer per language, keyed by ActiveLanguage. Dual (bilingual)
+  // mode populates both keys; manual mode populates exactly one. A missing
+  // key means that engine either was never started or has permanently
+  // failed (see handleEngineUnavailable) — never a live instance.
+  const recognitionRefs = useRef<Partial<Record<ActiveLanguage, SpeechRecognitionLike>>>({})
+  // Whether we're currently supervising one engine or two. Starts as
+  // whatever the language preference implies and can drop from 'dual' to
+  // 'single' mid-recording if the second engine fails (resource guard, see
+  // startBilingualRecognition / handleEngineUnavailable) — never the other
+  // direction.
+  const engineModeRef = useRef<'dual' | 'single'>('single')
   const recordingRef = useRef(false)
   const finalTranscriptRef = useRef('')
   const transcriptPanelRef = useRef<HTMLDivElement | null>(null)
   const nearBottomRef = useRef(true)
-  // Mirrors `activeLang`/`language` state for use inside the recognition
-  // event handlers below — those close over refs, not state, since a
-  // handler set on `recognition.onresult` at start time would otherwise
-  // see whatever `language` was at that moment forever, not its later
-  // value after a switch or a re-render.
-  const activeLangRef = useRef<ActiveLanguage>('en-US')
-  const languagePreferenceRef = useRef<LanguagePreference>('auto')
-  // Rolling window of confidence scores from the most recent FINAL
-  // results, oldest first — capped at CONFIDENCE_WINDOW_SIZE. Reset to
-  // empty after every switch (hysteresis: a fresh recognizer in the new
-  // language deserves a clean read, not one dragged down by the low
-  // scores that just triggered the switch).
-  const confidenceWindowRef = useRef<number[]>([])
-  // Timestamp of the last automatic switch (or of recording start, before
-  // the first one) — how shouldSwitchLanguage enforces the ~10s cooldown.
-  const lastSwitchAtRef = useRef(0)
+  // Mirrors `language` state for use inside the recognition event handlers
+  // below — those close over refs, not state, since a handler set on
+  // `recognition.onresult` at start time would otherwise see whatever
+  // `language` was at that moment forever, not its later value after a
+  // re-render.
+  const languagePreferenceRef = useRef<LanguagePreference>('bilingual')
+  // The language of the last ACCEPTED utterance (from either engine) — the
+  // `previousLang` pickUtterance uses for its conversation-inertia
+  // fallback. Seeded from LAST_ACTIVE_LANGUAGE_STORAGE_KEY at the start of
+  // each recording rather than reset to null, so the very first ambiguous
+  // utterance of a new recording still has something to lean on.
+  const previousLangRef = useRef<ActiveLanguage | null>(null)
+  // Each engine's current (uncommitted) interim text, keyed by language —
+  // used to decide which engine's partial result is "leading" right now
+  // (see refreshInterimDisplay). Cleared for a language the moment that
+  // engine finalizes a result.
+  const engineInterimRef = useRef<Partial<Record<ActiveLanguage, string>>>({})
+  // At most one finalized-but-unpaired utterance, waiting to see if the
+  // OTHER engine finalizes its own result for roughly the same stretch of
+  // speech (see pickUtterance / UTTERANCE_PAIR_WINDOW_MS). Only used in
+  // dual mode — manual (single-engine) mode accepts every final
+  // immediately, since there is nothing to pair it against.
+  const pendingUtteranceRef = useRef<{ candidate: UtteranceCandidate; receivedAt: number } | null>(null)
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Persisted across sessions (LAST_ACTIVE_LANGUAGE_STORAGE_KEY) — seeds
+  // previousLangRef at the start of each new recording, and manual mode's
+  // initial engine when the preference itself doesn't say which language.
+  const lastActiveLangRef = useRef<ActiveLanguage>('en-US')
 
   const liveSupported =
     typeof window !== 'undefined' && Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition)
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY)
-      if (saved === 'auto' || saved === 'en-US' || saved === 'si-LK') {
+      const saved = parseLanguagePreference(window.localStorage.getItem(LANGUAGE_STORAGE_KEY))
+      if (saved) {
         languagePreferenceRef.current = saved
         // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time hydrate from localStorage on mount
         setLanguageState(saved)
       }
       const lastActive = window.localStorage.getItem(LAST_ACTIVE_LANGUAGE_STORAGE_KEY)
       if (lastActive === 'en-US' || lastActive === 'si-LK') {
-        activeLangRef.current = lastActive
-        setActiveLangState(lastActive)
+        lastActiveLangRef.current = lastActive
       }
     } catch {
-      /* private mode / unavailable — defaults stay Auto / English */
+      /* private mode / unavailable — defaults stay Bilingual / English */
     }
   }, [])
 
@@ -303,16 +350,20 @@ export function MeetingIntelPanel({
     }
   }
 
-  // Updates the language actually in use — both the ref the recognition
-  // handlers read and the state the UI badge renders — and remembers it as
-  // Auto mode's "last successful language" for next time.
-  function setActiveLang(next: ActiveLanguage) {
-    activeLangRef.current = next
-    setActiveLangState(next)
-    try {
-      window.localStorage.setItem(LAST_ACTIVE_LANGUAGE_STORAGE_KEY, next)
-    } catch {
-      /* private mode / unavailable — next Auto session just starts from English */
+  // Remembers which language just won an utterance — both the ref
+  // pickUtterance's conversation-inertia fallback reads, and the UI state
+  // the "currently winning" badge shows — and persists it as next
+  // recording's starting point.
+  function rememberWinner(next: ActiveLanguage) {
+    previousLangRef.current = next
+    setLastWinnerLang(next)
+    if (lastActiveLangRef.current !== next) {
+      lastActiveLangRef.current = next
+      try {
+        window.localStorage.setItem(LAST_ACTIVE_LANGUAGE_STORAGE_KEY, next)
+      } catch {
+        /* private mode / unavailable — next session just starts from English */
+      }
     }
   }
 
@@ -338,24 +389,40 @@ export function MeetingIntelPanel({
     if (next && !intel) void loadIntel()
   }
 
-  function stopRecognition() {
-    const recognition = recognitionRef.current
-    if (recognition) {
-      recognition.onresult = null
-      recognition.onerror = null
-      recognition.onend = null
-      try {
-        recognition.stop()
-      } catch {
-        /* already stopped */
+  function clearFlushTimer() {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current)
+      flushTimerRef.current = null
+    }
+  }
+
+  // Stops every currently-running engine (one in manual mode, up to two in
+  // dual mode). Nulls the handlers before stop() so onend's auto-restart
+  // never fires for a deliberate stop, same guarantee the single-recognizer
+  // version had.
+  function stopAllRecognition() {
+    for (const lang of Object.keys(recognitionRefs.current) as ActiveLanguage[]) {
+      const recognition = recognitionRefs.current[lang]
+      if (recognition) {
+        recognition.onresult = null
+        recognition.onerror = null
+        recognition.onend = null
+        try {
+          recognition.stop()
+        } catch {
+          /* already stopped */
+        }
       }
     }
-    recognitionRef.current = null
+    recognitionRefs.current = {}
   }
 
   function cleanupCapture() {
     recordingRef.current = false
-    stopRecognition()
+    stopAllRecognition()
+    clearFlushTimer()
+    pendingUtteranceRef.current = null
+    engineInterimRef.current = {}
     if (timerRef.current) clearInterval(timerRef.current)
     timerRef.current = null
     for (const stream of streamsRef.current) {
@@ -368,7 +435,8 @@ export function MeetingIntelPanel({
     setRecording(false)
     setSeconds(0)
     setInterimText('')
-    confidenceWindowRef.current = []
+    setInterimLeaderLang(null)
+    setFallbackNotice(null)
   }
 
   useEffect(() => cleanupCapture, [])
@@ -408,22 +476,152 @@ export function MeetingIntelPanel({
     nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   }
 
-  // Restarts recognition cleanly in the other language: Auto mode's only
-  // lever, since the Web Speech API can't detect a language on its own
-  // (see language-switch.ts). `finalTranscriptRef` is untouched here, so
-  // everything transcribed so far survives the restart.
-  function switchActiveLanguage() {
-    const next = otherLanguage(activeLangRef.current)
-    confidenceWindowRef.current = []
-    lastSwitchAtRef.current = Date.now()
-    setActiveLang(next)
-    stopRecognition()
-    startRecognition(next)
+  // Recomputes which engine's INTERIM text is currently shown, and updates
+  // the visible (provisional, muted/italic) interim string. Whichever
+  // engine's partial result is currently longer is treated as "leading" —
+  // in practice the engine actually matching what's being said tends to
+  // keep extending its partial transcript, while the other one (hearing
+  // the wrong grammar for what it's picking up) produces shorter or
+  // choppier partials. A tie (including both empty) falls back to the last
+  // ACCEPTED utterance's language for continuity, same inertia idea
+  // pickUtterance uses, rather than flapping between the two on every
+  // event. Works unmodified for manual (single-engine) mode too — the
+  // other language's interim simply never has any text.
+  function refreshInterimDisplay() {
+    const en = engineInterimRef.current['en-US'] ?? ''
+    const si = engineInterimRef.current['si-LK'] ?? ''
+    if (!en && !si) {
+      setInterimText('')
+      setInterimLeaderLang(null)
+      return
+    }
+    let leader: ActiveLanguage
+    if (en.length === si.length) {
+      leader = previousLangRef.current === 'si-LK' ? 'si-LK' : 'en-US'
+    } else {
+      leader = en.length > si.length ? 'en-US' : 'si-LK'
+    }
+    setInterimText(leader === 'en-US' ? en : si)
+    setInterimLeaderLang(leader)
   }
 
-  function startRecognition(lang: ActiveLanguage) {
+  // Commits one utterance to the live transcript and remembers its
+  // language for the next pickUtterance call and the "currently winning"
+  // badge. The single place both single- and dual-engine paths funnel
+  // through, so the transcript is built identically either way.
+  function acceptUtterance(candidate: UtteranceCandidate) {
+    rememberWinner(candidate.lang)
+    const trimmed = candidate.text.trim()
+    if (!trimmed) return
+    finalTranscriptRef.current = finalTranscriptRef.current
+      ? `${finalTranscriptRef.current} ${trimmed}`
+      : trimmed
+    setFinalText(finalTranscriptRef.current)
+  }
+
+  function flushPendingUtterance() {
+    clearFlushTimer()
+    const pending = pendingUtteranceRef.current
+    pendingUtteranceRef.current = null
+    if (pending) acceptUtterance(pending.candidate)
+  }
+
+  // Timer-driven check using the pure `shouldFlush` decision as the actual
+  // authority on WHETHER to flush, rather than trusting the browser timer's
+  // delay alone — setTimeout is a lower bound, not a guarantee (background
+  // tabs get throttled), so this re-checks the real elapsed age against the
+  // window and waits out whatever's left if it fired early.
+  function checkPendingFlush() {
+    const pending = pendingUtteranceRef.current
+    if (!pending) return
+    const age = Date.now() - pending.receivedAt
+    if (shouldFlush(age)) {
+      flushPendingUtterance()
+    } else {
+      flushTimerRef.current = setTimeout(checkPendingFlush, UTTERANCE_PAIR_WINDOW_MS - age)
+    }
+  }
+
+  function scheduleFlush() {
+    clearFlushTimer()
+    flushTimerRef.current = setTimeout(checkPendingFlush, UTTERANCE_PAIR_WINDOW_MS)
+  }
+
+  // One engine finalized a result. In manual (single-engine) mode there is
+  // only ever one source, so it's accepted immediately — same latency as
+  // before this feature. In dual mode, it goes through the pairing buffer:
+  // the first engine to finalize an utterance waits up to
+  // UTTERANCE_PAIR_WINDOW_MS for the other to finalize its own read of
+  // (roughly) the same stretch of speech, then pickUtterance decides
+  // between them. If the SAME engine finalizes again before a pair
+  // arrives, the buffered one clearly isn't getting a partner — flush it
+  // now rather than silently dropping it, then start a fresh buffer.
+  function handleEngineFinal(lang: ActiveLanguage, text: string, confidence: number | undefined) {
+    engineInterimRef.current[lang] = ''
+    refreshInterimDisplay()
+
+    if (engineModeRef.current === 'single') {
+      acceptUtterance({ lang, text, confidence })
+      return
+    }
+
+    const candidate: UtteranceCandidate = { lang, text, confidence }
+    const pending = pendingUtteranceRef.current
+    if (!pending) {
+      pendingUtteranceRef.current = { candidate, receivedAt: Date.now() }
+      scheduleFlush()
+      return
+    }
+    if (pending.candidate.lang === lang) {
+      flushPendingUtterance()
+      pendingUtteranceRef.current = { candidate, receivedAt: Date.now() }
+      scheduleFlush()
+      return
+    }
+    clearFlushTimer()
+    pendingUtteranceRef.current = null
+    const winner = pickUtterance({
+      candidates: [pending.candidate, candidate],
+      previousLang: previousLangRef.current,
+    })
+    if (winner) acceptUtterance(winner)
+  }
+
+  function handleEngineInterim(lang: ActiveLanguage, text: string) {
+    engineInterimRef.current[lang] = text
+    refreshInterimDisplay()
+  }
+
+  // An engine hit a permanent failure (denied mic permission, no capture
+  // device). In dual mode this is the resource guard's other half — if one
+  // engine is still running, keep going in single-engine mode rather than
+  // losing live text entirely; only give up if NOTHING is left. Any
+  // utterance still buffered has lost its only possible pairing partner —
+  // flush it immediately instead of waiting out the window.
+  function handleEngineUnavailable(lang: ActiveLanguage) {
+    delete recognitionRefs.current[lang]
+    engineInterimRef.current[lang] = ''
+    refreshInterimDisplay()
+    const remaining = Object.keys(recognitionRefs.current) as ActiveLanguage[]
+    if (remaining.length === 0) {
+      setLiveUnavailable(true)
+      return
+    }
+    engineModeRef.current = 'single'
+    flushPendingUtterance()
+    setFallbackNotice(
+      `Live text for ${ACTIVE_LANGUAGE_LABEL[lang]} stopped — continuing in ${ACTIVE_LANGUAGE_LABEL[remaining[0]]} only.`,
+    )
+  }
+
+  // Creates one recognizer for `lang` with the continuous + interimResults
+  // + auto-restart lifecycle every engine needs, wired to the shared
+  // handlers above. Framework for exactly one engine — dual mode calls this
+  // twice, manual mode once. Returns null only when the browser has no
+  // SpeechRecognition constructor at all.
+  function createRecognizer(lang: ActiveLanguage): SpeechRecognitionLike | null {
     const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition
-    if (!Ctor) return
+    if (!Ctor) return null
     const recognition = new Ctor()
     recognition.continuous = true
     recognition.interimResults = true
@@ -436,51 +634,26 @@ export function MeetingIntelPanel({
         const transcript = alternative?.transcript ?? ''
         if (result.isFinal) {
           const trimmed = transcript.trim()
-          if (trimmed) {
-            finalTranscriptRef.current = finalTranscriptRef.current
-              ? `${finalTranscriptRef.current} ${trimmed}`
-              : trimmed
-            setFinalText(finalTranscriptRef.current)
-          }
-
-          // Auto mode only: track confidence on FINAL results (interim
-          // ones are provisional and far noisier) and hand the rolling
-          // window to the pure decision function. Some browsers never
-          // report `confidence` at all — skip those samples rather than
-          // letting an absent score masquerade as a bad one.
-          if (languagePreferenceRef.current === 'auto') {
-            const confidence = alternative?.confidence
-            if (typeof confidence === 'number') {
-              confidenceWindowRef.current = [...confidenceWindowRef.current, confidence].slice(
-                -CONFIDENCE_WINDOW_SIZE,
-              )
-            }
-            const shouldSwitch = shouldSwitchLanguage({
-              confidences: confidenceWindowRef.current,
-              currentLang: activeLangRef.current,
-              msSinceLastSwitch: Date.now() - lastSwitchAtRef.current,
-            })
-            if (shouldSwitch) switchActiveLanguage()
-          }
+          if (trimmed) handleEngineFinal(lang, trimmed, alternative?.confidence)
         } else {
           interim += transcript
         }
       }
-      setInterimText(interim)
+      handleEngineInterim(lang, interim)
     }
     recognition.onerror = (event) => {
       // Permanent failures (denied mic permission for recognition, no
-      // capture device) — stop retrying and fall back to audio-only, same
-      // as an unsupported browser. Transient errors (no-speech, network,
-      // aborted) are left to onend's restart-on-drop below.
+      // capture device) — stop retrying this engine. Transient errors
+      // (no-speech, network, aborted) are left to onend's restart-on-drop
+      // below.
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed' || event.error === 'audio-capture') {
         recognition.onend = null
-        setLiveUnavailable(true)
+        handleEngineUnavailable(lang)
       }
     }
     recognition.onend = () => {
       // Some browsers silently end recognition after a pause in speech.
-      // Restart it for as long as we're still recording; stopRecognition()
+      // Restart it for as long as we're still recording; stopAllRecognition()
       // nulls this handler before calling stop() so a deliberate stop never
       // loops back here.
       if (!recordingRef.current) return
@@ -490,11 +663,44 @@ export function MeetingIntelPanel({
         /* already starting — the next onend will retry */
       }
     }
-    recognitionRef.current = recognition
+    return recognition
+  }
+
+  // Creates and starts one engine, registering it in recognitionRefs on
+  // success. Returns false without throwing if the browser refuses to
+  // start it (some browsers only allow one active SpeechRecognition session
+  // at a time) — the resource guard callers use to decide whether to fall
+  // back to single-engine mode.
+  function startEngine(lang: ActiveLanguage): boolean {
+    const recognition = createRecognizer(lang)
+    if (!recognition) return false
     try {
       recognition.start()
     } catch {
+      return false
+    }
+    recognitionRefs.current[lang] = recognition
+    return true
+  }
+
+  // Starts both engines for "Bilingual (auto)" mode. Resource guard: some
+  // browsers refuse to run a second concurrent SpeechRecognition instance.
+  // If only one of the two starts, fall back to single-engine mode
+  // automatically (with a quiet notice) rather than losing live text —
+  // the meeting keeps recording regardless either way. If neither starts,
+  // that's the same as an unsupported browser.
+  function startBilingualRecognition() {
+    engineModeRef.current = 'dual'
+    const started = DUAL_ENGINE_LANGUAGES.filter((lang) => startEngine(lang))
+    if (started.length === 0) {
       setLiveUnavailable(true)
+      return
+    }
+    if (started.length < DUAL_ENGINE_LANGUAGES.length) {
+      engineModeRef.current = 'single'
+      setFallbackNotice(
+        `Only one language engine could start — using ${ACTIVE_LANGUAGE_LABEL[started[0]]} only for this recording.`,
+      )
     }
   }
 
@@ -599,15 +805,26 @@ export function MeetingIntelPanel({
         finalTranscriptRef.current = ''
         setFinalText('')
         setInterimText('')
+        setInterimLeaderLang(null)
+        setLastWinnerLang(null)
+        setFallbackNotice(null)
         setLiveUnavailable(false)
-        confidenceWindowRef.current = []
-        lastSwitchAtRef.current = Date.now()
-        // Auto mode starts from whichever language it last settled on
-        // (persisted across sessions) rather than always assuming
-        // English; manual mode always starts on the language chosen.
-        const initialLang: ActiveLanguage = language === 'auto' ? activeLangRef.current : language
-        setActiveLang(initialLang)
-        startRecognition(initialLang)
+        engineInterimRef.current = {}
+        pendingUtteranceRef.current = null
+        clearFlushTimer()
+        // Seed the conversation-inertia fallback from whichever language
+        // last won an utterance (persisted across sessions) rather than
+        // starting with nothing to lean on for the very first ambiguous
+        // utterance of this recording.
+        previousLangRef.current = lastActiveLangRef.current
+
+        if (language === 'bilingual') {
+          startBilingualRecognition()
+        } else {
+          // Manual override — exactly one engine, in the chosen language.
+          engineModeRef.current = 'single'
+          if (!startEngine(language)) setLiveUnavailable(true)
+        }
       }
     } catch {
       cleanupCapture()
@@ -783,6 +1000,11 @@ export function MeetingIntelPanel({
     0,
   )
   const showLiveText = recording && liveSupported && !liveUnavailable
+  // Whichever engine is "currently winning": an in-flight interim result
+  // takes priority (it's the freshest signal of which language is being
+  // heard right now), falling back to whichever language last won an
+  // accepted utterance once things go quiet between sentences.
+  const currentLeadLang = interimLeaderLang ?? lastWinnerLang
 
   return (
     <div className="flex flex-col gap-2">
@@ -845,13 +1067,14 @@ export function MeetingIntelPanel({
               Recording — audio is sent to Google Gemini for analysis
             </span>
             {showLiveText ? (
-              // Subtle, not a status announcement — the language is a nicety to
-              // confirm what Auto settled on, not something worth interrupting a
-              // screen reader for on every switch.
+              // Subtle, not a status announcement — which engine is currently
+              // winning is a nicety to confirm bilingual mode is doing
+              // something sensible, not worth interrupting a screen reader
+              // for on every utterance.
               <span className="text-xs text-muted-foreground">
-                {language === 'auto'
-                  ? `Auto · ${ACTIVE_LANGUAGE_LABEL[activeLang]}`
-                  : ACTIVE_LANGUAGE_LABEL[activeLang]}
+                {language === 'bilingual'
+                  ? `Bilingual${currentLeadLang ? ` · ${ACTIVE_LANGUAGE_LABEL[currentLeadLang]}` : ''}`
+                  : ACTIVE_LANGUAGE_LABEL[language]}
               </span>
             ) : null}
           </>
@@ -873,6 +1096,9 @@ export function MeetingIntelPanel({
 
       {recording && liveSupported && liveUnavailable ? (
         <p className="text-xs text-muted-foreground">Live text stopped — recording continues normally.</p>
+      ) : null}
+      {recording && liveSupported && !liveUnavailable && fallbackNotice ? (
+        <p className="text-xs text-muted-foreground">{fallbackNotice}</p>
       ) : null}
       {recording && !liveSupported ? (
         <p className="text-xs text-muted-foreground">Live transcript needs Chrome — recording still works.</p>

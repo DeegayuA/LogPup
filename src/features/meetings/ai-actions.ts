@@ -546,10 +546,20 @@ export async function analyzeMeetingAudio(
   const prompt = `You are LogPup's meeting analyst for a software team.
 Audio of the meeting "${meeting.title}"${meeting.agenda ? ` (agenda: ${meeting.agenda})` : ''} is attached.
 Known attendees: ${attendeeNames.length > 0 ? attendeeNames.join(', ') : 'unknown'}.
-The meeting may be in English, Sinhala (සිංහල), or mixed — transcribe faithfully in the original language and script.
+This is a Sri Lankan team meeting. Speakers routinely CODE-SWITCH between Sinhala and English —
+often mid-sentence, sometimes mid-phrase — and that is completely normal for this team, not an
+error to correct. Transcribe each phrase in whichever language it was ACTUALLY spoken in: Sinhala
+words in Sinhala script (සිංහල), English words in Latin script, on the same line, exactly as a
+bilingual person would write it down. Do NOT force-translate the whole thing into one language, and
+do NOT paraphrase Sinhala into English (or vice versa) just to make the transcript read as a single
+language — that would misrepresent what was actually said. Technical/product terms that Sinhala
+speakers commonly say untranslated (e.g. "sprint", "deploy", "bug", "PR", "server", app or feature
+names) must stay in English/Latin script even inside an otherwise-Sinhala sentence — never
+transliterate or translate them.
 ${
   liveTranscript
-    ? `\nA live, noisy speech-to-text capture made during the meeting is included below as a HINT ONLY.
+    ? `\nA live, noisy speech-to-text capture made during the meeting is included below as a HINT ONLY —
+it may already interleave Sinhala and English phrases the way the audio does.
 Treat the AUDIO as authoritative for content, meaning, and language; use this noisy text only to help
 spell attendee names, product/technical terms, and numbers correctly. Never quote it verbatim over what
 the audio actually says.
@@ -563,16 +573,18 @@ ${liveTranscript}
 }
 Return STRICT JSON only, matching exactly:
 {
-  "language": "en" | "si" | "mixed",
-  "transcript": "full transcript with speaker labels where identifiable",
+  "language": "en" | "si" | "bilingual",
+  "transcript": "full transcript with speaker labels where identifiable — each phrase kept in the language it was actually spoken in, per the code-switching rules above",
   "summary": "professional meeting minutes in English (if mainly Sinhala, append a Sinhala section) with three clear parts: Decisions made, Discussion highlights, and Next steps — written for someone who was not in the room, not a raw dump of everything said",
   "perPerson": [{ "name": "...", "points": ["key things this person said or decided"], "actionItems": ["..."] }],
   "deadlines": [{ "item": "...", "owner": "...", "due": "date or phrase as spoken" }],
   "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
   "questions": [{ "person": "...", "questions": ["question this person should answer at the next meeting"] }],
-  "speakerSegments": [{ "speaker": "attendee name if identifiable, else \"Speaker 1\"/\"Speaker 2\"/… used consistently for the same voice, or null", "text": "what this speaker said in this turn" }],
+  "speakerSegments": [{ "speaker": "attendee name if identifiable, else \"Speaker 1\"/\"Speaker 2\"/… used consistently for the same voice, or null", "text": "what this speaker said in this turn, verbatim in whichever language(s) they actually used — never translated or normalized to one language" }],
   "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0 }]
 }
+Use "bilingual" for "language" whenever the meeting code-switches between Sinhala and English —
+the common case for this team — and "en"/"si" only when it is genuinely all one language throughout.
 Map speakers to attendee names where possible; unknown voices become "Speaker 1", "Speaker 2", … .
 Deadlines and action items must be concrete. Give each person 1–3 follow-up questions about their
 commitments, blockers, and deadlines from THIS meeting — they follow that person forward and are
@@ -622,6 +634,12 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
 
   const values = {
     meetingId: id,
+    // Free-text, not a DB enum — the model returns "en" | "si" | "bilingual"
+    // per the prompt above (bilingual = code-switching detected, the
+    // expected case for this team). Older rows may still say "mixed" from
+    // before this field's semantics were made explicit for code-switching;
+    // nothing in the codebase branches on the exact string, so both values
+    // coexist safely and neither needs a backfill.
     language: typeof parsed.language === 'string' ? parsed.language : 'en',
     transcript,
     summary,

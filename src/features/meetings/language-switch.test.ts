@@ -1,100 +1,98 @@
 import { describe, it, expect } from 'vitest'
 import {
-  shouldSwitchLanguage,
-  otherLanguage,
-  CONFIDENCE_WINDOW_SIZE,
-  CONFIDENCE_SWITCH_THRESHOLD,
-  SWITCH_COOLDOWN_MS,
+  pickUtterance,
+  shouldFlush,
+  UTTERANCE_PAIR_WINDOW_MS,
+  type UtteranceCandidate,
 } from './language-switch'
 
-// Sanity check on the tuned constants themselves — if these ever drift the
-// scenarios below (built around "clearly above" / "clearly below" values)
-// could quietly stop testing what they claim to.
-describe('tuned constants', () => {
-  it('threshold sits strictly between 0 and 1', () => {
-    expect(CONFIDENCE_SWITCH_THRESHOLD).toBeGreaterThan(0)
-    expect(CONFIDENCE_SWITCH_THRESHOLD).toBeLessThan(1)
+const en = (text: string, confidence?: number): UtteranceCandidate => ({ lang: 'en-US', text, confidence })
+const si = (text: string, confidence?: number): UtteranceCandidate => ({ lang: 'si-LK', text, confidence })
+
+describe('pickUtterance', () => {
+  it('returns null on empty input', () => {
+    expect(pickUtterance({ candidates: [], previousLang: null })).toBeNull()
   })
 
-  it('window requires more than one sample', () => {
-    expect(CONFIDENCE_WINDOW_SIZE).toBeGreaterThan(1)
+  it('returns the only candidate when there is just one, regardless of confidence', () => {
+    const only = en('hello', 0.1)
+    expect(pickUtterance({ candidates: [only], previousLang: null })).toBe(only)
+  })
+
+  it('returns the only candidate when it has no confidence at all', () => {
+    const only = si('hello')
+    expect(pickUtterance({ candidates: [only], previousLang: 'en-US' })).toBe(only)
+  })
+
+  it('picks the higher-confidence candidate when both report a number', () => {
+    const weak = en('helo', 0.4)
+    const strong = si('හෙලෝ', 0.9)
+    expect(pickUtterance({ candidates: [weak, strong], previousLang: null })).toBe(strong)
+    // Order in the array must not matter for a clear winner.
+    expect(pickUtterance({ candidates: [strong, weak], previousLang: null })).toBe(strong)
+  })
+
+  it('prefers the candidate with a numeric confidence over one with none', () => {
+    const withScore = en('deploy the build', 0.55)
+    const noScore = si('build එක deploy කරන්න')
+    expect(pickUtterance({ candidates: [withScore, noScore], previousLang: null })).toBe(withScore)
+    expect(pickUtterance({ candidates: [noScore, withScore], previousLang: null })).toBe(withScore)
+  })
+
+  it('falls back to previousLang when neither candidate has a usable confidence', () => {
+    const enCandidate = en('as I said')
+    const siCandidate = si('මම කිව්ව විදිහට')
+    expect(
+      pickUtterance({ candidates: [enCandidate, siCandidate], previousLang: 'si-LK' }),
+    ).toBe(siCandidate)
+    expect(
+      pickUtterance({ candidates: [enCandidate, siCandidate], previousLang: 'en-US' }),
+    ).toBe(enCandidate)
+  })
+
+  it('falls back to the first candidate when neither has confidence and there is no previous language', () => {
+    const first = en('good morning')
+    const second = si('සුභ උදෑසනක්')
+    expect(pickUtterance({ candidates: [first, second], previousLang: null })).toBe(first)
+  })
+
+  it('falls back to the first candidate when neither has confidence and previousLang matches neither', () => {
+    // previousLang can only ever be 'en-US' or 'si-LK' in practice, but the
+    // fallback-to-first behaviour should hold even if nothing matches.
+    const first = en('good morning')
+    const second = si('සුභ උදෑසනක්')
+    expect(pickUtterance({ candidates: [first, second], previousLang: 'si-LK' })).toBe(second)
+    expect(pickUtterance({ candidates: [second, first], previousLang: 'en-US' })).toBe(first)
+  })
+
+  it('resolves an exact confidence tie deterministically by taking the first candidate', () => {
+    const first = en('same score', 0.75)
+    const second = si('එකම ලකුණ', 0.75)
+    expect(pickUtterance({ candidates: [first, second], previousLang: null })).toBe(first)
+    // Reversing the array reverses which one is "first" — still deterministic.
+    expect(pickUtterance({ candidates: [second, first], previousLang: null })).toBe(second)
+  })
+
+  it('a tie is decided by array order even when previousLang matches the second candidate', () => {
+    // Ties are NOT resolved by conversation inertia — only the
+    // no-confidence-at-all case uses previousLang. This pins that down.
+    const first = en('same score', 0.5)
+    const second = si('එකම ලකුණ', 0.5)
+    expect(pickUtterance({ candidates: [first, second], previousLang: 'si-LK' })).toBe(first)
   })
 })
 
-describe('shouldSwitchLanguage', () => {
-  const readyToSwitch = SWITCH_COOLDOWN_MS // exactly at the cooldown boundary
-
-  it('switches when the rolling average is below threshold and enough samples exist', () => {
-    const confidences = Array(CONFIDENCE_WINDOW_SIZE).fill(CONFIDENCE_SWITCH_THRESHOLD - 0.2)
-    expect(
-      shouldSwitchLanguage({ confidences, currentLang: 'en-US', msSinceLastSwitch: readyToSwitch })
-    ).toBe(true)
+describe('shouldFlush', () => {
+  it('does not flush before the pairing window elapses', () => {
+    expect(shouldFlush(UTTERANCE_PAIR_WINDOW_MS - 1)).toBe(false)
+    expect(shouldFlush(0)).toBe(false)
   })
 
-  it('does not switch when the rolling average is above threshold', () => {
-    const confidences = Array(CONFIDENCE_WINDOW_SIZE).fill(CONFIDENCE_SWITCH_THRESHOLD + 0.2)
-    expect(
-      shouldSwitchLanguage({ confidences, currentLang: 'en-US', msSinceLastSwitch: readyToSwitch })
-    ).toBe(false)
+  it('flushes the instant the pairing window elapses', () => {
+    expect(shouldFlush(UTTERANCE_PAIR_WINDOW_MS)).toBe(true)
   })
 
-  it('does not switch when there are not yet enough samples, even if they are all low', () => {
-    const confidences = Array(CONFIDENCE_WINDOW_SIZE - 1).fill(0.1)
-    expect(
-      shouldSwitchLanguage({ confidences, currentLang: 'en-US', msSinceLastSwitch: readyToSwitch })
-    ).toBe(false)
-  })
-
-  it('does not switch on zero samples', () => {
-    expect(
-      shouldSwitchLanguage({ confidences: [], currentLang: 'si-LK', msSinceLastSwitch: readyToSwitch })
-    ).toBe(false)
-  })
-
-  it('blocks an otherwise-valid switch during the cooldown window', () => {
-    const confidences = Array(CONFIDENCE_WINDOW_SIZE).fill(0.1)
-    expect(
-      shouldSwitchLanguage({ confidences, currentLang: 'en-US', msSinceLastSwitch: SWITCH_COOLDOWN_MS - 1 })
-    ).toBe(false)
-  })
-
-  it('allows a switch the instant the cooldown elapses', () => {
-    const confidences = Array(CONFIDENCE_WINDOW_SIZE).fill(0.1)
-    expect(
-      shouldSwitchLanguage({ confidences, currentLang: 'en-US', msSinceLastSwitch: SWITCH_COOLDOWN_MS })
-    ).toBe(true)
-  })
-
-  it('only weighs the most recent window, ignoring older history', () => {
-    // A long run of terrible confidence followed by a strong recent run
-    // should read as "fine now", not be dragged down by ancient history.
-    const oldBad = Array(10).fill(0.05)
-    const recentGood = Array(CONFIDENCE_WINDOW_SIZE).fill(0.95)
-    expect(
-      shouldSwitchLanguage({
-        confidences: [...oldBad, ...recentGood],
-        currentLang: 'en-US',
-        msSinceLastSwitch: readyToSwitch,
-      })
-    ).toBe(false)
-  })
-
-  it('a single low sample among otherwise-confident ones does not average below threshold', () => {
-    // One rough word shouldn't be enough on its own — the point of
-    // averaging over a window rather than reacting to one result.
-    const confidences = [0.95, 0.9, 0.92, 0.1]
-    expect(
-      shouldSwitchLanguage({ confidences, currentLang: 'en-US', msSinceLastSwitch: readyToSwitch })
-    ).toBe(false)
-  })
-})
-
-describe('otherLanguage', () => {
-  it('flips English to Sinhala', () => {
-    expect(otherLanguage('en-US')).toBe('si-LK')
-  })
-
-  it('flips Sinhala to English', () => {
-    expect(otherLanguage('si-LK')).toBe('en-US')
+  it('flushes anything older than the window', () => {
+    expect(shouldFlush(UTTERANCE_PAIR_WINDOW_MS + 5_000)).toBe(true)
   })
 })

@@ -335,7 +335,9 @@ export const MiniCalendarDay = ({
         // height whether or not it has an icon. `min-h-11` keeps the 44px
         // WCAG 2.5.8 tap target a hard floor rather than an accident of
         // however tall the text happens to render.
-        "relative h-auto min-h-11 min-w-12 flex-col justify-center gap-0.5 px-2 py-2 text-xs",
+        // flex-1 so the days spread to fill the strip on wide screens; min-w keeps
+        // a 44px tap target on narrow ones (the row scrolls past that point).
+        "relative h-auto min-h-11 min-w-11 flex-1 flex-col justify-center gap-0.5 px-2 py-2 text-xs",
         // Today is a hairline ring around the whole cell. The previous top
         // accent bar sat on the month label and read as a strikethrough; a ring
         // cannot collide with anything, and stays clearly distinct from the

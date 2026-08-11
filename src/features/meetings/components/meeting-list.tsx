@@ -4,7 +4,7 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { CalendarCheckIcon, CalendarDaysIcon, SendIcon, Trash2Icon } from 'lucide-react'
+import { CalendarCheckIcon, CalendarDaysIcon, SendIcon, Trash2Icon, VideoIcon } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -124,6 +124,16 @@ function MeetingRow({
             <Badge variant="outline" className="gap-1">
               <CalendarCheckIcon className="size-3" /> Calendar invite sent
             </Badge>
+          ) : null}
+          {meeting.meetingUrl ? (
+            <a
+              href={meeting.meetingUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              <VideoIcon className="size-3" /> Join
+            </a>
           ) : null}
         </div>
         <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">

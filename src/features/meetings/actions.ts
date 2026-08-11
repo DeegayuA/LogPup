@@ -15,6 +15,7 @@ import {
   updateCalendarEventTime,
 } from '@/features/calendar/google-calendar'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
+import { meetingUrlSchema } from '@/features/meetings/meeting-url'
 
 const meetingInput = z
   .object({
@@ -23,6 +24,7 @@ const meetingInput = z
     startsAt: z.iso.datetime(),
     endsAt: z.iso.datetime(),
     agenda: z.string().max(2000).optional(),
+    meetingUrl: meetingUrlSchema.optional(),
     attendeeIds: z.array(z.uuid()).min(1),
   })
   .refine((data) => new Date(data.endsAt) > new Date(data.startsAt), {
@@ -193,7 +195,7 @@ export async function createMeeting(
   const parsed = meetingInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const { appId, title, startsAt, endsAt, agenda } = parsed.data
+  const { appId, title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
   // Dedup: the picker can submit the same user twice (e.g. selected, then
   // re-added via a mention hint) — a duplicate id would violate the
   // meetingAttendees composite primary key and fail the whole batch insert.
@@ -213,6 +215,7 @@ export async function createMeeting(
         startsAt: new Date(startsAt),
         endsAt: new Date(endsAt),
         agenda: agenda || null,
+        meetingUrl: meetingUrl ?? null,
         createdBy: session.user.id,
       }),
       db

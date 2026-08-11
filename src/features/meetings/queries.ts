@@ -14,6 +14,7 @@ export type MeetingSummary = {
   endsAt: Date
   agenda: string | null
   notes: string | null
+  meetingUrl: string | null
   googleEventId: string | null
   createdBy: string
   attendees: MeetingAttendee[]
@@ -29,6 +30,7 @@ const meetingColumns = {
   endsAt: meetings.endsAt,
   agenda: meetings.agenda,
   notes: meetings.notes,
+  meetingUrl: meetings.meetingUrl,
   googleEventId: meetings.googleEventId,
   createdBy: meetings.createdBy,
 }

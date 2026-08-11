@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { createMeeting, teamForApp } from '@/features/meetings/actions'
+import { MEETING_URL_ERROR, isValidMeetingUrl } from '@/features/meetings/meeting-url'
 import type { ActiveUser } from '@/features/people/queries'
 import { parseMeetingIntent, type MeetingIntent } from '@/lib/meeting-intent'
 
@@ -60,6 +61,7 @@ type FormState = {
   start: Date
   end: Date
   agenda: string
+  meetingUrl: string
   attendeeIds: string[]
 }
 
@@ -71,6 +73,7 @@ function emptyState(defaultAppId?: string): FormState {
     start,
     end: addHours(start, 1),
     agenda: '',
+    meetingUrl: '',
     attendeeIds: [],
   }
 }
@@ -113,6 +116,15 @@ function resolveQuickAdd(
   return { ...intent, appName: app?.name ?? null, appId: app?.id ?? null }
 }
 
+/** Just the host, so a long invite URL doesn't blow out the preview line. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '') || 'link'
+  } catch {
+    return 'link'
+  }
+}
+
 /** The one-line "here is what I understood" the user reviews before applying. */
 function describeQuickAdd(preview: QuickAddPreview): string {
   const parts = [preview.title]
@@ -124,6 +136,9 @@ function describeQuickAdd(preview: QuickAddPreview): string {
     parts.push(preview.attendees.map((attendee) => attendee.name).join(', '))
   }
   if (preview.appName) parts.push(preview.appName)
+  // The parser lifts a pasted link out of the phrase entirely, so without this
+  // the URL just vanishes from the preview with no sign it was understood.
+  if (preview.meetingUrl) parts.push(hostOf(preview.meetingUrl))
   return parts.join(' · ')
 }
 
@@ -173,6 +188,25 @@ export function MeetingForm({
     [settled, activeUsers, apps],
   )
 
+  // Auto-fill: the moment the debounced parse yields something usable, it flows
+  // straight into the form — no "Apply" step. Manual edits afterward stick until
+  // the next change to the quick-add text re-parses.
+  useEffect(() => {
+    if (!preview) return
+    setForm((f) => ({
+      ...f,
+      title: preview.title.slice(0, 120),
+      appId: preview.appId ?? f.appId,
+      start: preview.startsAt ?? f.start,
+      end: preview.endsAt ?? f.end,
+      meetingUrl: preview.meetingUrl ?? f.meetingUrl,
+      attendeeIds:
+        preview.attendees.length > 0
+          ? Array.from(new Set([...f.attendeeIds, ...preview.attendees.map((a) => a.id)]))
+          : f.attendeeIds,
+    }))
+  }, [preview])
+
   function handleOpenChange(next: boolean) {
     setOpen(next)
     if (next) {
@@ -206,6 +240,7 @@ export function MeetingForm({
       appId: intent.appId ?? f.appId,
       start: intent.startsAt ?? f.start,
       end: intent.endsAt ?? f.end,
+      meetingUrl: intent.meetingUrl ?? f.meetingUrl,
       attendeeIds:
         intent.attendees.length > 0
           ? Array.from(new Set([...f.attendeeIds, ...intent.attendees.map((a) => a.id)]))
@@ -264,6 +299,10 @@ export function MeetingForm({
       document.getElementById('meeting-end')?.focus()
       return
     }
+    if (linkInvalid) {
+      document.getElementById('meeting-link')?.focus()
+      return
+    }
     if (noAttendees) {
       document.getElementById('meeting-attendees-add')?.focus()
       return
@@ -276,6 +315,7 @@ export function MeetingForm({
           startsAt: form.start.toISOString(),
           endsAt: form.end.toISOString(),
           agenda: form.agenda || undefined,
+          meetingUrl: form.meetingUrl,
           attendeeIds: form.attendeeIds,
         })
         if (!res.ok) {
@@ -300,6 +340,9 @@ export function MeetingForm({
   // two have no native equivalent, so they are surfaced (and focused) by hand.
   const endBeforeStart = form.end <= form.start
   const noAttendees = form.attendeeIds.length === 0
+  // Mirrors the server rule so a bad paste is caught before the round-trip.
+  // Blank is valid — the link is optional.
+  const linkInvalid = !isValidMeetingUrl(form.meetingUrl)
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -312,22 +355,17 @@ export function MeetingForm({
         {/* Deliberately outside the <form>: this only ever fills the fields
             below, so it must never be able to submit them. */}
         <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/40 p-3">
-          <Label htmlFor="meeting-quick-add">Quick add</Label>
-          <div className="flex items-center gap-2">
-            <Input
-              id="meeting-quick-add"
-              value={quickAdd}
-              onChange={(e) => setQuickAdd(e.target.value)}
-              onKeyDown={handleQuickAddKeyDown}
-              placeholder="standup tomorrow 10am with shanika"
-              aria-describedby="meeting-quick-add-preview"
-              autoComplete="off"
-              className="flex-1 bg-background"
-            />
-            <Button type="button" variant="secondary" size="sm" onClick={applyQuickAdd}>
-              Apply
-            </Button>
-          </div>
+          <Label htmlFor="meeting-quick-add">Quick add — fills the form as you type</Label>
+          <Input
+            id="meeting-quick-add"
+            value={quickAdd}
+            onChange={(e) => setQuickAdd(e.target.value)}
+            onKeyDown={handleQuickAddKeyDown}
+            placeholder="standup tomorrow 9pm with shanika https://meet.google.com/…"
+            aria-describedby="meeting-quick-add-preview"
+            autoComplete="off"
+            className="bg-background"
+          />
           <div id="meeting-quick-add-preview" aria-live="polite" className="flex flex-col gap-1">
             {preview ? (
               <>
@@ -413,6 +451,30 @@ export function MeetingForm({
               onChange={(e) => setForm((f) => ({ ...f, agenda: e.target.value }))}
               maxLength={2000}
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="meeting-link">Link</Label>
+            <Input
+              id="meeting-link"
+              type="url"
+              inputMode="url"
+              value={form.meetingUrl}
+              onChange={(e) => setForm((f) => ({ ...f, meetingUrl: e.target.value }))}
+              placeholder="https://meet.google.com/…"
+              autoComplete="off"
+              className="hover:border-ring/40"
+              aria-invalid={linkInvalid || undefined}
+              aria-describedby={linkInvalid ? 'meeting-link-error' : 'meeting-link-hint'}
+            />
+            {linkInvalid ? (
+              <p id="meeting-link-error" role="alert" className="text-xs text-destructive">
+                {MEETING_URL_ERROR}
+              </p>
+            ) : (
+              <p id="meeting-link-hint" className="text-xs text-muted-foreground">
+                Meet, Zoom or Teams link — attendees get a one-click join
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>Attendees</Label>
