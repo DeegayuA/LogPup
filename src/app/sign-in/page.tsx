@@ -3,6 +3,7 @@ import { signIn } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { PasswordAuth } from '@/features/auth/components/password-auth'
+import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
 
 export const metadata = { title: 'Sign in' }
 
@@ -13,6 +14,9 @@ const devLoginEmail =
 export default function SignInPage() {
   return (
     <main className="grid min-h-screen lg:grid-cols-2">
+      {/* Landing here means there is no session — drop any Cache Storage the
+          previous user's install may still be holding. */}
+      <ClearCachedShell />
       <aside className="hidden flex-col justify-between border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
         <div className="flex items-center gap-3">
           <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
