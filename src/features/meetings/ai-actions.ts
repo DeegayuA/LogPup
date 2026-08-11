@@ -11,6 +11,7 @@ import { allowedDomains, emailAllowed } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { db } from '@/db'
 import {
+  apps,
   assignmentHistory,
   assignments,
   meetingAiNotes,
@@ -2060,6 +2061,19 @@ const assignSpeakerInput = z
         email: z.email().max(160),
       })
       .optional(),
+    // The role and allocation to open a NEW app assignment with, for the case
+    // where attributing this label also puts someone on the meeting's app for
+    // the first time. Absent on the first call — the action answers
+    // 'needs-assignment' and the admin is asked, rather than a number being
+    // invented for them (see assignSpeaker). Same bounds as the admin
+    // allocation dialog (people/actions.ts assignInput) because it lands in
+    // exactly the same table and the same capacity totals.
+    assignment: z
+      .object({
+        role: z.string().trim().min(2).max(40),
+        allocationPct: z.number().int().min(5).max(100),
+      })
+      .optional(),
   })
   .refine((data) => (data.userId === undefined) !== (data.newPerson === undefined), {
     message: 'Pick someone, or add a new person — not both',
@@ -2130,12 +2144,40 @@ function attendanceHistoryStatements(input: {
   ] as const
 }
 
-// What an auto-created assignment claims. 5% is the floor the admin
-// allocation UI permits — the smallest non-zero claim there is. Inventing a
-// real percentage nobody decided would corrupt every capacity total that
-// includes it; the floor, labelled by the note below, does not.
-const SPEAKER_ASSIGNMENT_ROLE = 'Contributor'
-const SPEAKER_ASSIGNMENT_PCT = 5
+/**
+ * What assignSpeaker answers.
+ *
+ * 'needs-assignment' is NOT an error and NOT a partial write — nothing at all
+ * was written. Attributing this label would also open the person's first
+ * assignment on the meeting's app, and there is no honest default for what
+ * that assignment claims: an invented percentage is indistinguishable from a
+ * decided one once it is in `assignments`, and every capacity total that
+ * includes it silently inherits the guess. So the action stops and asks, and
+ * the caller retries with `assignment` filled in.
+ */
+export type AssignSpeakerResult =
+  | {
+      status: 'assigned'
+      userId: string | null
+      /** Set when this write put the person over 100% across all their apps. */
+      warning?: string
+      /**
+       * An app assignment was missing but the caller isn't an admin, so the
+       * label mapping and meeting attendance were written and the assignment
+       * was left alone. Allocations are admin-only everywhere else
+       * (people/actions.ts assignUser), and this is not the place to make an
+       * exception — least of all by inventing the number.
+       */
+      assignmentDeferred?: { appName: string }
+    }
+  | {
+      status: 'needs-assignment'
+      personName: string
+      appName: string
+      /** Their current total across all apps, so the admin is deciding with
+       *  the capacity picture in front of them rather than blind. */
+      currentPct: number
+    }
 
 /**
  * Maps a speaker label to a person — and follows that claim everywhere it
@@ -2162,7 +2204,8 @@ export async function assignSpeaker(input: {
   label: string
   userId?: string | null
   newPerson?: { name: string; email: string }
-}): Promise<ActionResult<{ userId: string | null }>> {
+  assignment?: { role: string; allocationPct: number }
+}): Promise<ActionResult<AssignSpeakerResult>> {
   const parsed = assignSpeakerInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -2175,6 +2218,9 @@ export async function assignSpeaker(input: {
   // anything that references it.
   const statements: BatchItem<'pg'>[] = []
   let targetUserId: string | null = null
+  // Only needed to name the person in the "what should this assignment say?"
+  // prompt, so it is whatever the caller already made us look up.
+  let targetUserName = ''
 
   if (parsed.data.newPerson) {
     if (!isAdmin) return err('Only an admin can add someone new')
@@ -2213,9 +2259,10 @@ export async function assignSpeaker(input: {
         status: 'approved',
       }),
     )
+    targetUserName = parsed.data.newPerson.name
   } else if (parsed.data.userId) {
     const [person] = await db
-      .select({ id: users.id, active: users.active })
+      .select({ id: users.id, name: users.name, active: users.active })
       .from(users)
       .where(eq(users.id, parsed.data.userId))
     if (!person) return err('That person no longer exists')
@@ -2235,6 +2282,7 @@ export async function assignSpeaker(input: {
       if (!attendee) return err('That person is no longer active')
     }
     targetUserId = person.id
+    targetUserName = person.name
   }
 
   // What the assignment already looks like, so the plan only adds what's
@@ -2246,10 +2294,13 @@ export async function assignSpeaker(input: {
       .where(eq(meetingAttendees.meetingId, meeting.id)),
     targetUserId
       ? db
-          .select({ appId: assignments.appId })
+          // allocationPct comes along so the over-allocation total can be
+          // computed without a second round trip — both to show the admin
+          // what they're adding to, and to warn afterwards.
+          .select({ appId: assignments.appId, allocationPct: assignments.allocationPct })
           .from(assignments)
           .where(eq(assignments.userId, targetUserId))
-      : Promise.resolve([] as { appId: string }[]),
+      : Promise.resolve([] as { appId: string; allocationPct: number }[]),
   ])
 
   const plan = planSpeakerAssignment({
@@ -2258,6 +2309,32 @@ export async function assignSpeaker(input: {
     appId: meeting.appId,
     assignedAppIds: assignmentRows.map((row) => row.appId),
   })
+
+  // The new assignment needs a role and an allocation, and nobody has said
+  // what they are. STOP — before any statement runs — and ask. Returning here
+  // writes nothing at all, so a cancelled prompt leaves the meeting exactly as
+  // it was rather than half-attributed.
+  //
+  // Non-admins are the one case that proceeds without one: creating an
+  // assignment is admin-only everywhere else (people/actions.ts assignUser),
+  // so there is nothing to prompt them for. They still get the two claims they
+  // ARE allowed to make — the label mapping and the attendance row — and the
+  // caller is told the assignment is outstanding.
+  const needsAssignment = plan.addAssignment && meeting.appId !== null && !parsed.data.assignment
+  const [appRow] = needsAssignment
+    ? await db.select({ name: apps.name }).from(apps).where(eq(apps.id, meeting.appId!))
+    : [undefined]
+
+  if (needsAssignment && isAdmin) {
+    return ok({
+      status: 'needs-assignment',
+      personName: targetUserName,
+      appName: appRow?.name ?? 'this app',
+      currentPct: assignmentRows.reduce((total, row) => total + row.allocationPct, 0),
+    })
+  }
+
+  const writeAssignment = plan.addAssignment && Boolean(parsed.data.assignment)
 
   // ONE instant for every interval boundary this batch writes, so the closing
   // and opening rows abut exactly instead of leaving a gap or an overlap.
@@ -2307,23 +2384,27 @@ export async function assignSpeaker(input: {
     )
   }
 
-  if (plan.userId && plan.addAssignment && meeting.appId) {
+  if (plan.userId && writeAssignment && meeting.appId && parsed.data.assignment) {
+    const { role, allocationPct } = parsed.data.assignment
     statements.push(
       db.insert(assignments).values({
         userId: plan.userId,
         appId: meeting.appId,
-        role: SPEAKER_ASSIGNMENT_ROLE,
-        allocationPct: SPEAKER_ASSIGNMENT_PCT,
+        role,
+        allocationPct,
       }),
       ...assignmentHistoryStatements({
         userId: plan.userId,
         appId: meeting.appId,
-        role: SPEAKER_ASSIGNMENT_ROLE,
-        allocationPct: SPEAKER_ASSIGNMENT_PCT,
+        role,
+        allocationPct,
         changeKind: 'assigned',
         changedBy: session.user.id,
         at,
-        note: `Created automatically when this person was attributed as a speaker in “${meeting.title}”. The allocation is a placeholder — set the real one on the app's team.`,
+        // No "placeholder" caveat any more: an admin typed this role and this
+        // percentage when they attributed the speaker, so the history entry
+        // records a decision rather than a guess to be corrected later.
+        note: `Set when this person was attributed as a speaker in “${meeting.title}”.`,
       }),
     )
   }
@@ -2338,11 +2419,27 @@ export async function assignSpeaker(input: {
   }
 
   revalidatePath('/meetings')
-  if (plan.addAssignment) {
+  if (writeAssignment) {
     revalidatePath('/people')
     revalidatePath('/')
   }
-  return ok({ userId: plan.userId })
+
+  // Same over-allocation check the admin allocation dialog makes — an
+  // assignment opened from here counts towards capacity identically, so it
+  // should be just as loud about pushing someone past 100%.
+  const totalPct = writeAssignment
+    ? assignmentRows.reduce((total, row) => total + row.allocationPct, 0) +
+      (parsed.data.assignment?.allocationPct ?? 0)
+    : 0
+
+  return ok({
+    status: 'assigned',
+    userId: plan.userId,
+    ...(totalPct > 100 ? { warning: `Now at ${totalPct}% allocation` } : {}),
+    ...(needsAssignment && !isAdmin
+      ? { assignmentDeferred: { appName: appRow?.name ?? 'this app' } }
+      : {}),
+  })
 }
 
 const acceptSuggestionInput = z.object({

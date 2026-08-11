@@ -24,11 +24,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { JOB_ROLES } from '@/lib/job-roles'
 import {
   assignSpeaker,
   getSpeakerAssignmentData,
   type SpeakerAssignmentData,
 } from '@/features/meetings/ai-actions'
+
+/** The call that produced a 'needs-assignment' answer, held so the exact same
+ *  input can be replayed once the admin has filled in the allocation. */
+type PendingAssignment = {
+  input: Parameters<typeof assignSpeaker>[0]
+  personName: string
+  appName: string
+  currentPct: number
+}
 
 // Sentinel values for the two picker rows that aren't a user id. Both are
 // shapes no uuid can take, so they can never collide with a real option.
@@ -82,6 +92,11 @@ export function SpeakerAssignment({
   const [pending, startPending] = useTransition()
   const [addingNew, setAddingNew] = useState(false)
   const [newPerson, setNewPerson] = useState({ name: '', email: '' })
+  // Set when the server came back asking what this person's first assignment
+  // on the meeting's app should claim. Nothing was written when this is set —
+  // dismissing the dialog cancels the whole attribution.
+  const [needsAssignment, setNeedsAssignment] = useState<PendingAssignment | null>(null)
+  const [allocation, setAllocation] = useState({ role: '', allocationPct: '' })
 
   const mapping = data.speakers.find((s) => s.label === label)
   const value = mapping ? (mapping.userId ?? NOT_ATTENDEE) : undefined
@@ -99,7 +114,30 @@ export function SpeakerAssignment({
           toast.error(res.error)
           return
         }
+
+        // Nothing was written: attributing this label would also be this
+        // person's first assignment on the meeting's app, and the allocation
+        // it claims is a decision, not something to default. Ask, then replay
+        // the identical call with the answer.
+        if (res.data.status === 'needs-assignment') {
+          setNeedsAssignment({
+            input,
+            personName: res.data.personName,
+            appName: res.data.appName,
+            currentPct: res.data.currentPct,
+          })
+          setAllocation({ role: '', allocationPct: '' })
+          return
+        }
+
+        if (res.data.warning) toast.warning(res.data.warning)
+        if (res.data.assignmentDeferred) {
+          toast.info(
+            `Attributed. An admin still needs to add them to ${res.data.assignmentDeferred.appName}'s team.`,
+          )
+        }
         setAddingNew(false)
+        setNeedsAssignment(null)
         setNewPerson({ name: '', email: '' })
         await onChanged?.()
       } catch {
@@ -221,6 +259,85 @@ export function SpeakerAssignment({
               <Button type="submit" disabled={pending}>
                 {pending ? <Loader2Icon className="animate-spin" aria-hidden /> : <UserPlusIcon aria-hidden />}
                 Add and attribute
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Attributing this label also puts someone on an app's team for the
+          first time. That assignment counts towards their capacity, so it is
+          asked for rather than defaulted — closing this cancels the whole
+          attribution, and nothing has been written yet. */}
+      <Dialog
+        open={needsAssignment !== null}
+        onOpenChange={(open) => !open && setNeedsAssignment(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Put {needsAssignment?.personName} on {needsAssignment?.appName}?</DialogTitle>
+            <DialogDescription>
+              Attributing “{label}” to {needsAssignment?.personName} says they were doing{' '}
+              {needsAssignment?.appName}&rsquo;s work, and they have no assignment on it yet.
+              {needsAssignment && needsAssignment.currentPct > 0
+                ? ` They're at ${needsAssignment.currentPct}% across their other apps.`
+                : ' They have no other allocation right now.'}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!needsAssignment) return
+              submit({
+                ...needsAssignment.input,
+                assignment: {
+                  role: allocation.role.trim(),
+                  allocationPct: Number(allocation.allocationPct),
+                },
+              })
+            }}
+          >
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`speaker-role-${label}`}>Role</Label>
+              <Input
+                id={`speaker-role-${label}`}
+                value={allocation.role}
+                onChange={(e) => setAllocation((f) => ({ ...f, role: e.target.value }))}
+                minLength={2}
+                maxLength={40}
+                placeholder="Engineer, Designer, PM…"
+                list={`speaker-role-options-${label}`}
+                required
+              />
+              {/* Same curated suggestions as the admin allocation dialog, free
+                  text still allowed — this writes to the same column. */}
+              <datalist id={`speaker-role-options-${label}`}>
+                {JOB_ROLES.map((option) => (
+                  <option key={option} value={option} />
+                ))}
+              </datalist>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor={`speaker-allocation-${label}`}>Allocation %</Label>
+              <Input
+                id={`speaker-allocation-${label}`}
+                type="number"
+                inputMode="numeric"
+                min={5}
+                max={100}
+                value={allocation.allocationPct}
+                onChange={(e) => setAllocation((f) => ({ ...f, allocationPct: e.target.value }))}
+                placeholder="20"
+                className="font-mono"
+                required
+              />
+              <p className="text-xs text-muted-foreground">5–100% of their time.</p>
+            </div>
+            <DialogFooter>
+              <Button type="submit" disabled={pending}>
+                {pending ? <Loader2Icon className="animate-spin" aria-hidden /> : null}
+                Assign and attribute
               </Button>
             </DialogFooter>
           </form>

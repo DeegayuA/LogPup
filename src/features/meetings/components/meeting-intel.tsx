@@ -61,6 +61,7 @@ import {
   type UtteranceCandidate,
 } from '@/features/meetings/language-switch'
 import { shouldCutSegment } from '@/features/meetings/recording-segments'
+import { SpeakerAssignmentPanel } from '@/features/meetings/components/speaker-assignment'
 
 // --- Minimal Web Speech API typings ------------------------------------
 // Not part of TypeScript's DOM lib (non-standard, webkit-prefixed). Declared
@@ -1822,6 +1823,12 @@ export function MeetingIntelPanel({
                   {/* The summary itself now auto-lands in the unified note
                       timeline above as an 'ai' segment (see
                       insertAutoNotesAndSuggestions) — no separate block here. */}
+
+                  {/* Maps the model's raw speaker labels ("Speaker 1") onto
+                      real people. Self-fetching, and renders nothing when the
+                      meeting has no labels to assign, so it costs nothing on
+                      meetings that were never recorded. */}
+                  <SpeakerAssignmentPanel meetingId={meetingId} canManage={canRecord} />
 
                   {notes.perPerson.length > 0 ? (
                     <section className="flex flex-col gap-1.5">
