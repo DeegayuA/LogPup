@@ -171,7 +171,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // URLs; see features/auth/avatar-actions.ts). Removing an uploaded
         // avatar sets the column NULL, so the next sign-in re-adopts Google's.
         const picture = (profile as { picture?: string } | undefined)?.picture
-        const isUploaded = existing.avatarUrl?.includes('.blob.vercel-storage.com') ?? false
+        const isUploaded = existing.avatarUrl?.startsWith('/api/avatar/') ?? false
         if (picture && !isUploaded && picture !== existing.avatarUrl) {
           updates.avatarUrl = picture
         }
