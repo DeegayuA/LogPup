@@ -20,6 +20,10 @@ const taskInput = z.object({
   assigneeId: z.uuid().nullable(),
   priority: z.number().int().min(0).max(3).default(0),
   status: z.enum(TASK_STATUSES).default('todo'),
+  // Optional so every existing caller (board "add task", quick-add) keeps
+  // working unchanged — omitting it leaves the task with no due date, same
+  // as before this field existed on the input.
+  dueDate: z.iso.date().nullable().optional(),
 })
 
 // Deliberately no `.default()` on any field, mirroring apps/update-input.ts:
@@ -89,7 +93,7 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
   const parsed = taskInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const { appId, sprintId, title, description, assigneeId, priority, status } = parsed.data
+  const { appId, sprintId, title, description, assigneeId, priority, status, dueDate } = parsed.data
   let created: { id: string } | undefined
   try {
     ;[created] = await db
@@ -102,6 +106,7 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
         assigneeId,
         priority,
         status,
+        dueDate: dueDate ?? null,
       })
       .returning({ id: tasks.id })
   } catch (error) {

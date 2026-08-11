@@ -6,13 +6,14 @@ import { and, eq, inArray, isNotNull, lt, ne, or } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { meetingAiNotes, meetingAttendees, meetingFollowups, meetings, users } from '@/db/schema'
-import { callGemini, GeminiError } from '@/features/gemini/client'
+import { DEFAULT_GEMINI_MODEL, callGemini, GeminiError } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import {
   matchPersonToAttendee,
   selectCarriedForward,
   filterValidIds,
   type AttendeeRef,
+  type CarriedForwardEntry,
   type CarriedForwardGroup,
   type FollowupKind,
   type OpenFollowupItem,
@@ -20,6 +21,7 @@ import {
 
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024 // inline Gemini requests cap around 20MB
 const MAX_LIVE_TRANSCRIPT_CHARS = 100_000
+const MAX_RESOLUTION_NOTE_CHARS = 500
 
 // A malformed (non-UUID) meetingId would otherwise reach the DB as a raw
 // `uuid` column comparison and throw a Postgres "invalid input syntax"
@@ -44,9 +46,29 @@ export type MeetingAiNotesView = {
   createdAt: Date
 }
 
+export type FollowupStatus = 'open' | 'resolved'
+
+/**
+ * A carried-forward item as the UI needs it: the pure carry-forward entry
+ * plus where it stands. `status` is what separates "still owed" from "dealt
+ * with", and `resolutionNote` carries the answer someone typed when they
+ * resolved it — the record of WHAT changed, not just that something did.
+ */
+export type CarriedForwardItem = CarriedForwardEntry & {
+  status: FollowupStatus
+  resolutionNote: string | null
+  resolvedAt: Date | null
+}
+
+export type CarriedForwardItemGroup = {
+  userId: string
+  person: string
+  items: CarriedForwardItem[]
+}
+
 export type MeetingIntel = {
   notes: MeetingAiNotesView | null
-  prep: CarriedForwardGroup[]
+  prep: CarriedForwardItemGroup[]
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -91,20 +113,36 @@ async function fetchAttendees(meetingId: string): Promise<AttendeeRef[]> {
   return rows
 }
 
+type FollowupCarryRow = OpenFollowupItem & {
+  status: FollowupStatus
+  resolutionNote: string | null
+  resolvedAt: Date | null
+}
+
 /**
- * Open follow-ups (question/action items attributed to a person) whose
- * source meeting is earlier than `meeting` and readable by `caller` — same
+ * Follow-ups (question/action items attributed to a person) whose source
+ * meeting is earlier than `meeting` and readable by `caller` — same
  * admin/creator/attendee rule as canReadMeetingIntel, applied here to the
  * SOURCE meeting of each follow-up rather than the meeting being viewed.
  * Without this, a follow-up's text (derived from a transcript) could leak
  * into a meeting the caller has no right to see that source meeting's notes
  * from. Callers still need to narrow this to the target meeting's attendees
  * (see selectCarriedForward) — this only handles time + entitlement.
+ *
+ * `includeResolvedHere` additionally returns items that were resolved IN
+ * this meeting (resolvedInMeetingId), so the panel can keep showing them
+ * settled — with whatever note was left — instead of having them blink out
+ * of existence the moment they're ticked off. Deliberately narrow: a
+ * resolved item shows on the one meeting it was resolved in and nowhere
+ * else, which is what keeps it out of every future meeting. Leave it off
+ * for anything that treats the result as work still owed (the AI
+ * "did this come up" pass).
  */
-async function fetchOpenFollowupsBefore(
+async function fetchFollowupsBefore(
   meeting: { id: string; startsAt: Date },
   caller: { id: string; isAdmin: boolean },
-): Promise<OpenFollowupItem[]> {
+  { includeResolvedHere = false }: { includeResolvedHere?: boolean } = {},
+): Promise<FollowupCarryRow[]> {
   const rows = await db
     .select({
       id: meetingFollowups.id,
@@ -112,6 +150,9 @@ async function fetchOpenFollowupsBefore(
       personName: meetingFollowups.personName,
       text: meetingFollowups.text,
       kind: meetingFollowups.kind,
+      status: meetingFollowups.status,
+      resolutionNote: meetingFollowups.resolutionNote,
+      resolvedAt: meetingFollowups.resolvedAt,
       sourceMeetingId: meetingFollowups.sourceMeetingId,
       sourceMeetingTitle: meetings.title,
       sourceMeetingStartsAt: meetings.startsAt,
@@ -124,7 +165,12 @@ async function fetchOpenFollowupsBefore(
     )
     .where(
       and(
-        eq(meetingFollowups.status, 'open'),
+        includeResolvedHere
+          ? or(
+              eq(meetingFollowups.status, 'open'),
+              eq(meetingFollowups.resolvedInMeetingId, meeting.id),
+            )
+          : eq(meetingFollowups.status, 'open'),
         isNotNull(meetingFollowups.userId),
         ne(meetingFollowups.sourceMeetingId, meeting.id),
         lt(meetings.startsAt, meeting.startsAt),
@@ -216,7 +262,7 @@ return { "resolvedIds": [] }.`
 
   let raw: string
   try {
-    raw = await callGemini(userId, [{ text: prompt }], { responseJson: true })
+    ;({ text: raw } = await callGemini(userId, [{ text: prompt }], { responseJson: true }))
   } catch (error) {
     console.error('[meeting-followups] resolution check failed:', error)
     return
@@ -314,13 +360,20 @@ shown whenever they attend a future meeting.`
   const mimeType = audio.type || 'audio/webm'
 
   let raw: string
+  let modelUsed: string = DEFAULT_GEMINI_MODEL
   try {
-    raw = await callGemini(
+    ;({ text: raw, model: modelUsed } = await callGemini(
       session.user.id,
       [{ text: prompt }, { inlineData: { mimeType, data: base64 } }],
       { responseJson: true },
-    )
+    ))
   } catch (error) {
+    // GeminiError.message is already an actionable, key-free string (see
+    // callGemini): distinguishes "everything's busy, your recording is
+    // safe, retry shortly" from "your key was rejected" from a generic
+    // failure. The recording itself is never touched here — the client
+    // (meeting-intel.tsx) keeps the blob and live transcript in memory and
+    // re-offers Analyze on any failure, so nothing recorded is lost.
     if (error instanceof GeminiError) return err(error.message)
     return err('Gemini request failed — try again')
   }
@@ -346,7 +399,7 @@ shown whenever they attend a future meeting.`
     deadlines: asArray(parsed.deadlines),
     terms: asArray(parsed.terms),
     questions,
-    model: 'gemini-flash-latest',
+    model: modelUsed,
     createdBy: session.user.id,
     createdAt: new Date(),
   }
@@ -364,7 +417,7 @@ shown whenever they attend a future meeting.`
   // undo the analysis that already succeeded above.
   try {
     const isAdmin = session.user.role === 'admin'
-    const openBefore = await fetchOpenFollowupsBefore(
+    const openBefore = await fetchFollowupsBefore(
       { id, startsAt: meeting.startsAt },
       { id: session.user.id, isAdmin },
     )
@@ -423,11 +476,35 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     .where(eq(meetingAttendees.meetingId, id))
   const attendeeIds = attendeeIdRows.map((row) => row.userId)
 
-  const openBefore = await fetchOpenFollowupsBefore(
+  // Items resolved in THIS meeting come back too (includeResolvedHere) so a
+  // resolve is visible as a settled row with its outcome note rather than a
+  // disappearance — and can be undone. They stay pinned to this one meeting,
+  // so nothing resolved is ever carried into a future one.
+  const carried = await fetchFollowupsBefore(
     { id, startsAt: meeting.startsAt },
     { id: session.user.id, isAdmin },
+    { includeResolvedHere: true },
   )
-  const prep = selectCarriedForward(openBefore, attendeeIds)
+  const detailById = new Map(carried.map((row) => [row.id, row]))
+  const prep: CarriedForwardItemGroup[] = selectCarriedForward(carried, attendeeIds).map(
+    (group) => ({
+      userId: group.userId,
+      person: group.person,
+      items: group.items
+        .map((item) => {
+          const row = detailById.get(item.id)
+          return {
+            ...item,
+            status: row?.status ?? 'open',
+            resolutionNote: row?.resolutionNote ?? null,
+            resolvedAt: row?.resolvedAt ?? null,
+          }
+        })
+        // Still-owed work first; the settled ones are a record, not a to-do.
+        // Array#sort is stable, so each half keeps its original order.
+        .sort((a, b) => Number(a.status === 'resolved') - Number(b.status === 'resolved')),
+    }),
+  )
 
   return ok({
     notes: notesRow
@@ -447,25 +524,40 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   })
 }
 
-const resolveFollowupInput = z.object({ followupId: z.uuid() })
+const resolveFollowupInput = z.object({
+  followupId: z.uuid(),
+  // What actually came of the item. Optional on purpose — "done" with no
+  // explanation is still a legitimate answer, and forcing prose here would
+  // just get it skipped.
+  note: z.string().trim().max(MAX_RESOLUTION_NOTE_CHARS).optional(),
+  // Which meeting the person was looking at when they resolved it. Recorded
+  // so the settled row stays visible on that meeting (see
+  // fetchFollowupsBefore) instead of vanishing everywhere at once.
+  meetingId: z.uuid().optional(),
+})
+
+const reopenFollowupInput = z.object({ followupId: z.uuid() })
+
+type FollowupWriteContext = {
+  user: { id: string; role?: string | null }
+  row: typeof meetingFollowups.$inferSelect
+}
 
 /**
- * Manual resolve for a carried-in follow-up. Allowed for an admin, the
- * source meeting's creator, or the person the item is attributed to —
- * mirrors the read-entitlement rule so resolving something never requires
- * broader access than reading it did.
+ * Shared gate for the manual follow-up writes (resolve / reopen). Allowed
+ * for an admin, the source meeting's creator, or the person the item is
+ * attributed to — mirrors the read-entitlement rule so changing something
+ * never requires broader access than reading it did, and so undoing a
+ * resolve needs exactly as much standing as making it did.
  */
-export async function resolveFollowup(followupId: string): Promise<ActionResult> {
+async function authorizeFollowupWrite(
+  followupId: string,
+  verb: string,
+): Promise<ActionResult<FollowupWriteContext>> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
-  const parsed = resolveFollowupInput.safeParse({ followupId })
-  if (!parsed.success) return err(parsed.error.issues[0].message)
-
-  const [row] = await db
-    .select()
-    .from(meetingFollowups)
-    .where(eq(meetingFollowups.id, parsed.data.followupId))
+  const [row] = await db.select().from(meetingFollowups).where(eq(meetingFollowups.id, followupId))
   if (!row) return err('Not found')
 
   const [sourceMeeting] = await db
@@ -477,12 +569,89 @@ export async function resolveFollowup(followupId: string): Promise<ActionResult>
   const isAdmin = session.user.role === 'admin'
   const isCreator = sourceMeeting.createdBy === session.user.id
   const isSelf = row.userId === session.user.id
-  if (!isAdmin && !isCreator && !isSelf) return err('Not allowed to resolve this item')
+  if (!isAdmin && !isCreator && !isSelf) return err(`Not allowed to ${verb} this item`)
 
-  if (row.status !== 'resolved') {
+  return ok({ user: session.user, row })
+}
+
+/**
+ * Manual resolve for a carried-in follow-up, with the outcome attached:
+ * `note` is what the answer/change actually was, which is the whole point of
+ * closing an item rather than just silencing it.
+ */
+export async function resolveFollowup(
+  followupId: string,
+  note?: string,
+  meetingId?: string,
+): Promise<ActionResult> {
+  const parsed = resolveFollowupInput.safeParse({ followupId, note, meetingId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'resolve')
+  if (!authorized.ok) return authorized
+  const { user, row } = authorized.data
+
+  // An all-whitespace note is no note — store null so "resolved with no
+  // explanation" has one representation, not two.
+  const resolutionNote = parsed.data.note ? parsed.data.note : null
+
+  // The meeting context is only trusted after the same read check the panel
+  // itself passes — otherwise a resolve could pin an item onto a meeting the
+  // caller can't see.
+  let resolvedInMeetingId: string | null = null
+  if (parsed.data.meetingId) {
+    const [contextMeeting] = await db
+      .select()
+      .from(meetings)
+      .where(eq(meetings.id, parsed.data.meetingId))
+    if (!contextMeeting) return err('Not found')
+    if (!(await canReadMeetingIntel(user, contextMeeting))) return err('Not available')
+    resolvedInMeetingId = contextMeeting.id
+  }
+
+  const alreadyResolved = row.status === 'resolved'
+  // Re-resolving an already-resolved item is only meaningful when it adds
+  // the note that was missing; otherwise leave the original timestamp and
+  // meeting alone.
+  if (alreadyResolved && !resolutionNote) return ok(undefined)
+
+  await db
+    .update(meetingFollowups)
+    .set({
+      status: 'resolved',
+      resolvedAt: alreadyResolved ? row.resolvedAt : new Date(),
+      resolvedInMeetingId: alreadyResolved ? row.resolvedInMeetingId : resolvedInMeetingId,
+      resolutionNote,
+    })
+    .where(eq(meetingFollowups.id, row.id))
+  revalidatePath('/meetings')
+
+  return ok(undefined)
+}
+
+/**
+ * Undo of the above — "actually, not yet". Clears every trace of the
+ * resolve (timestamp, meeting, note) so the item is indistinguishable from
+ * one that was never closed, which is exactly what makes it carry forward
+ * to the next meeting its person attends again.
+ */
+export async function reopenFollowup(followupId: string): Promise<ActionResult> {
+  const parsed = reopenFollowupInput.safeParse({ followupId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'reopen')
+  if (!authorized.ok) return authorized
+  const { row } = authorized.data
+
+  if (row.status !== 'open') {
     await db
       .update(meetingFollowups)
-      .set({ status: 'resolved', resolvedAt: new Date() })
+      .set({
+        status: 'open',
+        resolvedAt: null,
+        resolvedInMeetingId: null,
+        resolutionNote: null,
+      })
       .where(eq(meetingFollowups.id, row.id))
     revalidatePath('/meetings')
   }

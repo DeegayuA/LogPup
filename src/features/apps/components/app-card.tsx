@@ -23,6 +23,14 @@ const STATUS_LABEL: Record<AppWithMembers['status'], string> = {
   archived: 'Archived',
 }
 
+// Left-edge accent so a card's status reads at a glance across the grid, not
+// only from the chip in its corner.
+const STATUS_ACCENT: Record<AppWithMembers['status'], string> = {
+  active: 'border-l-primary',
+  paused: 'border-l-chart-1',
+  archived: 'border-l-muted-foreground/40',
+}
+
 const MAX_TAGS = 4
 const MAX_AVATARS = 4
 
@@ -44,7 +52,7 @@ export function AppCard({ app }: { app: AppWithMembers }) {
       href={`/apps/${app.slug}`}
       className="group block h-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
     >
-      <Card className="h-full transition-[transform,box-shadow] duration-150 ease-out group-hover:-translate-y-0.5 group-hover:ring-ring/40 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0">
+      <Card className={`h-full border-l-2 ${STATUS_ACCENT[app.status]} transition-[transform,box-shadow] duration-150 ease-out group-hover:-translate-y-0.5 group-hover:ring-ring/40 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0`}>
         <CardHeader>
           <CardTitle className="font-heading font-semibold">{app.name}</CardTitle>
           <CardDescription className="font-mono text-xs">{app.slug}</CardDescription>

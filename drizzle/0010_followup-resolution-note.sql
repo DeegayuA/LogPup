@@ -1,0 +1,1 @@
+ALTER TABLE "meeting_followups" ADD COLUMN "resolution_note" text;

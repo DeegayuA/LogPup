@@ -1,7 +1,7 @@
 import { PawPrint } from 'lucide-react'
 import { auth } from '@/lib/auth'
 import { listApps } from '@/features/apps/queries'
-import { AppCard } from '@/features/apps/components/app-card'
+import { AppsBrowser } from '@/features/apps/components/apps-browser'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 
 export default async function AppsPage(props: { searchParams: Promise<{ new?: string }> }) {
@@ -37,11 +37,7 @@ export default async function AppsPage(props: { searchParams: Promise<{ new?: st
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {apps.map((app) => (
-            <AppCard key={app.id} app={app} />
-          ))}
-        </div>
+        <AppsBrowser apps={apps} />
       )}
     </div>
   )

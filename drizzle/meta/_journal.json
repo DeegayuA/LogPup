@@ -71,6 +71,13 @@
       "when": 1786451328796,
       "tag": "0009_app_comments",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786452873771,
+      "tag": "0010_followup-resolution-note",
+      "breakpoints": true
     }
   ]
 }

@@ -14,17 +14,22 @@ import {
   MessageCircleQuestion,
   Mic,
   MonitorSpeaker,
+  RotateCcw,
   Sparkles,
   Square,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { MarkdownLite } from '@/components/markdown-lite'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import type { ActionResult } from '@/lib/action-result'
 import {
   analyzeMeetingAudio,
   getMeetingIntel,
+  reopenFollowup,
   resolveFollowup,
+  type CarriedForwardItem,
   type MeetingIntel,
 } from '@/features/meetings/ai-actions'
 import {
@@ -110,6 +115,20 @@ function pickMimeType(): string {
   return ''
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(0)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
+}
+
+// A recording that finished but hasn't been successfully analyzed yet —
+// kept in memory (not just a closure inside the onstop handler) so a
+// transient Gemini failure never loses the recording: the Analyze action
+// stays available to retry the exact same audio/transcript, no re-recording
+// needed. Cleared only on a successful analysis or an explicit discard.
+type PendingAudio = { blob: Blob; liveTranscript: string }
+
 export function MeetingIntelPanel({
   meetingId,
   canRecord,
@@ -133,7 +152,19 @@ export function MeetingIntelPanel({
   const [liveUnavailable, setLiveUnavailable] = useState(false)
   const [finalText, setFinalText] = useState('')
   const [interimText, setInterimText] = useState('')
-  const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set())
+  // See PendingAudio above — set the moment a recording finishes, cleared
+  // only once analysis actually succeeds (or the user discards it).
+  const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null)
+  // Follow-up resolution state. `composingId` is the one row with its note
+  // field open (only ever one at a time — this is a decision, not a form),
+  // `keptOpenIds` are rows the user explicitly said "not yet" on so the
+  // carry-forward promise can be stated back to them, and `busyFollowupId`
+  // marks the row whose write is in flight.
+  const [followupPending, startFollowupWrite] = useTransition()
+  const [busyFollowupId, setBusyFollowupId] = useState<string | null>(null)
+  const [composingId, setComposingId] = useState<string | null>(null)
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
+  const [keptOpenIds, setKeptOpenIds] = useState<Set<string>>(new Set())
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamsRef = useRef<MediaStream[]>([])
@@ -206,16 +237,19 @@ export function MeetingIntelPanel({
     }
   }
 
-  async function loadIntel() {
-    setLoading(true)
+  // `silent` refetches without swapping the whole panel for a spinner —
+  // used after a follow-up write, where the row already updated optimistically
+  // and blanking the panel would be a bigger disruption than the change.
+  async function loadIntel({ silent = false }: { silent?: boolean } = {}) {
+    if (!silent) setLoading(true)
     try {
       const res = await getMeetingIntel(meetingId)
       if (res.ok) setIntel(res.data)
-      else toast.error(res.error)
+      else if (!silent) toast.error(res.error)
     } catch {
-      toast.error('Could not load meeting intelligence')
+      if (!silent) toast.error('Could not load meeting intelligence')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -385,6 +419,34 @@ export function MeetingIntelPanel({
     }
   }
 
+  // Runs (or re-runs) analysis on already-captured audio. `pendingAudio`
+  // is set by the caller *before* this fires and is only cleared on
+  // success — so a 503/network failure, or any other error, leaves the
+  // recording sitting there with the Analyze action still available
+  // instead of vanishing. See PendingAudio's comment for why this exists.
+  function runAnalysis(blob: Blob, liveTranscript: string) {
+    startAnalyzing(async () => {
+      try {
+        const formData = new FormData()
+        formData.append('audio', new File([blob], 'meeting-audio', { type: blob.type }))
+        if (liveTranscript.trim()) formData.append('liveTranscript', liveTranscript)
+        const res = await analyzeMeetingAudio(meetingId, formData)
+        if (!res.ok) {
+          // Server-side message is already specific and actionable (busy /
+          // key rejected / generic — see GeminiError in client.ts) and
+          // never includes the key itself.
+          toast.error(res.error)
+          return
+        }
+        setPendingAudio(null)
+        toast.success('Meeting analyzed — notes are ready')
+        await loadIntel()
+      } catch {
+        toast.error('Something went wrong — your recording is saved, try Analyze again')
+      }
+    })
+  }
+
   async function startRecording(withScreen: boolean) {
     const mimeType = pickMimeType()
     if (!mimeType) {
@@ -438,23 +500,16 @@ export function MeetingIntelPanel({
           toast.error('Recording is over 15MB — keep segments under ~20 minutes')
           return
         }
-        startAnalyzing(async () => {
-          try {
-            const formData = new FormData()
-            formData.append('audio', new File([blob], 'meeting-audio', { type: blob.type }))
-            if (liveTranscript.trim()) formData.append('liveTranscript', liveTranscript)
-            const res = await analyzeMeetingAudio(meetingId, formData)
-            if (!res.ok) {
-              toast.error(res.error)
-              return
-            }
-            toast.success('Meeting analyzed — notes are ready')
-            await loadIntel()
-          } catch {
-            toast.error('Something went wrong — try again')
-          }
-        })
+        // Stash the recording BEFORE attempting analysis — if the request
+        // fails (or throws) it stays here for the retry affordance below,
+        // instead of only living in this closure and disappearing.
+        setPendingAudio({ blob, liveTranscript })
+        runAnalysis(blob, liveTranscript)
       }
+      // A fresh recording starting is the one deliberate point where it's
+      // safe to drop whatever unanalyzed recording came before — the user
+      // is choosing to record again rather than retry the old one.
+      setPendingAudio(null)
       recorder.start(1000)
       setRecording(true)
       recordingRef.current = true
@@ -481,29 +536,96 @@ export function MeetingIntelPanel({
     }
   }
 
-  async function handleResolve(followupId: string) {
-    setResolvingIds((prev) => new Set(prev).add(followupId))
-    try {
-      const res = await resolveFollowup(followupId)
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+  // Patches one carried-forward row in place so a resolve/reopen lands
+  // instantly; the silent refetch that follows replaces it with whatever the
+  // server actually stored (and puts it back if the write failed).
+  function patchFollowup(followupId: string, patch: Partial<CarriedForwardItem>) {
+    setIntel((prev) =>
+      prev
+        ? {
+            ...prev,
+            prep: prev.prep.map((group) => ({
+              ...group,
+              items: group.items.map((item) =>
+                item.id === followupId ? { ...item, ...patch } : item,
+              ),
+            })),
+          }
+        : prev,
+    )
+  }
+
+  function runFollowupWrite(
+    followupId: string,
+    write: () => Promise<ActionResult>,
+    success: string,
+  ) {
+    setBusyFollowupId(followupId)
+    startFollowupWrite(async () => {
+      try {
+        const res = await write()
+        if (res.ok) toast.success(success)
+        else toast.error(res.error)
+      } catch {
+        toast.error('Something went wrong — try again')
+      } finally {
+        await loadIntel({ silent: true })
+        setBusyFollowupId(null)
       }
-      toast.success('Marked resolved')
-      await loadIntel()
-    } catch {
-      toast.error('Something went wrong — try again')
-    } finally {
-      setResolvingIds((prev) => {
-        const next = new Set(prev)
-        next.delete(followupId)
-        return next
-      })
+    })
+  }
+
+  function handleResolve(followupId: string) {
+    const note = (noteDrafts[followupId] ?? '').trim()
+    setComposingId(null)
+    setKeptOpenIds((prev) => {
+      if (!prev.has(followupId)) return prev
+      const next = new Set(prev)
+      next.delete(followupId)
+      return next
+    })
+    patchFollowup(followupId, {
+      status: 'resolved',
+      resolutionNote: note || null,
+      resolvedAt: new Date(),
+    })
+    runFollowupWrite(
+      followupId,
+      () => resolveFollowup(followupId, note || undefined, meetingId),
+      note ? 'Resolved — answer saved' : 'Marked resolved',
+    )
+  }
+
+  function handleReopen(item: CarriedForwardItem) {
+    // Keep the note that was there as a draft — reopening usually means the
+    // answer was wrong or incomplete, not that it should be retyped.
+    if (item.resolutionNote) {
+      setNoteDrafts((prev) => ({ ...prev, [item.id]: item.resolutionNote ?? '' }))
     }
+    patchFollowup(item.id, { status: 'open', resolutionNote: null, resolvedAt: null })
+    runFollowupWrite(
+      item.id,
+      () => reopenFollowup(item.id),
+      'Back open — it carries to the next meeting',
+    )
+  }
+
+  // "Not yet" changes nothing in the database — an unresolved item is
+  // already the thing that carries forward. What it does is say so out
+  // loud, and get the note field out of the way.
+  function handleNotYet(followupId: string) {
+    setComposingId((prev) => (prev === followupId ? null : prev))
+    setKeptOpenIds((prev) => new Set(prev).add(followupId))
   }
 
   const notes = intel?.notes ?? null
   const prep = intel?.prep ?? []
+  // Resolved rows stay on screen as a record, so "is anything still owed?"
+  // has to count open ones rather than trust the list being empty.
+  const openCount = prep.reduce(
+    (total, group) => total + group.items.filter((item) => item.status === 'open').length,
+    0,
+  )
   const showLiveText = recording && liveSupported && !liveUnavailable
 
   return (
@@ -620,6 +742,38 @@ export function MeetingIntelPanel({
         </div>
       ) : null}
 
+      {/* Analysis failed (or hasn't been retried yet) — the recording itself
+          was never discarded, so offer to try again on the exact same
+          audio/transcript instead of forcing a re-record. Shown regardless
+          of the panel's open/closed state so it's never silently missed. */}
+      {pendingAudio && !recording && !analyzing ? (
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/10 p-3"
+          role="status"
+        >
+          <p className="flex items-start gap-1.5 text-sm">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+            <span>
+              Analysis didn&rsquo;t finish, but your recording ({formatBytes(pendingAudio.blob.size)}) is
+              still here — nothing was lost. Try again when you&rsquo;re ready.
+            </span>
+          </p>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => runAnalysis(pendingAudio.blob, pendingAudio.liveTranscript)}
+            >
+              <Sparkles /> Retry analysis
+            </Button>
+            <Button variant="ghost" size="sm" type="button" onClick={() => setPendingAudio(null)}>
+              Discard
+            </Button>
+          </span>
+        </div>
+      ) : null}
+
       {open ? (
         <div className="flex flex-col gap-3 rounded-lg border border-dashed p-3">
           {loading ? (
@@ -633,6 +787,12 @@ export function MeetingIntelPanel({
                   <MessageCircleQuestion className="size-3.5 text-primary" aria-hidden />
                   Carried forward
                 </h4>
+                {openCount > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Anything you don&rsquo;t resolve stays open and carries forward to the next
+                    meeting these people attend.
+                  </p>
+                ) : null}
                 {prep.length > 0 ? (
                   <ul className="flex flex-col gap-2.5">
                     {prep.map((group) => (
@@ -641,31 +801,150 @@ export function MeetingIntelPanel({
                         <ul className="flex flex-col gap-1">
                           {group.items.map((item) => {
                             const canResolve = canRecord || group.userId === currentUserId
-                            const isResolving = resolvingIds.has(item.id)
+                            const isBusy = busyFollowupId === item.id && followupPending
+                            const isResolved = item.status === 'resolved'
+                            const isComposing = composingId === item.id
+                            const keptOpen = !isResolved && keptOpenIds.has(item.id)
+                            const noteFieldId = `followup-note-${item.id}`
                             return (
                               <li
                                 key={item.id}
-                                className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/40 px-2 py-1.5"
+                                className={cn(
+                                  'flex flex-col gap-1.5 rounded-md px-2 py-1.5',
+                                  isResolved ? 'bg-muted/20' : 'bg-muted/40',
+                                )}
                               >
-                                <span className="text-sm text-muted-foreground">
-                                  <span className="text-foreground">{item.text}</span> — from “
-                                  {item.fromTitle}” ({format(item.fromDate, 'MMM d')})
-                                </span>
-                                {canResolve ? (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    type="button"
-                                    disabled={isResolving}
-                                    onClick={() => handleResolve(item.id)}
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <span className="flex min-w-0 flex-1 items-start gap-1.5 text-sm text-muted-foreground">
+                                    {isResolved ? (
+                                      <CircleCheck
+                                        className="mt-0.5 size-3.5 shrink-0 text-primary"
+                                        aria-hidden
+                                      />
+                                    ) : null}
+                                    <span>
+                                      <span className={isResolved ? undefined : 'text-foreground'}>
+                                        {item.text}
+                                      </span>{' '}
+                                      — from “{item.fromTitle}” ({format(item.fromDate, 'MMM d')})
+                                    </span>
+                                  </span>
+                                  {canResolve && !isComposing ? (
+                                    <span className="flex shrink-0 items-center gap-1">
+                                      {isResolved ? (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() => handleReopen(item)}
+                                        >
+                                          {isBusy ? (
+                                            <Loader2 className="animate-spin" aria-hidden />
+                                          ) : (
+                                            <RotateCcw aria-hidden />
+                                          )}
+                                          Reopen
+                                        </Button>
+                                      ) : (
+                                        <>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            type="button"
+                                            disabled={isBusy}
+                                            onClick={() => setComposingId(item.id)}
+                                          >
+                                            {isBusy ? (
+                                              <Loader2 className="animate-spin" aria-hidden />
+                                            ) : (
+                                              <Check aria-hidden />
+                                            )}
+                                            Resolve
+                                          </Button>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            type="button"
+                                            disabled={isBusy}
+                                            aria-pressed={keptOpen}
+                                            onClick={() => handleNotYet(item.id)}
+                                          >
+                                            Not yet
+                                          </Button>
+                                        </>
+                                      )}
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                {isResolved && item.resolutionNote ? (
+                                  <p className="border-l-2 border-primary/40 pl-2 text-sm">
+                                    <span className="text-muted-foreground">Outcome: </span>
+                                    {item.resolutionNote}
+                                  </p>
+                                ) : null}
+
+                                {keptOpen ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    Staying open — it carries forward to the next meeting{' '}
+                                    {group.person} attends.
+                                  </p>
+                                ) : null}
+
+                                {isComposing ? (
+                                  <form
+                                    className="flex flex-col gap-1.5"
+                                    onSubmit={(event) => {
+                                      event.preventDefault()
+                                      handleResolve(item.id)
+                                    }}
                                   >
-                                    {isResolving ? (
-                                      <Loader2 className="animate-spin" aria-hidden />
-                                    ) : (
-                                      <Check aria-hidden />
-                                    )}
-                                    Mark resolved
-                                  </Button>
+                                    <label
+                                      htmlFor={noteFieldId}
+                                      className="text-xs font-medium text-foreground"
+                                    >
+                                      What&rsquo;s the answer / what changed?
+                                    </label>
+                                    <Textarea
+                                      id={noteFieldId}
+                                      autoFocus
+                                      rows={2}
+                                      maxLength={500}
+                                      className="min-h-14 text-sm"
+                                      placeholder="Optional — e.g. room booked, lighting fixed on Tuesday"
+                                      value={noteDrafts[item.id] ?? ''}
+                                      onChange={(event) =>
+                                        setNoteDrafts((prev) => ({
+                                          ...prev,
+                                          [item.id]: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <Button size="sm" type="submit" disabled={isBusy}>
+                                        {isBusy ? (
+                                          <Loader2 className="animate-spin" aria-hidden />
+                                        ) : (
+                                          <Check aria-hidden />
+                                        )}
+                                        Save and resolve
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        type="button"
+                                        disabled={isBusy}
+                                        onClick={() => handleNotYet(item.id)}
+                                      >
+                                        Not yet
+                                      </Button>
+                                      <span className="text-xs text-muted-foreground">
+                                        The note is optional — resolving without one still closes
+                                        it.
+                                      </span>
+                                    </div>
+                                  </form>
                                 ) : null}
                               </li>
                             )
@@ -674,12 +953,13 @@ export function MeetingIntelPanel({
                       </li>
                     ))}
                   </ul>
-                ) : (
+                ) : null}
+                {openCount === 0 ? (
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <CircleCheck className="size-3.5 shrink-0" aria-hidden />
                     Nothing open is carried in for this meeting&rsquo;s attendees.
                   </p>
-                )}
+                ) : null}
               </section>
 
               {notes ? (

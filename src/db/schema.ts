@@ -17,6 +17,8 @@ export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
 export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
 export const followupKind = pgEnum('followup_kind', ['question', 'action'])
 export const followupStatus = pgEnum('followup_status', ['open', 'resolved'])
+export const noteSource = pgEnum('note_source', ['typed', 'voice', 'ai'])
+export const suggestionStatus = pgEnum('suggestion_status', ['open', 'accepted', 'dismissed'])
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -162,8 +164,18 @@ export const meetingAiNotes = pgTable('meeting_ai_notes', {
 //   resolvedInMeetingId / resolvedAt  set either by an admin/creator/the
 //                    person themself manually resolving it, or by the AI
 //                    "did this come up" pass run after analyzing a later
-//                    meeting (analyzeMeetingAudio) — resolvedInMeetingId
-//                    distinguishes the two (null on a manual resolve).
+//                    meeting (analyzeMeetingAudio). resolvedInMeetingId is
+//                    the meeting the item was resolved *in* — the analyzed
+//                    meeting for the AI pass, the meeting whose Intelligence
+//                    panel the person clicked Resolve on for a manual one.
+//                    It is what keeps a resolved item visible (settled, with
+//                    its note) on that one meeting instead of silently
+//                    vanishing everywhere; null only when the resolve had no
+//                    meeting context. Reopening clears all three fields so
+//                    the item carries forward again.
+//   resolutionNote   what actually came of it — the answer/outcome typed on
+//                    resolve. Optional: a resolve with no note is still a
+//                    resolve, so null means "done, nothing written down".
 export const meetingFollowups = pgTable('meeting_followups', {
   id: uuid('id').primaryKey().defaultRandom(),
   sourceMeetingId: uuid('source_meeting_id').notNull()
@@ -176,6 +188,7 @@ export const meetingFollowups = pgTable('meeting_followups', {
   resolvedInMeetingId: uuid('resolved_in_meeting_id')
     .references(() => meetings.id, { onDelete: 'set null' }),
   resolvedAt: timestamp('resolved_at'),
+  resolutionNote: text('resolution_note'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -202,5 +215,75 @@ export const appComments = pgTable('app_comments', {
   appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
   authorId: uuid('author_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   body: text('body').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// One unified, chronological note timeline per meeting — replaces the old
+// split between the human-typed `meetings.notes` blob and the AI's
+// `meetingAiNotes.summary` block. Every entry ("segment") carries a SOURCE
+// so the UI can badge it (typed/voice/ai) and, where known, a speaker.
+//   source        'typed' (a person wrote it), 'voice' (transcribed speech,
+//                 one chunk per speaker turn from the Gemini analysis),
+//                 or 'ai' (the model's own summary/insight — auto-inserted
+//                 when analysis completes, see analyzeMeetingAudio).
+//   speakerId     resolved user, either directly (a 'typed'/'ai' segment's
+//                 author) or via a meetingSpeakers label mapping backfilled
+//                 onto 'voice' segments once someone assigns that speaker.
+//   speakerLabel  the raw as-transcribed label ("Speaker 1", or an attendee
+//                 name the model recognized) for 'voice' segments before —
+//                 or absent — a mapping. Null for 'typed'/'ai'.
+//   startedAtMs   offset into the recording, used to order 'voice' segments
+//                 that land in the same analysis pass (their real wall-clock
+//                 createdAt is identical, down to the second, since they're
+//                 inserted together) — see orderNoteSegments in notes.ts.
+//                 Null for 'typed'/'ai', and for 'voice' segments the model
+//                 couldn't place (ordering then falls back to input order).
+// meetings.notes is left in place as a read-only legacy field — a meeting
+// with no segments yet renders it as a synthetic first entry, and it is
+// migrated into a real 'typed' segment the first time notes are edited
+// (see addTypedNoteSegment) rather than dropped.
+export const meetingNoteSegments = pgTable('meeting_note_segments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  source: noteSource('source').notNull(),
+  speakerId: uuid('speaker_id').references(() => users.id, { onDelete: 'set null' }),
+  speakerLabel: text('speaker_label'),
+  content: text('content').notNull(),
+  startedAtMs: integer('started_at_ms'),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// Maps a raw speaker label ("Speaker 1", "Speaker 2", …) the live transcript
+// or the Gemini analysis produced for ONE meeting to a real user — set by an
+// authorized user via the speaker-assignment control on the note timeline.
+// userId is nullable so "not a listed attendee" can be recorded explicitly
+// (distinct from "not yet assigned": a row exists either way once someone
+// has looked at the label). Setting/changing a mapping backfills
+// meetingNoteSegments.speakerId on every segment carrying that label.
+export const meetingSpeakers = pgTable('meeting_speakers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  label: text('label').notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [uniqueIndex('meeting_speakers_meeting_label_idx').on(t.meetingId, t.label)])
+
+// Actionable items the AI proposes after analyzing a meeting — rendered as
+// one-click "Add task" suggestion cards on the note timeline. `status`
+// tracks the card's fate: 'open' (still showing), 'accepted' (a real task
+// was created — see createdTaskId), or 'dismissed' (rejected, persisted so
+// it never re-shows). segmentId is nullable: a suggestion isn't always
+// anchored to one exact voice/ai segment (e.g. it may synthesize across
+// several), so it's best-effort provenance, not a requirement.
+export const meetingTaskSuggestions = pgTable('meeting_task_suggestions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  segmentId: uuid('segment_id').references(() => meetingNoteSegments.id, { onDelete: 'set null' }),
+  text: text('text').notNull(),
+  suggestedUserId: uuid('suggested_user_id').references(() => users.id, { onDelete: 'set null' }),
+  suggestedDueDate: date('suggested_due_date'),
+  status: suggestionStatus('status').notNull().default('open'),
+  createdTaskId: uuid('created_task_id').references(() => tasks.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
