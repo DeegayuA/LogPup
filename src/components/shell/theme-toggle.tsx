@@ -14,6 +14,7 @@ export function ThemeToggle() {
 
   // resolvedTheme is undefined on the server; render a stable button until
   // hydration so the icon never flashes the wrong state.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard next-themes mounted guard
   useEffect(() => setMounted(true), [])
   const isDark = mounted && resolvedTheme === 'dark'
 
