@@ -9,7 +9,11 @@ export default async function AppLayout({
   children: React.ReactNode
 }) {
   const session = await auth()
-  const isAdmin = session?.user?.role === 'admin'
+  // Defense in depth: the proxy guard is the primary gate, but its matcher
+  // necessarily excludes static-asset paths, so no authed page should rely on
+  // it alone.
+  if (!session?.user) redirect('/sign-in')
+  const isAdmin = session.user.role === 'admin'
 
   return (
     <CommandCenterProvider isAdmin={isAdmin}>

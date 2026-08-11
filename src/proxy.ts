@@ -24,8 +24,12 @@ export const config = {
   // route self-authenticates via a constant-time CRON_SECRET check (see
   // src/app/api/cron/backup/route.ts) — without this exclusion the redirect
   // above sends cron requests to /sign-in and backups silently never run.
-  // Also skip PWA/static assets — the icon routes and anything with a file extension
-  // (manifest.webmanifest, sw.js, icon.svg, favicon.ico, images) — so they load
-  // without a session; otherwise install/manifest fetches redirect to /sign-in.
-  matcher: ['/((?!api/auth|api/cron|_next/static|_next/image|sign-in|pwa-icon|apple-icon|.*\\.).*)'],
+  // Also skip PWA/static assets so install/manifest fetches don't redirect to
+  // /sign-in. The extension list is explicit and end-anchored on purpose: a bare
+  // `.*\.` exclusion skips the guard for ANY path containing a dot, so a request
+  // like /apps/foo.bar would reach a page unauthenticated. The (app) layout also
+  // redirects on a missing session as defense in depth.
+  matcher: [
+    '/((?!api/auth|api/cron|_next/static|_next/image|sign-in|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
+  ],
 }
