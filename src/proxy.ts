@@ -42,12 +42,17 @@ export const config = {
   // route self-authenticates via a constant-time CRON_SECRET check (see
   // src/app/api/cron/backup/route.ts) — without this exclusion the redirect
   // above sends cron requests to /sign-in and backups silently never run.
+  // api/meetings is excluded for the same shape of reason: it serves files
+  // (the .ics invite), and a file endpoint must answer with a status code its
+  // caller can act on — a 307 to an HTML sign-in page would be downloaded as
+  // the "invite". The route gates itself on auth() + canAccessApp and returns
+  // 401/404 directly; see src/app/api/meetings/[id]/ics/route.ts.
   // Also skip PWA/static assets so install/manifest fetches don't redirect to
   // /sign-in. The extension list is explicit and end-anchored on purpose: a bare
   // `.*\.` exclusion skips the guard for ANY path containing a dot, so a request
   // like /apps/foo.bar would reach a page unauthenticated. The (app) layout also
   // redirects on a missing session as defense in depth.
   matcher: [
-    '/((?!api/auth|api/cron|_next/static|_next/image|sign-in|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
+    '/((?!api/auth|api/cron|api/meetings|_next/static|_next/image|sign-in|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
   ],
 }

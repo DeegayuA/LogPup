@@ -11,7 +11,6 @@ import {
   ClipboardListIcon,
   FileTextIcon,
   ListIcon,
-  SendIcon,
   Trash2Icon,
   UsersIcon,
 } from 'lucide-react'
@@ -39,7 +38,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { deleteMeeting, rescheduleMeeting, retryCalendarInvite } from '@/features/meetings/actions'
+import { deleteMeeting, rescheduleMeeting } from '@/features/meetings/actions'
+import { AddToCalendarMenu } from '@/features/meetings/components/add-to-calendar'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
 /** "1h 30m" / "45m" — the span the reschedule fields preserve. */
@@ -202,22 +202,6 @@ function MeetingDetailBody({
     })
   }
 
-  function handleSendInvite() {
-    startTransition(async () => {
-      try {
-        const res = await retryCalendarInvite(meeting.id)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Calendar invite sent')
-        router.refresh()
-      } catch {
-        toast.error('Something went wrong — try again')
-      }
-    })
-  }
-
   return (
     <>
       <DialogHeader>
@@ -243,24 +227,17 @@ function MeetingDetailBody({
           )}
           {meeting.googleEventId ? (
             <Badge variant="outline">
-              <CalendarCheckIcon aria-hidden /> Calendar invite sent
+              <CalendarCheckIcon aria-hidden /> Google invite sent
             </Badge>
           ) : (
             <Badge variant="outline" className="text-muted-foreground">
-              <CalendarOffIcon aria-hidden /> No calendar invite
+              <CalendarOffIcon aria-hidden /> No Google invite
             </Badge>
           )}
-          {canManage && !meeting.googleEventId ? (
-            <Button
-              variant="ghost"
-              size="xs"
-              type="button"
-              disabled={isPending}
-              onClick={handleSendInvite}
-            >
-              <SendIcon /> Send invite
-            </Button>
-          ) : null}
+          {/* The menu below is the answer to that badge either way: it hands
+              over the .ics file and the add-to-calendar links, neither of
+              which depends on a Google connection. */}
+          <AddToCalendarMenu meeting={meeting} canManage={canManage} size="xs" />
         </div>
       </DialogHeader>
 

@@ -12,6 +12,7 @@ import { getTeamForApp } from '@/features/people/queries'
 import {
   createCalendarEvent,
   deleteCalendarEvent,
+  describeCalendarError,
   updateCalendarEventTime,
 } from '@/features/calendar/google-calendar'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
@@ -44,12 +45,29 @@ const rescheduleInput = z
   })
 
 const MAX_NOTES_LENGTH = 5000
-const NO_CALENDAR_ACCESS_WARNING = 'No Google Calendar access — sign out and back in to grant it'
-const CALENDAR_INVITE_FAILED_WARNING = 'Saved, but calendar invite failed — retry from the meeting list'
-const CALENDAR_MOVE_NO_ACCESS_WARNING =
-  'Moved here, but Google Calendar was not updated — no calendar access for the organiser'
-const CALENDAR_MOVE_FAILED_WARNING =
-  'Moved here, but the Google Calendar invite still shows the old time — update it in Google Calendar'
+
+/**
+ * Emailing invites through the Google Calendar API is a bonus, not the
+ * product: it only works for an organiser who signed in with Google AND still
+ * holds a live refresh token for the sensitive `calendar.events` scope. Every
+ * user, however they signed in, can always get the same meeting as an RFC 5545
+ * `.ics` file from /api/meetings/[id]/ics — so when Google is unavailable the
+ * honest thing to say is *why*, and to point at the path that works, rather
+ * than to offer a retry that will fail identically.
+ *
+ * These helpers compose that message. `reason` is a clause produced by
+ * describeCalendarError() (or the constant below when there is no connection
+ * at all), never anything derived from a token.
+ */
+const NO_GOOGLE_CONNECTION_REASON = 'the organiser has no Google Calendar connection'
+const ICS_FALLBACK_HINT = 'Use “Add to calendar” on the meeting to get the invite file instead.'
+
+const inviteWarning = (reason: string) =>
+  `Meeting saved. Google didn’t email the invites — ${reason}. ${ICS_FALLBACK_HINT}`
+const retryFailedMessage = (reason: string) =>
+  `Google didn’t send the invites — ${reason}. ${ICS_FALLBACK_HINT}`
+const moveWarning = (reason: string) =>
+  `Moved here, but the Google Calendar event still shows the old time — ${reason}. ${ICS_FALLBACK_HINT}`
 
 async function requireSession() {
   const session = await auth()
@@ -112,10 +130,10 @@ async function attendeeEmails(attendeeIds: string[]): Promise<string[]> {
 }
 
 /**
- * Creates (or retries) the Google Calendar invite for a meeting. Never
- * throws: a missing/invalid Google connection surfaces as a `calendarWarning`
- * string for the caller to relay, not a thrown error — the meeting itself is
- * already saved either way.
+ * Best-effort Google Calendar invite for a meeting. Never throws: a
+ * missing/invalid Google connection comes back as a `reason` clause for the
+ * caller to phrase, not as a thrown error — the meeting itself is already
+ * saved either way, and the `.ics` route can always serve the same invite.
  */
 async function syncCalendarInvite(
   meeting: {
@@ -127,13 +145,13 @@ async function syncCalendarInvite(
     createdBy: string
   },
   attendeeIds: string[],
-): Promise<{ calendarWarning?: string }> {
+): Promise<{ reason?: string }> {
   const [creator] = await db
     .select({ googleRefreshToken: users.googleRefreshToken })
     .from(users)
     .where(eq(users.id, meeting.createdBy))
   if (!creator?.googleRefreshToken) {
-    return { calendarWarning: NO_CALENDAR_ACCESS_WARNING }
+    return { reason: NO_GOOGLE_CONNECTION_REASON }
   }
 
   try {
@@ -148,8 +166,13 @@ async function syncCalendarInvite(
     })
     await db.update(meetings).set({ googleEventId: eventId }).where(eq(meetings.id, meeting.id))
     return {}
-  } catch {
-    return { calendarWarning: CALENDAR_INVITE_FAILED_WARNING }
+  } catch (error) {
+    // Logged, not swallowed: this used to be a bare `catch {}`, so the actual
+    // Google error was never recorded anywhere and the failure could not be
+    // diagnosed from the outside. describeCalendarError never echoes the token.
+    const reason = describeCalendarError(error)
+    console.error(`[calendar] invite failed for meeting ${meeting.id}: ${reason}`, error)
+    return { reason }
   }
 }
 
@@ -170,7 +193,7 @@ async function syncCalendarTime(
     .select({ googleRefreshToken: users.googleRefreshToken })
     .from(users)
     .where(eq(users.id, organiserId))
-  if (!creator?.googleRefreshToken) return CALENDAR_MOVE_NO_ACCESS_WARNING
+  if (!creator?.googleRefreshToken) return moveWarning(NO_GOOGLE_CONNECTION_REASON)
 
   try {
     await updateCalendarEventTime({
@@ -180,8 +203,10 @@ async function syncCalendarTime(
       endsAt,
     })
     return undefined
-  } catch {
-    return CALENDAR_MOVE_FAILED_WARNING
+  } catch (error) {
+    const reason = describeCalendarError(error)
+    console.error(`[calendar] reschedule failed for event ${eventId}: ${reason}`, error)
+    return moveWarning(reason)
   }
 }
 
@@ -227,7 +252,7 @@ export async function createMeeting(
     throw error
   }
 
-  const { calendarWarning } = await syncCalendarInvite(
+  const { reason } = await syncCalendarInvite(
     {
       id: meetingId,
       title,
@@ -238,6 +263,7 @@ export async function createMeeting(
     },
     attendeeIds,
   )
+  const calendarWarning = reason ? inviteWarning(reason) : undefined
 
   // Notify every attendee except the organizer. A notification failure must not
   // fail the meeting itself, which is already created and calendar-synced.
@@ -277,11 +303,11 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
     .from(meetingAttendees)
     .where(eq(meetingAttendees.meetingId, meetingId))
 
-  const { calendarWarning } = await syncCalendarInvite(
+  const { reason } = await syncCalendarInvite(
     existing,
     attendeeRows.map((r) => r.userId),
   )
-  if (calendarWarning) return err(calendarWarning)
+  if (reason) return err(retryFailedMessage(reason))
 
   await revalidateMeetingPaths(existing.appId)
   return ok(undefined)

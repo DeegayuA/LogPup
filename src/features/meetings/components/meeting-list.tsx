@@ -4,7 +4,7 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { CalendarCheckIcon, CalendarDaysIcon, SendIcon, Trash2Icon } from 'lucide-react'
+import { CalendarCheckIcon, CalendarDaysIcon, Trash2Icon } from 'lucide-react'
 import { MeetingRsvp } from '@/features/meetings/components/meeting-rsvp'
 import {
   AlertDialog,
@@ -21,7 +21,8 @@ import { Avatar, AvatarFallback, AvatarGroup, AvatarImage } from '@/components/u
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { type MentionUser } from '@/components/mention-textarea'
-import { deleteMeeting, retryCalendarInvite } from '@/features/meetings/actions'
+import { deleteMeeting } from '@/features/meetings/actions'
+import { AddToCalendarMenu } from '@/features/meetings/components/add-to-calendar'
 import { MeetingIntelPanel } from '@/features/meetings/components/meeting-intel'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
@@ -97,22 +98,6 @@ function MeetingRow({
     })
   }
 
-  function handleSendInvite() {
-    startTransition(async () => {
-      try {
-        const res = await retryCalendarInvite(meeting.id)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Calendar invite sent')
-        router.refresh()
-      } catch {
-        toast.error('Something went wrong — try again')
-      }
-    })
-  }
-
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -160,19 +145,12 @@ function MeetingRow({
         ) : (
           <span className="text-xs text-muted-foreground">No attendees</span>
         )}
-        {canManage ? (
-          <div className="flex items-center gap-1.5">
-            {!meeting.googleEventId ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                type="button"
-                disabled={isPending}
-                onClick={handleSendInvite}
-              >
-                <SendIcon /> Send invite
-              </Button>
-            ) : null}
+        <div className="flex items-center gap-1.5">
+          {/* Always offered, to every viewer: the .ics download and the
+              add-to-calendar links need no Google connection, so this is the
+              one calendar affordance that is never a dead end. */}
+          <AddToCalendarMenu meeting={meeting} canManage={canManage} />
+          {canManage ? (
             <AlertDialog>
               <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
                 <Trash2Icon />
@@ -193,8 +171,8 @@ function MeetingRow({
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </div>
       {/* Typed notes, AI notes, and the speech transcript are now one
           unified timeline inside the panel below (see note-timeline.tsx) —

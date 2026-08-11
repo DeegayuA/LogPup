@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { createMeeting, teamForApp } from '@/features/meetings/actions'
+import { icsHref } from '@/features/meetings/components/add-to-calendar'
 import { MEETING_URL_ERROR, isValidMeetingUrl } from '@/features/meetings/meeting-url'
 import type { ActiveUser } from '@/features/people/queries'
 import { parseMeetingIntent, type MeetingIntent } from '@/lib/meeting-intent'
@@ -322,8 +323,19 @@ export function MeetingForm({
           toast.error(res.error)
           return
         }
-        if (res.data.calendarWarning) toast.warning(res.data.calendarWarning)
-        else toast.success('Meeting created')
+        if (res.data.calendarWarning) {
+          // The meeting is saved; only Google's email invites are missing. Say
+          // that plainly and put the path that always works one click away, in
+          // the same toast — a retry here would fail the same way it just did.
+          const meetingId = res.data.meetingId
+          toast.warning(res.data.calendarWarning, {
+            action: {
+              label: 'Download invite',
+              onClick: () => window.location.assign(icsHref(meetingId)),
+            },
+            duration: 12_000,
+          })
+        } else toast.success('Meeting created')
         handleOpenChange(false)
         router.refresh()
       } catch {

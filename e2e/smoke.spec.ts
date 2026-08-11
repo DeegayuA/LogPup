@@ -182,10 +182,12 @@ test.describe('LogPup smoke', () => {
 
     await dialog.getByRole('button', { name: 'Create meeting' }).click()
 
-    // The dev-login user has no googleRefreshToken, so the calendar sync
-    // step (src/features/meetings/actions.ts syncCalendarInvite) can't run
-    // — that must surface as a warning toast, not block the save.
-    await expect(page.getByText('No Google Calendar access')).toBeVisible()
+    // The dev-login user has no googleRefreshToken, so the best-effort Google
+    // step (src/features/meetings/actions.ts syncCalendarInvite) can't run —
+    // that must surface as a warning toast naming the reason and offering the
+    // .ics download, not block the save and not offer a doomed retry.
+    await expect(page.getByText('the organiser has no Google Calendar connection')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Download invite' })).toBeVisible()
     await expect(dialog).not.toBeVisible()
     await expect(page.getByText(MEETING_TITLE, { exact: true })).toBeVisible()
   })
