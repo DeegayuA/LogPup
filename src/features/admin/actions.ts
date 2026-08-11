@@ -193,6 +193,10 @@ export async function createUser(
       passwordHash: hashPassword(starterPassword),
       mustChangePassword: true,
       active: true,
+      // An admin creating the account IS the vetting step — the 'pending'
+      // column default is for open Google self-signup only (see
+      // src/lib/auth.ts), which this path bypasses entirely.
+      status: 'approved',
     })
   } catch {
     // Unique-email race between the check above and the insert.
@@ -254,6 +258,44 @@ export async function setUserTitle(userId: string, title: string): Promise<Actio
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, parsedId.data))
+  revalidateAdminPaths()
+  return ok(undefined)
+}
+
+const approveUserInput = z.object({
+  userId: z.uuid('Invalid user'),
+  role: roleInput,
+})
+
+// Moves a self-signed-up user (see listPendingUsers) from 'pending' to
+// 'approved' and sets their role in the same write — the admin picks the
+// role right there on the pending-approvals row, there's no separate step.
+// No canEditUser self-target guard: a pending user is never the acting
+// admin's own account (an admin session already implies status='approved').
+export async function approveUser(userId: string, role: 'admin' | 'member'): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsed = approveUserInput.safeParse({ userId, role })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  await db
+    .update(users)
+    .set({ status: 'approved', role: parsed.data.role })
+    .where(eq(users.id, parsed.data.userId))
+  revalidateAdminPaths()
+  return ok(undefined)
+}
+
+// Dead-ends a self-signed-up user: status='rejected' denies sign-in outright
+// from then on (see the signIn/jwt callbacks in src/lib/auth.ts) — there is
+// currently no "un-reject" path back to pending or approved from this UI.
+export async function rejectUser(userId: string): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsedId = z.uuid().safeParse(userId)
+  if (!parsedId.success) return err('Invalid user')
+
+  await db.update(users).set({ status: 'rejected' }).where(eq(users.id, parsedId.data))
   revalidateAdminPaths()
   return ok(undefined)
 }

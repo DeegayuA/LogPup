@@ -14,18 +14,19 @@ const MAX_PASSWORD_LENGTH = 200
 
 const authBaseUrl = process.env.AUTH_URL ?? 'http://localhost:3000'
 
-// "May sign in" (ALLOWED_EMAIL_DOMAINS) and "may be created on first sign-in"
-// are two different questions. The allowlist is deliberately allowed to carry
-// personal domains (e.g. gmail.com) so a named individual can be given an
-// account; if that same list also drove provisioning, every mailbox on that
-// domain could click "Continue with Google" and hand itself an active member
-// row. Auto-provisioning is therefore opt-in per corporate domain, and fails
-// closed when unset.
-const autoProvisionDomains = (): string[] =>
-  (process.env.AUTO_PROVISION_EMAIL_DOMAINS ?? '')
-    .split(',')
-    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
-    .filter(Boolean)
+// DECISION — what ALLOWED_EMAIL_DOMAINS / emailAllowed() now gates:
+// Google sign-in used to be a two-gate system — the domain allowlist decided
+// who could sign in at all, and AUTO_PROVISION_EMAIL_DOMAINS (now removed)
+// decided who could self-register a brand-new row. Open signup + admin
+// approval collapses that into one gate: ANY Google account with a verified
+// email may sign in (see the signIn callback below), and a first-time signer
+// lands as status='pending' — locked out of the app by src/proxy.ts until an
+// admin approves them. The allowlist stops being a sign-in gate for Google;
+// it no longer blocks anything there. It's kept — unchanged — for the
+// password and Notion providers below, which have no self-signup flow of
+// their own and still require an admin-provisioned row up front, so the
+// allowlist is still doing real work for them (keeping an admin from typing
+// in a domain that could never actually sign in).
 
 // Fail closed: the passwordless provider must NEVER be reachable in a production
 // runtime. Crash at boot rather than silently accept a leaked test flag.
@@ -108,6 +109,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 email,
                 name: email.split('@')[0],
                 role: 'admin',
+                // Explicitly approved: this is the trusted, single
+                // dev/E2E identity (DEV_LOGIN_EMAIL) — leaving it at the
+                // 'pending' column default would immediately pin it to
+                // /pending and break local dev + E2E runs.
+                status: 'approved',
                 orgTags: derivedOrg ? [derivedOrg] : [],
               })
               .returning()
@@ -117,7 +123,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       : []),
   ],
   session: { strategy: 'jwt' },
-  pages: { signIn: '/sign-in' },
+  // `error` replaces Auth.js's stock white "Access Denied" page (the one a
+  // rejected/deactivated/unverified sign-in used to land on) with our own
+  // branded explanation — see src/app/auth-error/page.tsx. Auth.js appends
+  // `?error=<code>` (AccessDenied, Configuration, Verification, ...) to
+  // whatever URL is configured here.
+  pages: { signIn: '/sign-in', error: '/auth-error' },
   callbacks: {
     async signIn({ profile, account, user }) {
       const provider = account?.provider
@@ -136,14 +147,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         console.warn('[auth] denied: no email on profile')
         return false
       }
-      if (!emailAllowed(email)) {
+
+      // Notion keeps the stricter, pre-open-signup posture: domain-gated and
+      // no self-registration. Google no longer checks the allowlist at all —
+      // see the DECISION comment near the top of this file.
+      if (provider === 'notion' && !emailAllowed(email)) {
         console.warn(`[auth] denied: ${email} not in allowed domains [${allowedDomains().join(', ') || '(none configured)'}]`)
         return false
       }
 
       const [existing] = await db.select().from(users).where(eq(users.email, email))
 
-      // Notion: never auto-provision. Only an existing, active allowed user may log in.
+      // Notion: never auto-provision. Only an existing, active, non-rejected
+      // allowed user may log in.
       if (provider === 'notion') {
         if (!existing) {
           console.warn(`[auth] denied: Notion account ${email} has no matching user`)
@@ -153,13 +169,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
           return false
         }
+        if (existing.status === 'rejected') {
+          console.warn(`[auth] denied: ${email} was rejected by an admin (status=rejected)`)
+          return false
+        }
         return true
       }
 
-      // Google: sign in existing user (refreshing the token) or provision a new one.
+      // Google: open self-signup. Sign in an existing user (refreshing the
+      // token) or provision a brand-new one — status gates what happens
+      // next, not this callback. A 'pending' user still returns true here:
+      // they need a session to reach /pending and finish onboarding (see the
+      // jwt callback and src/proxy.ts), they just can't reach anything else
+      // yet.
       if (existing) {
         if (!existing.active) {
           console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
+          return false
+        }
+        if (existing.status === 'rejected') {
+          console.warn(`[auth] denied: ${email} was rejected by an admin (status=rejected)`)
           return false
         }
 
@@ -182,16 +211,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return true
       }
 
-      // No user row yet: only a domain explicitly marked auto-provisionable may
-      // self-register. Everyone else needs an admin to create the account first
-      // (same posture as Notion above).
-      const domain = email.slice(email.lastIndexOf('@') + 1)
-      if (!autoProvisionDomains().includes(domain)) {
-        console.warn(
-          `[auth] denied: ${email} has no user row and ${domain} is not auto-provisioned`,
-        )
-        return false
-      }
+      // No user row yet: create one, pending admin approval. orgTags is
+      // seeded from the email domain when it maps to a known company (see
+      // src/lib/org-from-domain.ts); otherwise the person fills it in
+      // themselves on /pending. role/active/status are written explicitly
+      // even though they match the column defaults — this is the one place
+      // that decision is actually being made, so it shouldn't be implicit.
       const derivedOrg = orgForEmail(email)
       await db.insert(users).values({
         email,
@@ -199,6 +224,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         avatarUrl: (profile as { picture?: string } | undefined)?.picture,
         googleRefreshToken: account?.refresh_token,
         orgTags: derivedOrg ? [derivedOrg] : [],
+        status: 'pending',
+        role: 'member',
+        active: true,
       })
       return true
     },
@@ -209,18 +237,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // email casing (observed from some OAuth IdPs) still matches the row.
       const email = token.email.toLowerCase()
       const [u] = await db.select().from(users).where(eq(users.email, email))
-      if (!u?.active) return null
+      // Inactive or rejected: no session, full stop — unchanged from before,
+      // now also covering the 'rejected' outcome of admin review. A
+      // 'pending' user, in contrast, MUST get a token: they need a session to
+      // reach /pending and submit onboarding info. src/proxy.ts is what
+      // actually keeps them off every other route while pending — this
+      // callback only kills sessions for outcomes that should never see the
+      // app at all.
+      if (!u || !u.active || u.status === 'rejected') return null
       token.userId = u.id
       token.role = u.role
+      token.status = u.status
       // This callback hits the DB on every session read (not just at sign-in),
       // so the flag refreshes per request: the moment setOwnPassword clears it
       // on the users row, the very next request unsticks — no re-login needed.
+      // Same holds for status: the moment an admin approves/rejects, the next
+      // request picks it up.
       token.mustChangePassword = u.mustChangePassword
       return token
     },
     async session({ session, token }) {
       session.user.id = token.userId as string
       session.user.role = token.role as 'admin' | 'member'
+      session.user.status = token.status as 'pending' | 'approved' | 'rejected'
       session.user.mustChangePassword = token.mustChangePassword === true
       return session
     },

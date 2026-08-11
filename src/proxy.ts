@@ -1,15 +1,33 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
+import { canAccessApp } from '@/lib/access-gate'
 
 export default auth((req) => {
   if (!req.auth) {
     return NextResponse.redirect(new URL('/sign-in', req.nextUrl))
   }
+  const { pathname } = req.nextUrl
+
+  // Pending-approval gate: a self-signed-up user awaiting admin review (see
+  // src/lib/auth.ts signIn callback + src/db/schema.ts `user_status`) is
+  // pinned to /pending until an admin approves them — same shape as the
+  // mustChangePassword gate below. `active` is hardcoded true here because a
+  // session only exists at all when the jwt callback's own active/rejected
+  // check already passed (see src/lib/auth.ts); by construction it can't be
+  // false by the time we get here. /api stays reachable so auth + server
+  // actions (including sign-out, and the onboarding submit action) work.
+  if (
+    !canAccessApp(req.auth.user?.status ?? 'pending', true) &&
+    !pathname.startsWith('/pending') &&
+    !pathname.startsWith('/api')
+  ) {
+    return NextResponse.redirect(new URL('/pending', req.nextUrl))
+  }
+
   // First-login gate: a user still on the admin-issued starter password is
   // pinned to /profile until they set their own (setOwnPassword clears the
   // flag; the jwt callback re-reads it per request, so the gate lifts on the
   // next navigation). /api stays reachable so auth + server actions work.
-  const { pathname } = req.nextUrl
   if (
     req.auth.user?.mustChangePassword === true &&
     !pathname.startsWith('/profile') &&
