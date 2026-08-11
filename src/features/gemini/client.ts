@@ -5,13 +5,14 @@ import { decryptSecret } from '@/lib/crypto'
 import { MAX_ATTEMPTS, backoffDelayMs, shouldRetry, sleep } from '@/features/gemini/retry'
 import { shouldUseInlineAudio } from '@/features/gemini/audio-strategy'
 
-export const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
-// Fallback used only when the primary model is persistently overloaded
-// (503 after exhausting retries) — gemini-flash-lite-latest is the
-// cheaper/lighter sibling in the same "-latest" alias family, so it needs
-// no separate model-availability handling and is likely to have separate
-// capacity from the primary flash model during a demand spike.
-export const FALLBACK_GEMINI_MODEL = 'gemini-flash-lite-latest'
+// Pinned to an explicit version rather than a moving "-latest" alias so model
+// behaviour (and the prompts tuned against it) stays stable until deliberately bumped.
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.6-flash'
+// Fallback covers two cases: the primary being persistently overloaded (503
+// after exhausting retries), and the pinned version being retired or unavailable
+// on a given key's project — the moving alias always resolves to a live flash
+// model, so a version pin can never hard-fail the whole feature.
+export const FALLBACK_GEMINI_MODEL = 'gemini-flash-latest'
 export const GEMINI_MODEL_FALLBACK_ORDER: readonly string[] = [
   DEFAULT_GEMINI_MODEL,
   FALLBACK_GEMINI_MODEL,
