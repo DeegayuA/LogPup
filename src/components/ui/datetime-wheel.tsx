@@ -30,7 +30,7 @@ const ROW_HEIGHT = 44
 // peeking above and below it.
 const VISIBLE_ROWS = 3
 const COLUMN_HEIGHT = ROW_HEIGHT * VISIBLE_ROWS
-const COLUMN_WIDTH = 76
+const COLUMN_WIDTH = 104
 
 type WheelOption = { value: number; label: string }
 
@@ -298,7 +298,7 @@ export function DateTimeWheelField({
           <PopoverContent
             align="start"
             collisionPadding={16}
-            className="w-auto min-w-64 p-0"
+            className="w-[min(22rem,calc(100vw-2rem))] p-0"
           >
             <div className="p-2">
               <Calendar
