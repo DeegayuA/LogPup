@@ -1,4 +1,13 @@
-import { AppWindow, CalendarDays, PawPrint, SquareKanban, Users } from 'lucide-react'
+import {
+  AppWindow,
+  CalendarDays,
+  ChevronDown,
+  PawPrint,
+  ShieldCheck,
+  SquareKanban,
+  Users,
+  Wrench,
+} from 'lucide-react'
 import { signIn } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -62,7 +71,11 @@ export default function SignInPage() {
           </ul>
         </div>
 
-        <p className="relative text-xs text-sidebar-foreground/60 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:520ms] motion-safe:[animation-fill-mode:backwards]">
+        {/* Called out as a chip rather than a faint line: it is the one
+            instruction on this panel, and at /60 alpha it also sat under the
+            AA contrast floor. */}
+        <p className="relative inline-flex w-fit items-center gap-2 rounded-full border border-sidebar-border bg-sidebar-accent px-3 py-1.5 text-xs font-medium text-sidebar-accent-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:520ms] motion-safe:[animation-fill-mode:backwards]">
+          <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
           Internal tool · sign in with your work account
         </p>
       </aside>
@@ -76,42 +89,67 @@ export default function SignInPage() {
         </div>
 
         <Card className="w-full max-w-sm motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:100ms] motion-safe:[animation-fill-mode:backwards]">
-          <CardHeader>
-            <h1 className="font-heading text-2xl font-bold tracking-tight">Sign in</h1>
+          <CardHeader className="gap-1">
+            <h1 className="font-heading text-2xl font-bold tracking-tight">Welcome back</h1>
+            <p className="text-sm text-muted-foreground">
+              Sign in to pick up where your team left off.
+            </p>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {notionConfigured && (
-              <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
-                <Button type="submit" size="lg" className="w-full">Continue with Notion</Button>
+          <CardContent className="flex flex-col gap-4">
+            {/* Google is the primary path: filled, first, and the only provider
+                that can self-provision an account. */}
+            <div className="flex flex-col gap-2">
+              <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/' }) }}>
+                <Button type="submit" size="lg" className="w-full">Continue with Google</Button>
               </form>
-            )}
-
-            <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/' }) }}>
-              <Button type="submit" size="lg" variant="outline" className="w-full">Continue with Google</Button>
-            </form>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">or</span>
-              </div>
+              <p className="text-center text-xs text-muted-foreground">
+                Personal accounts need admin approval.
+              </p>
             </div>
 
-            <PasswordAuth />
-
-            {devLoginEmail && (
-              <div className="rounded-lg border border-dashed p-3">
-                <p className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                  Development
-                </p>
-                <form
-                  action={async () => { 'use server'; await signIn('credentials', { email: devLoginEmail, redirectTo: '/' }) }}
-                >
-                  <Button type="submit" variant="ghost" className="w-full text-muted-foreground">
-                    Dev login ({devLoginEmail})
+            {notionConfigured && (
+              <>
+                <div className="relative">
+                  <span aria-hidden className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </span>
+                  <span className="relative flex justify-center">
+                    <span className="bg-card px-2 text-xs text-muted-foreground">or</span>
+                  </span>
+                </div>
+                <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
+                  <Button type="submit" size="lg" variant="outline" className="w-full">
+                    Continue with Notion
                   </Button>
                 </form>
+              </>
+            )}
+
+            {/* Email + password is the fallback, so it starts collapsed rather
+                than filling the card with fields nobody uses first. Native
+                <details> keeps this a server component — no JS to hydrate. */}
+            <details className="group border-t pt-4">
+              <summary className="flex cursor-pointer list-none items-center justify-center gap-1.5 rounded-md py-1 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                Use email and password
+                <ChevronDown
+                  aria-hidden
+                  className="size-4 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none"
+                />
+              </summary>
+              <div className="pt-3">
+                <PasswordAuth />
               </div>
+            </details>
+
+            {devLoginEmail && (
+              <form
+                className="border-t pt-3"
+                action={async () => { 'use server'; await signIn('credentials', { email: devLoginEmail, redirectTo: '/' }) }}
+              >
+                <Button type="submit" variant="ghost" size="sm" className="w-full text-muted-foreground">
+                  <Wrench aria-hidden /> Dev login · {devLoginEmail}
+                </Button>
+              </form>
             )}
           </CardContent>
         </Card>
