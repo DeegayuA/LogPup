@@ -22,11 +22,14 @@ export function MeetingRsvp({
   meetingUrl,
   myResponse,
   canEditLink,
+  isAttendee = true,
 }: {
   meetingId: string
   meetingUrl: string | null
   myResponse: AttendeeResponse
   canEditLink: boolean
+  /** RSVP buttons only make sense for people actually invited. */
+  isAttendee?: boolean
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -66,6 +69,7 @@ export function MeetingRsvp({
         </a>
       ) : null}
 
+      {isAttendee ? (
       <div role="group" aria-label="Your RSVP" className="flex items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5">
         {OPTIONS.map((o) => {
           const active = myResponse === o.id
@@ -87,6 +91,7 @@ export function MeetingRsvp({
           )
         })}
       </div>
+      ) : null}
 
       {canEditLink ? (
         editing ? (

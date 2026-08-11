@@ -4,7 +4,8 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { CalendarCheckIcon, CalendarDaysIcon, SendIcon, Trash2Icon, VideoIcon } from 'lucide-react'
+import { CalendarCheckIcon, CalendarDaysIcon, SendIcon, Trash2Icon } from 'lucide-react'
+import { MeetingRsvp } from '@/features/meetings/components/meeting-rsvp'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -125,22 +126,25 @@ function MeetingRow({
               <CalendarCheckIcon className="size-3" /> Calendar invite sent
             </Badge>
           ) : null}
-          {meeting.meetingUrl ? (
-            <a
-              href={meeting.meetingUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
-            >
-              <VideoIcon className="size-3" /> Join
-            </a>
-          ) : null}
         </div>
         <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
           {format(meeting.startsAt, 'MMM d, yyyy · h:mm a')} – {format(meeting.endsAt, 'h:mm a')}
         </span>
       </div>
       {meeting.agenda ? <p className="text-sm text-muted-foreground">{meeting.agenda}</p> : null}
+      {(() => {
+        const mine = meeting.attendees.find((a) => a.id === currentUserId)
+        if (!meeting.meetingUrl && !mine && !canManage) return null
+        return (
+          <MeetingRsvp
+            meetingId={meeting.id}
+            meetingUrl={meeting.meetingUrl}
+            myResponse={mine?.response ?? 'pending'}
+            isAttendee={Boolean(mine)}
+            canEditLink={canManage}
+          />
+        )
+      })()}
       <div className="flex flex-wrap items-center justify-between gap-2">
         {meeting.attendees.length > 0 ? (
           <AvatarGroup>

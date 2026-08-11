@@ -58,11 +58,11 @@ export function NotificationBellClient({
             You&apos;re all caught up.
           </p>
         ) : (
-          <ul className="max-h-96 overflow-y-auto py-1">
+          <div className="max-h-96 overflow-y-auto py-1">
             {items.map((n) => {
               const Icon = n.type === 'mention' ? AtSign : CalendarPlus
-              const body = (
-                <div className="flex items-start gap-2.5 px-3 py-2">
+              const inner = (
+                <>
                   <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-muted-foreground">
                     <Icon className="size-3.5" aria-hidden />
                   </span>
@@ -78,21 +78,25 @@ export function NotificationBellClient({
                   {!n.read ? (
                     <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" />
                   ) : null}
+                </>
+              )
+              // A notification with a link becomes a real navigating menu item
+              // (closes the menu, routes to its source); one without stays inert.
+              return n.link ? (
+                <DropdownMenuItem
+                  key={n.id}
+                  render={<Link href={n.link} />}
+                  className="cursor-pointer items-start gap-2.5 px-3 py-2"
+                >
+                  {inner}
+                </DropdownMenuItem>
+              ) : (
+                <div key={n.id} className="flex items-start gap-2.5 px-3 py-2">
+                  {inner}
                 </div>
               )
-              return (
-                <li key={n.id} className="hover:bg-accent/60">
-                  {n.link ? (
-                    <Link href={n.link} className="block">
-                      {body}
-                    </Link>
-                  ) : (
-                    body
-                  )}
-                </li>
-              )
             })}
-          </ul>
+          </div>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

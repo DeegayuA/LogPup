@@ -2,7 +2,12 @@ import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 
-export type MeetingAttendee = { id: string; name: string; avatarUrl: string | null }
+export type MeetingAttendee = {
+  id: string
+  name: string
+  avatarUrl: string | null
+  response: 'pending' | 'going' | 'maybe' | 'declined'
+}
 
 export type MeetingSummary = {
   id: string
@@ -51,6 +56,7 @@ async function attachAttendees(
       id: users.id,
       name: users.name,
       avatarUrl: users.avatarUrl,
+      response: meetingAttendees.response,
     })
     .from(meetingAttendees)
     .innerJoin(users, eq(meetingAttendees.userId, users.id))
@@ -59,7 +65,7 @@ async function attachAttendees(
   const byMeeting = new Map<string, MeetingAttendee[]>()
   for (const row of attendeeRows) {
     const list = byMeeting.get(row.meetingId) ?? []
-    list.push({ id: row.id, name: row.name, avatarUrl: row.avatarUrl })
+    list.push({ id: row.id, name: row.name, avatarUrl: row.avatarUrl, response: row.response })
     byMeeting.set(row.meetingId, list)
   }
 

@@ -1,6 +1,6 @@
-import { asc, eq } from 'drizzle-orm'
+import { asc, count, eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { apps, assignments, users } from '@/db/schema'
+import { apps, assignments, meetings, sprints, tasks, users } from '@/db/schema'
 
 export type AppMember = {
   userId: string
@@ -8,12 +8,21 @@ export type AppMember = {
   avatarUrl: string | null
 }
 
+export type AppStats = {
+  tasks: { todo: number; in_progress: number; done: number; total: number }
+  /** The active sprint closing soonest, for the "deadline" line. */
+  activeSprint: { name: string; endDate: string } | null
+  sprintCount: number
+  meetingCount: number
+}
+
 export type AppWithMembers = typeof apps.$inferSelect & {
   members: AppMember[]
+  stats: AppStats
 }
 
 export async function listApps(): Promise<AppWithMembers[]> {
-  const [allApps, memberRows] = await Promise.all([
+  const [allApps, memberRows, taskRows, sprintRows, meetingRows] = await Promise.all([
     db.select().from(apps).orderBy(asc(apps.status), asc(apps.name)),
     db
       .select({
@@ -24,6 +33,14 @@ export async function listApps(): Promise<AppWithMembers[]> {
       })
       .from(assignments)
       .innerJoin(users, eq(assignments.userId, users.id)),
+    db
+      .select({ appId: tasks.appId, status: tasks.status, c: count() })
+      .from(tasks)
+      .groupBy(tasks.appId, tasks.status),
+    db
+      .select({ appId: sprints.appId, name: sprints.name, endDate: sprints.endDate, status: sprints.status })
+      .from(sprints),
+    db.select({ appId: meetings.appId, c: count() }).from(meetings).groupBy(meetings.appId),
   ])
 
   const membersByApp = new Map<string, AppMember[]>()
@@ -33,7 +50,43 @@ export async function listApps(): Promise<AppWithMembers[]> {
     membersByApp.set(row.appId, members)
   }
 
-  return allApps.map((app) => ({ ...app, members: membersByApp.get(app.id) ?? [] }))
+  const emptyTasks = () => ({ todo: 0, in_progress: 0, done: 0, total: 0 })
+  const taskByApp = new Map<string, ReturnType<typeof emptyTasks>>()
+  for (const r of taskRows) {
+    const t = taskByApp.get(r.appId) ?? emptyTasks()
+    t[r.status] = r.c
+    t.total += r.c
+    taskByApp.set(r.appId, t)
+  }
+
+  const sprintCountByApp = new Map<string, number>()
+  const activeSprintByApp = new Map<string, { name: string; endDate: string }>()
+  for (const r of sprintRows) {
+    sprintCountByApp.set(r.appId, (sprintCountByApp.get(r.appId) ?? 0) + 1)
+    if (r.status === 'active') {
+      const existing = activeSprintByApp.get(r.appId)
+      // Soonest-closing active sprint is the one that reads as "the deadline".
+      if (!existing || r.endDate < existing.endDate) {
+        activeSprintByApp.set(r.appId, { name: r.name, endDate: r.endDate })
+      }
+    }
+  }
+
+  const meetingCountByApp = new Map<string, number>()
+  for (const r of meetingRows) {
+    if (r.appId) meetingCountByApp.set(r.appId, r.c)
+  }
+
+  return allApps.map((app) => ({
+    ...app,
+    members: membersByApp.get(app.id) ?? [],
+    stats: {
+      tasks: taskByApp.get(app.id) ?? emptyTasks(),
+      activeSprint: activeSprintByApp.get(app.id) ?? null,
+      sprintCount: sprintCountByApp.get(app.id) ?? 0,
+      meetingCount: meetingCountByApp.get(app.id) ?? 0,
+    },
+  }))
 }
 
 export async function getAppBySlug(slug: string) {

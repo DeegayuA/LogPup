@@ -1,6 +1,9 @@
 import Link from 'next/link'
+import { differenceInCalendarDays, format } from 'date-fns'
+import { CalendarClock, CalendarDays, ListChecks, SquareKanban } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import {
   Avatar,
   AvatarBadge,
@@ -46,6 +49,14 @@ export function AppCard({ app }: { app: AppWithMembers }) {
     : app.members
   const visibleMembers = members.slice(0, MAX_AVATARS)
   const extraMembers = members.length - visibleMembers.length
+  const lead = app.leadId ? app.members.find((m) => m.userId === app.leadId) : undefined
+
+  const { tasks: t, activeSprint, sprintCount, meetingCount } = app.stats
+  const donePct = t.total > 0 ? (t.done / t.total) * 100 : 0
+  const inProgressPct = t.total > 0 ? (t.in_progress / t.total) * 100 : 0
+  const deadlineDate = activeSprint ? new Date(`${activeSprint.endDate}T12:00:00`) : null
+  const daysLeft = deadlineDate ? differenceInCalendarDays(deadlineDate, new Date()) : null
+  const deadlineSoon = daysLeft !== null && daysLeft <= 3
 
   return (
     <Link
@@ -81,28 +92,79 @@ export function AppCard({ app }: { app: AppWithMembers }) {
               ) : null}
             </div>
           ) : null}
-          {visibleMembers.length > 0 ? (
-            <AvatarGroup className="mt-auto pt-1 *:data-[slot=avatar]:ring-card">
-              {visibleMembers.map((member) => (
-                <Avatar key={member.userId} size="sm" title={member.name}>
-                  {member.avatarUrl ? (
-                    <AvatarImage src={member.avatarUrl} alt={member.name} />
-                  ) : null}
-                  <AvatarFallback>{member.name.slice(0, 1).toUpperCase()}</AvatarFallback>
-                  {member.userId === app.leadId ? (
-                    <AvatarBadge title="Lead">
-                      <span className="sr-only">Lead</span>
-                    </AvatarBadge>
-                  ) : null}
-                </Avatar>
-              ))}
-              {extraMembers > 0 ? (
-                <AvatarGroupCount className="font-mono text-xs ring-card group-has-data-[size=sm]/avatar-group:size-6">
-                  +{extraMembers}
-                </AvatarGroupCount>
-              ) : null}
-            </AvatarGroup>
+
+          {/* Task progress — a mini stacked bar (done / in-progress / todo). */}
+          {t.total > 0 ? (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">{t.done}/{t.total} tasks done</span>
+                <span className="font-mono text-muted-foreground">{Math.round(donePct)}%</span>
+              </div>
+              <div className="flex h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
+                <div className="bg-primary" style={{ width: `${donePct}%` }} />
+                <div className="bg-chart-1" style={{ width: `${inProgressPct}%` }} />
+              </div>
+            </div>
           ) : null}
+
+          {/* Deadline — the soonest-closing active sprint. */}
+          {activeSprint && deadlineDate ? (
+            <div className="flex items-center gap-1.5 text-xs">
+              <CalendarClock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="truncate text-muted-foreground">{activeSprint.name} · ends</span>
+              <span
+                className={cn('shrink-0 font-medium', deadlineSoon ? 'text-destructive' : 'text-foreground')}
+              >
+                {format(deadlineDate, 'MMM d')}
+                {daysLeft !== null && daysLeft >= 0 ? ` · ${daysLeft}d left` : ' · overdue'}
+              </span>
+            </div>
+          ) : null}
+
+          {/* At-a-glance counts. */}
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1" title="Sprints">
+              <SquareKanban className="size-3.5" aria-hidden /> {sprintCount}
+            </span>
+            <span className="flex items-center gap-1" title="Open tasks">
+              <ListChecks className="size-3.5" aria-hidden /> {t.todo + t.in_progress} open
+            </span>
+            <span className="flex items-center gap-1" title="Meetings">
+              <CalendarDays className="size-3.5" aria-hidden /> {meetingCount}
+            </span>
+          </div>
+
+          <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+            {visibleMembers.length > 0 ? (
+              <AvatarGroup className="*:data-[slot=avatar]:ring-card">
+                {visibleMembers.map((member) => (
+                  <Avatar key={member.userId} size="sm" title={member.name}>
+                    {member.avatarUrl ? (
+                      <AvatarImage src={member.avatarUrl} alt={member.name} />
+                    ) : null}
+                    <AvatarFallback>{member.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+                    {member.userId === app.leadId ? (
+                      <AvatarBadge title="Lead">
+                        <span className="sr-only">Lead</span>
+                      </AvatarBadge>
+                    ) : null}
+                  </Avatar>
+                ))}
+                {extraMembers > 0 ? (
+                  <AvatarGroupCount className="font-mono text-xs ring-card group-has-data-[size=sm]/avatar-group:size-6">
+                    +{extraMembers}
+                  </AvatarGroupCount>
+                ) : null}
+              </AvatarGroup>
+            ) : (
+              <span />
+            )}
+            {lead ? (
+              <span className="truncate text-xs text-muted-foreground">
+                Lead · <span className="font-medium text-foreground">{lead.name}</span>
+              </span>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     </Link>

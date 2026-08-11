@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.114",
+  "current": "v0.0.124",
   "versions": [
     {
       "version": "v0.0.1",
@@ -684,6 +684,66 @@
       "date": "2026-08-11",
       "hash": "035ec0d",
       "change": "feat: unified meeting notes with sources, speakers, and task suggestions"
+    },
+    {
+      "version": "v0.0.115",
+      "date": "2026-08-11",
+      "hash": "1ae5ddb",
+      "change": "."
+    },
+    {
+      "version": "v0.0.116",
+      "date": "2026-08-11",
+      "hash": "91d1052",
+      "change": "feat: tech tag autocomplete with canonical suggestions"
+    },
+    {
+      "version": "v0.0.117",
+      "date": "2026-08-11",
+      "hash": "1a32691",
+      "change": "feat: sprints default to a 7-day range"
+    },
+    {
+      "version": "v0.0.118",
+      "date": "2026-08-11",
+      "hash": "21889c7",
+      "change": "fix: repair the migration chain so it survives a replay"
+    },
+    {
+      "version": "v0.0.119",
+      "date": "2026-08-11",
+      "hash": "62ebb24",
+      "change": "fix: reject non-http meeting links (stored XSS)"
+    },
+    {
+      "version": "v0.0.120",
+      "date": "2026-08-11",
+      "hash": "e3a23c8",
+      "change": "feat: meeting detail, drag-to-reschedule, link field, follow-up actions"
+    },
+    {
+      "version": "v0.0.121",
+      "date": "2026-08-11",
+      "hash": "81f44dd",
+      "change": "feat: fuzzy @mention matching; fix uncontrolled Tabs warning"
+    },
+    {
+      "version": "v0.0.122",
+      "date": "2026-08-11",
+      "hash": "93213d5",
+      "change": "feat: bilingual Sinhala-English live transcription"
+    },
+    {
+      "version": "v0.0.123",
+      "date": "2026-08-11",
+      "hash": "8151072",
+      "change": "feat: natural-language task capture on the sprint board"
+    },
+    {
+      "version": "v0.0.124",
+      "date": "2026-08-11",
+      "hash": "72a142b",
+      "change": "fix: sprints activate by date so the dashboard reflects reality"
     }
   ]
 }
