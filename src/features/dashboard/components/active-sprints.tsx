@@ -47,7 +47,7 @@ export function ActiveSprints({ sprints }: { sprints: ActiveSprintSummary[] }) {
                 <li key={sprint.sprintId} className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <Link
-                      href={`/apps/${sprint.appSlug}`}
+                      href={`/apps/${sprint.appSlug}?tab=board`}
                       className="truncate text-sm font-medium hover:underline"
                     >
                       {sprint.appName}

@@ -54,10 +54,10 @@ function formatSprintDate(isoDate: string): string {
 
 export default async function AppDetailPage(props: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ sprint?: string }>
+  searchParams: Promise<{ sprint?: string; tab?: string }>
 }) {
   const { slug } = await props.params
-  const { sprint: sprintParam } = await props.searchParams
+  const { sprint: sprintParam, tab: tabParam } = await props.searchParams
   const app = await getAppBySlug(slug)
   if (!app) notFound()
 
@@ -108,6 +108,7 @@ export default async function AppDetailPage(props: {
       </div>
 
       <AppTabs
+        initialTab={tabParam}
         overview={
           <TeamPanel appId={app.id} team={team} activeUsers={activeUsers} isAdmin={isAdmin} />
         }
