@@ -37,15 +37,19 @@ export function UpcomingMeetingsFiltered({
         <MiniCalendar
           value={selected}
           onValueChange={setSelected}
-          days={7}
-          className="bg-card"
+          days={30}
+          className="w-full min-w-0 max-w-2xl bg-card"
         >
           <MiniCalendarNavigation direction="prev" aria-label="Show earlier days" />
-          <MiniCalendarDays>
+          {/* All 30 days render at once; the strip scrolls horizontally in its
+              own container (min-w-0 lets the flex child shrink instead of
+              widening the page), arrows still page for keyboard users. */}
+          <MiniCalendarDays className="min-w-0 flex-1 snap-x scroll-px-2 overflow-x-auto">
             {(date) => (
               <MiniCalendarDay
                 date={date}
                 key={date.toISOString()}
+                className="snap-start"
                 aria-label={format(date, 'EEEE, MMMM d')}
                 aria-pressed={selected ? isSameDay(date, selected) : false}
               />
