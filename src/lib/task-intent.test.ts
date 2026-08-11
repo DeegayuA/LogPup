@@ -77,6 +77,60 @@ describe('parseTaskIntent', () => {
     expect(intent?.appQuery).toBe('logpup')
   })
 
+  it('reads a recipient written at the end of the phrase', () => {
+    const to = parseTaskIntent('new task to shanika', PEOPLE, TODAY)
+    expect(to?.assignee?.id).toBe('u1')
+    expect(to?.title).toBe('new task')
+
+    const forName = parseTaskIntent('ship the brief for deeghayu', PEOPLE, TODAY)
+    expect(forName?.assignee?.id).toBe('u2')
+    expect(forName?.title).toBe('ship the brief')
+
+    // Trailing "@name" — the board composer's old shorthand.
+    const at = parseTaskIntent('fix the login flow @deeghayu', PEOPLE, TODAY)
+    expect(at?.assignee?.id).toBe('u2')
+    expect(at?.title).toBe('fix the login flow')
+  })
+
+  it('leaves "to"/"for" alone when the tail is not a person', () => {
+    const intent = parseTaskIntent('write docs for the API', PEOPLE, TODAY)
+    expect(intent?.assignee).toBeNull()
+    expect(intent?.assigneeQuery).toBeNull()
+    expect(intent?.title).toBe('write docs for the API')
+  })
+
+  it('composes a trailing recipient with a date and an app hint', () => {
+    const dated = parseTaskIntent('fix login to shanika friday', PEOPLE, TODAY)
+    expect(dated?.assignee?.id).toBe('u1')
+    expect(dated?.title).toBe('fix login')
+    expect(dated?.due).toBe('2026-08-14')
+
+    // The name can be written on either side of the app hint.
+    const beforeApp = parseTaskIntent('fix login to shanika on logpup', PEOPLE, TODAY)
+    expect(beforeApp?.assignee?.id).toBe('u1')
+    expect(beforeApp?.title).toBe('fix login')
+    expect(beforeApp?.appQuery).toBe('logpup')
+
+    const afterApp = parseTaskIntent('fix login on logpup to shanika', PEOPLE, TODAY)
+    expect(afterApp?.assignee?.id).toBe('u1')
+    expect(afterApp?.title).toBe('fix login')
+    expect(afterApp?.appQuery).toBe('logpup')
+  })
+
+  it('reports an ambiguous trailing name instead of guessing', () => {
+    const intent = parseTaskIntent('fix the build to sam', PEOPLE, TODAY)
+    expect(intent?.assignee).toBeNull()
+    expect(intent?.ambiguous.map((p) => p.id)).toEqual(['u3', 'u4'])
+    expect(intent?.assigneeQuery).toBe('sam')
+    expect(intent?.title).toBe('fix the build')
+  })
+
+  it('does not let a tail override a name already read from the front', () => {
+    const intent = parseTaskIntent('@deeghayu send the deck to shanika', PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u2')
+    expect(intent?.title).toBe('send the deck to shanika')
+  })
+
   it('returns null when there is no task left to create', () => {
     expect(parseTaskIntent('a', PEOPLE, TODAY)).toBeNull()
     expect(parseTaskIntent('shanika today', PEOPLE, TODAY)).toBeNull()

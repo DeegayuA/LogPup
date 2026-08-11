@@ -1,9 +1,10 @@
 /**
- * Natural-language task capture for the ⌘K palette.
+ * Natural-language task capture for the ⌘K palette and the board composer.
  *
  * Turns things people actually type — "shanika do this task today",
  * "@sam fix the login flow", "assign billing copy to mary on logpup",
- * "dee: ship the roadmap by friday" — into { assignee, title, due, app }.
+ * "new task to shanika", "dee: ship the roadmap by friday" — into
+ * { assignee, title, due, app }.
  *
  * Deliberately a pure function over a caller-supplied people list: it runs on
  * every keystroke to power the palette's live preview, so it must never touch
@@ -113,6 +114,22 @@ function extractApp(text: string): { rest: string; app: string | null } {
   return { rest: match[1].trim(), app: match[2].trim() }
 }
 
+/** Letters/digits plus the punctuation that lives *inside* names (O'Neil, Anne-Marie). */
+const NAME_WORD = String.raw`[\p{L}\p{N}][\p{L}\p{N}.'’-]*`
+
+/**
+ * A recipient written at the END of the phrase: "new task to shanika",
+ * "ship the brief for dee", "fix login @sam".
+ *
+ * The tail is capped at two words so a whole clause can never be read as a
+ * name, and the caller only accepts the split when that tail resolves to
+ * somebody — "write docs for the API" keeps every word it was given.
+ */
+const TRAILING_ASSIGNEE = new RegExp(
+  String.raw`^([\s\S]*\S)\s+(?:(?:to|for)\s+|@)(${NAME_WORD}(?:\s+${NAME_WORD})?)$`,
+  'iu',
+)
+
 function findPeople(query: string, people: IntentPerson[]): IntentPerson[] {
   const q = query.toLowerCase()
   const exact = people.filter((p) => p.name.toLowerCase() === q)
@@ -123,6 +140,25 @@ function findPeople(query: string, people: IntentPerson[]): IntentPerson[] {
   if (contains.length > 0) return contains
   // Typo fallback ("shanka" → "Shanika"), only when nothing above matched.
   return fuzzyMatches(query, people, (p) => p.name)
+}
+
+/**
+ * Splits a trailing recipient off the phrase, but ONLY when it names someone
+ * real. Refusing the split otherwise is the whole safety property: an
+ * unresolved tail stays in the title rather than quietly disappearing into an
+ * assignment nobody asked for.
+ */
+function takeTrailingAssignee(
+  text: string,
+  people: IntentPerson[],
+): { rest: string; query: string } | null {
+  const match = TRAILING_ASSIGNEE.exec(text)
+  if (!match) return null
+  const query = match[2].trim()
+  // Ambiguity counts as a match: two Sams must be reported, not left buried in
+  // the title where the user would never learn the name was even read.
+  if (findPeople(query, people).length === 0) return null
+  return { rest: match[1].trim(), query }
 }
 
 /**
@@ -174,13 +210,40 @@ export function parseTaskIntent(
     }
   }
 
-  const matches = nameQuery ? findPeople(nameQuery, people) : []
-
   // Dates first: "audit in 3 days" would otherwise be read as app "3 days",
   // and "fix login on monday" as app "monday".
   const withoutDue = extractDue(body, today)
-  const withoutApp = extractApp(withoutDue.rest)
-  const title = withoutApp.rest.replace(LEADING_FILLER, '').trim()
+  let rest = withoutDue.rest
+
+  /*
+   * Then the trailing recipient — "new task to shanika". Tried once on either
+   * side of the app hint, because either can be written last:
+   *   "fix login to shanika on logpup"  -> app must come off first
+   *   "fix login on logpup to shanika"  -> name must come off first
+   * Never when a name was already read from the front: "@sam ship it for
+   * review" must not be reassigned by its own tail.
+   */
+  if (!nameQuery) {
+    const trailing = takeTrailingAssignee(rest, people)
+    if (trailing) {
+      nameQuery = trailing.query
+      rest = trailing.rest
+    }
+  }
+
+  const withoutApp = extractApp(rest)
+  rest = withoutApp.rest
+
+  if (!nameQuery) {
+    const trailing = takeTrailingAssignee(rest, people)
+    if (trailing) {
+      nameQuery = trailing.query
+      rest = trailing.rest
+    }
+  }
+
+  const matches = nameQuery ? findPeople(nameQuery, people) : []
+  const title = rest.replace(LEADING_FILLER, '').trim()
 
   if (!title) return null
 
