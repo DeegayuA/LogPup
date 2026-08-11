@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, isNull, lte, or } from 'drizzle-orm'
+import { and, asc, eq, gt, gte, isNull, lte, or } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, sprints, tasks, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
@@ -46,11 +46,11 @@ export type UpcomingSprintSummary = {
 }
 
 export async function getSprintsForApp(appId: string): Promise<Sprint[]> {
-  return db
-    .select()
-    .from(sprints)
-    .where(eq(sprints.appId, appId))
-    .orderBy(desc(sprints.startDate))
+  // The roadmap reads rows in `sortOrder` (drag-reorderable, independent of
+  // dates), not `startDate` — migration 0016 seeded `sortOrder`
+  // chronologically per app, so a fresh app's roadmap still reads oldest to
+  // newest until someone actually reorders it.
+  return db.select().from(sprints).where(eq(sprints.appId, appId)).orderBy(asc(sprints.sortOrder))
 }
 
 /**

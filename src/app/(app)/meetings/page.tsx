@@ -56,6 +56,7 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
         currentUserId={currentUserId}
         isAdmin={isAdmin}
         users={activeUsers}
+        apps={appOptions}
       />
     </div>
   )

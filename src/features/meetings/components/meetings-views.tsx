@@ -24,12 +24,15 @@ export function MeetingsViews({
   currentUserId,
   isAdmin,
   users,
+  apps,
 }: {
   upcoming: MeetingSummary[]
   past: MeetingSummary[]
   currentUserId: string
   isAdmin: boolean
   users: MentionUser[]
+  /** For the calendar view's "click an empty day" New meeting form. */
+  apps: { id: string; name: string }[]
 }) {
   const [view, setView] = useState<ViewId>('list')
   // Day selection lives here, not in UpcomingMeetingsFiltered, so a calendar
@@ -93,6 +96,8 @@ export function MeetingsViews({
           past={past}
           currentUserId={currentUserId}
           isAdmin={isAdmin}
+          apps={apps}
+          activeUsers={users}
           onSelectDay={(selected) => {
             setDay(selected)
             setView('list')

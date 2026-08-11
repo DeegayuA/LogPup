@@ -58,6 +58,8 @@ export function BoardColumn({
                   currentUser.id,
                   task.assignee?.id ?? null,
                 )}
+                isAdmin={currentUser.role === 'admin'}
+                team={team}
                 onOpen={onOpenTask}
               />
             ))

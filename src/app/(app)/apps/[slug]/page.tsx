@@ -79,6 +79,14 @@ export default async function AppDetailPage(props: {
   const isAdmin = session?.user?.role === 'admin'
   const lead = app.leadId ? activeUsers.find((user) => user.id === app.leadId) : undefined
 
+  // `sprints` now comes back in roadmap order (`sortOrder` — drag-reorderable,
+  // independent of dates), not date order, so picking `sprints[0]` here would
+  // hand the board the OLDEST sprint by default instead of the most recent
+  // one the moment a workspace's rows stop being in chronological order.
+  // `sprintsByDateDesc` (newest first) is what both the board's default
+  // fallback and the sprint switcher dropdown actually want.
+  const sprintsByDateDesc = [...sprints].sort((a, b) => b.startDate.localeCompare(a.startDate))
+
   // A `sprint=backlog` query param is a synthetic selection, not a real
   // sprint id: it maps to `getBoard(appId, null)`, which returns tasks that
   // aren't attached to any sprint.
@@ -87,7 +95,7 @@ export default async function AppDetailPage(props: {
     ? undefined
     : (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
       sprints.find((s) => s.status === 'active') ??
-      sprints[0]
+      sprintsByDateDesc[0]
   const showBoard = isBacklog || Boolean(selectedSprint)
   const boardSprintId = isBacklog ? null : (selectedSprint?.id ?? null)
   const board = showBoard ? await getBoard(app.id, boardSprintId) : null
@@ -143,7 +151,7 @@ export default async function AppDetailPage(props: {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2">
                 <SprintSwitcher
-                  sprints={sprints}
+                  sprints={sprintsByDateDesc}
                   selectedId={isBacklog ? '' : (selectedSprint?.id ?? '')}
                 />
                 <Link
@@ -216,7 +224,7 @@ export default async function AppDetailPage(props: {
             )}
           </div>
         }
-        roadmap={<Roadmap sprints={sprints} slug={slug} />}
+        roadmap={<Roadmap sprints={sprints} slug={slug} appId={app.id} isAdmin={isAdmin} />}
         meetings={
           <div className="flex flex-col gap-4">
             <div className="flex justify-end">

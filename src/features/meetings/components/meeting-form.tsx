@@ -66,8 +66,15 @@ type FormState = {
   attendeeIds: string[]
 }
 
-function emptyState(defaultAppId?: string): FormState {
-  const start = roundUpToStep(new Date())
+function emptyState(defaultAppId?: string, defaultStart?: Date): FormState {
+  // A caller-supplied date (the calendar's "click an empty day" entry point)
+  // keeps that day's date but still rounds/snaps the time the same way
+  // `new Date()` would — so a form opened from a day cell doesn't propose a
+  // meeting at the literal stroke of midnight.
+  const base = defaultStart
+    ? new Date(defaultStart.getFullYear(), defaultStart.getMonth(), defaultStart.getDate(), new Date().getHours(), new Date().getMinutes())
+    : new Date()
+  const start = roundUpToStep(base)
   return {
     appId: defaultAppId ?? '',
     title: '',
@@ -159,25 +166,56 @@ export function MeetingForm({
   apps,
   activeUsers,
   defaultAppId,
+  defaultStart,
   trigger,
   defaultOpen,
+  open: openProp,
+  onOpenChange: onOpenChangeProp,
 }: {
   apps: { id: string; name: string }[]
   activeUsers: ActiveUser[]
   defaultAppId?: string
-  trigger: ReactElement
+  /** Prefills the start (and, one hour later, the end) — the calendar's
+      "click an empty day cell" entry point. */
+  defaultStart?: Date
+  /** Omit for the normal click-a-button-to-open flow (renders `trigger` as
+      a `DialogTrigger`). Provide with `open`/`onOpenChange` for a caller
+      that opens this form itself with no visible trigger of its own — the
+      calendar mounts one `MeetingForm` per day cell this way. */
+  trigger?: ReactElement
   defaultOpen?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   const router = useRouter()
-  const [open, setOpen] = useState(defaultOpen ?? false)
+  const [openState, setOpenState] = useState(defaultOpen ?? false)
+  const open = openProp ?? openState
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
-  const [form, setForm] = useState<FormState>(() => emptyState(defaultAppId))
+  const [form, setForm] = useState<FormState>(() => emptyState(defaultAppId, defaultStart))
   // `quickAdd` is what is being typed; `settled` trails it by the debounce and
   // is the only thing the (re-parsed) preview reads, so parsing never runs on
   // a half-typed word.
   const [quickAdd, setQuickAdd] = useState('')
   const [settled, setSettled] = useState('')
+
+  // Resets the form fields the instant `open` flips from closed to open —
+  // regardless of WHO caused that transition. The uncontrolled case (a
+  // visible `trigger` button) reaches this the same way a fully controlled
+  // caller (the calendar, opening this with no trigger of its own from a
+  // day-cell click) does: both change the `open` value this render reads,
+  // and Base UI's own `onOpenChange` only fires for gestures it initiates
+  // itself (Escape, backdrop click) — never for a parent-driven `open` prop
+  // change — so a controlled caller would otherwise see a stale form.
+  const [syncedOpen, setSyncedOpen] = useState(open)
+  if (open !== syncedOpen) {
+    setSyncedOpen(open)
+    if (open) {
+      setForm(emptyState(defaultAppId, defaultStart))
+      setQuickAdd('')
+      setSettled('')
+    }
+  }
 
   useEffect(() => {
     const timer = setTimeout(() => setSettled(quickAdd), QUICK_ADD_DEBOUNCE_MS)
@@ -209,12 +247,10 @@ export function MeetingForm({
   }, [preview])
 
   function handleOpenChange(next: boolean) {
-    setOpen(next)
-    if (next) {
-      setForm(emptyState(defaultAppId))
-      setQuickAdd('')
-      setSettled('')
-    }
+    // Field reset lives in the render-time sync above, which fires for this
+    // same transition regardless of cause — this only needs to relay it.
+    if (onOpenChangeProp) onOpenChangeProp(next)
+    else setOpenState(next)
   }
 
   /**
@@ -358,7 +394,7 @@ export function MeetingForm({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={trigger} />
+      {trigger ? <DialogTrigger render={trigger} /> : null}
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New meeting</DialogTitle>
