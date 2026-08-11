@@ -41,6 +41,8 @@ import {
   universalSearch,
   signOutFromPalette,
   quickAssignTask,
+  previewTaskIntent,
+  type TaskIntentPreview,
   type SearchResults,
 } from '../actions'
 
@@ -130,6 +132,8 @@ export function CommandCenterProvider({
   const [results, setResults] = React.useState<SearchResults>(EMPTY_RESULTS)
   const [searching, setSearching] = React.useState(false)
   const [assigning, setAssigning] = React.useState(false)
+  const [intent, setIntent] = React.useState<TaskIntentPreview | null>(null)
+  const intentSeq = React.useRef(0)
   const [recents, setRecents] = React.useState<Recent[]>([])
   const searchSeq = React.useRef(0)
   const goPrefix = React.useRef<number | null>(null)
@@ -185,6 +189,29 @@ export function CommandCenterProvider({
       paletteGoTimer.current = null
     }
   }, [open])
+
+  /* Debounced natural-language parse, so the preview shows who/what/when the
+     phrase resolved to before Enter creates anything. Same stale-response
+     guard as the search below. */
+  React.useEffect(() => {
+    const trimmed = query.trim()
+    if (trimmed.length < 4) {
+      intentSeq.current++
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear the preview once the query is too short to be a task
+      setIntent(null)
+      return
+    }
+    const seq = ++intentSeq.current
+    const timer = setTimeout(async () => {
+      try {
+        const parsed = await previewTaskIntent(trimmed)
+        if (intentSeq.current === seq) setIntent(parsed)
+      } catch {
+        if (intentSeq.current === seq) setIntent(null)
+      }
+    }, 180)
+    return () => clearTimeout(timer)
+  }, [query])
 
   /* Debounced server search; stale responses are dropped by sequence id. */
   React.useEffect(() => {
@@ -267,8 +294,6 @@ export function CommandCenterProvider({
   /* Natural-language quick-assign: "@sam fix login" or
      "assign fix login to sam on logpup" creates a backlog task directly. */
   const rawQuery = query.trim()
-  const smartIntent =
-    rawQuery.startsWith('@') || /\b(assign|create task|task)\b.+\b(to|for)\b/i.test(rawQuery)
 
   const handleQuickAssign = React.useCallback(async () => {
     const raw = query.trim()
@@ -324,7 +349,7 @@ export function CommandCenterProvider({
   const nothingAtAll =
     q.length >= 2 &&
     !searching &&
-    !smartIntent &&
+    !intent &&
     !hasEntityResults &&
     pages.length === 0 &&
     themeActions.length === 0 &&
@@ -367,18 +392,44 @@ export function CommandCenterProvider({
               </CommandEmpty>
             ) : null}
 
-            {smartIntent ? (
-              <CommandGroup heading="Smart">
+            {intent ? (
+              <CommandGroup heading="New task">
                 <CommandItem
                   value="smart-quick-assign"
-                  disabled={assigning}
+                  disabled={assigning || !intent.assigneeName}
                   onSelect={() => void handleQuickAssign()}
                 >
                   {assigning ? <Loader2 className="animate-spin" /> : <Plus />}
-                  <span className="truncate">➕ {rawQuery}</span>
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    Create &amp; assign task — press Enter
-                  </span>
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate">{intent.title}</span>
+                    {/* Show what the phrase actually resolved to, so nothing is
+                        created on a guess the user never saw. */}
+                    <span className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                      {intent.assigneeName ? (
+                        <span className="text-foreground">{intent.assigneeName}</span>
+                      ) : intent.ambiguousNames.length > 0 ? (
+                        <span className="text-destructive">
+                          {intent.ambiguousNames.join(' or ')}?
+                        </span>
+                      ) : intent.unresolvedName ? (
+                        <span className="text-destructive">
+                          no one called “{intent.unresolvedName}”
+                        </span>
+                      ) : (
+                        <span className="text-destructive">start with a teammate’s name</span>
+                      )}
+                      {intent.dueLabel ? (
+                        <span className="inline-flex items-center gap-1">
+                          <CalendarDays className="size-3" aria-hidden />
+                          {intent.dueLabel}
+                        </span>
+                      ) : null}
+                      {intent.appName ? <span>· {intent.appName}</span> : null}
+                    </span>
+                  </div>
+                  {intent.assigneeName ? (
+                    <CommandShortcut>↵</CommandShortcut>
+                  ) : null}
                 </CommandItem>
               </CommandGroup>
             ) : null}

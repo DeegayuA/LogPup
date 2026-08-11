@@ -88,6 +88,9 @@ export const tasks = pgTable('tasks', {
   assigneeId: uuid('assignee_id').references(() => users.id),
   priority: integer('priority').notNull().default(0),
   sortOrder: integer('sort_order').notNull().default(0),
+  // Plain calendar day, no time: set from phrases like "today" / "friday" in
+  // the ⌘K natural-language quick-add (see src/lib/task-intent.ts).
+  dueDate: date('due_date'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -189,5 +192,15 @@ export const notifications = pgTable('notifications', {
   link: text('link'),
   meetingId: uuid('meeting_id').references(() => meetings.id, { onDelete: 'cascade' }),
   read: boolean('read').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// Discussion thread on an app's overview. @mentions in the body notify the
+// mentioned users via the notifications table (see app comment actions).
+export const appComments = pgTable('app_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  authorId: uuid('author_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })

@@ -7,6 +7,7 @@ import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
 import { apps, assignments, meetings, sprints, tasks, users } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { parseTaskIntent } from '@/lib/task-intent'
 
 export type SearchResults = {
   apps: { id: string; name: string; slug: string; status: 'active' | 'paused' | 'archived' }[]
@@ -161,21 +162,66 @@ const quickAssignTitle = z
 // Escape LIKE metacharacters so names with "%"/"_" match literally.
 const likePattern = (value: string) => `%${value.replace(/[\\%_]/g, '\\$&')}%`
 
-/*
- * Natural-language quick-assign, straight from the ⌘K palette:
- *   Pattern A: "@sam fix the login flow"
- *   Pattern B: "(assign|create task|task) <title> (to|for) <name>( on <app>)?"
+/** Everyone the palette may assign to. Approved + active only. */
+async function assignableUsers() {
+  return db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(and(eq(users.active, true), eq(users.status, 'approved')))
+    .orderBy(asc(users.name))
+}
+
+export type TaskIntentPreview = {
+  title: string
+  assigneeName: string | null
+  /** Name written that matched nobody, or several people. */
+  unresolvedName: string | null
+  ambiguousNames: string[]
+  dueLabel: string | null
+  dueDate: string | null
+  appName: string | null
+}
+
+/**
+ * Read-only parse for the palette's live preview — shows who/what/when the
+ * phrase resolved to before the user commits. Creates nothing.
  */
-function parseQuickAssign(raw: string): { title: string; name: string; app: string | null } | null {
-  const leading = /^@(\S+)\s+([\s\S]+)$/.exec(raw)
-  if (leading) return { name: leading[1], title: leading[2].trim(), app: null }
-  const command = /^(?:assign|create\s+task|task)\s+([\s\S]+?)\s+(?:to|for)\s+([\s\S]+?)(?:\s+on\s+([\s\S]+))?$/i.exec(
-    raw,
-  )
-  if (command) {
-    return { title: command[1].trim(), name: command[2].trim(), app: command[3]?.trim() ?? null }
+export async function previewTaskIntent(raw: string): Promise<TaskIntentPreview | null> {
+  const session = await auth()
+  if (!session?.user) return null
+
+  const input = z.string().max(400).safeParse(raw)
+  if (!input.success) return null
+
+  const people = await assignableUsers()
+  const intent = parseTaskIntent(input.data, people)
+  if (!intent) return null
+
+  let appName: string | null = null
+  if (intent.appQuery) {
+    const [match] = await db
+      .select({ name: apps.name })
+      .from(apps)
+      .where(
+        or(
+          ilike(apps.name, likePattern(intent.appQuery)),
+          ilike(apps.slug, likePattern(intent.appQuery)),
+        ),
+      )
+      .limit(1)
+    appName = match?.name ?? null
   }
-  return null
+
+  return {
+    // An unresolved "on <x>" is not an app, so those words belong to the title.
+    title: intent.appQuery && !appName ? `${intent.title} on ${intent.appQuery}` : intent.title,
+    assigneeName: intent.assignee?.name ?? null,
+    unresolvedName: intent.ambiguous.length === 0 ? intent.assigneeQuery : null,
+    ambiguousNames: intent.ambiguous.map((p) => p.name),
+    dueLabel: intent.dueLabel,
+    dueDate: intent.due,
+    appName,
+  }
 }
 
 export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAssignData>> {
@@ -185,72 +231,43 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
   const input = z.string().max(400).safeParse(raw)
   if (!input.success) return err('Try "@name task title" or "assign <task> to <name> on <app>"')
 
-  const parsed = parseQuickAssign(input.data.trim())
-  if (!parsed) return err('Try "@name task title" or "assign <task> to <name> on <app>"')
+  const people = await assignableUsers()
+  const intent = parseTaskIntent(input.data, people)
+  if (!intent) {
+    return err('Try "shanika fix the login flow today" or "assign X to <name>"')
+  }
 
-  const title = quickAssignTitle.safeParse(parsed.title)
+  if (intent.ambiguous.length > 1) {
+    return err(
+      `"${intent.assigneeQuery}" could be ${intent.ambiguous.map((p) => p.name).join(' or ')} — be more specific`,
+    )
+  }
+  if (!intent.assignee) {
+    return err(
+      intent.assigneeQuery
+        ? `No one matches "${intent.assigneeQuery}"`
+        : 'Start with a teammate’s name, e.g. "shanika fix the login flow today"',
+    )
+  }
+  const assignee = intent.assignee
+
+  const title = quickAssignTitle.safeParse(intent.title)
   if (!title.success) return err(title.error.issues[0].message)
 
-  const candidates = await db
-    .select({ id: users.id, name: users.name })
-    .from(users)
-    .where(
-      and(
-        eq(users.active, true),
-        // Excludes self-signed-up users still awaiting admin approval.
-        eq(users.status, 'approved'),
-        ilike(users.name, likePattern(parsed.name)),
-      ),
-    )
-    .orderBy(asc(users.name))
-    .limit(6)
-  if (candidates.length === 0) return err(`No one matches "${parsed.name}"`)
-  if (candidates.length > 1) {
-    return err(
-      `"${parsed.name}" could be ${candidates.map((c) => c.name).join(' or ')} — be more specific`,
-    )
-  }
-  const assignee = candidates[0]
-
-  // Pattern A captures only the first word of the name, so "@sam perera fix X"
-  // would otherwise title the task "perera fix X" — consume title words that
-  // continue the matched user's real name.
   let taskTitle = title.data
-  let appQuery = parsed.app
-  {
-    const nameWords = assignee.name.toLowerCase().split(/\s+/)
-    let i = nameWords.indexOf(parsed.name.toLowerCase())
-    let words = taskTitle.split(/\s+/)
-    while (
-      i >= 0 &&
-      i + 1 < nameWords.length &&
-      words.length > 1 &&
-      nameWords[i + 1] === words[0].toLowerCase()
-    ) {
-      i++
-      words = words.slice(1)
-    }
-    taskTitle = words.join(' ')
-  }
+  let appQuery = intent.appQuery
 
-  // Pattern A can also carry an explicit app suffix: "@sam fix login on logpup".
-  // Only strip it when the suffix actually resolves to an app, so titles that
-  // legitimately end in "on <something>" survive.
-  if (!appQuery) {
-    const trailing = /^([\s\S]+?)\s+on\s+(\S[\s\S]*)$/i.exec(taskTitle)
-    if (trailing) {
-      const candidateApp = trailing[2].trim()
-      const matches = await db
-        .select({ id: apps.id })
-        .from(apps)
-        .where(
-          or(ilike(apps.name, likePattern(candidateApp)), ilike(apps.slug, likePattern(candidateApp))),
-        )
-        .limit(2)
-      if (matches.length === 1) {
-        taskTitle = trailing[1].trim()
-        appQuery = candidateApp
-      }
+  // "on <x>" is only an app when it resolves to one — otherwise those words
+  // were part of the task ("write the copy on onboarding").
+  if (appQuery) {
+    const matches = await db
+      .select({ id: apps.id })
+      .from(apps)
+      .where(or(ilike(apps.name, likePattern(appQuery)), ilike(apps.slug, likePattern(appQuery))))
+      .limit(2)
+    if (matches.length === 0) {
+      taskTitle = `${taskTitle} on ${appQuery}`
+      appQuery = null
     }
   }
 
@@ -293,6 +310,7 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
     assigneeId: assignee.id,
     priority: 0,
     sortOrder: 0,
+    dueDate: intent.due,
   })
 
   revalidatePath('/apps/' + app.slug)

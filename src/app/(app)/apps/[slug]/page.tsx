@@ -13,6 +13,8 @@ import { getMeetingsForApp } from '@/features/meetings/queries'
 import { AppTabs } from '@/features/apps/components/app-tabs'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { TeamPanel } from '@/features/people/components/team-panel'
+import { AppComments } from '@/features/apps/components/app-comments'
+import { listAppComments } from '@/features/apps/comment-queries'
 import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
@@ -63,13 +65,14 @@ export default async function AppDetailPage(props: {
   const app = await getAppBySlug(slug)
   if (!app) notFound()
 
-  const [session, team, activeUsers, sprints, appMeetings, allApps] = await Promise.all([
+  const [session, team, activeUsers, sprints, appMeetings, allApps, comments] = await Promise.all([
     auth(),
     getTeamForApp(app.id),
     listActiveUsers(),
     getSprintsForApp(app.id),
     getMeetingsForApp(app.id),
     listApps(),
+    listAppComments(app.id),
   ])
   const isAdmin = session?.user?.role === 'admin'
   const lead = app.leadId ? activeUsers.find((user) => user.id === app.leadId) : undefined
@@ -124,7 +127,14 @@ export default async function AppDetailPage(props: {
       <AppTabs
         initialTab={tabParam}
         overview={
-          <TeamPanel appId={app.id} team={team} activeUsers={activeUsers} isAdmin={isAdmin} />
+          <div className="flex flex-col gap-8">
+            <TeamPanel appId={app.id} team={team} activeUsers={activeUsers} isAdmin={isAdmin} />
+            <AppComments
+              appId={app.id}
+              comments={comments}
+              users={activeUsers.map((u) => ({ id: u.id, name: u.name }))}
+            />
+          </div>
         }
         board={
           <div className="flex flex-col gap-4">
