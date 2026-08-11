@@ -9,6 +9,8 @@
  * (src/lib/task-intent.ts).
  */
 
+import { fuzzyMatches } from '@/lib/fuzzy'
+
 export type MeetingPerson = { id: string; name: string }
 
 export type MeetingIntent = {
@@ -27,6 +29,8 @@ export type MeetingIntent = {
   appQuery: string | null
   /** Always null from the parser; the caller resolves the hint to a real app. */
   appName: string | null
+  /** A video-call link found anywhere in the text, routed to the meeting link. */
+  meetingUrl: string | null
 }
 
 const WEEKDAYS = [
@@ -69,7 +73,10 @@ function resolvePeople(
 
   for (const token of attendeeNames) {
     const q = token.toLowerCase()
-    const matched = people.filter((p) => p.name.toLowerCase().startsWith(q))
+    // Exact/prefix first; fall back to fuzzy only when prefix finds nothing, so a
+    // typo ("deghayu") resolves while confident matches are never second-guessed.
+    let matched = people.filter((p) => p.name.toLowerCase().startsWith(q))
+    if (matched.length === 0) matched = fuzzyMatches(token, people, (p) => p.name)
     if (matched.length === 1) {
       if (!seen.has(matched[0].id)) {
         seen.add(matched[0].id)
@@ -186,6 +193,15 @@ export function parseMeetingIntent(
   let text = raw.trim().replace(/\s+/g, ' ')
   if (!text) return null
 
+  // A pasted video-call link is pulled out first and routed to the meeting link,
+  // so it never lands in the title.
+  let meetingUrl: string | null = null
+  const urlMatch = /https?:\/\/\S+/i.exec(text)
+  if (urlMatch) {
+    meetingUrl = urlMatch[0].replace(/[.,;]+$/, '')
+    text = stripMatch(text, urlMatch)
+  }
+
   // Scheduling clauses come out FIRST, so a "with …" that sits in the middle of
   // the sentence ("1:1 with deeghayu next monday 9.30am") doesn't swallow the day
   // and time that follow the names.
@@ -238,5 +254,6 @@ export function parseMeetingIntent(
     unresolved: attendance.unresolved,
     appQuery: app.app,
     appName: null,
+    meetingUrl,
   }
 }

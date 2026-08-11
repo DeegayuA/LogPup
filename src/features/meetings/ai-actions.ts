@@ -3,11 +3,23 @@
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { and, eq, inArray, isNotNull, lt, ne, or } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
-import { meetingAiNotes, meetingAttendees, meetingFollowups, meetings, users } from '@/db/schema'
+import {
+  meetingAiNotes,
+  meetingAttendees,
+  meetingFollowups,
+  meetingNoteSegments,
+  meetingSpeakers,
+  meetingTaskSuggestions,
+  meetings,
+  users,
+} from '@/db/schema'
 import { DEFAULT_GEMINI_MODEL, callGemini, GeminiError } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
+import { createTask } from '@/features/sprints/task-actions'
 import {
   matchPersonToAttendee,
   selectCarriedForward,
@@ -18,10 +30,19 @@ import {
   type FollowupKind,
   type OpenFollowupItem,
 } from '@/features/meetings/followups'
+import {
+  resolveSpeakerUserId,
+  normalizeDueDate,
+  suggestionToTaskPayload,
+  orderNoteSegments,
+  type NoteSource,
+  type SpeakerMapping,
+} from '@/features/meetings/notes'
 
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024 // inline Gemini requests cap around 20MB
 const MAX_LIVE_TRANSCRIPT_CHARS = 100_000
 const MAX_RESOLUTION_NOTE_CHARS = 500
+const MAX_SEGMENT_LENGTH = 5000 // matches MAX_NOTES_LENGTH in actions.ts
 
 // A malformed (non-UUID) meetingId would otherwise reach the DB as a raw
 // `uuid` column comparison and throw a Postgres "invalid input syntax"
@@ -75,13 +96,102 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
+type SpeakerSegmentOut = { speaker: string | null; text: string }
+type ActionItemOut = {
+  text: string
+  suggestedAssigneeLabel: string | null
+  suggestedDueDate: string | null
+}
+
+/** Defensive parse of the model's speakerSegments — drops anything without real text. */
+function asSpeakerSegments(value: unknown): SpeakerSegmentOut[] {
+  return asArray<Record<string, unknown>>(value)
+    .map((row) => ({
+      speaker: typeof row.speaker === 'string' && row.speaker.trim() ? row.speaker.trim() : null,
+      text: typeof row.text === 'string' ? row.text.trim() : '',
+    }))
+    .filter((row): row is SpeakerSegmentOut => row.text.length > 0)
+}
+
+/** Defensive parse of the model's actionItems — drops anything without real text. */
+function asActionItems(value: unknown): ActionItemOut[] {
+  return asArray<Record<string, unknown>>(value)
+    .map((row) => ({
+      text: typeof row.text === 'string' ? row.text.trim() : '',
+      suggestedAssigneeLabel:
+        typeof row.suggestedAssigneeLabel === 'string' && row.suggestedAssigneeLabel.trim()
+          ? row.suggestedAssigneeLabel.trim()
+          : null,
+      suggestedDueDate: normalizeDueDate(
+        typeof row.suggestedDueDate === 'string' ? row.suggestedDueDate : null,
+      ),
+    }))
+    .filter((row): row is ActionItemOut => row.text.length > 0)
+}
+
+/**
+ * "Intelligence auto add notes": inserts the AI's write-up straight into the
+ * unified note timeline (one 'ai' segment) and the diarized transcript as
+ * 'voice' segments — one per speaker turn — instead of leaving them in a
+ * separate panel the user has to go find. Also files the model's actionable
+ * proposals as open task suggestion cards. Best-effort: called from inside a
+ * try/catch at the call site so a failure here never undoes the analysis
+ * that already succeeded.
+ */
+async function insertAutoNotesAndSuggestions(
+  meetingId: string,
+  createdBy: string,
+  summary: string | null,
+  speakerSegments: SpeakerSegmentOut[],
+  actionItems: ActionItemOut[],
+  attendees: AttendeeRef[],
+): Promise<void> {
+  const mappingRows: SpeakerMapping[] = await db
+    .select({ label: meetingSpeakers.label, userId: meetingSpeakers.userId })
+    .from(meetingSpeakers)
+    .where(eq(meetingSpeakers.meetingId, meetingId))
+
+  const segmentRows: (typeof meetingNoteSegments.$inferInsert)[] = []
+  if (summary) {
+    segmentRows.push({ meetingId, source: 'ai', content: summary, createdBy })
+  }
+  speakerSegments.forEach((segment, index) => {
+    segmentRows.push({
+      meetingId,
+      source: 'voice',
+      speakerLabel: segment.speaker,
+      speakerId: resolveSpeakerUserId(segment.speaker, mappingRows, attendees),
+      content: segment.text,
+      // The model gives no per-chunk timing — a monotonic counter still
+      // orders these chunks correctly relative to one another (they share
+      // the same createdAt, inserted together), which is all
+      // orderNoteSegments needs "startedAtMs" for.
+      startedAtMs: index * 1000,
+      createdBy,
+    })
+  })
+  if (segmentRows.length > 0) await db.insert(meetingNoteSegments).values(segmentRows)
+
+  if (actionItems.length > 0) {
+    await db.insert(meetingTaskSuggestions).values(
+      actionItems.map((item) => ({
+        meetingId,
+        text: item.text,
+        suggestedUserId: resolveSpeakerUserId(item.suggestedAssigneeLabel, mappingRows, attendees),
+        suggestedDueDate: item.suggestedDueDate,
+        status: 'open' as const,
+      })),
+    )
+  }
+}
+
 /**
  * Meeting intel (transcript, per-person notes, follow-up questions) is
  * readable only by an admin, the meeting's creator, or someone who was
  * actually an attendee. Anything that returns intel — for THIS meeting or for
  * the earlier meeting the prep questions are pulled from — has to pass this.
  */
-async function canReadMeetingIntel(
+export async function canReadMeetingIntel(
   user: { id: string; role?: string | null },
   meeting: { id: string; createdBy: string },
 ): Promise<boolean> {
@@ -95,7 +205,7 @@ async function canReadMeetingIntel(
   return Boolean(attendee)
 }
 
-async function canManageMeeting(meetingId: string) {
+export async function canManageMeeting(meetingId: string) {
   const session = await auth()
   if (!session?.user) return null
   const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId))
@@ -349,12 +459,20 @@ Return STRICT JSON only, matching exactly:
   "perPerson": [{ "name": "...", "points": ["key things this person said or decided"], "actionItems": ["..."] }],
   "deadlines": [{ "item": "...", "owner": "...", "due": "date or phrase as spoken" }],
   "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
-  "questions": [{ "person": "...", "questions": ["question this person should answer at the next meeting"] }]
+  "questions": [{ "person": "...", "questions": ["question this person should answer at the next meeting"] }],
+  "speakerSegments": [{ "speaker": "attendee name if identifiable, else \"Speaker 1\"/\"Speaker 2\"/… used consistently for the same voice, or null", "text": "what this speaker said in this turn" }],
+  "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0 }]
 }
 Map speakers to attendee names where possible; unknown voices become "Speaker 1", "Speaker 2", … .
 Deadlines and action items must be concrete. Give each person 1–3 follow-up questions about their
 commitments, blockers, and deadlines from THIS meeting — they follow that person forward and are
-shown whenever they attend a future meeting.`
+shown whenever they attend a future meeting.
+speakerSegments must cover the whole meeting, in chronological order, one entry per speaker turn,
+using the same label for the same voice throughout. If you genuinely cannot tell speakers apart,
+return exactly ONE entry with "speaker": null and "text" set to the full transcript — never invent
+distinct labels you are not confident about. actionItems are the concrete next steps raised in the
+discussion (overlap with perPerson's actionItems is fine); suggestedDueDate must be a real ISO date
+or null, and confidence is your own 0–1 estimate of how sure you are about the assignee/due date.`
 
   const base64 = Buffer.from(await audio.arrayBuffer()).toString('base64')
   const mimeType = audio.type || 'audio/webm'
@@ -389,6 +507,8 @@ shown whenever they attend a future meeting.`
   const questions = asArray<QuestionNote>(parsed.questions)
   const transcript = typeof parsed.transcript === 'string' ? parsed.transcript : null
   const summary = typeof parsed.summary === 'string' ? parsed.summary : null
+  const speakerSegments = asSpeakerSegments(parsed.speakerSegments)
+  const actionItems = asActionItems(parsed.actionItems)
 
   const values = {
     meetingId: id,
@@ -410,6 +530,17 @@ shown whenever they attend a future meeting.`
     .onConflictDoUpdate({ target: meetingAiNotes.meetingId, set: values })
 
   await deriveAndInsertFollowups(id, attendees, perPerson, questions)
+
+  // "Intelligence auto add notes": drop the summary and diarized transcript
+  // straight into the unified note timeline, and file the model's
+  // actionable proposals as suggestion cards. Best-effort, same reasoning
+  // as the carry-forward pass below — a failure here must not undo the
+  // analysis that already succeeded.
+  try {
+    await insertAutoNotesAndSuggestions(id, session.user.id, summary, speakerSegments, actionItems, attendees)
+  } catch (error) {
+    console.error('[meeting-notes] auto note/suggestion insert failed:', error)
+  }
 
   // "Intelligently think" about carry-forward: check whether any follow-up
   // items owed by this meeting's attendees (from earlier meetings) were
@@ -653,6 +784,383 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
         resolutionNote: null,
       })
       .where(eq(meetingFollowups.id, row.id))
+    revalidatePath('/meetings')
+  }
+
+  return ok(undefined)
+}
+
+// --- Unified note timeline: segments, speaker assignment, task suggestions ---
+
+export type NoteSegmentView = {
+  id: string
+  source: NoteSource
+  speakerId: string | null
+  speakerName: string | null
+  speakerLabel: string | null
+  content: string
+  startedAtMs: number | null
+  createdByName: string | null
+  createdAt: Date
+  /** A synthetic entry read from the legacy `meetings.notes` field — not a
+   *  real row yet. Editing it (addTypedNoteSegment) migrates it into one. */
+  isLegacy?: boolean
+}
+
+export type SpeakerRow = { label: string; userId: string | null; userName: string | null }
+
+export type TaskSuggestionView = {
+  id: string
+  segmentId: string | null
+  text: string
+  suggestedUserId: string | null
+  suggestedUserName: string | null
+  suggestedDueDate: string | null
+  status: 'open' | 'accepted' | 'dismissed'
+  createdTaskId: string | null
+}
+
+export type NoteTimelineData = {
+  segments: NoteSegmentView[]
+  speakers: SpeakerRow[]
+  suggestions: TaskSuggestionView[]
+  attendees: AttendeeRef[]
+  appId: string | null
+}
+
+const speakerUsers = alias(users, 'note_speaker_users')
+const authorUsers = alias(users, 'note_author_users')
+const suggestedUsers = alias(users, 'note_suggested_users')
+
+/**
+ * The unified note timeline for a meeting: typed/voice/ai segments in
+ * chronological order, the speaker-label→user mappings set so far, and open
+ * task suggestions. Same read gate as getMeetingIntel (admin, creator, or
+ * attendee) — this can carry the same transcript-derived content.
+ */
+export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionResult<NoteTimelineData>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const idParsed = idInput.safeParse(meetingId)
+  if (!idParsed.success) return err(idParsed.error.issues[0].message)
+  const id = idParsed.data
+
+  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  if (!meeting) return err('Meeting not found')
+  if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
+
+  const attendees = await fetchAttendees(id)
+
+  const segmentRows = await db
+    .select({
+      id: meetingNoteSegments.id,
+      source: meetingNoteSegments.source,
+      speakerId: meetingNoteSegments.speakerId,
+      speakerName: speakerUsers.name,
+      speakerLabel: meetingNoteSegments.speakerLabel,
+      content: meetingNoteSegments.content,
+      startedAtMs: meetingNoteSegments.startedAtMs,
+      createdByName: authorUsers.name,
+      createdAt: meetingNoteSegments.createdAt,
+    })
+    .from(meetingNoteSegments)
+    .leftJoin(speakerUsers, eq(meetingNoteSegments.speakerId, speakerUsers.id))
+    .innerJoin(authorUsers, eq(meetingNoteSegments.createdBy, authorUsers.id))
+    .where(eq(meetingNoteSegments.meetingId, id))
+
+  // No segments yet — the legacy `meetings.notes` blob (pre-dating this
+  // feature) still renders as a read-only first entry rather than vanishing;
+  // it becomes a real segment the first time someone edits notes here (see
+  // addTypedNoteSegment).
+  const segments: NoteSegmentView[] =
+    segmentRows.length === 0 && meeting.notes
+      ? [
+          {
+            id: 'legacy',
+            source: 'typed',
+            speakerId: null,
+            speakerName: null,
+            speakerLabel: null,
+            content: meeting.notes,
+            startedAtMs: null,
+            createdByName: null,
+            createdAt: meeting.createdAt,
+            isLegacy: true,
+          },
+        ]
+      : orderNoteSegments(segmentRows)
+
+  const speakerMapRows = await db
+    .select({ label: meetingSpeakers.label, userId: meetingSpeakers.userId, userName: users.name })
+    .from(meetingSpeakers)
+    .leftJoin(users, eq(meetingSpeakers.userId, users.id))
+    .where(eq(meetingSpeakers.meetingId, id))
+
+  const suggestionRows = await db
+    .select({
+      id: meetingTaskSuggestions.id,
+      segmentId: meetingTaskSuggestions.segmentId,
+      text: meetingTaskSuggestions.text,
+      suggestedUserId: meetingTaskSuggestions.suggestedUserId,
+      suggestedUserName: suggestedUsers.name,
+      suggestedDueDate: meetingTaskSuggestions.suggestedDueDate,
+      status: meetingTaskSuggestions.status,
+      createdTaskId: meetingTaskSuggestions.createdTaskId,
+    })
+    .from(meetingTaskSuggestions)
+    .leftJoin(suggestedUsers, eq(meetingTaskSuggestions.suggestedUserId, suggestedUsers.id))
+    .where(and(eq(meetingTaskSuggestions.meetingId, id), eq(meetingTaskSuggestions.status, 'open')))
+
+  return ok({
+    segments,
+    speakers: speakerMapRows,
+    suggestions: suggestionRows,
+    attendees,
+    appId: meeting.appId,
+  })
+}
+
+const addTypedNoteInput = z.object({
+  meetingId: z.uuid(),
+  content: z.string().trim().min(1).max(MAX_SEGMENT_LENGTH),
+})
+
+/**
+ * Adds one typed note segment, authored by the caller. The FIRST time notes
+ * are edited on a meeting that predates this feature, the legacy
+ * `meetings.notes` text is migrated into a real segment first (attributed to
+ * the meeting's creator, at the meeting's own createdAt — best-effort
+ * provenance for content nobody recorded an author/time for) so it keeps its
+ * place in the timeline instead of being silently superseded.
+ */
+export async function addTypedNoteSegment(meetingId: string, content: string): Promise<ActionResult> {
+  const parsed = addTypedNoteInput.safeParse({ meetingId, content })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Not allowed')
+  const { session, meeting } = ctx
+
+  const [existing] = await db
+    .select({ id: meetingNoteSegments.id })
+    .from(meetingNoteSegments)
+    .where(eq(meetingNoteSegments.meetingId, meeting.id))
+    .limit(1)
+  if (!existing && meeting.notes) {
+    await db.insert(meetingNoteSegments).values({
+      meetingId: meeting.id,
+      source: 'typed',
+      content: meeting.notes,
+      createdBy: meeting.createdBy,
+      createdAt: meeting.createdAt,
+    })
+  }
+
+  await db.insert(meetingNoteSegments).values({
+    meetingId: meeting.id,
+    source: 'typed',
+    content: parsed.data.content,
+    createdBy: session.user.id,
+  })
+
+  // Notify anyone @mentioned in the new segment (except the author) — same
+  // convention as the legacy updateMeetingNotes. Best-effort.
+  try {
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users)
+    const mentionedIds = extractMentionedUserIds(parsed.data.content, allUsers).filter(
+      (uid) => uid !== session.user.id,
+    )
+    await createNotifications(
+      mentionedIds.map((userId) => ({
+        userId,
+        actorId: session.user.id,
+        type: 'mention' as const,
+        title: `${session.user.name ?? 'Someone'} mentioned you`,
+        body: `In “${meeting.title}”`,
+        link: '/meetings',
+        meetingId: meeting.id,
+      })),
+    )
+  } catch (error) {
+    console.error('[notifications] mention notify failed:', error)
+  }
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+const editSegmentInput = z.object({
+  segmentId: z.uuid(),
+  content: z.string().trim().min(1).max(MAX_SEGMENT_LENGTH),
+})
+
+/** Edits a typed or AI segment in place. Voice (transcript) segments are read-only. */
+export async function editNoteSegment(segmentId: string, content: string): Promise<ActionResult> {
+  const parsed = editSegmentInput.safeParse({ segmentId, content })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [segment] = await db
+    .select()
+    .from(meetingNoteSegments)
+    .where(eq(meetingNoteSegments.id, parsed.data.segmentId))
+  if (!segment) return err('Not found')
+  if (segment.source === 'voice') return err('The recorded transcript can’t be edited')
+
+  const ctx = await canManageMeeting(segment.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  await db
+    .update(meetingNoteSegments)
+    .set({ content: parsed.data.content })
+    .where(eq(meetingNoteSegments.id, segment.id))
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+/** Deletes a typed or AI segment. Voice (transcript) segments are read-only. */
+export async function deleteNoteSegment(segmentId: string): Promise<ActionResult> {
+  const parsed = idInput.safeParse(segmentId)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [segment] = await db.select().from(meetingNoteSegments).where(eq(meetingNoteSegments.id, parsed.data))
+  if (!segment) return err('Not found')
+  if (segment.source === 'voice') return err('The recorded transcript can’t be deleted')
+
+  const ctx = await canManageMeeting(segment.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  await db.delete(meetingNoteSegments).where(eq(meetingNoteSegments.id, segment.id))
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+const setSpeakerMappingInput = z.object({
+  meetingId: z.uuid(),
+  label: z.string().trim().min(1).max(60),
+  userId: z.uuid().nullable(),
+})
+
+/**
+ * Maps a speaker label to a real user (or explicitly to "not a listed
+ * attendee", i.e. null) and backfills speakerId on every note segment
+ * already carrying that label — so assigning "Speaker 1" once relabels
+ * everything they said, past and future, not just from here on.
+ */
+export async function setSpeakerMapping(
+  meetingId: string,
+  label: string,
+  userId: string | null,
+): Promise<ActionResult> {
+  const parsed = setSpeakerMappingInput.safeParse({ meetingId, label, userId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  await db
+    .insert(meetingSpeakers)
+    .values({ meetingId: parsed.data.meetingId, label: parsed.data.label, userId: parsed.data.userId })
+    .onConflictDoUpdate({
+      target: [meetingSpeakers.meetingId, meetingSpeakers.label],
+      set: { userId: parsed.data.userId },
+    })
+
+  await db
+    .update(meetingNoteSegments)
+    .set({ speakerId: parsed.data.userId })
+    .where(
+      and(
+        eq(meetingNoteSegments.meetingId, parsed.data.meetingId),
+        eq(meetingNoteSegments.speakerLabel, parsed.data.label),
+      ),
+    )
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+const acceptSuggestionInput = z.object({
+  suggestionId: z.uuid(),
+  title: z.string().trim().min(1).max(140).optional(),
+  assigneeId: z.uuid().nullable().optional(),
+  dueDate: z.iso.date().nullable().optional(),
+  priority: z.number().int().min(0).max(3).optional(),
+})
+
+/**
+ * Accepts a task suggestion — one click, or with edits from the small form
+ * first. Goes through the real createTask action so its own authz and
+ * FK-violation handling apply; this only resolves the payload and records
+ * which task the suggestion turned into.
+ */
+export async function acceptTaskSuggestion(
+  suggestionId: string,
+  overrides?: { title?: string; assigneeId?: string | null; dueDate?: string | null; priority?: number },
+): Promise<ActionResult<{ taskId: string }>> {
+  const parsed = acceptSuggestionInput.safeParse({ suggestionId, ...overrides })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [suggestion] = await db
+    .select()
+    .from(meetingTaskSuggestions)
+    .where(eq(meetingTaskSuggestions.id, parsed.data.suggestionId))
+  if (!suggestion) return err('Not found')
+  if (suggestion.status !== 'open') return err('This suggestion was already handled')
+
+  const ctx = await canManageMeeting(suggestion.meetingId)
+  if (!ctx) return err('Not allowed')
+  const { meeting } = ctx
+  if (!meeting.appId) return err('Link this meeting to an app before creating tasks from it')
+
+  const payload = suggestionToTaskPayload(
+    {
+      text: suggestion.text,
+      suggestedUserId: suggestion.suggestedUserId,
+      suggestedDueDate: suggestion.suggestedDueDate,
+    },
+    { appId: meeting.appId, sprintId: null },
+    {
+      title: parsed.data.title,
+      assigneeId: parsed.data.assigneeId,
+      dueDate: parsed.data.dueDate,
+      priority: parsed.data.priority,
+    },
+  )
+
+  const result = await createTask(payload)
+  if (!result.ok) return err(result.error)
+
+  await db
+    .update(meetingTaskSuggestions)
+    .set({ status: 'accepted', createdTaskId: result.data.taskId })
+    .where(eq(meetingTaskSuggestions.id, suggestion.id))
+
+  revalidatePath('/meetings')
+  return ok({ taskId: result.data.taskId })
+}
+
+/** Rejects a suggestion. Persisted so it never re-shows on this meeting. */
+export async function dismissTaskSuggestion(suggestionId: string): Promise<ActionResult> {
+  const parsed = idInput.safeParse(suggestionId)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [suggestion] = await db
+    .select()
+    .from(meetingTaskSuggestions)
+    .where(eq(meetingTaskSuggestions.id, parsed.data))
+  if (!suggestion) return err('Not found')
+
+  const ctx = await canManageMeeting(suggestion.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  if (suggestion.status === 'open') {
+    await db
+      .update(meetingTaskSuggestions)
+      .set({ status: 'dismissed' })
+      .where(eq(meetingTaskSuggestions.id, suggestion.id))
     revalidatePath('/meetings')
   }
 

@@ -78,6 +78,13 @@
       "when": 1786452873771,
       "tag": "0010_followup-resolution-note",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786454020000,
+      "tag": "0012_meeting_link_rsvp",
+      "breakpoints": true
     }
   ]
 }

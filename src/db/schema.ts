@@ -15,6 +15,7 @@ export const appStatus = pgEnum('app_status', ['active', 'paused', 'archived'])
 export const sprintStatus = pgEnum('sprint_status', ['planned', 'active', 'done'])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
 export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
+export const attendeeResponse = pgEnum('attendee_response', ['pending', 'going', 'maybe', 'declined'])
 export const followupKind = pgEnum('followup_kind', ['question', 'action'])
 export const followupStatus = pgEnum('followup_status', ['open', 'resolved'])
 export const noteSource = pgEnum('note_source', ['typed', 'voice', 'ai'])
@@ -104,6 +105,8 @@ export const meetings = pgTable('meetings', {
   endsAt: timestamp('ends_at').notNull(),
   agenda: text('agenda'),
   notes: text('notes'),
+  // Video-call link (Meet/Zoom/etc.) for one-click join. Optional.
+  meetingUrl: text('meeting_url'),
   googleEventId: text('google_event_id'),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -112,6 +115,8 @@ export const meetings = pgTable('meetings', {
 export const meetingAttendees = pgTable('meeting_attendees', {
   meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // RSVP state — the attendee marks whether they're coming.
+  response: attendeeResponse('response').notNull().default('pending'),
 }, (t) => [primaryKey({ columns: [t.meetingId, t.userId] })])
 
 // Per-user Gemini API keys. Multiple keys per user; requests roll across
@@ -176,6 +181,25 @@ export const meetingAiNotes = pgTable('meeting_ai_notes', {
 //   resolutionNote   what actually came of it — the answer/outcome typed on
 //                    resolve. Optional: a resolve with no note is still a
 //                    resolve, so null means "done, nothing written down".
+//   responseNote     what the person SAID about it while it is still open —
+//                    deliberately separate from resolutionNote, which only
+//                    exists on a closed item. Recording a response never
+//                    changes `status`, so the item keeps carrying forward:
+//                    "she said the client hasn't replied yet" is an update,
+//                    not an answer. Null until someone writes one down.
+//   deferReason      why it is NOT resolved yet — the reason typed when
+//                    someone hits "Not yet" (or later). Also open-only, and
+//                    also optional: deferring is one click, the reason is
+//                    enrichment layered on afterwards.
+//   createdBy        who added the item by hand. Null for the AI-derived
+//                    rows (deriveAndInsertFollowups), which is what makes
+//                    this column the "was a human asking for this?" flag,
+//                    not just provenance trivia.
+//   targetMeetingId  pins the item to ONE specific meeting instead of
+//                    letting it surface at whatever meeting its person
+//                    attends next. Null (the default, and every AI-derived
+//                    row) keeps the carry-forward behaviour; set, the item
+//                    shows on that meeting and nowhere else.
 export const meetingFollowups = pgTable('meeting_followups', {
   id: uuid('id').primaryKey().defaultRandom(),
   sourceMeetingId: uuid('source_meeting_id').notNull()
@@ -189,6 +213,11 @@ export const meetingFollowups = pgTable('meeting_followups', {
     .references(() => meetings.id, { onDelete: 'set null' }),
   resolvedAt: timestamp('resolved_at'),
   resolutionNote: text('resolution_note'),
+  responseNote: text('response_note'),
+  deferReason: text('defer_reason'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  targetMeetingId: uuid('target_meeting_id')
+    .references(() => meetings.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 

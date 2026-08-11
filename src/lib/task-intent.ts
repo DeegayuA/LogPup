@@ -10,6 +10,8 @@
  * the network or the clock implicitly (pass `today` in — tests depend on it).
  */
 
+import { fuzzyMatches } from '@/lib/fuzzy'
+
 export type IntentPerson = { id: string; name: string }
 
 export type TaskIntent = {
@@ -117,7 +119,10 @@ function findPeople(query: string, people: IntentPerson[]): IntentPerson[] {
   if (exact.length > 0) return exact
   const firstName = people.filter((p) => p.name.toLowerCase().split(/\s+/)[0] === q)
   if (firstName.length > 0) return firstName
-  return people.filter((p) => p.name.toLowerCase().includes(q))
+  const contains = people.filter((p) => p.name.toLowerCase().includes(q))
+  if (contains.length > 0) return contains
+  // Typo fallback ("shanka" → "Shanika"), only when nothing above matched.
+  return fuzzyMatches(query, people, (p) => p.name)
 }
 
 /**

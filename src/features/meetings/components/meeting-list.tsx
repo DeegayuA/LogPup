@@ -1,16 +1,10 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import {
-  CalendarCheckIcon,
-  CalendarDaysIcon,
-  PencilIcon,
-  SendIcon,
-  Trash2Icon,
-} from 'lucide-react'
+import { CalendarCheckIcon, CalendarDaysIcon, SendIcon, Trash2Icon } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,8 +19,8 @@ import {
 import { Avatar, AvatarFallback, AvatarGroup, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { MentionTextarea, type MentionUser } from '@/components/mention-textarea'
-import { deleteMeeting, retryCalendarInvite, updateMeetingNotes } from '@/features/meetings/actions'
+import { type MentionUser } from '@/components/mention-textarea'
+import { deleteMeeting, retryCalendarInvite } from '@/features/meetings/actions'
 import { MeetingIntelPanel } from '@/features/meetings/components/meeting-intel'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
@@ -85,30 +79,6 @@ function MeetingRow({
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
-  const [editingNotes, setEditingNotes] = useState(false)
-  const [notesDraft, setNotesDraft] = useState(meeting.notes ?? '')
-
-  function cancelNotes() {
-    setEditingNotes(false)
-    setNotesDraft(meeting.notes ?? '')
-  }
-
-  function handleSaveNotes() {
-    startTransition(async () => {
-      try {
-        const res = await updateMeetingNotes(meeting.id, notesDraft)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Notes saved')
-        setEditingNotes(false)
-        router.refresh()
-      } catch {
-        toast.error('Something went wrong — try again')
-      }
-    })
-  }
 
   function handleDelete() {
     startTransition(async () => {
@@ -189,14 +159,6 @@ function MeetingRow({
                 <SendIcon /> Send invite
               </Button>
             ) : null}
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              onClick={() => setEditingNotes((v) => !v)}
-            >
-              <PencilIcon /> Notes
-            </Button>
             <AlertDialog>
               <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
                 <Trash2Icon />
@@ -220,53 +182,18 @@ function MeetingRow({
           </div>
         ) : null}
       </div>
-      {editingNotes ? (
-        <div className="flex flex-col gap-2">
-          <MentionTextarea
-            users={users}
-            value={notesDraft}
-            onValueChange={setNotesDraft}
-            maxLength={5000}
-            rows={3}
-            aria-label={`Notes for ${meeting.title}`}
-            onKeyDown={(event) => {
-              // Cmd/Ctrl+Enter saves; plain Enter has to stay a newline here —
-              // notes are multi-line, and the @mention popover already claims
-              // bare Enter to insert the highlighted person.
-              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault()
-                handleSaveNotes()
-                return
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                cancelNotes()
-              }
-            }}
-          />
-          <div className="flex items-center justify-end gap-2">
-            <span className="mr-auto text-2xs text-muted-foreground">
-              <kbd className="rounded border bg-muted px-1 font-mono">⌘/Ctrl</kbd>+
-              <kbd className="rounded border bg-muted px-1 font-mono">↵</kbd> to save ·{' '}
-              <kbd className="rounded border bg-muted px-1 font-mono">Esc</kbd> to cancel
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              type="button"
-              onClick={cancelNotes}
-            >
-              Cancel
-            </Button>
-            <Button size="sm" type="button" disabled={isPending} onClick={handleSaveNotes}>
-              {isPending ? 'Saving…' : 'Save notes'}
-            </Button>
-          </div>
-        </div>
-      ) : meeting.notes ? (
-        <p className="text-sm text-muted-foreground">Notes: {meeting.notes}</p>
-      ) : null}
-      <MeetingIntelPanel meetingId={meeting.id} canRecord={canManage} currentUserId={currentUserId} />
+      {/* Typed notes, AI notes, and the speech transcript are now one
+          unified timeline inside the panel below (see note-timeline.tsx) —
+          notes editing no longer lives here as a separate surface. */}
+      <MeetingIntelPanel
+        meetingId={meeting.id}
+        meetingTitle={meeting.title}
+        canRecord={canManage}
+        currentUserId={currentUserId}
+        attendees={meeting.attendees}
+        appId={meeting.appId}
+        mentionUsers={users}
+      />
     </li>
   )
 }

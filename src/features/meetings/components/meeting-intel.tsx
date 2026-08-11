@@ -20,10 +20,11 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { MarkdownLite } from '@/components/markdown-lite'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import type { ActionResult } from '@/lib/action-result'
+import type { MentionUser } from '@/components/mention-textarea'
+import { NoteTimeline } from '@/features/meetings/components/note-timeline'
 import {
   analyzeMeetingAudio,
   getMeetingIntel,
@@ -131,12 +132,23 @@ type PendingAudio = { blob: Blob; liveTranscript: string }
 
 export function MeetingIntelPanel({
   meetingId,
+  meetingTitle,
   canRecord,
   currentUserId,
+  attendees = [],
+  appId = null,
+  mentionUsers,
 }: {
   meetingId: string
+  meetingTitle: string
   canRecord: boolean
   currentUserId: string
+  /** For speaker assignment and task-suggestion assignee pickers. */
+  attendees?: { id: string; name: string }[]
+  /** The meeting's app — task suggestions need one to file into. */
+  appId?: string | null
+  /** Wider mention pool for the note composer; falls back to attendees. */
+  mentionUsers?: MentionUser[]
 }) {
   const [open, setOpen] = useState(false)
   const [intel, setIntel] = useState<MeetingIntel | null>(null)
@@ -633,7 +645,7 @@ export function MeetingIntelPanel({
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="ghost" size="sm" type="button" onClick={toggleOpen} aria-expanded={open}>
           <Sparkles />
-          Intelligence
+          Notes
           <ChevronDown
             className={cn('transition-transform duration-150', open && 'rotate-180')}
             aria-hidden
@@ -782,6 +794,15 @@ export function MeetingIntelPanel({
             </span>
           ) : (
             <>
+              <NoteTimeline
+                meetingId={meetingId}
+                meetingTitle={meetingTitle}
+                canManage={canRecord}
+                attendees={attendees}
+                appId={appId}
+                mentionUsers={mentionUsers}
+              />
+
               <section className="flex flex-col gap-1.5">
                 <h4 className="flex items-center gap-1.5 font-heading text-sm font-semibold">
                   <MessageCircleQuestion className="size-3.5 text-primary" aria-hidden />
@@ -964,14 +985,9 @@ export function MeetingIntelPanel({
 
               {notes ? (
                 <>
-                  {notes.summary ? (
-                    <section className="flex flex-col gap-1">
-                      <h4 className="font-heading text-sm font-semibold">Summary</h4>
-                      {/* Gemini returns Markdown (###, **bold**, ---); rendered
-                          verbatim it showed the syntax as literal characters. */}
-                      <MarkdownLite className="text-muted-foreground" content={notes.summary} />
-                    </section>
-                  ) : null}
+                  {/* The summary itself now auto-lands in the unified note
+                      timeline above as an 'ai' segment (see
+                      insertAutoNotesAndSuggestions) — no separate block here. */}
 
                   {notes.perPerson.length > 0 ? (
                     <section className="flex flex-col gap-1.5">

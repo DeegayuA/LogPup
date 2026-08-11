@@ -1,9 +1,64 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { Textarea } from '@/components/ui/textarea'
 
 export type MentionUser = { id: string; name: string }
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Renders "@Name" occurrences as in-app links to /people/[id] — the display
+ * half of the same plain-text "@Name " convention MentionTextarea writes and
+ * extractMentionedUserIds (src/features/notifications/notify.ts) reads for
+ * notifications. Longest names first so a short name never matches inside a
+ * longer one that starts the same way.
+ */
+export function MentionText({
+  text,
+  users,
+  className,
+}: {
+  text: string
+  users: MentionUser[]
+  className?: string
+}) {
+  if (!text.includes('@') || users.length === 0) {
+    return className ? <span className={className}>{text}</span> : <>{text}</>
+  }
+
+  const byLength = [...users].sort((a, b) => b.name.length - a.name.length)
+  const pattern = byLength.map((user) => escapeRegExp(user.name)).join('|')
+  const re = new RegExp(`(^|\\s)@(${pattern})(?=\\s|$|[.,!?;:])`, 'gi')
+
+  const nodes: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  let key = 0
+
+  while ((match = re.exec(text)) !== null) {
+    const [whole, lead, name] = match
+    const user = byLength.find((u) => u.name.toLowerCase() === name.toLowerCase())
+    if (!user) continue
+    nodes.push(text.slice(lastIndex, match.index + lead.length))
+    nodes.push(
+      <Link
+        key={`mention-${key++}`}
+        href={`/people/${user.id}`}
+        className="font-medium text-primary underline-offset-2 hover:underline"
+      >
+        @{name}
+      </Link>,
+    )
+    lastIndex = match.index + whole.length
+  }
+  nodes.push(text.slice(lastIndex))
+
+  return <span className={className}>{nodes}</span>
+}
 
 type ActiveMention = { start: number; query: string }
 
