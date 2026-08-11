@@ -36,6 +36,20 @@
       "when": 1786440237678,
       "tag": "0004_user-phone",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786448101373,
+      "tag": "0005_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786448335749,
+      "tag": "0006_user-status",
+      "breakpoints": true
     }
   ]
 }

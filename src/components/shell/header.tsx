@@ -21,6 +21,7 @@ import {
 import { ThemeToggle } from '@/components/shell/theme-toggle'
 import { CommandCenterTrigger } from '@/features/search/components/command-center'
 import { InstallButton } from '@/features/pwa/pwa'
+import { NotificationBell } from '@/features/notifications/components/notification-bell'
 
 type HeaderUser = {
   name?: string | null
@@ -80,6 +81,7 @@ export function Header({ user, isAdmin }: { user: HeaderUser; isAdmin: boolean }
         <CommandCenterTrigger />
       </div>
       <InstallButton />
+      <NotificationBell />
       <ThemeToggle />
       <DropdownMenu>
         <DropdownMenuTrigger

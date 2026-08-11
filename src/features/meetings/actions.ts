@@ -7,8 +7,10 @@ import { db } from '@/db'
 import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { format } from 'date-fns'
 import { getTeamForApp } from '@/features/people/queries'
 import { createCalendarEvent, deleteCalendarEvent } from '@/features/calendar/google-calendar'
+import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 
 const meetingInput = z
   .object({
@@ -183,6 +185,26 @@ export async function createMeeting(
     attendeeIds,
   )
 
+  // Notify every attendee except the organizer. A notification failure must not
+  // fail the meeting itself, which is already created and calendar-synced.
+  try {
+    await createNotifications(
+      attendeeIds
+        .filter((id) => id !== session.user.id)
+        .map((userId) => ({
+          userId,
+          actorId: session.user.id,
+          type: 'meeting' as const,
+          title: `${session.user.name ?? 'Someone'} invited you to “${title}”`,
+          body: format(new Date(startsAt), 'EEE, MMM d · h:mm a'),
+          link: '/meetings',
+          meetingId,
+        })),
+    )
+  } catch (error) {
+    console.error('[notifications] meeting invite failed:', error)
+  }
+
   await revalidateMeetingPaths(appId)
   return ok({ meetingId, calendarWarning })
 }
@@ -221,6 +243,27 @@ export async function updateMeetingNotes(meetingId: string, notes: string): Prom
   if (!canManageMeeting(session, existing)) return err('Not allowed')
 
   await db.update(meetings).set({ notes: notes || null }).where(eq(meetings.id, meetingId))
+
+  // Notify anyone @mentioned in the notes (except the author). Best-effort.
+  try {
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users)
+    const mentionedIds = extractMentionedUserIds(notes, allUsers).filter(
+      (id) => id !== session.user.id,
+    )
+    await createNotifications(
+      mentionedIds.map((userId) => ({
+        userId,
+        actorId: session.user.id,
+        type: 'mention' as const,
+        title: `${session.user.name ?? 'Someone'} mentioned you`,
+        body: `In “${existing.title}”`,
+        link: '/meetings',
+        meetingId,
+      })),
+    )
+  } catch (error) {
+    console.error('[notifications] mention notify failed:', error)
+  }
 
   await revalidateMeetingPaths(existing.appId)
   return ok(undefined)

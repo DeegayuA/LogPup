@@ -14,11 +14,19 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024
 const ALLOWED_TYPES = ['image/webp', 'image/png', 'image/jpeg']
 
+// Uploads live in a PRIVATE blob store (the same store holds encrypted DB
+// backups, so it must never be public). avatarUrl therefore holds our own
+// proxy path rather than a blob URL: /api/avatar/<pathname>. The route streams
+// the object to signed-in users only, and every existing <img src={avatarUrl}>
+// keeps working untouched.
+const AVATAR_PROXY_PREFIX = '/api/avatar/'
+
 /** Best-effort cleanup of a replaced avatar; never fails the new upload. */
-async function deleteIfBlob(url: string | null): Promise<void> {
-  if (!url?.includes('.blob.vercel-storage.com')) return
+async function deleteUploadedAvatar(avatarUrl: string | null): Promise<void> {
+  if (!avatarUrl?.startsWith(AVATAR_PROXY_PREFIX)) return
+  const pathname = decodeURIComponent(avatarUrl.slice(AVATAR_PROXY_PREFIX.length))
   try {
-    await del(url)
+    await del(pathname)
   } catch {
     /* Already gone, or the token lost access — the new avatar still stands. */
   }
@@ -44,20 +52,20 @@ export async function uploadOwnAvatar(formData: FormData): Promise<ActionResult<
 
   let url: string
   try {
-    // addRandomSuffix keeps the URL unguessable and avoids the CDN serving a
-    // stale avatar from a reused path.
+    // addRandomSuffix gives each upload its own pathname, so a replaced avatar
+    // can never be served from a cached copy of the old one.
     const blob = await put(`avatars/${session.user.id}.webp`, file, {
-      access: 'public',
+      access: 'private',
       addRandomSuffix: true,
       contentType: file.type,
     })
-    url = blob.url
+    url = AVATAR_PROXY_PREFIX + encodeURIComponent(blob.pathname)
   } catch {
     return err('Upload failed — try again')
   }
 
   await db.update(users).set({ avatarUrl: url }).where(eq(users.id, session.user.id))
-  await deleteIfBlob(current?.avatarUrl ?? null)
+  await deleteUploadedAvatar(current?.avatarUrl ?? null)
 
   revalidatePath('/profile')
   revalidatePath('/people')
@@ -75,7 +83,7 @@ export async function removeOwnAvatar(): Promise<ActionResult> {
     .where(eq(users.id, session.user.id))
 
   await db.update(users).set({ avatarUrl: null }).where(eq(users.id, session.user.id))
-  await deleteIfBlob(current?.avatarUrl ?? null)
+  await deleteUploadedAvatar(current?.avatarUrl ?? null)
 
   revalidatePath('/profile')
   revalidatePath('/people')

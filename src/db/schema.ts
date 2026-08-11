@@ -4,9 +4,17 @@ import {
 } from 'drizzle-orm/pg-core'
 
 export const userRole = pgEnum('user_role', ['admin', 'member'])
+// Open self-signup + admin approval. New rows default to 'pending' — the
+// jwt/session gate (src/lib/auth.ts, src/proxy.ts) lets a pending user hold a
+// session (so they can complete onboarding at /pending) but blocks every
+// other route until an admin approves or rejects them. 'rejected' is a
+// dead end: sign-in is still denied outright (see the signIn callback) —
+// the status column is what /pending shows to explain that.
+export const userStatus = pgEnum('user_status', ['pending', 'approved', 'rejected'])
 export const appStatus = pgEnum('app_status', ['active', 'paused', 'archived'])
 export const sprintStatus = pgEnum('sprint_status', ['planned', 'active', 'done'])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
+export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -20,6 +28,11 @@ export const users = pgTable('users', {
   phone: text('phone'),
   role: userRole('role').notNull().default('member'),
   active: boolean('active').notNull().default(true),
+  // Admin-approval gate for self-signup (see src/lib/auth.ts signIn callback).
+  // Every row inserted by an admin (createUser) or by a provider that already
+  // required an existing row (Notion, password) is backfilled/created as
+  // 'approved' — only a brand-new Google self-signup lands as 'pending'.
+  status: userStatus('status').notNull().default('pending'),
   passwordHash: text('password_hash'),
   // Set when an admin creates the account with the shared starter password;
   // cleared the moment the user sets their own (see setOwnPassword). While
@@ -129,5 +142,21 @@ export const meetingAiNotes = pgTable('meeting_ai_notes', {
   questions: jsonb('questions'),
   model: text('model').notNull(),
   createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// In-app notifications. One row per recipient. `actorId` is who triggered it,
+// `link` is the in-app path to open, `meetingId` ties mention/meeting alerts to
+// their source so deleting the meeting cleans them up.
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+  type: notificationType('type').notNull(),
+  title: text('title').notNull(),
+  body: text('body'),
+  link: text('link'),
+  meetingId: uuid('meeting_id').references(() => meetings.id, { onDelete: 'cascade' }),
+  read: boolean('read').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
