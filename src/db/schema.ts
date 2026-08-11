@@ -17,6 +17,13 @@ export const users = pgTable('users', {
   role: userRole('role').notNull().default('member'),
   active: boolean('active').notNull().default(true),
   passwordHash: text('password_hash'),
+  // Set when an admin creates the account with the shared starter password;
+  // cleared the moment the user sets their own (see setOwnPassword). While
+  // true, the proxy pins the user to /profile so the starter password never
+  // survives past first sign-in.
+  mustChangePassword: boolean('must_change_password').notNull().default(false),
+  // Free-form organization labels (client/team names) an admin pins on a user.
+  orgTags: text('org_tags').array().notNull().default([]),
   googleRefreshToken: text('google_refresh_token'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })

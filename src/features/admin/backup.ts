@@ -1,6 +1,8 @@
 import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { db } from '@/db'
-import { users, apps, assignments, sprints, tasks, meetings, meetingAttendees } from '@/db/schema'
+import {
+  users, apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAiNotes,
+} from '@/db/schema'
 
 // A backup contains password hashes and Google refresh tokens, so the JSON is
 // AES-256-GCM encrypted before it ever leaves the process. Output layout:
@@ -30,6 +32,7 @@ const backupUserColumns = {
 export async function buildSnapshot() {
   const [
     usersRows, appsRows, assignmentsRows, sprintsRows, tasksRows, meetingsRows, attendeesRows,
+    aiNotesRows,
   ] = await Promise.all([
     db.select(backupUserColumns).from(users),
     db.select().from(apps),
@@ -38,6 +41,10 @@ export async function buildSnapshot() {
     db.select().from(tasks),
     db.select().from(meetings),
     db.select().from(meetingAttendees),
+    // Meeting transcripts/notes are irreplaceable (Gemini output, not
+    // re-derivable from anything else in the DB) — must be backed up.
+    // geminiKeys stays excluded: those are per-user secrets, not data.
+    db.select().from(meetingAiNotes),
   ])
   return {
     version: 1,
@@ -50,6 +57,7 @@ export async function buildSnapshot() {
       tasks: tasksRows,
       meetings: meetingsRows,
       meetingAttendees: attendeesRows,
+      meetingAiNotes: aiNotesRows,
     },
   }
 }

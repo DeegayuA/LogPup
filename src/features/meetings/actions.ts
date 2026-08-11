@@ -140,7 +140,11 @@ export async function createMeeting(
   const parsed = meetingInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const { appId, title, startsAt, endsAt, agenda, attendeeIds } = parsed.data
+  const { appId, title, startsAt, endsAt, agenda } = parsed.data
+  // Dedup: the picker can submit the same user twice (e.g. selected, then
+  // re-added via a mention hint) — a duplicate id would violate the
+  // meetingAttendees composite primary key and fail the whole batch insert.
+  const attendeeIds = [...new Set(parsed.data.attendeeIds)]
   // Generated client-side (not via .returning()) so the id is known before
   // the batch runs — db.batch sends both inserts in one atomic round-trip
   // (neon-http has no transactions), so the attendee rows can't reference a

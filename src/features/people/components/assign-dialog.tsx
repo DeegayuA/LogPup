@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ALL_ROLES } from '@/lib/roles'
 import {
   Select,
   SelectContent,
@@ -61,22 +62,29 @@ export function AssignDialog({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     startTransition(async () => {
-      const allocation = Number(allocationPct)
-      const res = assignment
-        ? await updateAssignment(assignment.assignmentId, { role, allocationPct: allocation })
-        : await assignUser({ appId, userId, role, allocationPct: allocation })
+      try {
+        const allocation = Number(allocationPct)
+        const res = assignment
+          ? await updateAssignment(assignment.assignmentId, { role, allocationPct: allocation })
+          : await assignUser({ appId, userId, role, allocationPct: allocation })
 
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        if (res.data.warning) {
+          toast.warning(res.data.warning)
+        } else {
+          toast.success(isEdit ? 'Assignment updated' : 'Member added')
+        }
+        handleOpenChange(false)
+        router.refresh()
+      } catch {
+        // A thrown error (e.g. DB outage) is not `{ ok: false }` — without
+        // this catch it's an unhandled rejection and Save silently does
+        // nothing.
+        toast.error('Something went wrong — try again')
       }
-      if (res.data.warning) {
-        toast.warning(res.data.warning)
-      } else {
-        toast.success(isEdit ? 'Assignment updated' : 'Member added')
-      }
-      handleOpenChange(false)
-      router.refresh()
     })
   }
 
@@ -119,8 +127,16 @@ export function AssignDialog({
               minLength={2}
               maxLength={40}
               placeholder="Engineer, Designer, PM…"
+              list="assign-role-options"
               required
             />
+            {/* Native datalist: curated software + engineering (EMC) roles,
+                free text still allowed. */}
+            <datalist id="assign-role-options">
+              {ALL_ROLES.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="assign-allocation">Allocation %</Label>

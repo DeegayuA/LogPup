@@ -4,6 +4,9 @@
 // scale-out), so there is exactly one process to hold this state, and it resets
 // on restart/redeploy. Do NOT reuse this module for a multi-instance or
 // public-facing deployment without an external store (e.g. Redis) instead.
+//
+// ACCEPTED RISK: in-memory per-instance — on serverless scale-out lockout
+// weakens; move to durable store (e.g. Upstash/DB) before external exposure.
 
 export const LOCKOUT_MESSAGE = 'Too many attempts — try again later'
 

@@ -15,7 +15,7 @@ const MAX_KEYS_PER_USER = 5
 const idInput = z.uuid()
 
 const addKeyInput = z.object({
-  label: z.string().min(1).max(40),
+  label: z.string().min(1).max(60),
   key: z.string().min(20, 'That does not look like a Gemini API key').max(200),
 })
 

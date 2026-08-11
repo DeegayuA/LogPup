@@ -9,6 +9,8 @@ export type AdminUser = {
   avatarUrl: string | null
   role: 'admin' | 'member'
   active: boolean
+  orgTags: string[]
+  mustChangePassword: boolean
 }
 
 // Unlike listActiveUsers (people/queries.ts), this includes inactive users —
@@ -23,6 +25,8 @@ export async function listAllUsers(): Promise<AdminUser[]> {
       avatarUrl: users.avatarUrl,
       role: users.role,
       active: users.active,
+      orgTags: users.orgTags,
+      mustChangePassword: users.mustChangePassword,
     })
     .from(users)
     .orderBy(asc(users.name))

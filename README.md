@@ -76,3 +76,4 @@ The UI follows the committed **"watchdog calm"** spec — warm stone surfaces, p
 - Set all env vars above for Production (change `AUTH_URL` to the production origin).
 - Register the production OAuth redirect URIs with Google (and Notion if enabled).
 - `vercel.json` schedules the nightly backup cron.
+- ACCEPTED RISK: in-memory per-instance — on serverless scale-out lockout weakens; move to durable store (e.g. Upstash/DB) before external exposure. (login rate limiter, `src/lib/rate-limit.ts`)

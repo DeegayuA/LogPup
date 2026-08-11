@@ -53,8 +53,12 @@ export async function setOwnPassword(
   const parsed = setPasswordInput.safeParse({ password: formData.get('password') })
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  // Clearing mustChangePassword here releases the first-login gate in
+  // src/proxy.ts — the jwt callback re-reads the row on the next request.
   const passwordHash = hashPassword(parsed.data.password)
-  await db.update(users).set({ passwordHash }).where(eq(users.id, session.user.id))
+  await db.update(users)
+    .set({ passwordHash, mustChangePassword: false })
+    .where(eq(users.id, session.user.id))
 
   return ok(undefined)
 }

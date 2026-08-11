@@ -6,6 +6,8 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { apps, assignments, sprints, tasks, meetings, meetingAttendees, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
+import { hashPassword } from '@/lib/password'
+import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
 
@@ -106,6 +108,88 @@ export async function setUserActive(userId: string, active: boolean): Promise<Ac
   }
 
   await db.update(users).set({ active: parsed.data }).where(eq(users.id, userId))
+  revalidateAdminPaths()
+  return ok(undefined)
+}
+
+// Every admin-created account starts with this shared password and
+// mustChangePassword=true, so the proxy pins the user to /profile until they
+// replace it (see src/proxy.ts). It never survives past first sign-in.
+const STARTER_PASSWORD = '1234567890'
+
+const orgTagsInput = z
+  .array(
+    z
+      .string()
+      .trim()
+      .min(1, 'Organization tags cannot be empty')
+      .max(30, 'Organization tags must be 30 characters or fewer'),
+  )
+  .max(8, 'Up to 8 organization tags per user')
+  .transform((tags) => Array.from(new Set(tags)))
+
+const createUserInput = z.object({
+  email: z.preprocess(
+    (v) => String(v ?? '').trim().toLowerCase(),
+    z.email('Enter a valid email address'),
+  ),
+  name: z.string().trim().min(1, 'Name is required').max(80, 'Name must be 80 characters or fewer'),
+  role: roleInput.default('member'),
+  title: z.string().trim().max(80, 'Title must be 80 characters or fewer').optional(),
+  orgTags: orgTagsInput.default([]),
+})
+
+// Admin-created account: the teammate signs in with email + the starter
+// password and is forced to set their own before doing anything else.
+export async function createUser(input: unknown): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsed = createUserInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const { email, name, role, title, orgTags } = parsed.data
+
+  // Sign-in is domain-gated (every provider funnels through emailAllowed), so
+  // an account outside the allowlist would be a locked door — refuse up front.
+  if (!emailAllowed(email)) {
+    const domain = email.slice(email.lastIndexOf('@') + 1)
+    return err(
+      `${domain} isn't an allowed sign-in domain — this user could never log in. Allowed: ${allowedDomains().join(', ') || '(none configured)'}`,
+    )
+  }
+
+  const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email))
+  if (existing) return err('A user with that email already exists')
+
+  try {
+    await db.insert(users).values({
+      email,
+      name,
+      role,
+      title: title || null,
+      orgTags,
+      passwordHash: hashPassword(STARTER_PASSWORD),
+      mustChangePassword: true,
+      active: true,
+    })
+  } catch {
+    // Unique-email race between the check above and the insert.
+    return err('A user with that email already exists')
+  }
+
+  revalidateAdminPaths()
+  return ok(undefined)
+}
+
+export async function setUserOrgTags(userId: string, tags: unknown): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsedId = z.uuid().safeParse(userId)
+  if (!parsedId.success) return err('Invalid user')
+
+  const parsed = orgTagsInput.safeParse(tags)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  await db.update(users).set({ orgTags: parsed.data }).where(eq(users.id, parsedId.data))
   revalidateAdminPaths()
   return ok(undefined)
 }

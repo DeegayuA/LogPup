@@ -3,11 +3,13 @@ import { TriangleAlert } from 'lucide-react'
 import { auth } from '@/lib/auth'
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { AddUserDialog } from '@/features/admin/components/add-user-dialog'
 import { DbClearButton } from '@/features/admin/components/db-clear-button'
 import { UserTable } from '@/features/admin/components/user-table'
 import { AppsTable } from '@/features/admin/components/apps-table'
@@ -27,6 +29,9 @@ export default async function AdminPage() {
     listActiveUsers(),
   ])
 
+  const existingOrgTags = Array.from(new Set(allUsers.flatMap((u) => u.orgTags)))
+    .sort((a, b) => a.localeCompare(b))
+
   return (
     <div className="flex flex-1 flex-col p-6">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
@@ -41,9 +46,12 @@ export default async function AdminPage() {
           <CardHeader>
             <CardTitle>Users</CardTitle>
             <CardDescription>
-              Change a teammate&apos;s role or deactivate their account. You can&apos;t change
-              your own role or active status here.
+              Add teammates by email, tag their organization, change roles or deactivate
+              accounts. You can&apos;t change your own role or active status here.
             </CardDescription>
+            <CardAction>
+              <AddUserDialog existingOrgTags={existingOrgTags} />
+            </CardAction>
           </CardHeader>
           <CardContent>
             <UserTable users={allUsers} currentUserId={session.user.id} />

@@ -151,6 +151,18 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
   if (!meeting) return err('Meeting not found')
 
+  // Meeting intel can contain a full transcript — restrict reads to people
+  // who were actually in the room (attendees), the meeting's creator, or an
+  // admin. A plain "any signed-in user" check would leak transcripts across
+  // the whole org.
+  if (session.user.role !== 'admin' && meeting.createdBy !== session.user.id) {
+    const [attendee] = await db
+      .select({ userId: meetingAttendees.userId })
+      .from(meetingAttendees)
+      .where(and(eq(meetingAttendees.meetingId, id), eq(meetingAttendees.userId, session.user.id)))
+    if (!attendee) return err('Not available')
+  }
+
   const [notesRow] = await db
     .select()
     .from(meetingAiNotes)

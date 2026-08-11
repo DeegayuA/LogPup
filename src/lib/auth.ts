@@ -159,15 +159,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     async jwt({ token }) {
       if (!token.email) return token
-      const [u] = await db.select().from(users).where(eq(users.email, token.email))
+      // Provisioning always stores emails lowercase (see signIn/authorize
+      // above); normalize here too so a provider that hands back mixed-case
+      // email casing (observed from some OAuth IdPs) still matches the row.
+      const email = token.email.toLowerCase()
+      const [u] = await db.select().from(users).where(eq(users.email, email))
       if (!u?.active) return null
       token.userId = u.id
       token.role = u.role
+      // This callback hits the DB on every session read (not just at sign-in),
+      // so the flag refreshes per request: the moment setOwnPassword clears it
+      // on the users row, the very next request unsticks — no re-login needed.
+      token.mustChangePassword = u.mustChangePassword
       return token
     },
     async session({ session, token }) {
       session.user.id = token.userId as string
       session.user.role = token.role as 'admin' | 'member'
+      session.user.mustChangePassword = token.mustChangePassword === true
       return session
     },
   },
