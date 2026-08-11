@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import {
   pgTable, pgEnum, text, uuid, integer, boolean, date, timestamp,
   index, uniqueIndex, primaryKey, jsonb,
@@ -122,6 +123,15 @@ export const assignmentHistory = pgTable('assignment_history', {
   // this covers `effective_from <= $at AND (effective_to IS NULL OR
   // effective_to > $at)` without touching userId/appId first.
   index('assignment_history_as_of_idx').on(t.effectiveFrom, t.effectiveTo),
+  // The "AT MOST ONE open row per (userId, appId)" invariant above, enforced
+  // rather than only documented. capacityAsOf sums every in-force row, so a
+  // second open interval for one pairing silently DOUBLES that person's
+  // allocation on every historical page — a wrong number, not an error.
+  // Partial (open rows only): closed intervals for the same pairing are the
+  // normal case and must stay unconstrained.
+  uniqueIndex('assignment_history_one_open_idx')
+    .on(t.userId, t.appId)
+    .where(sql`${t.effectiveTo} is null`),
 ])
 
 export const sprints = pgTable('sprints', {

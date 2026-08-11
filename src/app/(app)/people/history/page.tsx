@@ -21,7 +21,12 @@ export default async function TeamCapacityHistoryPage(props: {
   const asOf = resolveAsOf(at)
   const capacities = await getTeamCapacityAsOf(asOf.at)
 
-  const stamp = format(asOf.at, 'EEEE, MMMM d, yyyy')
+  // Formatted from the resolved DAY, not from the instant: `asOf.at` is
+  // 23:59:59.999 Asia/Colombo, and date-fns formats in the *server's* zone, so
+  // running anywhere east of Colombo would print the following day right here
+  // while the picker below still read the day the user asked for. Midday keeps
+  // it away from either boundary.
+  const stamp = format(new Date(`${asOf.iso}T12:00:00`), 'EEEE, MMMM d, yyyy')
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">

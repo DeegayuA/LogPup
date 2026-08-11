@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { capacityBand } from '@/features/people/components/capacity-bar'
 import type { UserCapacity } from '@/features/people/queries'
 import { cn } from '@/lib/utils'
 
@@ -76,8 +77,17 @@ export function CapacityEmpty({ title, hint }: { title: string; hint: string }) 
   )
 }
 
-/** Avatar + linked name + the "Over" badge — identical in both lists. */
+/**
+ * Avatar + linked name + the capacity badge — identical in both lists.
+ *
+ * Both non-normal bands get a badge, not just the over one: the 80–99% band
+ * was signalled by the bar's amber fill alone, and amber-vs-green is the
+ * canonical protanopia/deuteranopia confusion pair (in dark mode the two
+ * tokens were also all but identical in lightness). A word is the signal that
+ * survives both colour vision and a screen reader.
+ */
 export function PersonHeading({ person }: { person: UserCapacity }) {
+  const band = capacityBand(person.totalPct)
   return (
     <div className="flex items-center gap-2">
       <Link
@@ -86,7 +96,12 @@ export function PersonHeading({ person }: { person: UserCapacity }) {
       >
         {person.user.name}
       </Link>
-      {person.overallocated ? <Badge variant="destructive">Over</Badge> : null}
+      {band === 'over' ? <Badge variant="destructive">Over</Badge> : null}
+      {band === 'near' ? (
+        <Badge variant="outline" className="border-chart-1 text-foreground">
+          Near capacity
+        </Badge>
+      ) : null}
     </div>
   )
 }

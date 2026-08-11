@@ -14,7 +14,7 @@ import {
 } from '@/features/people/queries'
 import { ActivityGraph } from '@/features/people/components/activity-graph'
 import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
-import { CapacityBar } from '@/features/people/components/capacity-bar'
+import { CapacityBar, capacityBand } from '@/features/people/components/capacity-bar'
 import { cn } from '@/lib/utils'
 
 const TASK_STATUS_ORDER = ['todo', 'in_progress', 'done'] as const
@@ -147,6 +147,14 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
                 <CapacityBar totalPct={totalPct} />
                 {overallocated ? (
                   <p className="text-xs text-destructive">Over capacity — lighten the load.</p>
+                ) : null}
+                {/* The 80–99% band had no words anywhere — only an amber fill,
+                    which is invisible to a red/green-blind reader and silent
+                    to a screen reader. */}
+                {!overallocated && capacityBand(totalPct) === 'near' ? (
+                  <p className="text-xs text-muted-foreground">
+                    Near capacity — little room for anything new.
+                  </p>
                 ) : null}
               </CardContent>
             </>

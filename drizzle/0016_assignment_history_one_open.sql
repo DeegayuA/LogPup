@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "assignment_history_one_open_idx" ON "assignment_history" USING btree ("user_id","app_id") WHERE "assignment_history"."effective_to" is null;

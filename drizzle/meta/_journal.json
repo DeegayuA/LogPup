@@ -106,6 +106,13 @@
       "when": 1786457996857,
       "tag": "0015_assignment_history",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786460764175,
+      "tag": "0016_assignment_history_one_open",
+      "breakpoints": true
     }
   ]
 }

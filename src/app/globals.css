@@ -122,7 +122,16 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.68 0.08 165);
-  --chart-1: oklch(0.8 0.13 70);
+  /* Ember, deliberately DARKER than --primary (0.78) rather than matching it.
+     At 0.8 the two were luminance-identical (1.00:1), so the capacity bar's
+     "near capacity" amber and its normal green differed by hue alone — the
+     one difference a red/green-blind reader cannot see. 0.68 puts real
+     lightness between them while staying ~5.4:1 against the --muted track and
+     ~6.5:1 against --background, so every other ember use (paused dots,
+     priority chips, the roadmap's today line) keeps its contrast. Colour is
+     still not the ONLY signal: see the "Near capacity" badge in
+     capacity-card.tsx and the band named in CapacityBar's aria-label. */
+  --chart-1: oklch(0.68 0.13 70);
   --chart-2: oklch(0.72 0.1 165);
   --chart-3: oklch(0.78 0.1 165);
   --chart-4: oklch(0.68 0.11 70);
