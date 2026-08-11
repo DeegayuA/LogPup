@@ -2,22 +2,11 @@
 
 import { useState } from 'react'
 import { CalendarDays, List } from 'lucide-react'
-import {
-  CalendarBody,
-  CalendarDate,
-  CalendarDatePagination,
-  CalendarDatePicker,
-  CalendarHeader,
-  CalendarItem,
-  CalendarMonthPicker,
-  CalendarProvider,
-  CalendarYearPicker,
-  type Feature,
-} from '@/components/kibo-ui/calendar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { UpcomingMeetingsFiltered } from '@/features/meetings/components/upcoming-filter'
 import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
+import { MeetingsMonthCalendar } from '@/features/meetings/components/meetings-month-calendar'
 import type { MentionUser } from '@/components/mention-textarea'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
@@ -28,21 +17,7 @@ const VIEWS = [
 
 type ViewId = (typeof VIEWS)[number]['id']
 
-function toFeatures(upcoming: MeetingSummary[], past: MeetingSummary[]): Feature[] {
-  const map = (meeting: MeetingSummary, tone: 'upcoming' | 'past'): Feature => ({
-    id: meeting.id,
-    name: meeting.title,
-    startAt: new Date(meeting.startsAt),
-    endAt: new Date(meeting.endsAt),
-    status:
-      tone === 'upcoming'
-        ? { id: 'upcoming', name: 'Upcoming', color: 'var(--color-primary)' }
-        : { id: 'past', name: 'Past', color: 'var(--color-muted-foreground)' },
-  })
-  return [...upcoming.map((m) => map(m, 'upcoming')), ...past.map((m) => map(m, 'past'))]
-}
-
-/** List/calendar switcher for the meetings page — calendar is the Kibo month grid. */
+/** List/calendar switcher for the meetings page — calendar is the month event grid. */
 export function MeetingsViews({
   upcoming,
   past,
@@ -57,7 +32,6 @@ export function MeetingsViews({
   users: MentionUser[]
 }) {
   const [view, setView] = useState<ViewId>('list')
-  const features = view === 'calendar' ? toFeatures(upcoming, past) : []
 
   return (
     <div className="flex flex-col gap-4">
@@ -103,21 +77,7 @@ export function MeetingsViews({
           />
         </div>
       ) : (
-        <div className="rounded-xl border bg-card">
-          <CalendarProvider className="text-sm">
-            <CalendarDate>
-              <CalendarDatePicker>
-                <CalendarMonthPicker />
-                <CalendarYearPicker start={2024} end={2030} />
-              </CalendarDatePicker>
-              <CalendarDatePagination />
-            </CalendarDate>
-            <CalendarHeader />
-            <CalendarBody features={features}>
-              {({ feature }) => <CalendarItem feature={feature} key={feature.id} />}
-            </CalendarBody>
-          </CalendarProvider>
-        </div>
+        <MeetingsMonthCalendar upcoming={upcoming} past={past} />
       )}
     </div>
   )

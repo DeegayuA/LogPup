@@ -242,7 +242,9 @@ export const MiniCalendarDay = ({
     <Button
       className={cn(
         "relative h-auto min-h-11 min-w-11 flex-col gap-0.5 p-2 text-xs",
-        isTodayDate && !isSelected && "bg-accent ring-2 ring-inset ring-primary",
+        // Today reads as a quiet underline, not a second green box, so it
+        // never competes with the filled selected day.
+        isTodayDate && !isSelected && "after:absolute after:bottom-0.5 after:h-0.5 after:w-4 after:rounded-full after:bg-primary after:content-['']",
         className
       )}
       onClick={() => onDateSelect(date)}
