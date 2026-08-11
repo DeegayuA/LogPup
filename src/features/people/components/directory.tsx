@@ -148,10 +148,10 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
         </div>
       ) : (
         <ul className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
+          {/* Stretched-link rows: the name anchor covers the row via ::after,
+              so the whole row navigates while the call button stays a
+              separate, valid sibling link above it. */}
           {rows.map(({ user, totalPct, breakdown }) => (
-            {/* Stretched-link row: the name anchor covers the row via
-                ::after, so the whole row navigates while the call button
-                stays a separate, valid sibling link above it. */}
             <li
               key={user.id}
               className={cn(
