@@ -526,25 +526,19 @@ export function MeetingIntelPanel({
     if (pending) acceptUtterance(pending.candidate)
   }
 
-  // Timer-driven check using the pure `shouldFlush` decision as the actual
-  // authority on WHETHER to flush, rather than trusting the browser timer's
-  // delay alone — setTimeout is a lower bound, not a guarantee (background
-  // tabs get throttled), so this re-checks the real elapsed age against the
-  // window and waits out whatever's left if it fired early.
-  function checkPendingFlush() {
-    const pending = pendingUtteranceRef.current
-    if (!pending) return
-    const age = Date.now() - pending.receivedAt
-    if (shouldFlush(age)) {
-      flushPendingUtterance()
-    } else {
-      flushTimerRef.current = setTimeout(checkPendingFlush, UTTERANCE_PAIR_WINDOW_MS - age)
-    }
-  }
-
+  // Schedules the pairing-window timeout. The pure `shouldFlush` decision —
+  // not just "the timer fired" — is the actual authority on whether to
+  // flush now: setTimeout's delay is a lower bound, not a guarantee
+  // (background-tab throttling can fire it late, never early), so this
+  // re-checks the real elapsed age before flushing. Guards against a stale
+  // timer flushing something it shouldn't (e.g. a new buffer started after
+  // clearFlushTimer() raced with an in-flight callback).
   function scheduleFlush() {
     clearFlushTimer()
-    flushTimerRef.current = setTimeout(checkPendingFlush, UTTERANCE_PAIR_WINDOW_MS)
+    flushTimerRef.current = setTimeout(() => {
+      const pending = pendingUtteranceRef.current
+      if (pending && shouldFlush(Date.now() - pending.receivedAt)) flushPendingUtterance()
+    }, UTTERANCE_PAIR_WINDOW_MS)
   }
 
   // One engine finalized a result. In manual (single-engine) mode there is
