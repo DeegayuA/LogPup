@@ -134,6 +134,12 @@ function CommandGroup({
   )
 }
 
+function CommandLoading({
+  ...props
+}: React.ComponentProps<typeof CommandPrimitive.Loading>) {
+  return <CommandPrimitive.Loading data-slot="command-loading" {...props} />
+}
+
 function CommandSeparator({
   className,
   ...props
@@ -188,6 +194,7 @@ export {
   CommandDialog,
   CommandInput,
   CommandList,
+  CommandLoading,
   CommandEmpty,
   CommandGroup,
   CommandItem,

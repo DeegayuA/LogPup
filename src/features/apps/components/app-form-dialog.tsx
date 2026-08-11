@@ -138,7 +138,7 @@ export function AppFormDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="app-name">Name</Label>
             <Input
               id="app-name"
@@ -149,7 +149,7 @@ export function AppFormDialog({
               required
             />
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="app-description">Description</Label>
             <Textarea
               id="app-description"
@@ -158,7 +158,7 @@ export function AppFormDialog({
               maxLength={500}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="app-repo-url">Repo URL</Label>
             <Input
               id="app-repo-url"
@@ -168,7 +168,7 @@ export function AppFormDialog({
               onChange={(e) => setForm((f) => ({ ...f, repoUrl: e.target.value }))}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="app-tech-tags">Tech tags</Label>
             <Input
               id="app-tech-tags"
@@ -176,8 +176,9 @@ export function AppFormDialog({
               value={form.techTags}
               onChange={(e) => setForm((f) => ({ ...f, techTags: e.target.value }))}
             />
+            <p className="text-xs text-muted-foreground">Comma-separated, shown as badges on the card.</p>
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="app-status">Status</Label>
             <Select
               value={form.status}

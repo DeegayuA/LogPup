@@ -16,7 +16,10 @@ export default async function AppLayout({
       <div className="flex min-h-full flex-1">
         <Sidebar isAdmin={isAdmin} />
         <div className="flex flex-1 flex-col">
-          <Header user={{ name: session?.user?.name, image: session?.user?.image }} />
+          <Header
+            user={{ name: session?.user?.name, image: session?.user?.image }}
+            isAdmin={isAdmin}
+          />
           <main className="flex flex-1 flex-col">{children}</main>
         </div>
       </div>

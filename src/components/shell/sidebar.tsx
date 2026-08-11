@@ -54,7 +54,7 @@ function NavLink({
       <Icon className="size-4 shrink-0" />
       {label}
       {hint ? (
-        <kbd className="ml-auto hidden font-mono text-[10px] text-sidebar-foreground/40 group-hover:inline">
+        <kbd className="ml-auto hidden font-mono text-2xs text-sidebar-foreground/70 group-hover:inline group-focus-visible:inline">
           G {hint}
         </kbd>
       ) : null}
@@ -66,7 +66,7 @@ export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname()
 
   return (
-    <nav className="hidden h-auto w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+    <nav className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col self-start overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
       <Link href="/" className="flex items-center gap-2.5 px-4 pb-6 pt-4">
         <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <PawPrint className="size-4" aria-hidden />
@@ -89,7 +89,7 @@ export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
 
       {isAdmin ? (
         <div className="mt-6 flex flex-col gap-0.5 px-2">
-          <div className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-sidebar-foreground/45">
+          <div className="px-2.5 pb-1 text-2xs font-medium uppercase tracking-wider text-sidebar-foreground/70">
             Manage
           </div>
           <NavLink
@@ -101,9 +101,12 @@ export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : null}
 
-      <div className="mt-auto border-t border-sidebar-border px-4 py-3 text-[11px] text-sidebar-foreground/45">
-        Press <kbd className="rounded border border-sidebar-border bg-sidebar-accent/50 px-1 font-mono">⌘K</kbd> to
-        fetch anything
+      <div className="mt-auto border-t border-sidebar-border px-4 py-3 text-2xs text-sidebar-foreground/70">
+        Press{' '}
+        <kbd className="rounded border border-sidebar-border bg-sidebar-accent/50 px-1 font-mono">
+          Ctrl/⌘ K
+        </kbd>{' '}
+        to fetch anything
       </div>
     </nav>
   )

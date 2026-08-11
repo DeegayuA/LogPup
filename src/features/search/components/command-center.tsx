@@ -3,9 +3,11 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from 'next-themes'
+import { toast } from 'sonner'
 import {
   AppWindow,
   CalendarDays,
+  Keyboard,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -28,6 +30,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandLoading,
   CommandSeparator,
   CommandShortcut,
 } from '@/components/ui/command'
@@ -42,6 +45,7 @@ type Recent = {
 }
 
 const RECENTS_KEY = 'logpup.recents.v1'
+const GO_SHORTCUTS_KEY = 'logpup.goShortcuts'
 const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints: [] }
 
 const CommandCenterContext = React.createContext<{ setOpen: (open: boolean) => void } | null>(null)
@@ -81,22 +85,27 @@ function readRecents(): Recent[] {
   }
 }
 
+/* Ember (chart-1) is reserved for attention states; work in flight uses the
+   working color, planned/neutral states use the quiet pine tint. */
 const STATUS_DOT: Record<string, string> = {
   active: 'bg-primary',
-  planned: 'bg-chart-1',
+  in_progress: 'bg-primary',
   paused: 'bg-chart-1',
+  planned: 'bg-chart-2',
   done: 'bg-muted-foreground/40',
   archived: 'bg-muted-foreground/40',
   todo: 'bg-muted-foreground/40',
-  in_progress: 'bg-chart-1',
 }
 
 function StatusDot({ status }: { status: string }) {
   return (
-    <span
-      aria-hidden
-      className={cn('ml-auto size-1.5 shrink-0 rounded-full', STATUS_DOT[status] ?? 'bg-border')}
-    />
+    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      <span
+        aria-hidden
+        className={cn('size-1.5 rounded-full', STATUS_DOT[status] ?? 'bg-border')}
+      />
+      <span className="sr-only">{status.replace('_', ' ')}</span>
+    </span>
   )
 }
 
@@ -116,6 +125,8 @@ export function CommandCenterProvider({
   const [recents, setRecents] = React.useState<Recent[]>([])
   const searchSeq = React.useRef(0)
   const goPrefix = React.useRef<number | null>(null)
+  const paletteGoPrefix = React.useRef<number | null>(null)
+  const paletteGoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /* ⌘K / Ctrl+K opens; "g then d/a/p/m" jumps between sections. */
   React.useEffect(() => {
@@ -126,8 +137,20 @@ export function CommandCenterProvider({
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) return
+      /* Never fire single-key jumps inside overlays (dialogs, menus, pickers),
+         during IME composition, or when the user opted out (WCAG 2.1.4). */
+      if (
+        event.isComposing ||
+        (event.target instanceof HTMLElement &&
+          event.target.closest(
+            '[role="dialog"],[role="menu"],[role="listbox"],[role="combobox"],[role="textbox"]',
+          )) ||
+        window.localStorage.getItem(GO_SHORTCUTS_KEY) === 'off'
+      )
+        return
+      const key = event.key.toLowerCase() // tolerate Shift/Caps Lock
       if (goPrefix.current !== null && Date.now() - goPrefix.current < 800) {
-        const href = GO_KEYS[event.key]
+        const href = GO_KEYS[key]
         goPrefix.current = null
         if (href) {
           event.preventDefault()
@@ -135,7 +158,7 @@ export function CommandCenterProvider({
         }
         return
       }
-      if (event.key === 'g') goPrefix.current = Date.now()
+      if (key === 'g') goPrefix.current = Date.now()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -143,9 +166,15 @@ export function CommandCenterProvider({
 
   React.useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset dialog state on open, recents come from localStorage
       setRecents(readRecents())
       setQuery('')
       setResults(EMPTY_RESULTS)
+    }
+    paletteGoPrefix.current = null
+    if (paletteGoTimer.current) {
+      clearTimeout(paletteGoTimer.current)
+      paletteGoTimer.current = null
     }
   }, [open])
 
@@ -153,6 +182,8 @@ export function CommandCenterProvider({
   React.useEffect(() => {
     const trimmed = query.trim()
     if (trimmed.length < 2) {
+      searchSeq.current++ // invalidate any in-flight response so it can't repopulate results
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear pending results when the query drops below the threshold
       setResults(EMPTY_RESULTS)
       setSearching(false)
       return
@@ -189,6 +220,41 @@ export function CommandCenterProvider({
     },
     [pushRecent, router],
   )
+
+  /* "g then key" also works inside the palette while the input is empty.
+     The swallowed "g" is restored into the query if the user keeps typing
+     (or after the 800ms window lapses), so searching for "google…" still works. */
+  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    const key = event.key.toLowerCase()
+    if (paletteGoPrefix.current !== null && Date.now() - paletteGoPrefix.current < 800) {
+      if (paletteGoTimer.current) {
+        clearTimeout(paletteGoTimer.current)
+        paletteGoTimer.current = null
+      }
+      paletteGoPrefix.current = null
+      const href = GO_KEYS[key]
+      if (href) {
+        event.preventDefault()
+        go(href)
+        return
+      }
+      if (event.key.length === 1) {
+        event.preventDefault()
+        setQuery(`g${event.key}`)
+      }
+      return
+    }
+    if (key === 'g' && query === '') {
+      event.preventDefault()
+      paletteGoPrefix.current = Date.now()
+      paletteGoTimer.current = setTimeout(() => {
+        paletteGoPrefix.current = null
+        paletteGoTimer.current = null
+        setQuery('g')
+      }, 800)
+    }
+  }
 
   const q = query.trim().toLowerCase()
   const pages = [
@@ -234,13 +300,16 @@ export function CommandCenterProvider({
             placeholder="Fetch anything — apps, people, tasks…"
             value={query}
             onValueChange={setQuery}
+            onKeyDown={handleInputKeyDown}
           />
           <CommandList>
             {searching ? (
-              <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-                <Loader2 className="size-3 animate-spin" aria-hidden />
-                Sniffing around…
-              </div>
+              <CommandLoading>
+                <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin" aria-hidden />
+                  Sniffing around…
+                </div>
+              </CommandLoading>
             ) : null}
             {nothingAtAll ? (
               <CommandEmpty>
@@ -414,15 +483,36 @@ export function CommandCenterProvider({
                     Sign out
                   </CommandItem>
                 ) : null}
+                {!q || 'toggle go-to shortcuts keyboard'.includes(q) ? (
+                  <CommandItem
+                    value="toggle-go-shortcuts"
+                    onSelect={() => {
+                      try {
+                        const off = window.localStorage.getItem(GO_SHORTCUTS_KEY) === 'off'
+                        window.localStorage.setItem(GO_SHORTCUTS_KEY, off ? 'on' : 'off')
+                        toast.info(off ? 'Go-to shortcuts enabled' : 'Go-to shortcuts disabled')
+                      } catch {
+                        /* localStorage unavailable — shortcuts stay on */
+                      }
+                      setOpen(false)
+                    }}
+                  >
+                    <Keyboard />
+                    Toggle go-to shortcuts (g + key)
+                  </CommandItem>
+                ) : null}
               </CommandGroup>
             ) : null}
           </CommandList>
-          <div className="flex items-center gap-3 border-t px-3 py-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-3 border-t px-3 py-1.5 text-2xs text-muted-foreground">
             <span>
               <kbd className="rounded border bg-muted px-1 font-mono">↑↓</kbd> navigate
             </span>
             <span>
               <kbd className="rounded border bg-muted px-1 font-mono">↵</kbd> open
+            </span>
+            <span className="hidden sm:inline">
+              <kbd className="rounded border bg-muted px-1 font-mono">g</kbd>+key jump
             </span>
             <span className="ml-auto inline-flex items-center gap-1">
               <PawPrint className="size-3" aria-hidden /> LogPup
@@ -438,6 +528,7 @@ export function CommandCenterTrigger({ className }: { className?: string }) {
   const { setOpen } = useCommandCenter()
   const [isMac, setIsMac] = React.useState(true)
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe platform detection
     setIsMac(/Mac|iPhone|iPad/.test(window.navigator.userAgent))
   }, [])
 
@@ -454,7 +545,7 @@ export function CommandCenterTrigger({ className }: { className?: string }) {
     >
       <Search className="size-3.5 shrink-0" aria-hidden />
       <span className="truncate">Fetch anything…</span>
-      <kbd className="ml-auto rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-none">
+      <kbd className="ml-auto rounded border bg-muted px-1.5 py-0.5 font-mono text-2xs leading-none">
         {isMac ? '⌘K' : 'Ctrl K'}
       </kbd>
     </button>

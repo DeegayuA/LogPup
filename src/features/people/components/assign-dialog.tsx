@@ -127,12 +127,16 @@ export function AssignDialog({
             <Input
               id="assign-allocation"
               type="number"
+              inputMode="numeric"
               min={5}
               max={100}
               value={allocationPct}
               onChange={(e) => setAllocationPct(e.target.value)}
+              placeholder="60"
+              className="font-mono"
               required
             />
+            <p className="text-xs text-muted-foreground">5–100% of their time.</p>
           </div>
           <DialogFooter>
             <Button type="submit" disabled={isPending || (!isEdit && !userId)}>

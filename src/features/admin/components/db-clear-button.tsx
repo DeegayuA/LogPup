@@ -11,7 +11,7 @@ import type { ActionResult } from '@/lib/action-result'
 function ConfirmButton() {
   const { pending } = useFormStatus()
   return (
-    <Button type="submit" variant="destructive" size="sm" disabled={pending}>
+    <Button type="submit" variant="destructive" size="lg" disabled={pending}>
       {pending ? 'Clearing…' : 'Clear database'}
     </Button>
   )
@@ -25,6 +25,7 @@ export function DbClearButton() {
     if (!state) return
     if (state.ok) {
       toast.success('Database cleared (users kept)')
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- close form in response to server action result
       setOpen(false)
     } else {
       toast.error(state.error)
@@ -33,22 +34,33 @@ export function DbClearButton() {
 
   if (!open) {
     return (
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+      <Button variant="destructive" className="self-start" onClick={() => setOpen(true)}>
         Clear database…
       </Button>
     )
   }
 
   return (
-    <form action={formAction} className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">
+    <form
+      action={formAction}
+      className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4"
+    >
       <p className="text-sm text-muted-foreground">
-        Deletes all apps, assignments, sprints, tasks and meetings. Users are kept. This cannot be undone.
-        Type <span className="font-mono font-medium text-foreground">CLEAR</span> to confirm.
+        Deletes all apps, assignments, sprints, tasks and meetings. Users are kept. This
+        cannot be undone. Type{' '}
+        <span className="font-mono text-xs font-medium text-foreground">CLEAR</span> to
+        confirm.
       </p>
-      <div className="flex items-center gap-2">
-        <Input name="confirm" placeholder="CLEAR" autoComplete="off" className="max-w-[140px]" />
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          name="confirm"
+          placeholder="CLEAR"
+          autoComplete="off"
+          aria-label="Type CLEAR to confirm"
+          className="h-9 max-w-[160px] font-mono text-sm"
+        />
         <ConfirmButton />
-        <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
+        <Button type="button" variant="ghost" size="lg" onClick={() => setOpen(false)}>
           Cancel
         </Button>
       </div>

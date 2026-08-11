@@ -39,6 +39,8 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -70,7 +72,7 @@
   --border: oklch(0.905 0.008 100);
   --input: oklch(0.905 0.008 100);
   --ring: oklch(0.56 0.08 165);
-  --chart-1: oklch(0.76 0.14 70);
+  --chart-1: oklch(0.62 0.13 70);
   --chart-2: oklch(0.55 0.09 165);
   --chart-3: oklch(0.44 0.09 165);
   --chart-4: oklch(0.68 0.1 70);
@@ -135,7 +137,7 @@
     letter-spacing: -0.015em;
   }
   ::selection {
-    background: oklch(0.44 0.09 165 / 22%);
+    background: color-mix(in oklab, var(--primary) 25%, transparent);
   }
   /* Data values (counts, percentages, dates) align in columns. */
   .font-mono {

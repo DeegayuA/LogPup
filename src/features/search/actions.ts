@@ -33,7 +33,8 @@ export async function universalSearch(q: string): Promise<SearchResults> {
 
   const query = q.trim()
   if (query.length < 2) return EMPTY
-  const pattern = `%${query}%`
+  // Escape LIKE metacharacters so "50%" matches literally, not as a wildcard.
+  const pattern = `%${query.replace(/[\\%_]/g, '\\$&')}%`
 
   const [appRows, peopleRows, taskRows, sprintRows] = await Promise.all([
     db
