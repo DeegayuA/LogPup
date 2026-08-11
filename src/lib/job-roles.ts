@@ -21,6 +21,20 @@ export const JOB_ROLE_GROUPS = [
     ],
   },
   {
+    label: 'Engineering (EMC / hardware)',
+    roles: [
+      'Electronics Engineer',
+      'Embedded / Firmware Engineer',
+      'Hardware Engineer',
+      'EMC Test Engineer',
+      'RF Engineer',
+      'Compliance Engineer',
+      'PCB Designer',
+      'Test Technician',
+      'Project Engineer',
+    ],
+  },
+  {
     label: 'Design',
     roles: ['UI/UX Designer', 'Product Designer', 'Graphic Designer'],
   },

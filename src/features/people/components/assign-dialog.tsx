@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ALL_ROLES } from '@/lib/roles'
+import { JOB_ROLES } from '@/lib/job-roles'
 import {
   Select,
   SelectContent,
@@ -140,7 +140,7 @@ export function AssignDialog({
             {/* Native datalist: curated software + engineering (EMC) roles,
                 free text still allowed. */}
             <datalist id="assign-role-options">
-              {ALL_ROLES.map((option) => (
+              {JOB_ROLES.map((option) => (
                 <option key={option} value={option} />
               ))}
             </datalist>
