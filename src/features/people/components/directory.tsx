@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronRight, PawPrint, Phone, ShieldCheck } from 'lucide-react'
+import { ChevronRight, PawPrint, Phone, Search, ShieldCheck } from 'lucide-react'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,7 @@ const SORT_LABEL: Record<SortKey, string> = {
 export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
   const [sort, setSort] = useState<SortKey>('name')
   const [org, setOrg] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   const orgs = useMemo(
     () => [...new Set(people.flatMap((p) => p.user.orgTags))].sort((a, b) => a.localeCompare(b)),
@@ -44,15 +46,23 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
   const activeOrg = org && orgs.includes(org) ? org : null
 
   const rows = useMemo(() => {
-    const filtered = activeOrg
-      ? people.filter((p) => p.user.orgTags.includes(activeOrg))
-      : people
+    const term = search.trim().toLowerCase()
+    const filtered = people.filter((p) => {
+      if (activeOrg && !p.user.orgTags.includes(activeOrg)) return false
+      if (!term) return true
+      // Name, job title and org all match — typing "engineer" or a client name
+      // finds people just as well as typing a name does.
+      return [p.user.name, p.user.title ?? '', ...p.user.orgTags]
+        .join(' ')
+        .toLowerCase()
+        .includes(term)
+    })
     return [...filtered].sort((a, b) => {
       if (sort === 'load-desc') return b.totalPct - a.totalPct
       if (sort === 'load-asc') return a.totalPct - b.totalPct
       return a.user.name.localeCompare(b.user.name)
     })
-  }, [people, activeOrg, sort])
+  }, [people, activeOrg, sort, search])
 
   // Derived from `rows`, not `people`: the strip and the list below it describe
   // the same set, so an org filter can never leave them contradicting each other.
@@ -83,6 +93,21 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
           </div>
         ))}
       </div>
+
+      <InputGroup className="w-full max-w-xs">
+        <InputGroupAddon>
+          <Search aria-hidden />
+        </InputGroupAddon>
+        {/* Filters as you type — no submit, no round trip: every person is
+            already on the client. */}
+        <InputGroupInput
+          type="text"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Filter by name, role or org — ⌘K fetches everything"
+          aria-label="Filter people"
+        />
+      </InputGroup>
 
       <div className="flex flex-wrap items-center gap-2">
         {orgs.length > 0 ? (
@@ -140,11 +165,25 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
         <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-16 text-center">
           <PawPrint className="size-8 text-muted-foreground" aria-hidden />
           <div className="flex flex-col gap-1">
-            <p className="font-heading font-semibold">No one in {activeOrg} yet.</p>
-            <p className="text-sm text-muted-foreground">Clear the filter to see everyone.</p>
+            <p className="font-heading font-semibold">
+              {search.trim() ? 'No one matches your search.' : `No one in ${activeOrg} yet.`}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {search.trim()
+                ? 'Try ⌘K — it fetches apps, tasks and meetings too.'
+                : 'Clear the filter to see everyone.'}
+            </p>
           </div>
-          <Button variant="outline" size="sm" type="button" onClick={() => setOrg(null)}>
-            Clear filter
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => {
+              setSearch('')
+              setOrg(null)
+            }}
+          >
+            Clear filters
           </Button>
         </div>
       ) : (
