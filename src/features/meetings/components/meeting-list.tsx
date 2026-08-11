@@ -88,6 +88,11 @@ function MeetingRow({
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesDraft, setNotesDraft] = useState(meeting.notes ?? '')
 
+  function cancelNotes() {
+    setEditingNotes(false)
+    setNotesDraft(meeting.notes ?? '')
+  }
+
   function handleSaveNotes() {
     startTransition(async () => {
       try {
@@ -224,16 +229,32 @@ function MeetingRow({
             maxLength={5000}
             rows={3}
             aria-label={`Notes for ${meeting.title}`}
+            onKeyDown={(event) => {
+              // Cmd/Ctrl+Enter saves; plain Enter has to stay a newline here —
+              // notes are multi-line, and the @mention popover already claims
+              // bare Enter to insert the highlighted person.
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                handleSaveNotes()
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelNotes()
+              }
+            }}
           />
-          <div className="flex justify-end gap-2">
+          <div className="flex items-center justify-end gap-2">
+            <span className="mr-auto text-2xs text-muted-foreground">
+              <kbd className="rounded border bg-muted px-1 font-mono">⌘/Ctrl</kbd>+
+              <kbd className="rounded border bg-muted px-1 font-mono">↵</kbd> to save ·{' '}
+              <kbd className="rounded border bg-muted px-1 font-mono">Esc</kbd> to cancel
+            </span>
             <Button
               variant="outline"
               size="sm"
               type="button"
-              onClick={() => {
-                setEditingNotes(false)
-                setNotesDraft(meeting.notes ?? '')
-              }}
+              onClick={cancelNotes}
             >
               Cancel
             </Button>
