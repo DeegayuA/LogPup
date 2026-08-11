@@ -22,6 +22,11 @@ export const followupStatus = pgEnum('followup_status', ['open', 'resolved'])
 export const noteSource = pgEnum('note_source', ['typed', 'voice', 'ai'])
 export const suggestionStatus = pgEnum('suggestion_status', ['open', 'accepted', 'dismissed'])
 export const allocationChange = pgEnum('allocation_change', ['assigned', 'updated', 'removed'])
+// Mirrors allocationChange one-for-one for meeting membership. Separate only
+// because "assigned to a meeting" reads wrong; the three states, the interval
+// algebra and the tombstone rule are the same pattern (see
+// meetingAttendeeHistory below).
+export const attendanceChange = pgEnum('attendance_change', ['added', 'updated', 'removed'])
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -182,6 +187,75 @@ export const meetingAttendees = pgTable('meeting_attendees', {
   // RSVP state — the attendee marks whether they're coming.
   response: attendeeResponse('response').notNull().default('pending'),
 }, (t) => [primaryKey({ columns: [t.meetingId, t.userId] })])
+
+// Append-only audit of who was on a meeting, and when. Exactly the
+// assignment_history pattern above, applied to meeting membership — read that
+// comment first; this one only records where the two differ.
+//
+// meetingAttendees stays THE live state, untouched, for the same reason
+// assignments did: every existing read path keeps working with no new filter
+// to remember. Without this sibling, removing someone from a meeting erased
+// the fact that they were ever on it.
+//
+// SHAPE — one row per (meetingId, userId) *interval*, half-open [from, to),
+// with AT MOST ONE open row per pair. A change closes the open row and opens
+// the next from the SAME JS `Date` in one db.batch, so the intervals abut
+// exactly and never overlap.
+//
+// REMOVAL SEMANTICS — identical: close the open row AND insert a 'removed'
+// tombstone, left open. Not close-only, because a close records the instant
+// but not the actor, and the "as of" query stays one uniform rule ("the row
+// open at the date wins") with no special case for "no open row". Readers
+// must drop 'removed' rows from any roster — see attendanceAsOf in
+// src/features/meetings/attendance-history.ts, which owns that rule.
+//
+// DIFFERENCES from assignment_history, both forced by the payload:
+//   - `response` (the RSVP) takes the place of role+allocationPct. It is
+//     CARRIED onto the tombstone rather than zeroed — attendance has no
+//     summed quantity, so "was going when removed" is the useful record and
+//     there is nothing whose total a stale value could corrupt.
+//   - An 'updated' row is an RSVP change (respondToMeeting), which is the
+//     only payload edit this table has.
+//
+// Removal is a statement about the future only: note segments keep their
+// speakerId and accepted tasks keep their assignee, because those record what
+// was actually said and agreed.
+//
+// changedBy is whoever made the change. Backfilled rows (migration 0018)
+// carry the meeting's creator at the meeting's createdAt — near-observed,
+// since the attendee list is written in the same batch as the meeting itself,
+// but still noted as backfill because a later hand-added attendee is
+// indistinguishable from an original one in the live table.
+export const meetingAttendeeHistory = pgTable('meeting_attendee_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  response: attendeeResponse('response').notNull(),
+  effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull().defaultNow(),
+  effectiveTo: timestamp('effective_to', { withTimezone: true }),
+  changedBy: uuid('changed_by').notNull().references(() => users.id),
+  changeKind: attendanceChange('change_kind').notNull(),
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // "Which meetings was this person on?" — the person-side timeline.
+  index('meeting_attendee_history_user_from_idx').on(t.userId, t.effectiveFrom),
+  // "Who was on this meeting?" — the per-meeting roster.
+  index('meeting_attendee_history_meeting_from_idx').on(t.meetingId, t.effectiveFrom),
+  // "As of" lookups filter on the interval bounds alone, same as
+  // assignment_history_as_of_idx.
+  index('meeting_attendee_history_as_of_idx').on(t.effectiveFrom, t.effectiveTo),
+  // The "AT MOST ONE open row per (meetingId, userId)" invariant above,
+  // enforced rather than only documented — the same guard, declared the same
+  // way, as assignment_history_one_open_idx. attendanceAsOf returns every
+  // in-force row, so a second open interval for one pairing would list the
+  // person twice with two different RSVPs: a wrong answer, not an error.
+  // Partial (open rows only): closed intervals for the same pairing are the
+  // normal case and must stay unconstrained.
+  uniqueIndex('meeting_attendee_history_one_open_idx')
+    .on(t.meetingId, t.userId)
+    .where(sql`${t.effectiveTo} is null`),
+])
 
 // Per-user Gemini API keys. Multiple keys per user; requests roll across
 // active keys (least-recently-used first) so free-tier rate limits spread out.

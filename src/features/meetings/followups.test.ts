@@ -1,10 +1,105 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildFollowupRows,
   matchPersonToAttendee,
   selectCarriedForward,
   filterValidIds,
   type OpenFollowupItem,
 } from './followups'
+
+describe('buildFollowupRows', () => {
+  // These names ARE the source meeting's attendees. Using them as the model's
+  // output is the whole point of the guard: an exact name match must not
+  // attribute the item.
+  const ATTENDEE_NAMES = ['Nadeesha Perera', 'Kasun Silva']
+
+  // THE REGRESSION GUARD. deriveAndInsertFollowups used to name-match the
+  // model's perPerson[].name against the attendees, so a person the meeting
+  // merely TALKED ABOUT was recorded as owing the work — and it carried
+  // forward to every future meeting they attended. Only a confirmed
+  // meeting_speakers mapping may attribute a follow-up.
+  it('returns null userId for an unconfirmed name that EXACTLY matches an attendee', () => {
+    const [exactAttendeeName] = ATTENDEE_NAMES
+    expect(exactAttendeeName).toBe('Nadeesha Perera')
+    const rows = buildFollowupRows(
+      'm1',
+      [{ name: exactAttendeeName, actionItems: ['Send the contract'] }],
+      [],
+      [],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].userId).toBeNull()
+  })
+
+  it('keeps the raw guess in personName so nothing the model observed is lost', () => {
+    const rows = buildFollowupRows('m1', [{ name: 'Irushi Anupama', actionItems: ['Follow up'] }], [], [])
+    expect(rows[0].personName).toBe('Irushi Anupama')
+    expect(rows[0].userId).toBeNull()
+  })
+
+  it('attributes only through a confirmed speaker mapping', () => {
+    const rows = buildFollowupRows(
+      'm1',
+      [{ name: 'Kasun Silva', actionItems: ['Deploy the fix'] }],
+      [],
+      [{ label: 'Kasun Silva', userId: 'u2' }],
+    )
+    expect(rows[0].userId).toBe('u2')
+  })
+
+  it('honors a mapping that explicitly resolves to nobody', () => {
+    const rows = buildFollowupRows(
+      'm1',
+      [{ name: 'Kasun Silva', actionItems: ['Deploy the fix'] }],
+      [],
+      [{ label: 'Kasun Silva', userId: null }],
+    )
+    expect(rows[0].userId).toBeNull()
+  })
+
+  it('builds question rows as well as action rows', () => {
+    const rows = buildFollowupRows(
+      'm1',
+      [{ name: 'A', actionItems: ['do it'] }],
+      [{ person: 'B', questions: ['why?'] }],
+      [],
+    )
+    expect(rows.map((r) => r.kind)).toEqual(['action', 'question'])
+    expect(rows.map((r) => r.text)).toEqual(['do it', 'why?'])
+  })
+
+  it('expands multiple items per person and carries sourceMeetingId', () => {
+    const rows = buildFollowupRows(
+      'meeting-9',
+      [{ name: 'A', actionItems: ['one', 'two'] }],
+      [],
+      [],
+    )
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r) => r.sourceMeetingId === 'meeting-9')).toBe(true)
+  })
+
+  it('skips entries with no name and items with no text', () => {
+    const rows = buildFollowupRows(
+      'm1',
+      [
+        { name: '', actionItems: ['orphan'] },
+        { name: 'A', actionItems: ['', 'real'] },
+      ],
+      [{ person: '', questions: ['orphan'] }],
+      [],
+    )
+    expect(rows.map((r) => r.text)).toEqual(['real'])
+  })
+
+  it('handles a person with no actionItems at all', () => {
+    expect(buildFollowupRows('m1', [{ name: 'A' }], [], [])).toEqual([])
+  })
+
+  it('returns nothing for empty input', () => {
+    expect(buildFollowupRows('m1', [], [], [])).toEqual([])
+  })
+})
 
 describe('matchPersonToAttendee', () => {
   const attendees = [

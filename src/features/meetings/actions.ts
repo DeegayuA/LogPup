@@ -5,7 +5,14 @@ import { eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { del } from '@vercel/blob'
 import { db } from '@/db'
-import { apps, meetingAttendees, meetingScreenshots, meetings, users } from '@/db/schema'
+import {
+  apps,
+  meetingAttendeeHistory,
+  meetingAttendees,
+  meetingScreenshots,
+  meetings,
+  users,
+} from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { format } from 'date-fns'
@@ -18,6 +25,7 @@ import {
 } from '@/features/calendar/google-calendar'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
+import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 
 const meetingInput = z
   .object({
@@ -231,6 +239,9 @@ export async function createMeeting(
   // (neon-http has no transactions), so the attendee rows can't reference a
   // meeting id that isn't guaranteed to exist yet.
   const meetingId = crypto.randomUUID()
+  // One instant for the meeting row and every attendee's opening membership
+  // interval, so the history starts exactly when the meeting did.
+  const at = new Date()
 
   try {
     await db.batch([
@@ -243,10 +254,27 @@ export async function createMeeting(
         agenda: agenda || null,
         meetingUrl: meetingUrl ?? null,
         createdBy: session.user.id,
+        createdAt: at,
       }),
       db
         .insert(meetingAttendees)
         .values(attendeeIds.map((userId) => ({ meetingId, userId }))),
+      // The membership history opens in the SAME batch as the live rows —
+      // otherwise every meeting created after this feature shipped would have
+      // attendees with no recorded start, and "who was on this meeting on
+      // date X" would only work for the backfilled ones.
+      db.insert(meetingAttendeeHistory).values(
+        attendeeIds.map((userId) =>
+          buildAttendanceEntry({
+            meetingId,
+            userId,
+            response: 'pending',
+            changeKind: 'added',
+            changedBy: session.user.id,
+            at,
+          }),
+        ),
+      ),
     ])
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid app or attendee')
