@@ -595,6 +595,11 @@ function RoadmapRow({
   // that whole debounce window.
   const [pending, setPending] = useState<{ start: string; end: string } | null>(null)
   const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // The quick menu's "Open board" needs its own router: the parent Roadmap's
+  // instance isn't in scope here. Client-side navigation, matching the Link
+  // to this identical URL in the label cell below — a full reload was never
+  // the intent, it just wasn't noticed.
+  const router = useRouter()
 
   const effectiveStart = pending?.start ?? sprint.startDate
   const effectiveEnd = pending?.end ?? sprint.endDate
@@ -686,7 +691,7 @@ function RoadmapRow({
           key: 'open',
           label: 'Open board',
           onSelect: () => {
-            window.location.href = `/apps/${slug}?sprint=${sprint.id}&tab=board`
+            router.push(`/apps/${slug}?sprint=${sprint.id}&tab=board`)
           },
         },
         { type: 'separator', key: 'sep-delete' },
