@@ -25,7 +25,8 @@ export type MeetingIntent = {
   unresolved: string[]
   /** "on <app>" hint. The caller owns the app list; the parser never resolves it. */
   appQuery: string | null
-  appName: null
+  /** Always null from the parser; the caller resolves the hint to a real app. */
+  appName: string | null
 }
 
 const WEEKDAYS = [
@@ -185,6 +186,18 @@ export function parseMeetingIntent(
   let text = raw.trim().replace(/\s+/g, ' ')
   if (!text) return null
 
+  // Scheduling clauses come out FIRST, so a "with …" that sits in the middle of
+  // the sentence ("1:1 with deeghayu next monday 9.30am") doesn't swallow the day
+  // and time that follow the names.
+  const duration = extractDuration(text)
+  text = duration.rest
+
+  const time = extractTime(text)
+  text = time.rest
+
+  const dayResult = extractDay(text, now)
+  text = dayResult.rest
+
   // "with <list>" — stop the list before a trailing "on <app>".
   let attendance = resolvePeople('', people)
   const withMatch = /\bwith\s+([\s\S]+?)(?=\s+on\s+[A-Za-z]|$)/i.exec(text)
@@ -195,15 +208,6 @@ export function parseMeetingIntent(
 
   const app = extractApp(text)
   text = app.rest
-
-  const duration = extractDuration(text)
-  text = duration.rest
-
-  const time = extractTime(text)
-  text = time.rest
-
-  const dayResult = extractDay(text, now)
-  text = dayResult.rest
 
   const title = text.replace(LEADING_FILLER, '').replace(/\s+/g, ' ').trim()
   if (!title) return null
