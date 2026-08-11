@@ -1,4 +1,4 @@
-import { PawPrint } from 'lucide-react'
+import { AppWindow, CalendarDays, PawPrint, SquareKanban, Users } from 'lucide-react'
 import { signIn } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -6,6 +6,13 @@ import { PasswordAuth } from '@/features/auth/components/password-auth'
 import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
 
 export const metadata = { title: 'Sign in' }
+
+const CAPABILITIES = [
+  { icon: AppWindow, title: 'Apps', detail: 'Every product, its team, and its status in one list.' },
+  { icon: Users, title: 'People', detail: 'Who is on what, and how much room they have left.' },
+  { icon: SquareKanban, title: 'Sprints', detail: 'Boards, backlog, and a roadmap per app.' },
+  { icon: CalendarDays, title: 'Meetings', detail: 'Scheduled, transcribed, and turned into notes.' },
+] as const
 
 const notionConfigured = !!process.env.NOTION_OAUTH_CLIENT_ID && !!process.env.NOTION_OAUTH_CLIENT_SECRET
 const devLoginEmail =
@@ -17,25 +24,36 @@ export default function SignInPage() {
       {/* Landing here means there is no session — drop any Cache Storage the
           previous user's install may still be holding. */}
       <ClearCachedShell />
-      <aside className="hidden flex-col justify-between border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
+      <aside className="hidden flex-col border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
         <div className="flex items-center gap-3">
           <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <PawPrint className="size-5" aria-hidden />
           </div>
           <span className="font-heading text-xl font-bold tracking-tight">LogPup</span>
         </div>
-        <div className="space-y-6">
-          <p className="max-w-md font-heading text-2xl leading-snug font-bold tracking-tight">
+
+        {/* The panel earns its width by saying what the product actually does,
+            rather than stranding a tagline at the bottom of empty space. */}
+        <div className="my-auto flex max-w-md flex-col gap-8 py-10">
+          <p className="font-heading text-3xl leading-tight font-bold tracking-tight">
             The watchdog for your team&apos;s apps, people, and sprints.
           </p>
-          <div className="flex items-center gap-2 text-sm text-sidebar-foreground/60">
-            <span>Apps</span>
-            <span aria-hidden>·</span>
-            <span>People</span>
-            <span aria-hidden>·</span>
-            <span>Sprints</span>
-          </div>
+          <ul className="flex flex-col divide-y divide-sidebar-border">
+            {CAPABILITIES.map(({ icon: Icon, title, detail }) => (
+              <li key={title} className="flex items-start gap-3 py-3">
+                <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium">{title}</span>
+                  <span className="text-sm text-sidebar-foreground/60">{detail}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
+
+        <p className="text-xs text-sidebar-foreground/60">
+          Internal tool · sign in with your work account
+        </p>
       </aside>
 
       <div className="flex flex-col items-center justify-center gap-6 p-4 py-10 lg:p-10">
