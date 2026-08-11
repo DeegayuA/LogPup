@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_SPRINT_DAYS,
   defaultSprintRange,
+  initialSprintStatus,
+  isSprintRunningNow,
   shiftEndDate,
   sprintDurationLabel,
 } from './sprint-date-range'
@@ -94,5 +96,49 @@ describe('sprintDurationLabel', () => {
     expect(sprintDurationLabel('', '2026-08-17')).toBeNull()
     expect(sprintDurationLabel('2026-08-11', '')).toBeNull()
     expect(sprintDurationLabel('', '')).toBeNull()
+  })
+})
+
+describe('initialSprintStatus', () => {
+  it('starts active when the range contains today', () => {
+    expect(initialSprintStatus('2026-08-08', '2026-08-15', '2026-08-11')).toBe('active')
+  })
+
+  it('starts planned when the range is wholly in the future', () => {
+    expect(initialSprintStatus('2026-08-18', '2026-08-25', '2026-08-11')).toBe('planned')
+  })
+
+  it('starts done when the range is wholly in the past', () => {
+    expect(initialSprintStatus('2026-07-01', '2026-07-08', '2026-08-11')).toBe('done')
+  })
+
+  it('starts active for a single-day sprint today', () => {
+    expect(initialSprintStatus('2026-08-11', '2026-08-11', '2026-08-11')).toBe('active')
+  })
+
+  it('starts active on the boundary where today equals the start date', () => {
+    expect(initialSprintStatus('2026-08-11', '2026-08-18', '2026-08-11')).toBe('active')
+  })
+
+  it('starts active on the boundary where today equals the end date', () => {
+    expect(initialSprintStatus('2026-08-04', '2026-08-11', '2026-08-11')).toBe('active')
+  })
+})
+
+describe('isSprintRunningNow', () => {
+  it('includes a sprint whose status is already active, regardless of dates', () => {
+    expect(isSprintRunningNow('active', '2026-01-01', '2026-01-08', '2026-08-11')).toBe(true)
+  })
+
+  it('includes a planned sprint whose range contains today', () => {
+    expect(isSprintRunningNow('planned', '2026-08-08', '2026-08-15', '2026-08-11')).toBe(true)
+  })
+
+  it('excludes a planned sprint whose range is wholly in the future', () => {
+    expect(isSprintRunningNow('planned', '2026-08-18', '2026-08-25', '2026-08-11')).toBe(false)
+  })
+
+  it('excludes a done sprint even if its range contains today', () => {
+    expect(isSprintRunningNow('done', '2026-08-08', '2026-08-15', '2026-08-11')).toBe(false)
   })
 })

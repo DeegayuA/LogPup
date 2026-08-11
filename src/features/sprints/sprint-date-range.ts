@@ -73,3 +73,46 @@ export function sprintDurationLabel(startDate: string, endDate: string): string 
   if (days < 1) return null
   return `${days} day${days === 1 ? '' : 's'}`
 }
+
+export type SprintStatus = 'planned' | 'active' | 'done'
+
+/**
+ * The status a newly created sprint should start in, given its date range
+ * and "today" (all three plain yyyy-mm-dd strings in the same calendar-date
+ * space as the rest of this module — callers are responsible for computing
+ * `today` correctly, e.g. via `toIsoDateInTimeZone(new Date(), LK_TIMEZONE)`
+ * from lk-holidays.ts for an Asia/Colombo-correct value).
+ *
+ * A range that contains today (inclusive of both endpoints) starts 'active'
+ * — a sprint that's already running the day it's created shouldn't require
+ * a manual status flip to be seen as such. A wholly future range stays
+ * 'planned'; a wholly past range (e.g. someone logging a sprint
+ * retroactively) starts 'done'.
+ */
+export function initialSprintStatus(startDate: string, endDate: string, today: string): SprintStatus {
+  if (today < startDate) return 'planned'
+  if (today > endDate) return 'done'
+  return 'active'
+}
+
+/**
+ * Whether a sprint should read as "running now" to a human looking at the
+ * dashboard — status 'active' always counts, and a 'planned' sprint whose
+ * date range already contains today counts too (defensive: covers rows
+ * created before sprints started auto-activating, and anything a user
+ * forgets to flip). A 'done' sprint never counts, even if its range still
+ * technically contains today (e.g. someone closed it out early).
+ *
+ * Reuses `initialSprintStatus`'s "does this range contain today" check
+ * rather than reimplementing the inclusive-range comparison.
+ */
+export function isSprintRunningNow(
+  status: SprintStatus,
+  startDate: string,
+  endDate: string,
+  today: string,
+): boolean {
+  if (status === 'active') return true
+  if (status === 'done') return false
+  return initialSprintStatus(startDate, endDate, today) === 'active'
+}

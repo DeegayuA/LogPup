@@ -7,6 +7,8 @@ import { db } from '@/db'
 import { apps, sprints } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
+import { initialSprintStatus } from '@/features/sprints/sprint-date-range'
 
 const sprintInput = z
   .object({
@@ -41,14 +43,40 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const { appId, name, goal, startDate, endDate } = parsed.data
-  const [created] = await db
-    .insert(sprints)
-    .values({ appId, name, goal: goal || null, startDate, endDate })
-    .returning({ id: sprints.id })
+  const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
+  const status = initialSprintStatus(startDate, endDate, today)
+
+  // Generated client-side (not via .returning()) so the id is known up
+  // front regardless of which branch below runs — same reasoning as
+  // createMeeting's use of db.batch in meetings/actions.ts.
+  const sprintId = crypto.randomUUID()
+
+  if (status === 'active') {
+    // A sprint that starts life 'active' (its range already contains
+    // today) must obey the same single-active-per-app rule
+    // updateSprintStatus enforces: demote any existing active sprint for
+    // this app in the same db.batch round-trip (neon-http has no
+    // transactions) so the app never ends up with two active sprints.
+    // The demote runs FIRST so its `eq(status, 'active')` filter can't
+    // also catch the row this batch is about to insert.
+    await db.batch([
+      db
+        .update(sprints)
+        .set({ status: 'done' })
+        .where(and(eq(sprints.appId, appId), eq(sprints.status, 'active'))),
+      db
+        .insert(sprints)
+        .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status }),
+    ])
+  } else {
+    await db
+      .insert(sprints)
+      .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status })
+  }
 
   const slug = await slugForApp(appId)
   if (slug) revalidatePath('/apps/' + slug)
-  return ok({ sprintId: created.id })
+  return ok({ sprintId })
 }
 
 export async function updateSprintStatus(
