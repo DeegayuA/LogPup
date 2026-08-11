@@ -1,5 +1,10 @@
 'use client'
 
+// Import the wheel styles directly (not only via the globals.css @import) so the
+// bundler always includes them — without this CSS the four columns collapse into
+// overlapping text instead of scrollable wheels. Use the package's exported
+// subpath (`./style.css`); `./dist/index.css` is not exposed in its exports map.
+import '@ncdai/react-wheel-picker/style.css'
 import { useMemo, useState, type ReactElement } from 'react'
 import { addDays, format, isValid, startOfDay } from 'date-fns'
 import { CalendarClockIcon, KeyboardIcon } from 'lucide-react'
@@ -106,7 +111,9 @@ export function DateTimeWheelField({
   onChange: (date: Date) => void
   className?: string
 }): ReactElement {
-  const [typedMode, setTypedMode] = useState(false)
+  // Default to the native datetime input: it renders reliably everywhere. The wheel
+  // is opt-in via the toggle (its styling depends on the third-party CSS above).
+  const [typedMode, setTypedMode] = useState(true)
   const [open, setOpen] = useState(false)
   // The 60-day window is anchored once per mount so it doesn't shift under
   // the user while the picker is open.
