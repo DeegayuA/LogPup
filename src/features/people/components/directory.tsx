@@ -199,12 +199,22 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
                 </div>
               ) : null}
               <span className="hidden max-w-56 truncate text-xs text-muted-foreground lg:block">
-                {breakdown.length > 0
-                  ? breakdown
-                      .slice(0, 2)
-                      .map((b) => `${b.appName} ${b.allocationPct}%`)
-                      .join(' · ') + (breakdown.length > 2 ? ` +${breakdown.length - 2}` : '')
-                  : 'Unassigned'}
+                {breakdown.length > 0 ? (
+                  <>
+                    {breakdown.slice(0, 2).map((b, i) => (
+                      <span key={b.appName}>
+                        {i > 0 ? ' · ' : ''}
+                        {b.appName}{' '}
+                        <span className="font-mono tabular-nums">{b.allocationPct}%</span>
+                      </span>
+                    ))}
+                    {breakdown.length > 2 ? (
+                      <span className="font-mono tabular-nums"> +{breakdown.length - 2}</span>
+                    ) : null}
+                  </>
+                ) : (
+                  'Unassigned'
+                )}
               </span>
               <div className="w-40 shrink-0">
                 <CapacityBar totalPct={totalPct} />

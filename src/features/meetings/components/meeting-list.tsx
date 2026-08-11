@@ -148,7 +148,7 @@ function MeetingRow({
             </Badge>
           ) : null}
         </div>
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
           {format(meeting.startsAt, 'MMM d, yyyy · h:mm a')} – {format(meeting.endsAt, 'h:mm a')}
         </span>
       </div>

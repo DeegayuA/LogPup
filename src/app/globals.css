@@ -149,4 +149,54 @@
   .font-mono {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Coarse-pointer touch targets (WCAG 2.5.8, ~44x44 CSS px minimum).
+     Several shared primitives are intentionally smaller than 44px on
+     desktop to keep rows/toolbars dense (Button `sm`/`xs`/`icon-sm`/
+     `icon-xs`, `sm` Select triggers, inline chip-remove buttons, the
+     datetime picker's "Type instead" toggle, calendar nav, etc). Growing
+     those boxes outright — even only under this media query — would still
+     resize table rows, popover pills and chip rows on every coarse-pointer
+     device, which is its own kind of layout break. Instead we expand only
+     the invisible HIT AREA via an absolutely positioned ::after sized to
+     at least 44x44 and centered on the control; the visible box is
+     untouched, so nothing reflows or grows taller/wider. This requires the
+     control to be a positioning context (`position: relative`) for the
+     ::after to size/center against — applied below, but only as a
+     fallback: this block lives in `@layer base`, and Tailwind's own
+     utilities (including `absolute`/`fixed`/`sticky`) live in
+     `@layer utilities`, which the cascade always ranks above unlayered/base
+     rules regardless of selector specificity. So an element that
+     deliberately opts into different positioning via a Tailwind utility
+     (e.g. DialogContent's close button, `absolute top-2 right-2`) keeps
+     that positioning untouched.
+     Known trade-off, unavoidable without a browser to verify against:
+     a control nested in an `overflow-hidden` ancestor (e.g. a chip-remove
+     button inside a Badge) still has its expanded hit area clipped at the
+     ancestor's edge — not a regression, just outside what this rule can
+     reach. Tightly packed icon-button clusters with only a few px of gap
+     (e.g. the month calendar's prev/Today/next pill) can also end up with
+     slightly overlapping hit zones between neighbors; that is a known
+     limitation of hit-slop expansion in general and preferable to leaving
+     28px targets untouched. */
+  @media (pointer: coarse) {
+    button,
+    [role="button"],
+    a.button-like,
+    [data-slot="select-trigger"] {
+      position: relative;
+    }
+
+    button::after,
+    [role="button"]::after,
+    a.button-like::after,
+    [data-slot="select-trigger"]::after {
+      content: "";
+      position: absolute;
+      inset: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
+  }
 }

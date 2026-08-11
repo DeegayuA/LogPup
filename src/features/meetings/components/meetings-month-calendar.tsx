@@ -14,6 +14,7 @@ import {
 } from 'date-fns'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { isLkHoliday, isLkSunday } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
@@ -160,6 +161,14 @@ export function MeetingsMonthCalendar({
               const inMonth = isSameMonth(day, cursor)
               const isExpanded = expanded === key
               const visible = isExpanded ? entries : entries.slice(0, MAX_VISIBLE)
+              // Same Sri Lanka holiday/Sunday markers as the mini-calendar day
+              // strip (src/components/kibo-ui/mini-calendar), reusing its
+              // helpers rather than re-deriving the rules here. A Sunday that
+              // is also a public holiday still reads as a holiday (holiday
+              // wins) — the dot marker is what keeps that legible without
+              // relying on the red/orange hue alone.
+              const holidayName = isLkHoliday(day)
+              const isWeekendDay = isLkSunday(day) && !holidayName
               return (
                 <div
                   key={key}
@@ -168,20 +177,36 @@ export function MeetingsMonthCalendar({
                     !inMonth && 'bg-muted/25',
                   )}
                 >
-                  <span
-                    className={cn(
-                      'flex size-5 items-center justify-center rounded-full font-mono text-xs',
-                      isToday(day)
-                        ? 'bg-primary font-semibold text-primary-foreground'
-                        : inMonth
-                          ? 'text-foreground'
-                          : // The tinted cell already de-emphasises out-of-month
-                            // days; alpha on top of it drops the date below AA.
-                            'text-muted-foreground',
-                    )}
-                  >
-                    {format(day, 'd')}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span
+                      aria-hidden
+                      title={holidayName}
+                      className={cn(
+                        'flex size-5 items-center justify-center rounded-full font-mono text-xs',
+                        isToday(day)
+                          ? 'bg-primary font-semibold text-primary-foreground'
+                          : holidayName
+                            ? 'text-holiday'
+                            : isWeekendDay
+                              ? 'text-weekend'
+                              : inMonth
+                                ? 'text-foreground'
+                                : // The tinted cell already de-emphasises
+                                  // out-of-month days; alpha on top of it
+                                  // drops the date below AA.
+                                  'text-muted-foreground',
+                      )}
+                    >
+                      {format(day, 'd')}
+                    </span>
+                    {holidayName ? (
+                      <span aria-hidden className="size-1 shrink-0 rounded-full bg-holiday" />
+                    ) : null}
+                    <span className="sr-only">
+                      {format(day, 'EEEE, MMMM d')}
+                      {holidayName ? `, ${holidayName}` : ''}
+                    </span>
+                  </div>
                   {visible.map(({ meeting, isPast }) => (
                     /* A real control, not a tooltip-only div: the full title,
                        time and app name live in the accessible tree (the visible

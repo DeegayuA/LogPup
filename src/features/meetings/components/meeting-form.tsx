@@ -4,7 +4,7 @@ import { useState, useTransition, type FormEvent, type ReactElement } from 'reac
 import { useRouter } from 'next/navigation'
 import { addHours } from 'date-fns'
 import { toast } from 'sonner'
-import { PlusIcon, XIcon } from 'lucide-react'
+import { Loader2, PlusIcon, XIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/command'
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -169,7 +170,7 @@ export function MeetingForm({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger render={trigger} />
-      <DialogContent>
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>New meeting</DialogTitle>
           <DialogDescription>Schedule a meeting and invite the team.</DialogDescription>
@@ -216,6 +217,7 @@ export function MeetingForm({
               label="Starts"
               value={form.start}
               onChange={handleStartChange}
+              className="min-w-0"
             />
             <DateTimeWheelField
               id="meeting-end"
@@ -224,6 +226,7 @@ export function MeetingForm({
               onChange={(end) => setForm((f) => ({ ...f, end }))}
               invalid={endBeforeStart}
               describedBy={endBeforeStart ? 'meeting-end-error' : undefined}
+              className="min-w-0"
             />
           </div>
           {endBeforeStart ? (
@@ -250,7 +253,7 @@ export function MeetingForm({
                     <button
                       type="button"
                       onClick={() => toggleAttendee(u.id)}
-                      className="ml-0.5 text-muted-foreground hover:text-foreground"
+                      className="ml-0.5 rounded-full p-0.5 text-muted-foreground outline-none transition-colors duration-150 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
                       aria-label={`Remove ${u.name}`}
                     >
                       <XIcon className="size-3" />
@@ -304,7 +307,11 @@ export function MeetingForm({
             ) : null}
           </div>
           <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" disabled={isPending} />}>
+              Cancel
+            </DialogClose>
             <Button type="submit" disabled={isPending}>
+              {isPending ? <Loader2 aria-hidden className="animate-spin" /> : null}
               {isPending ? 'Creating…' : 'Create meeting'}
             </Button>
           </DialogFooter>

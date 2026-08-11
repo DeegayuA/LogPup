@@ -159,7 +159,7 @@ function TechTagsInput({
                 type="button"
                 aria-label={`Remove tag ${tag}`}
                 onClick={() => onChange(value.filter((t) => t !== tag))}
-                className="rounded-full p-0.5 outline-none transition-colors hover:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="rounded-full p-0.5 outline-none transition-colors duration-150 hover:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 <X aria-hidden className="size-3" />
               </button>

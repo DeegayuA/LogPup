@@ -282,6 +282,12 @@ export function DateTimeWheelField({
     <div className={cn('flex flex-col gap-1.5', className)}>
       <div className="flex items-center justify-between gap-2">
         <Label htmlFor={id}>{label}</Label>
+        {/* A plain <button>, not the Button primitive — its ~20px visible
+            height is intentional (it sits beside a Label, not in a toolbar),
+            but it still needs a real touch target on phones/tablets. That
+            comes from the global `@media (pointer: coarse)` rule in
+            globals.css, which expands the tap target of every <button> via
+            an invisible ::after — no extra markup needed here. */}
         <button
           type="button"
           onClick={() => setTypedMode((v) => !v)}
@@ -311,12 +317,14 @@ export function DateTimeWheelField({
                 type="button"
                 aria-invalid={invalid || undefined}
                 aria-describedby={describedBy}
-                className="w-full justify-start font-normal"
+                className="w-full min-w-0 justify-start font-normal"
               />
             }
           >
-            <CalendarClockIcon className="opacity-60" aria-hidden />
-            {isValid(value) ? format(value, 'EEE, MMM d · h:mm a') : 'Pick a date & time'}
+            <CalendarClockIcon className="shrink-0 opacity-60" aria-hidden />
+            <span className="min-w-0 truncate">
+              {isValid(value) ? format(value, 'EEE, MMM d · h:mm a') : 'Pick a date & time'}
+            </span>
           </PopoverTrigger>
           <PopoverContent
             align="start"

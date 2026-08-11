@@ -79,7 +79,7 @@ export function OrgTagsField({
                 aria-label={`Remove ${tag}`}
                 disabled={disabled}
                 onClick={() => onTagsChange(tags.filter((t) => t !== tag))}
-                className="rounded-full p-0.5 outline-none transition-colors hover:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+                className="rounded-full p-0.5 outline-none transition-colors duration-150 hover:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
               >
                 <X aria-hidden className="size-3" />
               </button>
@@ -98,7 +98,6 @@ export function OrgTagsField({
           setError(null)
         }}
         onKeyDown={handleKeyDown}
-        className="h-9"
       />
       {error ? (
         <p role="alert" className="text-xs text-destructive">
@@ -119,7 +118,7 @@ export function OrgTagsField({
               onClick={() => addTag(s)}
               className={cn(
                 badgeVariants({ variant: 'outline' }),
-                'cursor-pointer outline-none transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
+                'cursor-pointer outline-none transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
               )}
             >
               + {s}

@@ -3,9 +3,11 @@
 import { useState, useTransition, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -109,7 +111,6 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
               required
-              className="h-9"
             />
           </div>
           <div className="flex flex-col gap-2">
@@ -121,7 +122,6 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
               minLength={1}
               maxLength={80}
               required
-              className="h-9"
             />
           </div>
           <div className="flex flex-col gap-2">
@@ -161,7 +161,7 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
               maxLength={30}
               placeholder="+94 71 234 5678"
-              className="h-9 font-mono"
+              className="font-mono"
             />
             <p className="text-xs text-muted-foreground">
               Optional — powers the call button on People.
@@ -177,7 +177,11 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
             />
           </div>
           <DialogFooter>
+            <DialogClose render={<Button type="button" variant="ghost" disabled={isPending} />}>
+              Cancel
+            </DialogClose>
             <Button type="submit" disabled={isPending}>
+              {isPending ? <Loader2 aria-hidden className="animate-spin" /> : null}
               {isPending ? 'Adding…' : 'Add user'}
             </Button>
           </DialogFooter>

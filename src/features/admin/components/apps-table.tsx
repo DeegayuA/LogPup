@@ -3,6 +3,7 @@
 import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { PawPrint } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -104,8 +105,14 @@ export function AppsTable({
       <TableBody>
         {apps.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
-              No apps yet. Add one from the Apps page to manage it here.
+            <TableCell colSpan={4} className="py-8">
+              <div className="flex flex-col items-center gap-1 text-center">
+                <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
+                <p className="text-sm font-medium">No apps yet.</p>
+                <p className="text-xs text-muted-foreground">
+                  Add one from the Apps page to manage it here.
+                </p>
+              </div>
             </TableCell>
           </TableRow>
         ) : null}
