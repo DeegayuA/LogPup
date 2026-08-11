@@ -2,7 +2,6 @@ import Link from 'next/link'
 import { PawPrint, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
-import { StatNumber } from '@/components/animate-ui/stat-number'
 import { getUserCapacities } from '@/features/people/queries'
 import { PeopleDirectory } from '@/features/people/components/directory'
 
@@ -37,20 +36,8 @@ export default async function PeoplePage(props: { searchParams: Promise<{ q?: st
   const { q } = await props.searchParams
   const people = await getUserCapacities(q)
 
-  const assigned = people.filter((p) => p.breakdown.length > 0).length
-  const over = people.filter((p) => p.overallocated).length
-  const avgLoad =
-    people.length > 0
-      ? Math.round(people.reduce((sum, p) => sum + p.totalPct, 0) / people.length)
-      : 0
-
-  const stats = [
-    { label: 'People', value: people.length },
-    { label: 'Assigned', value: assigned },
-    { label: 'Over capacity', value: over, alert: over > 0 },
-    { label: 'Avg load %', value: avgLoad },
-  ]
-
+  // The stat strip lives inside PeopleDirectory — it has to count the rows the
+  // org filter actually leaves on screen, not every search result.
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <div className="flex flex-col gap-4">
@@ -61,36 +48,29 @@ export default async function PeoplePage(props: { searchParams: Promise<{ q?: st
               Who&apos;s on what, and how much room they have left.
             </p>
           </div>
-          <form method="GET" className="w-full max-w-xs">
+          {/* `type="text"`, not `type="search"` — the native × clears the field
+              without submitting, which desyncs the box from the ?q= still
+              filtering the list. The explicit Clear link always resets the URL. */}
+          <form method="GET" className="flex w-full max-w-xs items-center gap-2">
             <InputGroup>
               <InputGroupAddon>
                 <Search aria-hidden />
               </InputGroupAddon>
               <InputGroupInput
-                type="search"
+                type="text"
                 name="q"
-                placeholder="Filter by name…"
+                placeholder="Filter by name — ⌘K fetches everything"
                 defaultValue={q ?? ''}
                 aria-label="Filter people by name"
               />
             </InputGroup>
+            {q ? (
+              <Button variant="ghost" size="sm" render={<Link href="/people" />}>
+                Clear
+              </Button>
+            ) : null}
           </form>
         </div>
-
-        {people.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {stats.map((stat) => (
-              <div key={stat.label} className="flex flex-col gap-0.5 rounded-xl border bg-card p-3">
-                <span
-                  className={`font-mono text-xl font-semibold ${stat.alert ? 'text-destructive' : ''}`}
-                >
-                  <StatNumber value={stat.value} />
-                </span>
-                <span className="text-xs text-muted-foreground">{stat.label}</span>
-              </div>
-            ))}
-          </div>
-        ) : null}
       </div>
 
       {people.length === 0 ? <EmptyState q={q} /> : <PeopleDirectory people={people} />}

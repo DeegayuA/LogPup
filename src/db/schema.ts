@@ -14,6 +14,10 @@ export const users = pgTable('users', {
   name: text('name').notNull(),
   avatarUrl: text('avatar_url'),
   title: text('title'),
+  // Contact number for the call button on People / person detail. Stored as
+  // the user typed it (display form); tel: links use the digits-only form
+  // computed by src/lib/phone.ts.
+  phone: text('phone'),
   role: userRole('role').notNull().default('member'),
   active: boolean('active').notNull().default(true),
   passwordHash: text('password_hash'),

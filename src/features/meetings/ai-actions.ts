@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
-import { and, desc, eq, isNull, lt, ne } from 'drizzle-orm'
+import { and, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { meetingAiNotes, meetingAttendees, meetings, users } from '@/db/schema'
@@ -40,6 +40,26 @@ export type MeetingIntel = {
 
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
+}
+
+/**
+ * Meeting intel (transcript, per-person notes, follow-up questions) is
+ * readable only by an admin, the meeting's creator, or someone who was
+ * actually an attendee. Anything that returns intel — for THIS meeting or for
+ * the earlier meeting the prep questions are pulled from — has to pass this.
+ */
+async function canReadMeetingIntel(
+  user: { id: string; role?: string | null },
+  meeting: { id: string; createdBy: string },
+): Promise<boolean> {
+  if (user.role === 'admin' || meeting.createdBy === user.id) return true
+  const [attendee] = await db
+    .select({ userId: meetingAttendees.userId })
+    .from(meetingAttendees)
+    .where(
+      and(eq(meetingAttendees.meetingId, meeting.id), eq(meetingAttendees.userId, user.id)),
+    )
+  return Boolean(attendee)
 }
 
 async function canManageMeeting(meetingId: string) {
@@ -155,13 +175,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   // who were actually in the room (attendees), the meeting's creator, or an
   // admin. A plain "any signed-in user" check would leak transcripts across
   // the whole org.
-  if (session.user.role !== 'admin' && meeting.createdBy !== session.user.id) {
-    const [attendee] = await db
-      .select({ userId: meetingAttendees.userId })
-      .from(meetingAttendees)
-      .where(and(eq(meetingAttendees.meetingId, id), eq(meetingAttendees.userId, session.user.id)))
-    if (!attendee) return err('Not available')
-  }
+  if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
 
   const [notesRow] = await db
     .select()
@@ -170,6 +184,18 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
 
   // Prep questions come from the most recent EARLIER analyzed meeting,
   // scoped to the same app when this meeting has one.
+  //
+  // The entitlement check above only covers THIS meeting's row. The prep
+  // source is a *different* meeting, and its questions are per-person
+  // follow-ups derived verbatim from that meeting's transcript — so the same
+  // attendee/creator/admin rule has to be applied to it as well. Without
+  // this, any member could create a throwaway meeting on someone else's
+  // appId (createMeeting takes a client-supplied appId with no app-membership
+  // check), pass the guard above as its creator, and read a confidential
+  // meeting's questions. Expressed as a SQL filter rather than a
+  // post-hoc check so `limit 1` lands on the most recent *readable* meeting
+  // instead of dropping prep entirely when the newest one is off-limits.
+  const isAdmin = session.user.role === 'admin'
   const [previous] = await db
     .select({
       title: meetings.title,
@@ -178,6 +204,13 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     })
     .from(meetingAiNotes)
     .innerJoin(meetings, eq(meetingAiNotes.meetingId, meetings.id))
+    .leftJoin(
+      meetingAttendees,
+      and(
+        eq(meetingAttendees.meetingId, meetings.id),
+        eq(meetingAttendees.userId, session.user.id),
+      ),
+    )
     .where(
       and(
         ne(meetings.id, id),
@@ -185,6 +218,12 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
         // App-less meetings only pull prep from other app-less meetings —
         // never from an unrelated project's analyzed notes.
         meeting.appId ? eq(meetings.appId, meeting.appId) : isNull(meetings.appId),
+        isAdmin
+          ? undefined
+          : or(
+              eq(meetings.createdBy, session.user.id),
+              isNotNull(meetingAttendees.userId),
+            ),
       ),
     )
     .orderBy(desc(meetings.startsAt))

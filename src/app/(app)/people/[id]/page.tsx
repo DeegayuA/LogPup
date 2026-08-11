@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { getPersonActivity, getPersonDetail } from '@/features/people/queries'
 import { ActivityGraph } from '@/features/people/components/activity-graph'
+import { CapacityBar } from '@/features/people/components/capacity-bar'
 import { cn } from '@/lib/utils'
 
 const TASK_STATUS_ORDER = ['todo', 'in_progress', 'done'] as const
@@ -21,12 +22,6 @@ const TASK_STATUS_DOT: Record<(typeof TASK_STATUS_ORDER)[number], string> = {
   todo: 'bg-muted-foreground/40',
   in_progress: 'bg-primary',
   done: 'bg-primary/40',
-}
-
-function capacityTone(totalPct: number) {
-  if (totalPct > 100) return 'bg-destructive'
-  if (totalPct >= 80) return 'bg-chart-1'
-  return 'bg-primary'
 }
 
 const linkClass =
@@ -119,24 +114,14 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
                   </div>
                 ))}
               </CardContent>
+              {/* Shared CapacityBar, same as /people and the dashboard — the
+                  hand-rolled meter here clipped at 100%, so 130% and 100% drew
+                  an identical full bar for the same person on two pages. */}
               <CardContent className="flex flex-col gap-2 border-t border-border pt-4">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm font-medium">Total capacity</span>
-                  <span
-                    className={cn(
-                      'font-mono text-sm font-medium',
-                      overallocated && 'text-destructive',
-                    )}
-                  >
-                    {totalPct}%
-                  </span>
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-muted" aria-hidden>
-                  <div
-                    className={cn('h-full rounded-full', capacityTone(totalPct))}
-                    style={{ width: `${Math.min(totalPct, 100)}%` }}
-                  />
-                </div>
+                <CapacityBar totalPct={totalPct} />
                 {overallocated ? (
                   <p className="text-xs text-destructive">Over capacity — lighten the load.</p>
                 ) : null}

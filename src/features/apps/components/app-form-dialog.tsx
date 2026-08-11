@@ -241,37 +241,44 @@ export function AppFormDialog({
       return
     }
     startTransition(async () => {
-      const res = isEdit
-        ? await updateApp(appId as string, {
-            name: form.name,
-            // Edit mode must send description even when cleared to '' —
-            // buildAppUpdate maps '' to null and persists it. Sending
-            // `undefined` here would drop the key entirely and silently
-            // keep the old description (see update-input.ts).
-            description: form.description,
-            repoUrl: normalizedRepoUrl || undefined,
-            techTags: form.techTags,
-            status: form.status,
-          })
-        : await createApp({
-            name: form.name,
-            description: form.description || undefined,
-            repoUrl: normalizedRepoUrl || undefined,
-            techTags: form.techTags,
-            status: form.status,
-          })
-      if (!res.ok) {
-        const field = identifyField(res.error)
-        if (field) {
-          setErrors((e) => ({ ...e, [field]: res.error }))
-        } else {
-          toast.error(res.error)
+      try {
+        const res = isEdit
+          ? await updateApp(appId as string, {
+              name: form.name,
+              // Edit mode must send description even when cleared to '' —
+              // buildAppUpdate maps '' to null and persists it. Sending
+              // `undefined` here would drop the key entirely and silently
+              // keep the old description (see update-input.ts).
+              description: form.description,
+              repoUrl: normalizedRepoUrl || undefined,
+              techTags: form.techTags,
+              status: form.status,
+            })
+          : await createApp({
+              name: form.name,
+              description: form.description || undefined,
+              repoUrl: normalizedRepoUrl || undefined,
+              techTags: form.techTags,
+              status: form.status,
+            })
+        if (!res.ok) {
+          const field = identifyField(res.error)
+          if (field) {
+            setErrors((e) => ({ ...e, [field]: res.error }))
+          } else {
+            toast.error(res.error)
+          }
+          return
         }
-        return
+        toast.success(isEdit ? 'App updated' : 'App created')
+        handleOpenChange(false)
+        router.refresh()
+      } catch {
+        // `updateApp` wraps nothing and `createApp` wraps only its insert, so
+        // a driver-level failure rejects instead of returning `{ ok: false }`.
+        // Without this catch Save would clear its spinner and do nothing.
+        toast.error('Something went wrong — try again')
       }
-      toast.success(isEdit ? 'App updated' : 'App created')
-      handleOpenChange(false)
-      router.refresh()
     })
   }
 

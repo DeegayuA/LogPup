@@ -58,23 +58,30 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     startTransition(async () => {
-      const res = await createUser({
-        email: form.email,
-        name: form.name,
-        role: form.role,
-        title: form.title.trim() || undefined,
-        orgTags: form.orgTags,
-      })
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      try {
+        const res = await createUser({
+          email: form.email,
+          name: form.name,
+          role: form.role,
+          title: form.title.trim() || undefined,
+          orgTags: form.orgTags,
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(
+          `User added — starter password: ${res.data.starterPassword} (share it once; they must change it on first sign-in)`,
+          { duration: 15000 },
+        )
+        handleOpenChange(false)
+        router.refresh()
+      } catch {
+        // A thrown error (DB outage, dropped connection, a stale action id
+        // after a redeploy) is not `{ ok: false }` — without this catch the
+        // transition rejects and "Add user" is a silent no-op.
+        toast.error('Something went wrong — try again')
       }
-      toast.success(
-        `User added — starter password: ${res.data.starterPassword} (share it once; they must change it on first sign-in)`,
-        { duration: 15000 },
-      )
-      handleOpenChange(false)
-      router.refresh()
     })
   }
 

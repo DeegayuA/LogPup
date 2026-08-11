@@ -37,12 +37,28 @@ function chipTone(appName: string | null): string {
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MAX_VISIBLE = 3
 
+/** Full chip text for the accessible tree — the visible spans truncate, and the
+    app is otherwise encoded only as a border hue. */
+function chipLabel(meeting: MeetingSummary, isPast: boolean): string {
+  return [
+    meeting.title,
+    format(meeting.startsAt, 'h:mm a'),
+    meeting.appName,
+    isPast ? 'past' : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
 export function MeetingsMonthCalendar({
   upcoming,
   past,
+  onSelectDay,
 }: {
   upcoming: MeetingSummary[]
   past: MeetingSummary[]
+  /** Hands a day back to the parent so a chip can drop into the filtered list. */
+  onSelectDay?: (date: Date) => void
 }) {
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()))
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -84,9 +100,11 @@ export function MeetingsMonthCalendar({
             </span>
           </div>
           <div className="flex flex-col">
-            <h3 className="font-heading text-lg font-semibold leading-tight">
+            {/* h2 — /meetings owns the h1, and the list view's "Upcoming" is an
+                h2, so the calendar view must not skip a level. */}
+            <h2 className="font-heading text-lg font-semibold leading-tight">
               {format(cursor, 'MMMM yyyy')}
-            </h3>
+            </h2>
             <span className="font-mono text-xs text-muted-foreground">
               {format(monthStart, 'MMM d')} – {format(monthEnd, 'MMM d, yyyy')}
             </span>
@@ -142,7 +160,6 @@ export function MeetingsMonthCalendar({
               const inMonth = isSameMonth(day, cursor)
               const isExpanded = expanded === key
               const visible = isExpanded ? entries : entries.slice(0, MAX_VISIBLE)
-              const hidden = entries.length - visible.length
               return (
                 <div
                   key={key}
@@ -158,43 +175,65 @@ export function MeetingsMonthCalendar({
                         ? 'bg-primary font-semibold text-primary-foreground'
                         : inMonth
                           ? 'text-foreground'
-                          : 'text-muted-foreground/60',
+                          : // The tinted cell already de-emphasises out-of-month
+                            // days; alpha on top of it drops the date below AA.
+                            'text-muted-foreground',
                     )}
                   >
                     {format(day, 'd')}
                   </span>
                   {visible.map(({ meeting, isPast }) => (
-                    <div
+                    /* A real control, not a tooltip-only div: the full title,
+                       time and app name live in the accessible tree (the visible
+                       spans truncate), and activating the chip drops the parent
+                       into that day's filtered list. "Past" is a dashed, hollow
+                       border plus a spoken ", past" — never opacity, which drove
+                       the chip text under AA and said nothing to a screen
+                       reader. */
+                    <button
                       key={meeting.id}
-                      title={`${meeting.title} · ${format(meeting.startsAt, 'h:mm a')}${meeting.appName ? ` · ${meeting.appName}` : ''}`}
+                      type="button"
+                      onClick={() => onSelectDay?.(meeting.startsAt)}
                       className={cn(
-                        'flex min-w-0 items-center gap-1 rounded-sm border-l-2 px-1.5 py-0.5',
+                        'flex min-w-0 flex-col gap-0.5 rounded-sm border-l-2 px-1.5 py-0.5 text-left',
+                        'transition-colors duration-150 hover:brightness-95',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                         chipTone(meeting.appName),
-                        isPast && 'opacity-55',
+                        isPast && 'border-dashed bg-transparent',
                       )}
                     >
-                      <span className="min-w-0 truncate text-xs">{meeting.title}</span>
-                      <span className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground">
-                        {format(meeting.startsAt, 'h:mm a')}
+                      <span className="sr-only">{chipLabel(meeting, isPast)}</span>
+                      <span aria-hidden className="flex w-full min-w-0 items-center gap-1">
+                        <span className="min-w-0 truncate text-xs">{meeting.title}</span>
+                        <span className="ml-auto shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
+                          {format(meeting.startsAt, 'h:mm a')}
+                        </span>
                       </span>
-                    </div>
-                  ))}
-                  {hidden > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(key)}
-                      className="w-fit rounded-sm text-2xs text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                    >
-                      +{hidden} more
+                      {/* The app name is visible text, not just the border hue:
+                          five chart tones are hashed across every app, so colour
+                          alone can neither name the app nor tell two of them
+                          apart for a colourblind user (WCAG 1.4.1). */}
+                      {meeting.appName ? (
+                        <span
+                          aria-hidden
+                          className="w-full min-w-0 truncate text-2xs text-muted-foreground"
+                        >
+                          {meeting.appName}
+                        </span>
+                      ) : null}
                     </button>
-                  ) : null}
-                  {isExpanded && entries.length > MAX_VISIBLE ? (
+                  ))}
+                  {/* One button across both states — rendering "+N more" and
+                      "Show less" as separate elements unmounted the control the
+                      user was standing on, dropping focus to <body>. */}
+                  {entries.length > MAX_VISIBLE ? (
                     <button
                       type="button"
-                      onClick={() => setExpanded(null)}
-                      className="w-fit rounded-sm text-2xs text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      aria-expanded={isExpanded}
+                      onClick={() => setExpanded(isExpanded ? null : key)}
+                      className="w-fit rounded-sm text-2xs text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                     >
-                      Show less
+                      {isExpanded ? 'Show less' : `+${entries.length - MAX_VISIBLE} more`}
                     </button>
                   ) : null}
                 </div>

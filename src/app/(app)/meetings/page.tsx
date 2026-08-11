@@ -27,8 +27,21 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="font-heading text-xl font-medium">Meetings</h1>
+      {/* Same header shape as Apps/People (and as meetings/loading.tsx, which
+          already rendered the 2xl-bold version) — the title used to visibly
+          shrink and de-bold the moment data arrived. */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-baseline gap-3">
+            <h1 className="font-heading text-2xl font-bold tracking-tight">Meetings</h1>
+            <span className="font-mono text-sm text-muted-foreground">
+              {upcoming.length + past.length}
+            </span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Everything the pack has scheduled — upcoming and past.
+          </p>
+        </div>
         <MeetingForm
           apps={appOptions}
           activeUsers={activeUsers}

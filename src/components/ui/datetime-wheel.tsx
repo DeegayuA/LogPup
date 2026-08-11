@@ -174,7 +174,10 @@ function TimeColumn({
       <span className="text-2xs font-medium text-muted-foreground select-none">
         {label}
       </span>
-      <div className="relative" style={{ width: COLUMN_WIDTH, height: COLUMN_HEIGHT }}>
+      {/* `isolate` — the highlight band below sits at -z-10, and without its own
+          stacking context that negative index escapes to the popover's, which
+          paints its opaque background over the band. */}
+      <div className="relative isolate" style={{ width: COLUMN_WIDTH, height: COLUMN_HEIGHT }}>
         <div
           aria-hidden
           className="pointer-events-none absolute inset-x-0 top-1/2 -z-10 -translate-y-1/2 rounded-md border-y border-border bg-accent/40"
@@ -188,7 +191,7 @@ function TimeColumn({
           tabIndex={0}
           onScroll={handleScroll}
           onKeyDown={handleKeyDown}
-          className="h-full snap-y snap-mandatory overflow-y-auto overscroll-contain rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="h-full snap-y snap-mandatory overflow-y-auto overscroll-contain rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
           style={{ paddingBlock: ROW_HEIGHT }}
         >
           {options.map((option, index) => {
@@ -230,19 +233,35 @@ export function DateTimeWheelField({
   value,
   onChange,
   className,
+  invalid,
+  describedBy,
 }: {
   id: string
   label: string
   value: Date
   onChange: (date: Date) => void
   className?: string
+  /** Marks the control `aria-invalid` when the surrounding form has rejected
+   * this value (e.g. an end time that precedes the start). */
+  invalid?: boolean
+  /** Id of the element holding the blocking error message, so the message is
+   * announced with the control instead of only being visible beside it. */
+  describedBy?: string
 }): ReactElement {
   const [typedMode, setTypedMode] = useState(false)
   const [open, setOpen] = useState(false)
 
-  const anchor = isValid(value) ? value : new Date()
+  const raw = isValid(value) ? value : new Date()
+  // The wheels only offer 5-minute marks, so an off-step value has to be
+  // rounded to something they can show. Let Date carry the rollover —
+  // setMinutes(60) advances the hour (and the day) — instead of clamping the
+  // minutes to 0, which would silently rewrite 23:58 as 23:00 the moment any
+  // wheel is nudged.
+  const anchor = new Date(raw)
+  anchor.setSeconds(0, 0)
+  anchor.setMinutes(Math.round(raw.getMinutes() / MINUTE_STEP) * MINUTE_STEP)
   const hour = anchor.getHours()
-  const minute = Math.round(anchor.getMinutes() / MINUTE_STEP) * MINUTE_STEP % 60
+  const minute = anchor.getMinutes()
 
   function commitDate(patch: { day?: Date; hour?: number; minute?: number }) {
     const day = patch.day ?? anchor
@@ -266,7 +285,7 @@ export function DateTimeWheelField({
         <button
           type="button"
           onClick={() => setTypedMode((v) => !v)}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
+          className="inline-flex items-center gap-1 rounded-sm px-1 text-xs text-muted-foreground outline-none transition-colors duration-150 hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <KeyboardIcon className="size-3" aria-hidden />
           {typedMode ? 'Use wheel picker' : 'Type instead'}
@@ -278,6 +297,8 @@ export function DateTimeWheelField({
           type="datetime-local"
           value={isValid(value) ? format(value, "yyyy-MM-dd'T'HH:mm") : ''}
           onChange={(e) => handleTypedChange(e.target.value)}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
           required
         />
       ) : (
@@ -288,6 +309,8 @@ export function DateTimeWheelField({
                 id={id}
                 variant="outline"
                 type="button"
+                aria-invalid={invalid || undefined}
+                aria-describedby={describedBy}
                 className="w-full justify-start font-normal"
               />
             }

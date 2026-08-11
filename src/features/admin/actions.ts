@@ -205,7 +205,10 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
   return ok(undefined)
 }
 
-const titleInput = z.string().trim().max(60, 'Job role must be 60 characters or fewer')
+// 80 to match createUserInput.title and the custom job-role input's own
+// maxLength — three different caps on one column meant the Users table rejected
+// strings the Add-user dialog happily accepted.
+const titleInput = z.string().trim().max(80, 'Job role must be 80 characters or fewer')
 
 // Sets the admin-facing "Job role" (users.title) — distinct from the
 // admin/member permission enum, which stays untouched here. Harmless to

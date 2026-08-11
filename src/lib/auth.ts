@@ -14,6 +14,19 @@ const MAX_PASSWORD_LENGTH = 200
 
 const authBaseUrl = process.env.AUTH_URL ?? 'http://localhost:3000'
 
+// "May sign in" (ALLOWED_EMAIL_DOMAINS) and "may be created on first sign-in"
+// are two different questions. The allowlist is deliberately allowed to carry
+// personal domains (e.g. gmail.com) so a named individual can be given an
+// account; if that same list also drove provisioning, every mailbox on that
+// domain could click "Continue with Google" and hand itself an active member
+// row. Auto-provisioning is therefore opt-in per corporate domain, and fails
+// closed when unset.
+const autoProvisionDomains = (): string[] =>
+  (process.env.AUTO_PROVISION_EMAIL_DOMAINS ?? '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean)
+
 // Fail closed: the passwordless provider must NEVER be reachable in a production
 // runtime. Crash at boot rather than silently accept a leaked test flag.
 if (process.env.NODE_ENV === 'production' && process.env.E2E_TEST_MODE === '1') {
@@ -155,6 +168,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             .where(eq(users.id, existing.id))
         }
         return true
+      }
+
+      // No user row yet: only a domain explicitly marked auto-provisionable may
+      // self-register. Everyone else needs an admin to create the account first
+      // (same posture as Notion above).
+      const domain = email.slice(email.lastIndexOf('@') + 1)
+      if (!autoProvisionDomains().includes(domain)) {
+        console.warn(
+          `[auth] denied: ${email} has no user row and ${domain} is not auto-provisioned`,
+        )
+        return false
       }
       const derivedOrg = orgForEmail(email)
       await db.insert(users).values({

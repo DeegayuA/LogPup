@@ -2,9 +2,11 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronRight, ShieldCheck } from 'lucide-react'
+import { ChevronRight, PawPrint, ShieldCheck } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { StatNumber } from '@/components/animate-ui/stat-number'
 import {
   Select,
   SelectContent,
@@ -34,28 +36,64 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
     [people],
   )
 
+  // The chip row is derived from `people`, which changes with the header
+  // search, while `org` is component state that survives that navigation. An
+  // org that is no longer on screen must not keep filtering — otherwise the
+  // whole chip group (including "All") unmounts and there is no way to clear.
+  const activeOrg = org && orgs.includes(org) ? org : null
+
   const rows = useMemo(() => {
-    const filtered = org ? people.filter((p) => p.user.orgTags.includes(org)) : people
+    const filtered = activeOrg
+      ? people.filter((p) => p.user.orgTags.includes(activeOrg))
+      : people
     return [...filtered].sort((a, b) => {
       if (sort === 'load-desc') return b.totalPct - a.totalPct
       if (sort === 'load-asc') return a.totalPct - b.totalPct
       return a.user.name.localeCompare(b.user.name)
     })
-  }, [people, org, sort])
+  }, [people, activeOrg, sort])
+
+  // Derived from `rows`, not `people`: the strip and the list below it describe
+  // the same set, so an org filter can never leave them contradicting each other.
+  const stats = useMemo(() => {
+    const over = rows.filter((p) => p.overallocated).length
+    return [
+      { label: 'People', value: rows.length },
+      { label: 'Assigned', value: rows.filter((p) => p.breakdown.length > 0).length },
+      { label: 'Over capacity', value: over, alert: over > 0 },
+      {
+        label: 'Avg load %',
+        value: rows.length
+          ? Math.round(rows.reduce((sum, p) => sum + p.totalPct, 0) / rows.length)
+          : 0,
+      },
+    ]
+  }, [rows])
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {stats.map((stat) => (
+          <div key={stat.label} className="flex flex-col gap-0.5 rounded-xl border bg-card p-3">
+            <span className={cn('font-mono text-xl font-semibold', stat.alert && 'text-destructive')}>
+              <StatNumber value={stat.value} />
+            </span>
+            <span className="text-xs text-muted-foreground">{stat.label}</span>
+          </div>
+        ))}
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         {orgs.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by organization">
             <button
               type="button"
-              aria-pressed={org === null}
+              aria-pressed={activeOrg === null}
               onClick={() => setOrg(null)}
               className={cn(
                 'rounded-full border px-2.5 py-1 text-xs transition-colors duration-150',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
-                org === null
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                activeOrg === null
                   ? 'border-primary bg-primary text-primary-foreground'
                   : 'text-muted-foreground hover:border-ring/40 hover:text-foreground',
               )}
@@ -66,12 +104,12 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
               <button
                 key={tag}
                 type="button"
-                aria-pressed={org === tag}
-                onClick={() => setOrg(org === tag ? null : tag)}
+                aria-pressed={activeOrg === tag}
+                onClick={() => setOrg(activeOrg === tag ? null : tag)}
                 className={cn(
                   'rounded-full border px-2.5 py-1 text-xs transition-colors duration-150',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
-                  org === tag
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  activeOrg === tag
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:border-ring/40 hover:text-foreground',
                 )}
@@ -98,9 +136,16 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
       </div>
 
       {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed px-6 py-10 text-center text-sm text-muted-foreground">
-          No one in {org} yet — clear the filter to see everyone.
-        </p>
+        <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-16 text-center">
+          <PawPrint className="size-8 text-muted-foreground" aria-hidden />
+          <div className="flex flex-col gap-1">
+            <p className="font-heading font-semibold">No one in {activeOrg} yet.</p>
+            <p className="text-sm text-muted-foreground">Clear the filter to see everyone.</p>
+          </div>
+          <Button variant="outline" size="sm" type="button" onClick={() => setOrg(null)}>
+            Clear filter
+          </Button>
+        </div>
       ) : (
         <ul className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
           {rows.map(({ user, totalPct, breakdown }) => (
@@ -110,7 +155,7 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
                 className={cn(
                   'flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3',
                   'transition-colors duration-150 hover:bg-accent/50',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                 )}
               >
                 <Avatar>

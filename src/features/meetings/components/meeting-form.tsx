@@ -120,6 +120,19 @@ export function MeetingForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    // The submit button stays enabled so assistive tech can reach it and be
+    // told *why* the form won't go through: a disabled button is skipped by
+    // some AT navigation modes and states no reason when it is reached.
+    // Blocking problems move focus to the offending control instead, whose
+    // aria-describedby points at the (role="alert") message.
+    if (endBeforeStart) {
+      document.getElementById('meeting-end')?.focus()
+      return
+    }
+    if (noAttendees) {
+      document.getElementById('meeting-attendees-add')?.focus()
+      return
+    }
     startTransition(async () => {
       try {
         const res = await createMeeting({
@@ -148,10 +161,10 @@ export function MeetingForm({
     .map((id) => activeUsers.find((u) => u.id === id))
     .filter((u): u is ActiveUser => Boolean(u))
   const availableUsers = activeUsers.filter((u) => !form.attendeeIds.includes(u.id))
-  const canSubmit =
-    form.title.trim().length >= 2 &&
-    form.end > form.start &&
-    form.attendeeIds.length > 0
+  // Title length is left to the input's native `required`/`minLength` — these
+  // two have no native equivalent, so they are surfaced (and focused) by hand.
+  const endBeforeStart = form.end <= form.start
+  const noAttendees = form.attendeeIds.length === 0
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -209,10 +222,14 @@ export function MeetingForm({
               label="Ends"
               value={form.end}
               onChange={(end) => setForm((f) => ({ ...f, end }))}
+              invalid={endBeforeStart}
+              describedBy={endBeforeStart ? 'meeting-end-error' : undefined}
             />
           </div>
-          {form.end <= form.start ? (
-            <p className="-mt-2 text-xs text-destructive">End must be after the start time.</p>
+          {endBeforeStart ? (
+            <p id="meeting-end-error" role="alert" className="-mt-2 text-xs text-destructive">
+              End must be after the start time.
+            </p>
           ) : null}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="meeting-agenda">Agenda</Label>
@@ -243,7 +260,19 @@ export function MeetingForm({
               </div>
             ) : null}
             <Popover open={attendeePickerOpen} onOpenChange={setAttendeePickerOpen}>
-              <PopoverTrigger render={<Button variant="outline" size="sm" type="button" className="w-fit" />}>
+              <PopoverTrigger
+                render={
+                  <Button
+                    id="meeting-attendees-add"
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    aria-invalid={noAttendees || undefined}
+                    aria-describedby={noAttendees ? 'meeting-attendees-error' : undefined}
+                    className="w-fit"
+                  />
+                }
+              >
                 <PlusIcon /> Add attendee
               </PopoverTrigger>
               <PopoverContent className="w-56 p-0">
@@ -268,12 +297,14 @@ export function MeetingForm({
                 </Command>
               </PopoverContent>
             </Popover>
-            {form.attendeeIds.length === 0 ? (
-              <p className="text-xs text-destructive">At least one attendee is required.</p>
+            {noAttendees ? (
+              <p id="meeting-attendees-error" role="alert" className="text-xs text-destructive">
+                At least one attendee is required.
+              </p>
             ) : null}
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={isPending || !canSubmit}>
+            <Button type="submit" disabled={isPending}>
               {isPending ? 'Creating…' : 'Create meeting'}
             </Button>
           </DialogFooter>

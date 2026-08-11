@@ -1,7 +1,7 @@
 "use client";
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
-import { addDays, format, isSameDay } from "date-fns";
+import { addDays, isSameDay } from "date-fns";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Slot } from "radix-ui";
 import {
@@ -14,7 +14,12 @@ import {
   useContext,
 } from "react";
 import { Button } from "@/components/ui/button";
-import { isLkHoliday, isLkSunday, toIsoDateInTimeZone } from "@/lib/lk-holidays";
+import {
+  isLkHoliday,
+  isLkSunday,
+  LK_TIMEZONE,
+  toIsoDateInTimeZone,
+} from "@/lib/lk-holidays";
 import { cn } from "@/lib/utils";
 
 // Context for sharing state between components
@@ -47,13 +52,20 @@ const getDays = (startDate: Date, count: number): Date[] => {
   return days;
 };
 
-// Helper function to format date
-const formatDate = (date: Date) => {
-  const month = format(date, "MMM");
-  const day = format(date, "d");
-
-  return { month, day };
-};
+// Helper function to format date. Rendered in Asia/Colombo — the same zone the
+// holiday/weekend markers below are resolved in — so the visible day number can
+// never disagree with the dot beside it for a viewer in another timezone (and
+// so the server's UTC render matches the client's).
+const formatDate = (date: Date) => ({
+  month: new Intl.DateTimeFormat("en-US", {
+    timeZone: LK_TIMEZONE,
+    month: "short",
+  }).format(date),
+  day: new Intl.DateTimeFormat("en-US", {
+    timeZone: LK_TIMEZONE,
+    day: "numeric",
+  }).format(date),
+});
 
 export type MiniCalendarProps = HTMLAttributes<HTMLDivElement> & {
   value?: Date;
@@ -234,7 +246,16 @@ export const MiniCalendarDay = ({
   // sr-only span carries the full accessible name instead, so today/holiday
   // context is always announced regardless of what aria-label (if any) a
   // caller passes through `props`.
-  const accessibleLabel = [format(date, "EEEE, MMMM d"), isTodayDate && "Today", holidayName]
+  const accessibleLabel = [
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: LK_TIMEZONE,
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    }).format(date),
+    isTodayDate && "Today",
+    holidayName,
+  ]
     .filter(Boolean)
     .join(", ");
 

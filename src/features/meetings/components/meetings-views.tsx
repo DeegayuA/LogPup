@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { CalendarDays, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { UpcomingMeetingsFiltered } from '@/features/meetings/components/upcoming-filter'
 import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
 import { MeetingsMonthCalendar } from '@/features/meetings/components/meetings-month-calendar'
@@ -32,6 +31,9 @@ export function MeetingsViews({
   users: MentionUser[]
 }) {
   const [view, setView] = useState<ViewId>('list')
+  // Day selection lives here, not in UpcomingMeetingsFiltered, so a calendar
+  // chip can hand its day to the list view on the way over.
+  const [day, setDay] = useState<Date | undefined>(undefined)
 
   return (
     <div className="flex flex-col gap-4">
@@ -40,18 +42,18 @@ export function MeetingsViews({
         aria-label="Meetings view"
         className="flex w-fit items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5"
       >
+        {/* Filled variant for the active view — `bg-card` on this `muted/50`
+            track resolves to the same color as the track in dark theme, i.e. no
+            visible selected state at all. */}
         {VIEWS.map(({ id, label, icon: Icon }) => (
           <Button
             key={id}
-            variant="ghost"
+            variant={view === id ? 'default' : 'ghost'}
             size="sm"
             type="button"
             aria-pressed={view === id}
             onClick={() => setView(id)}
-            className={cn(
-              'h-7 px-2.5',
-              view === id && 'bg-card text-foreground shadow-xs hover:bg-card',
-            )}
+            className="h-7 px-2.5"
           >
             <Icon /> {label}
           </Button>
@@ -67,6 +69,8 @@ export function MeetingsViews({
               currentUserId={currentUserId}
               isAdmin={isAdmin}
               users={users}
+              selectedDay={day}
+              onSelectedDayChange={setDay}
             />
           </section>
           <PastMeetingsSection
@@ -77,7 +81,14 @@ export function MeetingsViews({
           />
         </div>
       ) : (
-        <MeetingsMonthCalendar upcoming={upcoming} past={past} />
+        <MeetingsMonthCalendar
+          upcoming={upcoming}
+          past={past}
+          onSelectDay={(selected) => {
+            setDay(selected)
+            setView('list')
+          }}
+        />
       )}
     </div>
   )

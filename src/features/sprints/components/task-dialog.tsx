@@ -188,17 +188,27 @@ export function TaskDialog({
                 <SelectTrigger id="task-assignee" className="w-full">
                   {/* Explicit label mapping — the raw id is the Select's `value`,
                       so without this the trigger falls back to rendering that id
-                      (a UUID) instead of the assignee's name. */}
+                      (a UUID) instead of the assignee's name. An id that isn't in
+                      `team` (assignee since removed from the app) is labelled
+                      honestly rather than as "Unassigned", which would tell the
+                      editor the task is free while still saving the hidden id. */}
                   <SelectValue>
                     {(value: string) =>
                       value === UNASSIGNED
                         ? 'Unassigned'
-                        : (team.find((member) => member.userId === value)?.name ?? 'Unassigned')
+                        : (team.find((member) => member.userId === value)?.name ??
+                          'Assigned — no longer on this app team')
                     }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
+                  {form.assigneeId !== UNASSIGNED &&
+                  !team.some((member) => member.userId === form.assigneeId) ? (
+                    <SelectItem value={form.assigneeId}>
+                      Current assignee — no longer on this app team
+                    </SelectItem>
+                  ) : null}
                   {team.map((member) => (
                     <SelectItem key={member.userId} value={member.userId}>
                       {member.name}

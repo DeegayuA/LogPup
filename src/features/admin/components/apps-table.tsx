@@ -126,13 +126,23 @@ export function AppsTable({
                   <SelectTrigger size="sm" aria-label={`Lead for ${app.name}`}>
                     {/* Explicit label mapping — the raw id is the Select's `value`,
                         so without this the trigger falls back to rendering that id
-                        (a UUID) instead of the lead's name. */}
+                        (a UUID) instead of the lead's name. A lead who has since
+                        been deactivated isn't in `activeUsers`; label that case
+                        honestly instead of claiming the app has no lead. */}
                     <SelectValue>
-                      {(value: string) => activeUsers.find((user) => user.id === value)?.name ?? 'No lead'}
+                      {(value: string) =>
+                        value === NO_LEAD
+                          ? 'No lead'
+                          : (activeUsers.find((user) => user.id === value)?.name ??
+                            'Lead — deactivated')
+                      }
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NO_LEAD}>No lead</SelectItem>
+                    {app.leadId && !activeUsers.some((user) => user.id === app.leadId) ? (
+                      <SelectItem value={app.leadId}>Current lead — deactivated</SelectItem>
+                    ) : null}
                     {activeUsers.map((user) => (
                       <SelectItem key={user.id} value={user.id}>
                         {user.name}

@@ -56,7 +56,13 @@ export function AssignDialog({
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
-    if (!next) resetForm()
+    // Resync from the latest props on every open change — never only on
+    // close. The `useState` initializers above run once at mount and this
+    // instance is keyed by a stable `assignmentId`, so resetting on close
+    // would rewrite state from the pre-`router.refresh()` closure: reopening
+    // would show the values from before the last save, and saving again
+    // would silently revert it (see AppFormDialog.handleOpenChange).
+    resetForm()
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
