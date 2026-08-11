@@ -1,8 +1,16 @@
 'use client'
 
-import { useState, useTransition, type FormEvent, type ReactElement } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useTransition,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react'
 import { useRouter } from 'next/navigation'
-import { addHours } from 'date-fns'
+import { addHours, format } from 'date-fns'
 import { toast } from 'sonner'
 import { Loader2, PlusIcon, XIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -39,8 +47,12 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { createMeeting, teamForApp } from '@/features/meetings/actions'
 import type { ActiveUser } from '@/features/people/queries'
+import { parseMeetingIntent, type MeetingIntent } from '@/lib/meeting-intent'
 
 const NO_APP = '__none__'
+// Long enough that a fast typist isn't re-parsing mid-word, short enough that
+// the preview still reads as live.
+const QUICK_ADD_DEBOUNCE_MS = 200
 
 type FormState = {
   appId: string
@@ -63,6 +75,70 @@ function emptyState(defaultAppId?: string): FormState {
   }
 }
 
+type AppOption = { id: string; name: string }
+/** A parsed phrase with the app hint resolved against *this* dialog's apps. */
+type QuickAddPreview = MeetingIntent & { appId: string | null }
+
+function matchApp(query: string, apps: AppOption[]): AppOption | null {
+  const q = query.toLowerCase()
+  const exact = apps.filter((app) => app.name.toLowerCase() === q)
+  const matches = exact.length > 0 ? exact : apps.filter((app) => app.name.toLowerCase().includes(q))
+  // Two candidates is no better than none — the app select stays untouched.
+  return matches.length === 1 ? matches[0] : null
+}
+
+/**
+ * The parser reports a trailing "on <app>" as a query and leaves the name to
+ * the caller, since only the dialog knows the app list. When the words name no
+ * app we have, they were never an app hint — they go back on the title rather
+ * than being silently dropped.
+ */
+function resolveQuickAdd(
+  raw: string,
+  people: ActiveUser[],
+  apps: AppOption[],
+): QuickAddPreview | null {
+  const intent = parseMeetingIntent(raw, people)
+  if (!intent) return null
+  const app = intent.appQuery ? matchApp(intent.appQuery, apps) : null
+  if (intent.appQuery && !app) {
+    return {
+      ...intent,
+      title: `${intent.title} on ${intent.appQuery}`,
+      appQuery: null,
+      appName: null,
+      appId: null,
+    }
+  }
+  return { ...intent, appName: app?.name ?? null, appId: app?.id ?? null }
+}
+
+/** The one-line "here is what I understood" the user reviews before applying. */
+function describeQuickAdd(preview: QuickAddPreview): string {
+  const parts = [preview.title]
+  if (preview.startsAt) {
+    const start = format(preview.startsAt, 'EEE, MMM d, h:mm a')
+    parts.push(preview.endsAt ? `${start} – ${format(preview.endsAt, 'h:mm a')}` : start)
+  }
+  if (preview.attendees.length > 0) {
+    parts.push(preview.attendees.map((attendee) => attendee.name).join(', '))
+  }
+  if (preview.appName) parts.push(preview.appName)
+  return parts.join(' · ')
+}
+
+/** Names the parser refused to guess at, said plainly. */
+function quickAddProblems(preview: QuickAddPreview): string[] {
+  const problems: string[] = []
+  if (preview.ambiguous.length > 0) {
+    problems.push(`More than one person matches ${preview.ambiguous.join(', ')} — add them by hand`)
+  }
+  if (preview.unresolved.length > 0) {
+    problems.push(`No one here is called ${preview.unresolved.join(', ')}`)
+  }
+  return problems
+}
+
 export function MeetingForm({
   apps,
   activeUsers,
@@ -81,10 +157,68 @@ export function MeetingForm({
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() => emptyState(defaultAppId))
+  // `quickAdd` is what is being typed; `settled` trails it by the debounce and
+  // is the only thing the (re-parsed) preview reads, so parsing never runs on
+  // a half-typed word.
+  const [quickAdd, setQuickAdd] = useState('')
+  const [settled, setSettled] = useState('')
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(quickAdd), QUICK_ADD_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [quickAdd])
+
+  const preview = useMemo(
+    () => (settled.trim() ? resolveQuickAdd(settled, activeUsers, apps) : null),
+    [settled, activeUsers, apps],
+  )
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
-    if (next) setForm(emptyState(defaultAppId))
+    if (next) {
+      setForm(emptyState(defaultAppId))
+      setQuickAdd('')
+      setSettled('')
+    }
+  }
+
+  /**
+   * Fills the form below — never submits it. Re-parses the live text rather
+   * than reusing `preview`, so hitting Enter the instant you stop typing can't
+   * apply a stale reading.
+   */
+  function applyQuickAdd() {
+    const intent = resolveQuickAdd(quickAdd, activeUsers, apps)
+    if (!intent) {
+      // Nothing usable: flush the debounce so the reason is on screen, and put
+      // focus on the field it describes. The button stays enabled — a disabled
+      // one is skipped by some AT and explains nothing when it is reached.
+      setSettled(quickAdd)
+      document.getElementById('meeting-quick-add')?.focus()
+      return
+    }
+    setForm((f) => ({
+      ...f,
+      title: intent.title.slice(0, 120),
+      // Set directly instead of going through handleAppChange: that fetches the
+      // app's team and replaces the attendee list, which would race with (and
+      // overwrite) the people just named in the phrase.
+      appId: intent.appId ?? f.appId,
+      start: intent.startsAt ?? f.start,
+      end: intent.endsAt ?? f.end,
+      attendeeIds:
+        intent.attendees.length > 0
+          ? Array.from(new Set([...f.attendeeIds, ...intent.attendees.map((a) => a.id)]))
+          : f.attendeeIds,
+    }))
+  }
+
+  function handleQuickAddKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Enter') return
+    // The field sits outside <form>, but stop the keypress anyway so no future
+    // move of this block can turn Enter into a submit.
+    event.preventDefault()
+    applyQuickAdd()
   }
 
   async function handleAppChange(appId: string) {
@@ -175,6 +309,43 @@ export function MeetingForm({
           <DialogTitle>New meeting</DialogTitle>
           <DialogDescription>Schedule a meeting and invite the team.</DialogDescription>
         </DialogHeader>
+        {/* Deliberately outside the <form>: this only ever fills the fields
+            below, so it must never be able to submit them. */}
+        <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/40 p-3">
+          <Label htmlFor="meeting-quick-add">Quick add</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              id="meeting-quick-add"
+              value={quickAdd}
+              onChange={(e) => setQuickAdd(e.target.value)}
+              onKeyDown={handleQuickAddKeyDown}
+              placeholder="standup tomorrow 10am with shanika"
+              aria-describedby="meeting-quick-add-preview"
+              autoComplete="off"
+              className="flex-1 bg-background"
+            />
+            <Button type="button" variant="secondary" size="sm" onClick={applyQuickAdd}>
+              Apply
+            </Button>
+          </div>
+          <div id="meeting-quick-add-preview" aria-live="polite" className="flex flex-col gap-1">
+            {preview ? (
+              <>
+                <p className="text-xs text-muted-foreground">{describeQuickAdd(preview)}</p>
+                {quickAddProblems(preview).map((problem) => (
+                  <p key={problem} className="text-xs text-destructive">
+                    {problem}
+                  </p>
+                ))}
+              </>
+            ) : null}
+            {settled.trim() && !preview ? (
+              <p className="text-xs text-muted-foreground">
+                Add a name for the meeting — standup, design review, 1:1…
+              </p>
+            ) : null}
+          </div>
+        </div>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="meeting-app">App</Label>

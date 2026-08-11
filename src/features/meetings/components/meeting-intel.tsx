@@ -28,6 +28,7 @@ import {
   type MeetingIntel,
 } from '@/features/meetings/ai-actions'
 import {
+  CONFIDENCE_WINDOW_SIZE,
   otherLanguage,
   shouldSwitchLanguage,
   type ActiveLanguage,
@@ -81,12 +82,25 @@ declare global {
   }
 }
 
-type TranscribeLanguage = 'en-US' | 'si-LK'
-const LANGUAGE_OPTIONS: { value: TranscribeLanguage; label: string }[] = [
+// The user-facing preference: "Auto" lets the recognizer switch languages
+// mid-meeting on its own; the other two pin it, same as before this
+// feature existed. `ActiveLanguage` (imported above) is the narrower set
+// SpeechRecognition itself can actually run — "auto" is never sent to it.
+type LanguagePreference = 'auto' | ActiveLanguage
+const LANGUAGE_OPTIONS: { value: LanguagePreference; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
   { value: 'en-US', label: 'English' },
   { value: 'si-LK', label: 'Sinhala' },
 ]
 const LANGUAGE_STORAGE_KEY = 'logpup:transcribe-language'
+// Which language Auto mode last settled on, so the next recording starts
+// there instead of always assuming English — "start with the last
+// successful language (or English)".
+const LAST_ACTIVE_LANGUAGE_STORAGE_KEY = 'logpup:transcribe-last-active-language'
+const ACTIVE_LANGUAGE_LABEL: Record<ActiveLanguage, string> = {
+  'en-US': 'English',
+  'si-LK': 'Sinhala',
+}
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return ''
@@ -111,7 +125,11 @@ export function MeetingIntelPanel({
   const [analyzing, startAnalyzing] = useTransition()
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
-  const [language, setLanguageState] = useState<TranscribeLanguage>('en-US')
+  const [language, setLanguageState] = useState<LanguagePreference>('auto')
+  // The language actually in use right now — equals `language` in manual
+  // mode, but drifts from it in Auto mode as the recognizer switches.
+  // Surfaced in the UI so a mid-recording switch is visible, not silent.
+  const [activeLang, setActiveLangState] = useState<ActiveLanguage>('en-US')
   const [liveUnavailable, setLiveUnavailable] = useState(false)
   const [finalText, setFinalText] = useState('')
   const [interimText, setInterimText] = useState('')
@@ -127,6 +145,22 @@ export function MeetingIntelPanel({
   const finalTranscriptRef = useRef('')
   const transcriptPanelRef = useRef<HTMLDivElement | null>(null)
   const nearBottomRef = useRef(true)
+  // Mirrors `activeLang`/`language` state for use inside the recognition
+  // event handlers below — those close over refs, not state, since a
+  // handler set on `recognition.onresult` at start time would otherwise
+  // see whatever `language` was at that moment forever, not its later
+  // value after a switch or a re-render.
+  const activeLangRef = useRef<ActiveLanguage>('en-US')
+  const languagePreferenceRef = useRef<LanguagePreference>('auto')
+  // Rolling window of confidence scores from the most recent FINAL
+  // results, oldest first — capped at CONFIDENCE_WINDOW_SIZE. Reset to
+  // empty after every switch (hysteresis: a fresh recognizer in the new
+  // language deserves a clean read, not one dragged down by the low
+  // scores that just triggered the switch).
+  const confidenceWindowRef = useRef<number[]>([])
+  // Timestamp of the last automatic switch (or of recording start, before
+  // the first one) — how shouldSwitchLanguage enforces the ~10s cooldown.
+  const lastSwitchAtRef = useRef(0)
 
   const liveSupported =
     typeof window !== 'undefined' && Boolean(window.SpeechRecognition ?? window.webkitSpeechRecognition)
@@ -134,21 +168,41 @@ export function MeetingIntelPanel({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY)
-      if (saved === 'en-US' || saved === 'si-LK') {
+      if (saved === 'auto' || saved === 'en-US' || saved === 'si-LK') {
+        languagePreferenceRef.current = saved
         // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time hydrate from localStorage on mount
         setLanguageState(saved)
       }
+      const lastActive = window.localStorage.getItem(LAST_ACTIVE_LANGUAGE_STORAGE_KEY)
+      if (lastActive === 'en-US' || lastActive === 'si-LK') {
+        activeLangRef.current = lastActive
+        setActiveLangState(lastActive)
+      }
     } catch {
-      /* private mode / unavailable — default stays English */
+      /* private mode / unavailable — defaults stay Auto / English */
     }
   }, [])
 
-  function setLanguage(value: TranscribeLanguage) {
+  function setLanguage(value: LanguagePreference) {
     setLanguageState(value)
+    languagePreferenceRef.current = value
     try {
       window.localStorage.setItem(LANGUAGE_STORAGE_KEY, value)
     } catch {
       /* private mode / unavailable — selection just won't persist */
+    }
+  }
+
+  // Updates the language actually in use — both the ref the recognition
+  // handlers read and the state the UI badge renders — and remembers it as
+  // Auto mode's "last successful language" for next time.
+  function setActiveLang(next: ActiveLanguage) {
+    activeLangRef.current = next
+    setActiveLangState(next)
+    try {
+      window.localStorage.setItem(LAST_ACTIVE_LANGUAGE_STORAGE_KEY, next)
+    } catch {
+      /* private mode / unavailable — next Auto session just starts from English */
     }
   }
 
@@ -201,6 +255,7 @@ export function MeetingIntelPanel({
     setRecording(false)
     setSeconds(0)
     setInterimText('')
+    confidenceWindowRef.current = []
   }
 
   useEffect(() => cleanupCapture, [])
@@ -240,18 +295,32 @@ export function MeetingIntelPanel({
     nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   }
 
-  function startRecognition() {
+  // Restarts recognition cleanly in the other language: Auto mode's only
+  // lever, since the Web Speech API can't detect a language on its own
+  // (see language-switch.ts). `finalTranscriptRef` is untouched here, so
+  // everything transcribed so far survives the restart.
+  function switchActiveLanguage() {
+    const next = otherLanguage(activeLangRef.current)
+    confidenceWindowRef.current = []
+    lastSwitchAtRef.current = Date.now()
+    setActiveLang(next)
+    stopRecognition()
+    startRecognition(next)
+  }
+
+  function startRecognition(lang: ActiveLanguage) {
     const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition
     if (!Ctor) return
     const recognition = new Ctor()
     recognition.continuous = true
     recognition.interimResults = true
-    recognition.lang = language
+    recognition.lang = lang
     recognition.onresult = (event) => {
       let interim = ''
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i]
-        const transcript = result[0]?.transcript ?? ''
+        const alternative = result[0]
+        const transcript = alternative?.transcript ?? ''
         if (result.isFinal) {
           const trimmed = transcript.trim()
           if (trimmed) {
@@ -259,6 +328,26 @@ export function MeetingIntelPanel({
               ? `${finalTranscriptRef.current} ${trimmed}`
               : trimmed
             setFinalText(finalTranscriptRef.current)
+          }
+
+          // Auto mode only: track confidence on FINAL results (interim
+          // ones are provisional and far noisier) and hand the rolling
+          // window to the pure decision function. Some browsers never
+          // report `confidence` at all — skip those samples rather than
+          // letting an absent score masquerade as a bad one.
+          if (languagePreferenceRef.current === 'auto') {
+            const confidence = alternative?.confidence
+            if (typeof confidence === 'number') {
+              confidenceWindowRef.current = [...confidenceWindowRef.current, confidence].slice(
+                -CONFIDENCE_WINDOW_SIZE,
+              )
+            }
+            const shouldSwitch = shouldSwitchLanguage({
+              confidences: confidenceWindowRef.current,
+              currentLang: activeLangRef.current,
+              msSinceLastSwitch: Date.now() - lastSwitchAtRef.current,
+            })
+            if (shouldSwitch) switchActiveLanguage()
           }
         } else {
           interim += transcript
@@ -377,7 +466,14 @@ export function MeetingIntelPanel({
         setFinalText('')
         setInterimText('')
         setLiveUnavailable(false)
-        startRecognition()
+        confidenceWindowRef.current = []
+        lastSwitchAtRef.current = Date.now()
+        // Auto mode starts from whichever language it last settled on
+        // (persisted across sessions) rather than always assuming
+        // English; manual mode always starts on the language chosen.
+        const initialLang: ActiveLanguage = language === 'auto' ? activeLangRef.current : language
+        setActiveLang(initialLang)
+        startRecognition(initialLang)
       }
     } catch {
       cleanupCapture()
@@ -430,7 +526,7 @@ export function MeetingIntelPanel({
               <MonitorSpeaker /> Record screen + mic
             </Button>
             {liveSupported ? (
-              <Select value={language} onValueChange={(v) => v && setLanguage(v as TranscribeLanguage)}>
+              <Select value={language} onValueChange={(v) => v && setLanguage(v as LanguagePreference)}>
                 <SelectTrigger className="h-8 w-32" aria-label="Live transcript language">
                   <Languages className="size-3.5 text-muted-foreground" aria-hidden />
                   <SelectValue />
@@ -470,6 +566,16 @@ export function MeetingIntelPanel({
               />
               Recording — audio is sent to Google Gemini for analysis
             </span>
+            {showLiveText ? (
+              // Subtle, not a status announcement — the language is a nicety to
+              // confirm what Auto settled on, not something worth interrupting a
+              // screen reader for on every switch.
+              <span className="text-xs text-muted-foreground">
+                {language === 'auto'
+                  ? `Auto · ${ACTIVE_LANGUAGE_LABEL[activeLang]}`
+                  : ACTIVE_LANGUAGE_LABEL[activeLang]}
+              </span>
+            ) : null}
           </>
         ) : null}
         {analyzing ? (

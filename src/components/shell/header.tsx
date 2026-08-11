@@ -80,44 +80,64 @@ export function Header({ user, isAdmin }: { user: HeaderUser; isAdmin: boolean }
       <div className="flex flex-1 justify-center">
         <CommandCenterTrigger />
       </div>
-      <InstallButton />
-      <NotificationBell />
-      <ThemeToggle />
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <button className="flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+      {/* One control cluster: the install prompt, then icon actions, then a
+          hairline divider, then the account avatar — evenly spaced so the row
+          reads as a single group rather than four loose buttons. */}
+      <div className="flex items-center gap-0.5">
+        <InstallButton />
+        <NotificationBell />
+        <ThemeToggle />
+        <span aria-hidden className="mx-1.5 h-5 w-px bg-border" />
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                aria-label="Account menu"
+                className="flex items-center rounded-full outline-none ring-offset-2 ring-offset-background transition-[box-shadow] hover:ring-2 hover:ring-border focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                <Avatar size="sm">
+                  {user.image ? <AvatarImage src={user.image} alt={user.name ?? ''} /> : null}
+                  <AvatarFallback>{initials}</AvatarFallback>
+                </Avatar>
+              </button>
+            }
+          />
+          <DropdownMenuContent align="end" className="w-60">
+            {/* Identity header — avatar, name, and role so the menu confirms
+                who you're signed in as before any destructive action. */}
+            <div className="flex items-center gap-2.5 px-2 py-1.5">
               <Avatar size="sm">
                 {user.image ? <AvatarImage src={user.image} alt={user.name ?? ''} /> : null}
                 <AvatarFallback>{initials}</AvatarFallback>
               </Avatar>
-            </button>
-          }
-        />
-        <DropdownMenuContent align="end">
-          {/* Plain div: Base UI's GroupLabel primitive now requires a Menu.Group parent. */}
-          <div className="px-2 py-1.5 text-sm font-medium">{user.name ?? 'Account'}</div>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem render={<Link href="/profile" />}>
-            <User /> Profile
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <form
-            action={async () => {
-              'use server'
-              await signOut({ redirectTo: '/sign-in' })
-            }}
-          >
-            <DropdownMenuItem
-              nativeButton
-              closeOnClick={false}
-              render={<button type="submit" className="w-full" />}
-            >
-              <LogOut /> Sign out
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{user.name ?? 'Account'}</p>
+                <p className="text-xs text-muted-foreground">{isAdmin ? 'Admin' : 'Member'}</p>
+              </div>
+            </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem render={<Link href="/profile" />}>
+              <User /> Profile
             </DropdownMenuItem>
-          </form>
-        </DropdownMenuContent>
-      </DropdownMenu>
+            <DropdownMenuSeparator />
+            <form
+              action={async () => {
+                'use server'
+                await signOut({ redirectTo: '/sign-in' })
+              }}
+            >
+              <DropdownMenuItem
+                nativeButton
+                closeOnClick={false}
+                variant="destructive"
+                render={<button type="submit" className="w-full" />}
+              >
+                <LogOut /> Sign out
+              </DropdownMenuItem>
+            </form>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </header>
   )
 }

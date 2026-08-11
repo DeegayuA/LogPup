@@ -332,8 +332,10 @@ export const MiniCalendarDay = ({
       className={cn(
         // Clean vertical stack — month, day, then a fixed icon row — so the
         // holiday marker never overlaps the number and every cell is the same
-        // height whether or not it has an icon.
-        "relative h-auto min-w-12 flex-col justify-center gap-0.5 px-2 py-2 text-xs",
+        // height whether or not it has an icon. `min-h-11` keeps the 44px
+        // WCAG 2.5.8 tap target a hard floor rather than an accident of
+        // however tall the text happens to render.
+        "relative h-auto min-h-11 min-w-12 flex-col justify-center gap-0.5 px-2 py-2 text-xs",
         // Today is a hairline ring around the whole cell. The previous top
         // accent bar sat on the month label and read as a strikethrough; a ring
         // cannot collide with anything, and stays clearly distinct from the
@@ -367,21 +369,23 @@ export const MiniCalendarDay = ({
       >
         {day}
       </span>
-      {/* The holiday marker is absolutely positioned rather than a reserved
-          row: a fixed empty row left every ordinary day with a block of dead
-          space at the bottom. Out of flow, cells stay compact and identical
-          in height whether or not a day carries a marker. */}
-      {holiday ? (
-        <span
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute inset-x-0 bottom-1 flex items-center justify-center",
-            isSelected ? "text-primary-foreground/80" : "text-muted-foreground"
-          )}
-        >
-          <HolidayIcon categories={holiday.categories} className="size-3" />
-        </span>
-      ) : null}
+      {/* A fixed-height in-flow row, always rendered (empty on ordinary
+          days) rather than absolutely positioned over the day number. It
+          used to float via `absolute bottom-1`, which put it inside the
+          number's own line box — an 8px band where the icon visually
+          crossed out the digits, worst on holiday dates where the number
+          is also tinted --holiday. In flow, it can never overlap anything
+          above it, and every cell in the strip lands at the same height
+          instead of holiday cells growing taller than plain ones. */}
+      <span
+        aria-hidden
+        className={cn(
+          "flex h-3 items-center justify-center leading-none",
+          isSelected ? "text-primary-foreground/80" : "text-muted-foreground"
+        )}
+      >
+        {holiday ? <HolidayIcon categories={holiday.categories} className="size-3" /> : null}
+      </span>
       <span className="sr-only">{accessibleLabel}</span>
     </Button>
   );
