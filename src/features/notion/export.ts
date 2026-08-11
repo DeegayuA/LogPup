@@ -37,9 +37,19 @@ export async function upsertSprintPage(
       page_id: existingPageId,
       properties: { title: { title: [{ text: { content: title } }] } },
     })
-    const children = await client.blocks.children.list({ block_id: existingPageId, page_size: 100 })
-    for (const block of children.results) {
-      await client.blocks.delete({ block_id: block.id })
+    const blockIds: string[] = []
+    let cursor: string | undefined
+    do {
+      const children = await client.blocks.children.list({
+        block_id: existingPageId,
+        page_size: 100,
+        start_cursor: cursor,
+      })
+      blockIds.push(...children.results.map((block) => block.id))
+      cursor = children.has_more ? (children.next_cursor ?? undefined) : undefined
+    } while (cursor)
+    for (const blockId of blockIds) {
+      await client.blocks.delete({ block_id: blockId })
     }
     await client.blocks.children.append({ block_id: existingPageId, children: buildBlocks(data) as never })
     const page = await client.pages.retrieve({ page_id: existingPageId })
