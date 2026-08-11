@@ -330,10 +330,15 @@ export const MiniCalendarDay = ({
   return (
     <Button
       className={cn(
-        "relative h-auto min-h-11 min-w-11 flex-col gap-0.5 p-2 text-xs",
-        // Today reads as a quiet underline, not a second green box, so it
-        // never competes with the filled selected day.
-        isTodayDate && !isSelected && "after:absolute after:bottom-0.5 after:h-0.5 after:w-4 after:rounded-full after:bg-primary after:content-['']",
+        // Clean vertical stack — month, day, then a fixed icon row — so the
+        // holiday marker never overlaps the number and every cell is the same
+        // height whether or not it has an icon.
+        "relative h-auto min-w-12 flex-col justify-center gap-0.5 px-2 py-2 text-xs",
+        // Today is a hairline ring around the whole cell. The previous top
+        // accent bar sat on the month label and read as a strikethrough; a ring
+        // cannot collide with anything, and stays clearly distinct from the
+        // selected day, which is filled.
+        isTodayDate && !isSelected && "ring-1 ring-inset ring-primary/60",
         className
       )}
       onClick={() => onDateSelect(date)}
@@ -346,7 +351,7 @@ export const MiniCalendarDay = ({
       <span
         aria-hidden
         className={cn(
-          "font-medium text-[10px] text-muted-foreground",
+          "text-[10px] leading-none font-medium tracking-wide uppercase text-muted-foreground",
           isSelected && "text-primary-foreground/70"
         )}
       >
@@ -355,15 +360,27 @@ export const MiniCalendarDay = ({
       <span
         aria-hidden
         className={cn(
-          "font-semibold text-sm",
+          "text-base leading-none font-semibold tabular-nums",
           !isSelected && holiday && holidayToneClass(holiday.categories),
           !isSelected && isWeekend && "text-weekend"
         )}
       >
         {day}
       </span>
+      {/* The holiday marker is absolutely positioned rather than a reserved
+          row: a fixed empty row left every ordinary day with a block of dead
+          space at the bottom. Out of flow, cells stay compact and identical
+          in height whether or not a day carries a marker. */}
       {holiday ? (
-        <HolidayIcon categories={holiday.categories} className="absolute bottom-0.5 size-2.5" />
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-x-0 bottom-1 flex items-center justify-center",
+            isSelected ? "text-primary-foreground/80" : "text-muted-foreground"
+          )}
+        >
+          <HolidayIcon categories={holiday.categories} className="size-3" />
+        </span>
       ) : null}
       <span className="sr-only">{accessibleLabel}</span>
     </Button>
