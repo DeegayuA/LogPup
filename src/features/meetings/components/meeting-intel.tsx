@@ -18,6 +18,7 @@ import {
   Square,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { MarkdownLite } from '@/components/markdown-lite'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import {
@@ -550,9 +551,9 @@ export function MeetingIntelPanel({
                   {notes.summary ? (
                     <section className="flex flex-col gap-1">
                       <h4 className="font-heading text-sm font-semibold">Summary</h4>
-                      <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-                        {notes.summary}
-                      </p>
+                      {/* Gemini returns Markdown (###, **bold**, ---); rendered
+                          verbatim it showed the syntax as literal characters. */}
+                      <MarkdownLite className="text-muted-foreground" content={notes.summary} />
                     </section>
                   ) : null}
 

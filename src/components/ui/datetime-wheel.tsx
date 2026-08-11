@@ -191,7 +191,10 @@ function TimeColumn({
           tabIndex={0}
           onScroll={handleScroll}
           onKeyDown={handleKeyDown}
-          className="h-full snap-y snap-mandatory overflow-y-auto overscroll-contain rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          // The native scrollbar rendered as a bright track beside each column
+          // and read as UI chrome rather than a wheel; the column still scrolls
+          // by wheel, drag and keyboard.
+          className="h-full snap-y snap-mandatory overflow-y-auto overscroll-contain rounded-md outline-none [-ms-overflow-style:none] [scrollbar-width:none] focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-scrollbar]:hidden"
           style={{ paddingBlock: ROW_HEIGHT }}
         >
           {options.map((option, index) => {
