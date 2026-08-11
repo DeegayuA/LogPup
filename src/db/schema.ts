@@ -148,6 +148,12 @@ export const sprints = pgTable('sprints', {
   endDate: date('end_date').notNull(),
   status: sprintStatus('status').notNull().default('planned'),
   notionPageId: text('notion_page_id'),
+  // Roadmap row order, independent of date order — a lead can drag-reorder
+  // rows without changing a sprint's actual dates. Seeded chronologically by
+  // migration 0019 (per app_id, by start_date) so nothing visibly moves the
+  // day this column is introduced; `resortSprintsByDate` re-runs that same
+  // seed on demand.
+  sortOrder: integer('sort_order').notNull().default(0),
 })
 
 export const tasks = pgTable('tasks', {

@@ -1,9 +1,12 @@
 'use client'
 
-import { useOptimistic, useState, useTransition } from 'react'
-import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { useMemo, useOptimistic, useState, useTransition } from 'react'
+import { DragOverlay, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { toast } from 'sonner'
+import { DragSurface, buildDragAnnouncements } from '@/components/shared/drag-surface'
+import { sortOrderForIndex } from '@/lib/sort-order'
 import { BoardColumn } from '@/features/sprints/components/board-column'
+import { TaskCardFace } from '@/features/sprints/components/task-card'
 import { TaskDialog } from '@/features/sprints/components/task-dialog'
 import { moveTask } from '@/features/sprints/task-actions'
 import type { Board as BoardData, TaskWithAssignee } from '@/features/sprints/queries'
@@ -16,10 +19,9 @@ const COLUMNS: { status: TaskStatus; title: string }[] = [
   { status: 'done', title: 'Done' },
 ]
 
-// Spacing used when a task lands at either end of a column, or when the
-// fractional-midpoint strategy below runs out of integer room and needs a
-// clean re-spread.
-const SORT_GAP = 1024
+const COLUMN_TITLE: Record<TaskStatus, string> = Object.fromEntries(
+  COLUMNS.map((c) => [c.status, c.title]),
+) as Record<TaskStatus, string>
 
 type MoveUpdate = { taskId: string; status: TaskStatus; sortOrder: number }
 
@@ -42,30 +44,6 @@ function applyMove(board: BoardData, update: MoveUpdate): BoardData {
   const updated: TaskWithAssignee = { ...moved, status: update.status, sortOrder: update.sortOrder }
   next[update.status] = [...next[update.status], updated].sort((a, b) => a.sortOrder - b.sortOrder)
   return next
-}
-
-/**
- * sortOrder strategy: `sortOrder` is a Postgres `integer` column, so we
- * can't use arbitrary fractional indices. We first try the classic
- * fractional-midpoint between the two neighbors the task is dropped
- * between — that works as long as there's at least a 2-wide gap. Newly
- * created tasks all share the DB default of 0 though, so that gap often
- * doesn't exist yet; when it doesn't, we fall back to a fresh
- * `(index + 1) * SORT_GAP` slot. That's simple, collision-free, and the
- * remaining tasks in the column naturally regain spacing the next time
- * they're individually moved.
- */
-function sortOrderForIndex(neighbors: TaskWithAssignee[], index: number): number {
-  const before = index > 0 ? neighbors[index - 1].sortOrder : null
-  const after = index < neighbors.length ? neighbors[index].sortOrder : null
-
-  if (before === null && after === null) return SORT_GAP
-  if (before === null) return after! - SORT_GAP
-  if (after === null) return before + SORT_GAP
-
-  const mid = Math.floor((before + after) / 2)
-  if (mid <= before || mid >= after) return (index + 1) * SORT_GAP
-  return mid
 }
 
 function findTask(board: BoardData, taskId: string): TaskWithAssignee | undefined {
@@ -92,17 +70,23 @@ export function Board({
   const [board, applyOptimisticMove] = useOptimistic(initialBoard, applyMove)
   const [, startTransition] = useTransition()
   const [editingTask, setEditingTask] = useState<TaskWithAssignee | null>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      // Require a small drag distance before activating: without this, a
-      // plain click (to open the TaskDialog) would immediately register as
-      // a drag-start and swallow the click.
-      activationConstraint: { distance: 8 },
-    }),
-  )
+  // Names any id the board's DndContext might report — a task's own id, or
+  // one of the three column ids it can be dropped on — for the shared
+  // announcements builder.
+  function nameForId(id: string): string {
+    if (id in COLUMN_TITLE) return `the ${COLUMN_TITLE[id as TaskStatus]} column`
+    return findTask(board, id)?.title ?? 'the task'
+  }
+  const announcements = useMemo(() => buildDragAnnouncements(nameForId), [board])
+
+  function handleDragStart(event: DragStartEvent) {
+    setDraggingId(String(event.active.id))
+  }
 
   function handleDragEnd(event: DragEndEvent) {
+    setDraggingId(null)
     const { active, over } = event
     if (!over || over.id === active.id) return
 
@@ -145,9 +129,23 @@ export function Board({
     })
   }
 
+  const dragging = draggingId ? findTask(board, draggingId) : undefined
+
   return (
     <>
-      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      {/* Says out loud what the board offers, for anyone who can't see a card
+          lift under the cursor — and names the keyboard route (the calendar
+          has the same line for the same reason). */}
+      <p className="text-xs text-muted-foreground">
+        Select a card to open it. Press Space to lift a card and move it with the arrow keys, Space
+        again to drop.
+      </p>
+      <DragSurface
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setDraggingId(null)}
+        accessibility={{ announcements }}
+      >
         <div className="flex snap-x snap-mandatory items-stretch gap-4 overflow-x-auto pb-2">
           {COLUMNS.map((col) => (
             <BoardColumn
@@ -163,7 +161,15 @@ export function Board({
             />
           ))}
         </div>
-      </DndContext>
+        {/* Portalled to the body: the board's own row is `overflow-x-auto`,
+            so a card dragged toward the third column would otherwise clip at
+            the scroller edge instead of following the pointer. */}
+        <DragOverlay dropAnimation={null}>
+          {dragging ? (
+            <TaskCardFace task={dragging} className="shadow-md ring-1 ring-foreground/10" />
+          ) : null}
+        </DragOverlay>
+      </DragSurface>
       <TaskDialog
         task={editingTask}
         team={team}
