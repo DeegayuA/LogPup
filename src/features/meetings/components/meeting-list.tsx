@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { PencilIcon, Trash2Icon } from 'lucide-react'
+import { CalendarCheckIcon, PencilIcon, SendIcon, Trash2Icon } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +20,7 @@ import { Avatar, AvatarFallback, AvatarGroup, AvatarImage } from '@/components/u
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { deleteMeeting, updateMeetingNotes } from '@/features/meetings/actions'
+import { deleteMeeting, retryCalendarInvite, updateMeetingNotes } from '@/features/meetings/actions'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
 export function MeetingList({
@@ -99,6 +99,22 @@ function MeetingRow({
     })
   }
 
+  function handleSendInvite() {
+    startTransition(async () => {
+      try {
+        const res = await retryCalendarInvite(meeting.id)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Calendar invite sent')
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -106,6 +122,11 @@ function MeetingRow({
           <span className="font-medium">{meeting.title}</span>
           {showAppBadge && meeting.appName ? (
             <Badge variant="secondary">{meeting.appName}</Badge>
+          ) : null}
+          {meeting.googleEventId ? (
+            <Badge variant="outline" className="gap-1">
+              <CalendarCheckIcon className="size-3" /> Calendar invite sent
+            </Badge>
           ) : null}
         </div>
         <span className="shrink-0 text-xs text-muted-foreground">
@@ -130,6 +151,17 @@ function MeetingRow({
         )}
         {canManage ? (
           <div className="flex items-center gap-1.5">
+            {!meeting.googleEventId ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                disabled={isPending}
+                onClick={handleSendInvite}
+              >
+                <SendIcon /> Send invite
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"

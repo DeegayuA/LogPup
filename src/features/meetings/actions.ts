@@ -1,13 +1,14 @@
 'use server'
 
 import { z } from 'zod'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, meetingAttendees, meetings } from '@/db/schema'
+import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { getTeamForApp } from '@/features/people/queries'
+import { createCalendarEvent, deleteCalendarEvent } from '@/features/calendar/google-calendar'
 
 const meetingInput = z
   .object({
@@ -24,6 +25,8 @@ const meetingInput = z
   })
 
 const MAX_NOTES_LENGTH = 5000
+const NO_CALENDAR_ACCESS_WARNING = 'No Google Calendar access — sign out and back in to grant it'
+const CALENDAR_INVITE_FAILED_WARNING = 'Saved, but calendar invite failed — retry from the meeting list'
 
 async function requireSession() {
   const session = await auth()
@@ -76,6 +79,57 @@ function canManageMeeting(
   return session.user.role === 'admin' || meeting.createdBy === session.user.id
 }
 
+async function attendeeEmails(attendeeIds: string[]): Promise<string[]> {
+  if (attendeeIds.length === 0) return []
+  const rows = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(inArray(users.id, attendeeIds))
+  return rows.map((r) => r.email)
+}
+
+/**
+ * Creates (or retries) the Google Calendar invite for a meeting. Never
+ * throws: a missing/invalid Google connection surfaces as a `calendarWarning`
+ * string for the caller to relay, not a thrown error — the meeting itself is
+ * already saved either way.
+ */
+async function syncCalendarInvite(
+  meeting: {
+    id: string
+    title: string
+    agenda: string | null
+    startsAt: Date
+    endsAt: Date
+    createdBy: string
+  },
+  attendeeIds: string[],
+): Promise<{ calendarWarning?: string }> {
+  const [creator] = await db
+    .select({ googleRefreshToken: users.googleRefreshToken })
+    .from(users)
+    .where(eq(users.id, meeting.createdBy))
+  if (!creator?.googleRefreshToken) {
+    return { calendarWarning: NO_CALENDAR_ACCESS_WARNING }
+  }
+
+  try {
+    const emails = await attendeeEmails(attendeeIds)
+    const { eventId } = await createCalendarEvent({
+      refreshToken: creator.googleRefreshToken,
+      title: meeting.title,
+      agenda: meeting.agenda ?? undefined,
+      startsAt: meeting.startsAt,
+      endsAt: meeting.endsAt,
+      attendeeEmails: emails,
+    })
+    await db.update(meetings).set({ googleEventId: eventId }).where(eq(meetings.id, meeting.id))
+    return {}
+  } catch {
+    return { calendarWarning: CALENDAR_INVITE_FAILED_WARNING }
+  }
+}
+
 export async function createMeeting(
   input: unknown,
 ): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
@@ -113,10 +167,44 @@ export async function createMeeting(
     throw error
   }
 
+  const { calendarWarning } = await syncCalendarInvite(
+    {
+      id: meetingId,
+      title,
+      agenda: agenda || null,
+      startsAt: new Date(startsAt),
+      endsAt: new Date(endsAt),
+      createdBy: session.user.id,
+    },
+    attendeeIds,
+  )
+
   await revalidateMeetingPaths(appId)
-  // calendarWarning is unused until Task 15 wires Google Calendar in; typed
-  // now so this signature never changes.
-  return ok({ meetingId })
+  return ok({ meetingId, calendarWarning })
+}
+
+export async function retryCalendarInvite(meetingId: string): Promise<ActionResult> {
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
+
+  const existing = await meetingById(meetingId)
+  if (!existing) return err('Meeting not found')
+  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  if (existing.googleEventId) return err('Meeting already has a calendar invite')
+
+  const attendeeRows = await db
+    .select({ userId: meetingAttendees.userId })
+    .from(meetingAttendees)
+    .where(eq(meetingAttendees.meetingId, meetingId))
+
+  const { calendarWarning } = await syncCalendarInvite(
+    existing,
+    attendeeRows.map((r) => r.userId),
+  )
+  if (calendarWarning) return err(calendarWarning)
+
+  await revalidateMeetingPaths(existing.appId)
+  return ok(undefined)
 }
 
 export async function updateMeetingNotes(meetingId: string, notes: string): Promise<ActionResult> {
@@ -141,6 +229,23 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
   const existing = await meetingById(meetingId)
   if (!existing) return err('Meeting not found')
   if (!canManageMeeting(session, existing)) return err('Not allowed')
+
+  if (existing.googleEventId) {
+    // Best-effort: the calendar invite is cleanup, not the source of truth —
+    // the meeting still gets deleted even if Google is unreachable or the
+    // creator's grant has been revoked.
+    try {
+      const [creator] = await db
+        .select({ googleRefreshToken: users.googleRefreshToken })
+        .from(users)
+        .where(eq(users.id, existing.createdBy))
+      if (creator?.googleRefreshToken) {
+        await deleteCalendarEvent(creator.googleRefreshToken, existing.googleEventId)
+      }
+    } catch {
+      // Ignore — proceed with the DB delete regardless.
+    }
+  }
 
   await db.delete(meetings).where(eq(meetings.id, meetingId))
 
