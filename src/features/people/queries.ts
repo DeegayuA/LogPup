@@ -18,6 +18,7 @@ export type UserCapacity = {
     id: string
     name: string
     title: string | null
+    phone: string | null
     avatarUrl: string | null
     role: 'admin' | 'member'
     orgTags: string[]
@@ -53,6 +54,7 @@ export type PersonDetail = {
     name: string
     email: string
     title: string | null
+    phone: string | null
     avatarUrl: string | null
     role: 'admin' | 'member'
     active: boolean
@@ -87,6 +89,7 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
       userId: users.id,
       name: users.name,
       title: users.title,
+      phone: users.phone,
       avatarUrl: users.avatarUrl,
       userRole: users.role,
       orgTags: users.orgTags,
@@ -126,6 +129,7 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
           id: row.userId,
           name: row.name,
           title: row.title,
+          phone: row.phone,
           avatarUrl: row.avatarUrl,
           role: row.userRole,
           orgTags: row.orgTags,
@@ -200,6 +204,7 @@ export async function getPersonDetail(userId: string): Promise<PersonDetail | nu
       name: users.name,
       email: users.email,
       title: users.title,
+      phone: users.phone,
       avatarUrl: users.avatarUrl,
       role: users.role,
       active: users.active,

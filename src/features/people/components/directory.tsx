@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronRight, PawPrint, ShieldCheck } from 'lucide-react'
+import { ChevronRight, PawPrint, Phone, ShieldCheck } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -149,57 +149,77 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
       ) : (
         <ul className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
           {rows.map(({ user, totalPct, breakdown }) => (
-            <li key={user.id}>
-              <Link
-                href={`/people/${user.id}`}
-                className={cn(
-                  'flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3',
-                  'transition-colors duration-150 hover:bg-accent/50',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                )}
-              >
-                <Avatar>
-                  {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" /> : null}
-                  <AvatarFallback>{user.name.slice(0, 1).toUpperCase()}</AvatarFallback>
-                </Avatar>
-                <div className="flex min-w-0 flex-1 basis-48 flex-col">
-                  <span className="flex items-center gap-1.5 truncate text-sm font-medium">
+            {/* Stretched-link row: the name anchor covers the row via
+                ::after, so the whole row navigates while the call button
+                stays a separate, valid sibling link above it. */}
+            <li
+              key={user.id}
+              className={cn(
+                'relative flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3',
+                'transition-colors duration-150 hover:bg-accent/50',
+                'has-[a:focus-visible]:bg-accent/50',
+              )}
+            >
+              <Avatar>
+                {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt="" /> : null}
+                <AvatarFallback>{user.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <div className="flex min-w-0 flex-1 basis-48 flex-col">
+                <span className="flex items-center gap-1.5 truncate text-sm font-medium">
+                  <Link
+                    href={`/people/${user.id}`}
+                    className={cn(
+                      'truncate rounded-sm after:absolute after:inset-0 after:content-[""]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    )}
+                  >
                     {user.name}
-                    {user.role === 'admin' ? (
-                      <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-label="Admin" />
-                    ) : null}
-                  </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {user.title ?? 'No title yet'}
-                  </span>
-                </div>
-                {user.orgTags.length > 0 ? (
-                  <div className="hidden items-center gap-1 md:flex">
-                    {user.orgTags.slice(0, 2).map((tag) => (
-                      <Badge key={tag} variant="outline" className="font-normal text-muted-foreground">
-                        {tag}
-                      </Badge>
-                    ))}
-                    {user.orgTags.length > 2 ? (
-                      <span className="font-mono text-2xs text-muted-foreground">
-                        +{user.orgTags.length - 2}
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-                <span className="hidden max-w-56 truncate text-xs text-muted-foreground lg:block">
-                  {breakdown.length > 0
-                    ? breakdown
-                        .slice(0, 2)
-                        .map((b) => `${b.appName} ${b.allocationPct}%`)
-                        .join(' · ') + (breakdown.length > 2 ? ` +${breakdown.length - 2}` : '')
-                    : 'Unassigned'}
+                  </Link>
+                  {user.role === 'admin' ? (
+                    <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-label="Admin" />
+                  ) : null}
                 </span>
-                <div className="w-40 shrink-0">
-                  <CapacityBar totalPct={totalPct} />
+                <span className="truncate text-xs text-muted-foreground">
+                  {user.title ?? 'No title yet'}
+                </span>
+              </div>
+              {user.orgTags.length > 0 ? (
+                <div className="hidden items-center gap-1 md:flex">
+                  {user.orgTags.slice(0, 2).map((tag) => (
+                    <Badge key={tag} variant="outline" className="font-normal text-muted-foreground">
+                      {tag}
+                    </Badge>
+                  ))}
+                  {user.orgTags.length > 2 ? (
+                    <span className="font-mono text-2xs text-muted-foreground">
+                      +{user.orgTags.length - 2}
+                    </span>
+                  ) : null}
                 </div>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" aria-hidden />
-              </Link>
+              ) : null}
+              <span className="hidden max-w-56 truncate text-xs text-muted-foreground lg:block">
+                {breakdown.length > 0
+                  ? breakdown
+                      .slice(0, 2)
+                      .map((b) => `${b.appName} ${b.allocationPct}%`)
+                      .join(' · ') + (breakdown.length > 2 ? ` +${breakdown.length - 2}` : '')
+                  : 'Unassigned'}
+              </span>
+              <div className="w-40 shrink-0">
+                <CapacityBar totalPct={totalPct} />
+              </div>
+              {user.phone ? (
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  className="relative z-10 shrink-0"
+                  render={<a href={telHref(user.phone)} />}
+                >
+                  <Phone aria-hidden />
+                  <span className="sr-only">Call {user.name} on {user.phone}</span>
+                </Button>
+              ) : null}
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" aria-hidden />
             </li>
           ))}
         </ul>

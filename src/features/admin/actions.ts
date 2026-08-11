@@ -10,6 +10,7 @@ import { auth } from '@/lib/auth'
 import { hashPassword } from '@/lib/password'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
+import { normalizePhone } from '@/lib/phone'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
 
@@ -213,6 +214,25 @@ const titleInput = z.string().trim().max(80, 'Job role must be 80 characters or 
 // Sets the admin-facing "Job role" (users.title) — distinct from the
 // admin/member permission enum, which stays untouched here. Harmless to
 // apply to your own account, unlike role/active, so no self-target guard.
+/**
+ * Contact number behind the call button. Blank clears it. Admins set it for
+ * anyone; a user sets their own through setOwnPhone (features/auth/actions).
+ */
+export async function setUserPhone(userId: string, phone: string): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsedId = z.uuid().safeParse(userId)
+  if (!parsedId.success) return err('Invalid user')
+
+  const trimmed = phone.trim()
+  const value = trimmed === '' ? null : normalizePhone(trimmed)
+  if (trimmed !== '' && value === null) return err('That does not look like a phone number')
+
+  await db.update(users).set({ phone: value }).where(eq(users.id, parsedId.data))
+  revalidateAdminPaths()
+  return ok(undefined)
+}
+
 export async function setUserTitle(userId: string, title: string): Promise<ActionResult> {
   if (!(await requireAdmin())) return err('Admins only')
 
