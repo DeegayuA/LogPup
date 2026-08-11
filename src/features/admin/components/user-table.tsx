@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Pencil } from 'lucide-react'
@@ -31,7 +31,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { setUserActive, setUserOrgTags, setUserRole, setUserTitle } from '@/features/admin/actions'
+import {
+  setUserActive,
+  setUserOrgTags,
+  setUserPhone,
+  setUserRole,
+  setUserTitle,
+} from '@/features/admin/actions'
+import { Input } from '@/components/ui/input'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
 import type { AdminUser } from '@/features/admin/queries'
 import { orgForEmail } from '@/lib/org-from-domain'
@@ -69,6 +76,54 @@ function JobRoleCell({ user }: { user: AdminUser }) {
       disabled={isPending}
       ariaLabel={`Job role for ${user.name}`}
       size="sm"
+    />
+  )
+}
+
+// One user's contact number, saved on blur or Enter (Escape reverts). Blank
+// clears it. Prop-driven like the other cells: the refreshed server value
+// flows back down, so nothing drifts if two admins edit at once.
+function PhoneCell({ user }: { user: AdminUser }) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+  const [draft, setDraft] = useState(user.phone ?? '')
+
+  function save() {
+    const next = draft.trim()
+    if (next === (user.phone ?? '')) return
+    startTransition(async () => {
+      try {
+        const res = await setUserPhone(user.id, next)
+        if (!res.ok) {
+          toast.error(res.error)
+          setDraft(user.phone ?? '')
+          return
+        }
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+        setDraft(user.phone ?? '')
+      }
+    })
+  }
+
+  return (
+    <Input
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={save}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          event.currentTarget.blur()
+        }
+        if (event.key === 'Escape') setDraft(user.phone ?? '')
+      }}
+      disabled={isPending}
+      placeholder="—"
+      maxLength={30}
+      aria-label={`Phone number for ${user.name}`}
+      className="h-8 w-36 font-mono text-xs"
     />
   )
 }
@@ -207,6 +262,7 @@ export function UserTable({
         <TableRow>
           <TableHead>User</TableHead>
           <TableHead>Job role</TableHead>
+          <TableHead>Phone</TableHead>
           <TableHead>Organizations</TableHead>
           <TableHead>Role</TableHead>
           <TableHead>Active</TableHead>
@@ -241,6 +297,9 @@ export function UserTable({
               </TableCell>
               <TableCell>
                 <JobRoleCell user={user} />
+              </TableCell>
+              <TableCell>
+                <PhoneCell user={user} />
               </TableCell>
               <TableCell>
                 <OrgTagsCell user={user} suggestions={allOrgTags} />

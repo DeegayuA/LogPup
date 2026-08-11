@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { telHref } from '@/lib/phone'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import type { UserCapacity } from '@/features/people/queries'
 

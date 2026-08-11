@@ -10,6 +10,8 @@ import {
 } from '@/components/ui/card'
 import { SetPasswordForm } from '@/features/auth/components/set-password-form'
 import { GeminiKeysCard } from '@/features/gemini/components/gemini-keys-card'
+import { PhoneField } from '@/features/auth/components/phone-field'
+import { getOwnPhone } from '@/features/auth/queries'
 import { listGeminiKeys } from '@/features/gemini/queries'
 
 export default async function ProfilePage(props: {
@@ -19,7 +21,9 @@ export default async function ProfilePage(props: {
   const user = session?.user
   const role = user?.role ?? 'member'
   const initials = (user?.name ?? '?').slice(0, 1).toUpperCase()
-  const geminiKeys = user?.id ? await listGeminiKeys(user.id) : []
+  const [geminiKeys, phone] = user?.id
+    ? await Promise.all([listGeminiKeys(user.id), getOwnPhone(user.id)])
+    : [[], null]
   const showFirstLoginBanner = firstLogin === '1' || user?.mustChangePassword === true
 
   return (
@@ -64,6 +68,8 @@ export default async function ProfilePage(props: {
             </div>
           </CardContent>
         </Card>
+
+        <PhoneField phone={phone} />
 
         <SetPasswordForm />
 

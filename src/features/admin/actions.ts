@@ -140,6 +140,16 @@ const createUserInput = z.object({
   name: z.string().trim().min(1, 'Name is required').max(80, 'Name must be 80 characters or fewer'),
   role: roleInput.default('member'),
   title: z.string().trim().max(80, 'Title must be 80 characters or fewer').optional(),
+  // Optional at creation — an admin can add it later from the user table, or
+  // the teammate sets their own from Profile.
+  phone: z
+    .string()
+    .trim()
+    .max(30)
+    .optional()
+    .refine((value) => !value || normalizePhone(value) !== null, {
+      message: 'That does not look like a phone number',
+    }),
   orgTags: orgTagsInput.default([]),
 })
 
@@ -152,7 +162,7 @@ export async function createUser(
 
   const parsed = createUserInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
-  const { email, name, role, title, orgTags } = parsed.data
+  const { email, name, role, title, phone, orgTags } = parsed.data
 
   // Sign-in is domain-gated (every provider funnels through emailAllowed), so
   // an account outside the allowlist would be a locked door — refuse up front.
@@ -178,6 +188,7 @@ export async function createUser(
       name,
       role,
       title: title || null,
+      phone: phone ? normalizePhone(phone) : null,
       orgTags: effectiveOrgTags,
       passwordHash: hashPassword(starterPassword),
       mustChangePassword: true,

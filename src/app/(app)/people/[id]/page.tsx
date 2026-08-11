@@ -1,7 +1,9 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { format } from 'date-fns'
-import { PawPrint, ShieldCheck } from 'lucide-react'
+import { PawPrint, Phone, ShieldCheck } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { telHref } from '@/lib/phone'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -62,6 +64,18 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
             {[user.title, user.email].filter(Boolean).join(' · ')}
           </p>
         </div>
+        {user.phone ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto shrink-0"
+            render={<a href={telHref(user.phone)} />}
+          >
+            <Phone aria-hidden />
+            <span className="hidden font-mono sm:inline">{user.phone}</span>
+            <span className="sr-only">Call {user.name}</span>
+          </Button>
+        ) : null}
       </header>
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">

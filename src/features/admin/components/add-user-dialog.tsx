@@ -31,6 +31,7 @@ type FormState = {
   name: string
   role: 'admin' | 'member'
   title: string
+  phone: string
   orgTags: string[]
 }
 
@@ -39,6 +40,7 @@ const emptyState: FormState = {
   name: '',
   role: 'member',
   title: '',
+  phone: '',
   orgTags: [],
 }
 
@@ -64,6 +66,7 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
           name: form.name,
           role: form.role,
           title: form.title.trim() || undefined,
+        phone: form.phone.trim() || undefined,
           orgTags: form.orgTags,
         })
         if (!res.ok) {
@@ -147,6 +150,22 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
               onChange={(title) => setForm((f) => ({ ...f, title }))}
               disabled={isPending}
             />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="new-user-phone">Phone</Label>
+            <Input
+              id="new-user-phone"
+              type="tel"
+              inputMode="tel"
+              value={form.phone}
+              onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+              maxLength={30}
+              placeholder="+94 71 234 5678"
+              className="h-9 font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional — powers the call button on People.
+            </p>
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="new-user-org-tags">Organizations</Label>
