@@ -9,6 +9,7 @@ import { apps, assignments, sprints, tasks, meetings, meetingAttendees, users } 
 import { auth } from '@/lib/auth'
 import { hashPassword } from '@/lib/password'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
+import { orgForEmail } from '@/lib/org-from-domain'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
 
@@ -164,6 +165,11 @@ export async function createUser(
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email))
   if (existing) return err('A user with that email already exists')
 
+  // No org tags picked by hand — fall back to whatever the email domain implies
+  // (see src/lib/org-from-domain.ts) rather than leaving the column empty.
+  const derivedOrg = orgForEmail(email)
+  const effectiveOrgTags = orgTags.length > 0 ? orgTags : derivedOrg ? [derivedOrg] : []
+
   const starterPassword = randomBytes(6).toString('base64url')
   try {
     await db.insert(users).values({
@@ -171,7 +177,7 @@ export async function createUser(
       name,
       role,
       title: title || null,
-      orgTags,
+      orgTags: effectiveOrgTags,
       passwordHash: hashPassword(starterPassword),
       mustChangePassword: true,
       active: true,
@@ -195,6 +201,25 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   await db.update(users).set({ orgTags: parsed.data }).where(eq(users.id, parsedId.data))
+  revalidateAdminPaths()
+  return ok(undefined)
+}
+
+const titleInput = z.string().trim().max(60, 'Job role must be 60 characters or fewer')
+
+// Sets the admin-facing "Job role" (users.title) — distinct from the
+// admin/member permission enum, which stays untouched here. Harmless to
+// apply to your own account, unlike role/active, so no self-target guard.
+export async function setUserTitle(userId: string, title: string): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsedId = z.uuid().safeParse(userId)
+  if (!parsedId.success) return err('Invalid user')
+
+  const parsed = titleInput.safeParse(title)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, parsedId.data))
   revalidateAdminPaths()
   return ok(undefined)
 }

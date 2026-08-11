@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
+import { orgForEmail } from '@/lib/org-from-domain'
 import { verifyPassword } from '@/lib/password'
 import { loginRateLimiter, RateLimitError, LOCKOUT_MESSAGE } from '@/lib/rate-limit'
 
@@ -88,8 +89,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             // every other address must already exist (unchanged prior behavior).
             const devEmail = process.env.DEV_LOGIN_EMAIL?.trim().toLowerCase()
             if (email !== devEmail) return null
+            const derivedOrg = orgForEmail(email)
             const [created] = await db.insert(users)
-              .values({ email, name: email.split('@')[0], role: 'admin' })
+              .values({
+                email,
+                name: email.split('@')[0],
+                role: 'admin',
+                orgTags: derivedOrg ? [derivedOrg] : [],
+              })
               .returning()
             return { id: created.id, email: created.email, name: created.name }
           },
@@ -149,11 +156,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
         return true
       }
+      const derivedOrg = orgForEmail(email)
       await db.insert(users).values({
         email,
         name: profile?.name ?? email,
         avatarUrl: (profile as { picture?: string } | undefined)?.picture,
         googleRefreshToken: account?.refresh_token,
+        orgTags: derivedOrg ? [derivedOrg] : [],
       })
       return true
     },

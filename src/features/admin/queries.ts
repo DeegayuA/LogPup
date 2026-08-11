@@ -10,6 +10,7 @@ export type AdminUser = {
   role: 'admin' | 'member'
   active: boolean
   orgTags: string[]
+  title: string | null
   mustChangePassword: boolean
 }
 
@@ -26,6 +27,7 @@ export async function listAllUsers(): Promise<AdminUser[]> {
       role: users.role,
       active: users.active,
       orgTags: users.orgTags,
+      title: users.title,
       mustChangePassword: users.mustChangePassword,
     })
     .from(users)
