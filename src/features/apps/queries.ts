@@ -40,3 +40,22 @@ export async function getAppBySlug(slug: string) {
   const [app] = await db.select().from(apps).where(eq(apps.slug, slug))
   return app ?? null
 }
+
+/**
+ * Distinct tech tags already in use across every app, for the Tech tags
+ * combobox's suggestion pool (merged with the curated list in
+ * src/lib/tech-tags.ts). Selects just the array column rather than full
+ * rows, then de-dupes in JS — at our row counts that's simpler than an
+ * unnest/aggregate-distinct query and just as cheap.
+ */
+export async function listDistinctTechTags(): Promise<string[]> {
+  const rows = await db.select({ techTags: apps.techTags }).from(apps)
+  const tags = new Set<string>()
+  for (const row of rows) {
+    for (const tag of row.techTags) {
+      const trimmed = tag.trim()
+      if (trimmed) tags.add(trimmed)
+    }
+  }
+  return [...tags].sort((a, b) => a.localeCompare(b))
+}

@@ -6,7 +6,7 @@ import { auth } from '@/lib/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { getAppBySlug, listApps } from '@/features/apps/queries'
+import { getAppBySlug, listApps, listDistinctTechTags } from '@/features/apps/queries'
 import { getTeamForApp, listActiveUsers } from '@/features/people/queries'
 import { getBoard, getSprintsForApp } from '@/features/sprints/queries'
 import { getMeetingsForApp } from '@/features/meetings/queries'
@@ -65,15 +65,17 @@ export default async function AppDetailPage(props: {
   const app = await getAppBySlug(slug)
   if (!app) notFound()
 
-  const [session, team, activeUsers, sprints, appMeetings, allApps, comments] = await Promise.all([
-    auth(),
-    getTeamForApp(app.id),
-    listActiveUsers(),
-    getSprintsForApp(app.id),
-    getMeetingsForApp(app.id),
-    listApps(),
-    listAppComments(app.id),
-  ])
+  const [session, team, activeUsers, sprints, appMeetings, allApps, comments, workspaceTechTags] =
+    await Promise.all([
+      auth(),
+      getTeamForApp(app.id),
+      listActiveUsers(),
+      getSprintsForApp(app.id),
+      getMeetingsForApp(app.id),
+      listApps(),
+      listAppComments(app.id),
+      listDistinctTechTags(),
+    ])
   const isAdmin = session?.user?.role === 'admin'
   const lead = app.leadId ? activeUsers.find((user) => user.id === app.leadId) : undefined
 
@@ -250,6 +252,7 @@ export default async function AppDetailPage(props: {
                     techTags: app.techTags,
                     status: app.status,
                   }}
+                  workspaceTechTags={workspaceTechTags}
                 />
               </div>
             </div>

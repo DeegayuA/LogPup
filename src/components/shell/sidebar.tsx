@@ -11,6 +11,7 @@ import {
   PawPrint,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { VersionBadge } from '@/components/shell/version-badge'
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard, key: 'D' },
@@ -101,12 +102,15 @@ export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : null}
 
-      <div className="mt-auto border-t border-sidebar-border px-4 py-3 text-2xs text-sidebar-foreground/70">
-        Press{' '}
-        <kbd className="rounded border border-sidebar-border bg-sidebar-accent/50 px-1 font-mono">
-          Ctrl/⌘ K
-        </kbd>{' '}
-        to fetch anything
+      <div className="mt-auto flex flex-col gap-2 border-t border-sidebar-border px-2 py-3">
+        <div className="px-2 text-2xs text-sidebar-foreground/70">
+          Press{' '}
+          <kbd className="rounded border border-sidebar-border bg-sidebar-accent/50 px-1 font-mono">
+            Ctrl/⌘ K
+          </kbd>{' '}
+          to fetch anything
+        </div>
+        <VersionBadge />
       </div>
     </nav>
   )

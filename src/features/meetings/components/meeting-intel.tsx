@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
@@ -9,11 +10,16 @@ import {
   Check,
   ChevronDown,
   CircleCheck,
+  CircleHelp,
   Languages,
   Loader2,
   MessageCircleQuestion,
+  MessageSquareQuote,
   Mic,
   MonitorSpeaker,
+  NotebookPen,
+  Pencil,
+  Plus,
   RotateCcw,
   Sparkles,
   Square,
@@ -26,11 +32,17 @@ import type { ActionResult } from '@/lib/action-result'
 import type { MentionUser } from '@/components/mention-textarea'
 import { NoteTimeline } from '@/features/meetings/components/note-timeline'
 import {
+  addFollowup,
   analyzeMeetingAudio,
+  copyFollowupResponseToNotes,
+  deferFollowupReason,
   getMeetingIntel,
+  noteFollowup,
   reopenFollowup,
   resolveFollowup,
   type CarriedForwardItem,
+  type FollowupPersonOption,
+  type FollowupTargetOption,
   type MeetingIntel,
 } from '@/features/meetings/ai-actions'
 import {
@@ -130,6 +142,52 @@ function formatBytes(bytes: number): string {
 // needed. Cleared only on a successful analysis or an explicit discard.
 type PendingAudio = { blob: Blob; liveTranscript: string }
 
+// The three separate things that can be written about one follow-up. They
+// are never the same sentence: 'outcome' is what came of it (resolved
+// items), 'said' is what the person told us, 'why' is why it isn't done.
+// Only one composer is open per row at a time — writing is a small aside,
+// not a form to fill in.
+type ComposerField = 'outcome' | 'said' | 'why'
+type OpenComposer = { id: string; field: ComposerField } | null
+
+const COMPOSER_COPY: Record<
+  ComposerField,
+  { label: (person: string) => string; placeholder: string; hint: string; save: string }
+> = {
+  outcome: {
+    label: () => 'What’s the answer / what changed?',
+    placeholder: 'e.g. room booked, lighting fixed on Tuesday',
+    hint: 'Optional — the item is already resolved either way.',
+    save: 'Save outcome',
+  },
+  said: {
+    label: (person) => `What did ${person} say?`,
+    placeholder: 'e.g. still waiting on the client to confirm the date',
+    hint: 'It stays open and still carries forward.',
+    save: 'Save what they said',
+  },
+  why: {
+    label: () => 'Why isn’t this done yet?',
+    placeholder: 'e.g. blocked on the client’s approval',
+    hint: 'Optional — the item stays open either way.',
+    save: 'Save reason',
+  },
+}
+
+// "Their next meeting" — the default, and the behaviour every AI-derived
+// follow-up has: no pin, so it surfaces wherever that person turns up next.
+const NEXT_MEETING = 'next'
+
+function draftKey(field: ComposerField, followupId: string): string {
+  return `${field}:${followupId}`
+}
+
+function storedValue(item: CarriedForwardItem, field: ComposerField): string {
+  if (field === 'outcome') return item.resolutionNote ?? ''
+  if (field === 'said') return item.responseNote ?? ''
+  return item.deferReason ?? ''
+}
+
 export function MeetingIntelPanel({
   meetingId,
   meetingTitle,
@@ -168,16 +226,24 @@ export function MeetingIntelPanel({
   // See PendingAudio above — set the moment a recording finishes, cleared
   // only once analysis actually succeeds (or the user discards it).
   const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null)
-  // Follow-up resolution state. `composingId` is the one row with its note
-  // field open (only ever one at a time — this is a decision, not a form),
+  // Follow-up state. Every action (resolve, not yet, reopen) is one click and
+  // writes immediately; `composer` is the single open text field, since the
+  // writing is always optional enrichment layered on afterwards. `drafts` is
+  // keyed by field+id so a half-typed reason survives closing the composer,
   // `keptOpenIds` are rows the user explicitly said "not yet" on so the
   // carry-forward promise can be stated back to them, and `busyFollowupId`
   // marks the row whose write is in flight.
   const [followupPending, startFollowupWrite] = useTransition()
   const [busyFollowupId, setBusyFollowupId] = useState<string | null>(null)
-  const [composingId, setComposingId] = useState<string | null>(null)
-  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({})
+  const [composer, setComposer] = useState<OpenComposer>(null)
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [keptOpenIds, setKeptOpenIds] = useState<Set<string>>(new Set())
+  // The "add a follow-up by hand" form. Collapsed until asked for — the
+  // section's job is still mostly to show what came back from last time.
+  const [addingFollowup, setAddingFollowup] = useState(false)
+  const [addPending, startAddFollowup] = useTransition()
+
+  const router = useRouter()
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamsRef = useRef<MediaStream[]>([])
@@ -588,24 +654,21 @@ export function MeetingIntelPanel({
     })
   }
 
+  // One click closes it. No note, no second step, no dialog — the outcome
+  // can be written afterwards (or never) via the composer on the settled row.
   function handleResolve(followupId: string) {
-    const note = (noteDrafts[followupId] ?? '').trim()
-    setComposingId(null)
+    setComposer((prev) => (prev?.id === followupId ? null : prev))
     setKeptOpenIds((prev) => {
       if (!prev.has(followupId)) return prev
       const next = new Set(prev)
       next.delete(followupId)
       return next
     })
-    patchFollowup(followupId, {
-      status: 'resolved',
-      resolutionNote: note || null,
-      resolvedAt: new Date(),
-    })
+    patchFollowup(followupId, { status: 'resolved', resolvedAt: new Date() })
     runFollowupWrite(
       followupId,
-      () => resolveFollowup(followupId, note || undefined, meetingId),
-      note ? 'Resolved — answer saved' : 'Marked resolved',
+      () => resolveFollowup(followupId, undefined, meetingId),
+      'Resolved — add the outcome if it needs one',
     )
   }
 
@@ -613,7 +676,7 @@ export function MeetingIntelPanel({
     // Keep the note that was there as a draft — reopening usually means the
     // answer was wrong or incomplete, not that it should be retyped.
     if (item.resolutionNote) {
-      setNoteDrafts((prev) => ({ ...prev, [item.id]: item.resolutionNote ?? '' }))
+      setDrafts((prev) => ({ ...prev, [draftKey('outcome', item.id)]: item.resolutionNote ?? '' }))
     }
     patchFollowup(item.id, { status: 'open', resolutionNote: null, resolvedAt: null })
     runFollowupWrite(
@@ -625,14 +688,94 @@ export function MeetingIntelPanel({
 
   // "Not yet" changes nothing in the database — an unresolved item is
   // already the thing that carries forward. What it does is say so out
-  // loud, and get the note field out of the way.
+  // loud, and offer (never force) the "why" alongside it.
   function handleNotYet(followupId: string) {
-    setComposingId((prev) => (prev === followupId ? null : prev))
+    setComposer((prev) => (prev?.id === followupId ? null : prev))
     setKeptOpenIds((prev) => new Set(prev).add(followupId))
+  }
+
+  // Opens one text field on one row, seeded from whatever is already stored
+  // there the first time — editing, not retyping.
+  function openComposer(item: CarriedForwardItem, field: ComposerField) {
+    const key = draftKey(field, item.id)
+    setDrafts((prev) => (key in prev ? prev : { ...prev, [key]: storedValue(item, field) }))
+    setComposer({ id: item.id, field })
+  }
+
+  function handleSaveNote(item: CarriedForwardItem, field: ComposerField) {
+    const value = (drafts[draftKey(field, item.id)] ?? '').trim()
+    setComposer(null)
+    if (field === 'outcome') {
+      patchFollowup(item.id, { resolutionNote: value || null })
+      runFollowupWrite(
+        item.id,
+        () => resolveFollowup(item.id, value, meetingId),
+        value ? 'Outcome saved' : 'Outcome cleared',
+      )
+      return
+    }
+    if (field === 'said') {
+      patchFollowup(item.id, { responseNote: value || null })
+      runFollowupWrite(
+        item.id,
+        () => noteFollowup(item.id, value),
+        value ? 'Saved — still open and carrying forward' : 'Cleared',
+      )
+      return
+    }
+    patchFollowup(item.id, { deferReason: value || null })
+    runFollowupWrite(
+      item.id,
+      () => deferFollowupReason(item.id, value),
+      value ? 'Reason saved — still open' : 'Cleared',
+    )
+  }
+
+  // Explicit, never automatic: what someone said only becomes part of the
+  // meeting record when a person asks for it. router.refresh() is what makes
+  // the meeting's own notes above this panel show the new line.
+  function handleCopyResponse(item: CarriedForwardItem) {
+    runFollowupWrite(
+      item.id,
+      async () => {
+        const res = await copyFollowupResponseToNotes(item.id, meetingId)
+        if (res.ok) router.refresh()
+        return res
+      },
+      'Added to this meeting’s notes',
+    )
+  }
+
+  function handleAddFollowup(input: {
+    personUserId: string
+    text: string
+    kind: 'question' | 'action'
+    targetMeetingId: string | null
+  }) {
+    startAddFollowup(async () => {
+      try {
+        const res = await addFollowup({ meetingId, ...input })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setAddingFollowup(false)
+        toast.success('Follow-up added — it comes up at that meeting, not this one')
+        // The new item deliberately doesn't belong to THIS meeting, so
+        // there's nothing to show here; refetch anyway so anything else that
+        // changed server-side (or a pin onto a meeting shown elsewhere) is
+        // reflected without a full reload.
+        await loadIntel({ silent: true })
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
   }
 
   const notes = intel?.notes ?? null
   const prep = intel?.prep ?? []
+  const people = intel?.people ?? []
+  const upcomingMeetings = intel?.upcomingMeetings ?? []
   // Resolved rows stay on screen as a record, so "is anything still owed?"
   // has to count open ones rather than trust the list being empty.
   const openCount = prep.reduce(
@@ -805,15 +948,37 @@ export function MeetingIntelPanel({
               />
 
               <section className="flex flex-col gap-1.5">
-                <h4 className="flex items-center gap-1.5 font-heading text-sm font-semibold">
-                  <MessageCircleQuestion className="size-3.5 text-primary" aria-hidden />
-                  Carried forward
-                </h4>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="flex items-center gap-1.5 font-heading text-sm font-semibold">
+                    <MessageCircleQuestion className="size-3.5 text-primary" aria-hidden />
+                    Carried forward
+                  </h4>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    aria-expanded={addingFollowup}
+                    onClick={() => setAddingFollowup((value) => !value)}
+                  >
+                    <Plus aria-hidden />
+                    Add follow-up
+                  </Button>
+                </div>
                 {openCount > 0 ? (
                   <p className="text-xs text-muted-foreground">
                     Anything you don&rsquo;t resolve stays open and carries forward to the next
                     meeting these people attend.
                   </p>
+                ) : null}
+                {addingFollowup ? (
+                  <AddFollowupForm
+                    idPrefix={`add-followup-${meetingId}`}
+                    people={people}
+                    upcomingMeetings={upcomingMeetings}
+                    pending={addPending}
+                    onCancel={() => setAddingFollowup(false)}
+                    onSubmit={handleAddFollowup}
+                  />
                 ) : null}
                 {prep.length > 0 ? (
                   <ul className="flex flex-col gap-2.5">
@@ -822,153 +987,37 @@ export function MeetingIntelPanel({
                         <span className="text-sm font-medium">{group.person}</span>
                         <ul className="flex flex-col gap-1">
                           {group.items.map((item) => {
-                            const canResolve = canRecord || group.userId === currentUserId
-                            const isBusy = busyFollowupId === item.id && followupPending
-                            const isResolved = item.status === 'resolved'
-                            const isComposing = composingId === item.id
-                            const keptOpen = !isResolved && keptOpenIds.has(item.id)
-                            const noteFieldId = `followup-note-${item.id}`
+                            const openField =
+                              composer?.id === item.id ? composer.field : null
                             return (
-                              <li
+                              <FollowupRow
                                 key={item.id}
-                                className={cn(
-                                  'flex flex-col gap-1.5 rounded-md px-2 py-1.5',
-                                  isResolved ? 'bg-muted/20' : 'bg-muted/40',
-                                )}
-                              >
-                                <div className="flex flex-wrap items-start justify-between gap-2">
-                                  <span className="flex min-w-0 flex-1 items-start gap-1.5 text-sm text-muted-foreground">
-                                    {isResolved ? (
-                                      <CircleCheck
-                                        className="mt-0.5 size-3.5 shrink-0 text-primary"
-                                        aria-hidden
-                                      />
-                                    ) : null}
-                                    <span>
-                                      <span className={isResolved ? undefined : 'text-foreground'}>
-                                        {item.text}
-                                      </span>{' '}
-                                      — from “{item.fromTitle}” ({format(item.fromDate, 'MMM d')})
-                                    </span>
-                                  </span>
-                                  {canResolve && !isComposing ? (
-                                    <span className="flex shrink-0 items-center gap-1">
-                                      {isResolved ? (
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          type="button"
-                                          disabled={isBusy}
-                                          onClick={() => handleReopen(item)}
-                                        >
-                                          {isBusy ? (
-                                            <Loader2 className="animate-spin" aria-hidden />
-                                          ) : (
-                                            <RotateCcw aria-hidden />
-                                          )}
-                                          Reopen
-                                        </Button>
-                                      ) : (
-                                        <>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            type="button"
-                                            disabled={isBusy}
-                                            onClick={() => setComposingId(item.id)}
-                                          >
-                                            {isBusy ? (
-                                              <Loader2 className="animate-spin" aria-hidden />
-                                            ) : (
-                                              <Check aria-hidden />
-                                            )}
-                                            Resolve
-                                          </Button>
-                                          <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            type="button"
-                                            disabled={isBusy}
-                                            aria-pressed={keptOpen}
-                                            onClick={() => handleNotYet(item.id)}
-                                          >
-                                            Not yet
-                                          </Button>
-                                        </>
-                                      )}
-                                    </span>
-                                  ) : null}
-                                </div>
-
-                                {isResolved && item.resolutionNote ? (
-                                  <p className="border-l-2 border-primary/40 pl-2 text-sm">
-                                    <span className="text-muted-foreground">Outcome: </span>
-                                    {item.resolutionNote}
-                                  </p>
-                                ) : null}
-
-                                {keptOpen ? (
-                                  <p className="text-xs text-muted-foreground">
-                                    Staying open — it carries forward to the next meeting{' '}
-                                    {group.person} attends.
-                                  </p>
-                                ) : null}
-
-                                {isComposing ? (
-                                  <form
-                                    className="flex flex-col gap-1.5"
-                                    onSubmit={(event) => {
-                                      event.preventDefault()
-                                      handleResolve(item.id)
-                                    }}
-                                  >
-                                    <label
-                                      htmlFor={noteFieldId}
-                                      className="text-xs font-medium text-foreground"
-                                    >
-                                      What&rsquo;s the answer / what changed?
-                                    </label>
-                                    <Textarea
-                                      id={noteFieldId}
-                                      autoFocus
-                                      rows={2}
-                                      maxLength={500}
-                                      className="min-h-14 text-sm"
-                                      placeholder="Optional — e.g. room booked, lighting fixed on Tuesday"
-                                      value={noteDrafts[item.id] ?? ''}
-                                      onChange={(event) =>
-                                        setNoteDrafts((prev) => ({
-                                          ...prev,
-                                          [item.id]: event.target.value,
-                                        }))
-                                      }
-                                    />
-                                    <div className="flex flex-wrap items-center gap-1.5">
-                                      <Button size="sm" type="submit" disabled={isBusy}>
-                                        {isBusy ? (
-                                          <Loader2 className="animate-spin" aria-hidden />
-                                        ) : (
-                                          <Check aria-hidden />
-                                        )}
-                                        Save and resolve
-                                      </Button>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        type="button"
-                                        disabled={isBusy}
-                                        onClick={() => handleNotYet(item.id)}
-                                      >
-                                        Not yet
-                                      </Button>
-                                      <span className="text-xs text-muted-foreground">
-                                        The note is optional — resolving without one still closes
-                                        it.
-                                      </span>
-                                    </div>
-                                  </form>
-                                ) : null}
-                              </li>
+                                item={item}
+                                person={group.person}
+                                canWrite={canRecord || group.userId === currentUserId}
+                                canEditNotes={canRecord}
+                                busy={busyFollowupId === item.id && followupPending}
+                                keptOpen={keptOpenIds.has(item.id)}
+                                openField={openField}
+                                draft={
+                                  openField ? (drafts[draftKey(openField, item.id)] ?? '') : ''
+                                }
+                                onDraftChange={(value) =>
+                                  openField
+                                    ? setDrafts((prev) => ({
+                                        ...prev,
+                                        [draftKey(openField, item.id)]: value,
+                                      }))
+                                    : undefined
+                                }
+                                onOpenComposer={(field) => openComposer(item, field)}
+                                onCloseComposer={() => setComposer(null)}
+                                onSaveNote={(field) => handleSaveNote(item, field)}
+                                onResolve={() => handleResolve(item.id)}
+                                onReopen={() => handleReopen(item)}
+                                onNotYet={() => handleNotYet(item.id)}
+                                onCopyResponse={() => handleCopyResponse(item)}
+                              />
                             )
                           })}
                         </ul>
@@ -1092,5 +1141,427 @@ export function MeetingIntelPanel({
         </div>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * One carried-forward item. Every control here acts on a single click —
+ * Resolve closes it, Not yet keeps it, Reopen undoes a resolve — and the
+ * three text fields (why / what they said / outcome) are optional writing
+ * layered on afterwards, each shown back in its own distinct line so an
+ * outcome is never mistaken for an excuse or a quote.
+ */
+function FollowupRow({
+  item,
+  person,
+  canWrite,
+  canEditNotes,
+  busy,
+  keptOpen,
+  openField,
+  draft,
+  onDraftChange,
+  onOpenComposer,
+  onCloseComposer,
+  onSaveNote,
+  onResolve,
+  onReopen,
+  onNotYet,
+  onCopyResponse,
+}: {
+  item: CarriedForwardItem
+  person: string
+  canWrite: boolean
+  canEditNotes: boolean
+  busy: boolean
+  keptOpen: boolean
+  openField: ComposerField | null
+  draft: string
+  onDraftChange: (value: string) => void
+  onOpenComposer: (field: ComposerField) => void
+  onCloseComposer: () => void
+  onSaveNote: (field: ComposerField) => void
+  onResolve: () => void
+  onReopen: () => void
+  onNotYet: () => void
+  onCopyResponse: () => void
+}) {
+  const isResolved = item.status === 'resolved'
+  const stillOpenAndKept = keptOpen && !isResolved
+  const fieldId = openField ? `followup-${openField}-${item.id}` : undefined
+  const composerCopy = openField ? COMPOSER_COPY[openField] : null
+
+  return (
+    <li
+      className={cn(
+        'flex flex-col gap-1.5 rounded-md px-2 py-1.5',
+        isResolved ? 'bg-muted/20' : 'bg-muted/40',
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <span className="flex min-w-0 flex-1 items-start gap-1.5 text-sm text-muted-foreground">
+          {isResolved ? (
+            <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden />
+          ) : null}
+          <span>
+            <span className={isResolved ? undefined : 'text-foreground'}>{item.text}</span> — from
+            “{item.fromTitle}” ({format(item.fromDate, 'MMM d')})
+            {/* Provenance worth knowing: a hand-added item is someone's
+                deliberate ask, not something the model heard. */}
+            {item.createdBy ? ' · added by hand' : null}
+          </span>
+        </span>
+        {canWrite ? (
+          <span className="flex shrink-0 flex-wrap items-center gap-1">
+            {isResolved ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  onClick={onReopen}
+                >
+                  {busy ? (
+                    <Loader2 className="animate-spin" aria-hidden />
+                  ) : (
+                    <RotateCcw aria-hidden />
+                  )}
+                  Reopen
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  aria-expanded={openField === 'outcome'}
+                  onClick={() => onOpenComposer('outcome')}
+                >
+                  <Pencil aria-hidden />
+                  {item.resolutionNote ? 'Edit outcome' : 'Add outcome'}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  onClick={onResolve}
+                >
+                  {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+                  Resolve
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={keptOpen}
+                  onClick={onNotYet}
+                >
+                  Not yet
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  aria-expanded={openField === 'why'}
+                  onClick={() => onOpenComposer('why')}
+                >
+                  <CircleHelp aria-hidden />
+                  {item.deferReason ? 'Edit why' : 'Why'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={busy}
+                  aria-expanded={openField === 'said'}
+                  onClick={() => onOpenComposer('said')}
+                >
+                  <MessageSquareQuote aria-hidden />
+                  {item.responseNote ? 'Edit what they said' : 'What they said'}
+                </Button>
+              </>
+            )}
+          </span>
+        ) : null}
+      </div>
+
+      {/* What the person said — quoted, and still owed. Kept visually
+          separate from an outcome (solid primary rule, below) because it is
+          an update, not a conclusion. */}
+      {item.responseNote ? (
+        <div className="flex flex-wrap items-start justify-between gap-2 border-l-2 border-border pl-2">
+          <p className="min-w-0 flex-1 text-sm">
+            <span className="text-muted-foreground">
+              <MessageSquareQuote className="mr-1 inline size-3.5 align-[-2px]" aria-hidden />
+              {person} said:{' '}
+            </span>
+            {item.responseNote}
+          </p>
+          {canEditNotes ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              disabled={busy}
+              onClick={onCopyResponse}
+            >
+              {busy ? (
+                <Loader2 className="animate-spin" aria-hidden />
+              ) : (
+                <NotebookPen aria-hidden />
+              )}
+              Add to meeting notes
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!isResolved && item.deferReason ? (
+        <p className="border-l-2 border-dashed border-border pl-2 text-sm">
+          <span className="text-muted-foreground">Why not yet: </span>
+          {item.deferReason}
+        </p>
+      ) : null}
+
+      {isResolved && item.resolutionNote ? (
+        <p className="border-l-2 border-primary/40 pl-2 text-sm">
+          <span className="text-muted-foreground">Outcome: </span>
+          {item.resolutionNote}
+        </p>
+      ) : null}
+
+      {stillOpenAndKept ? (
+        <p className="text-xs text-muted-foreground">
+          Staying open — it carries forward to the next meeting {person} attends.
+        </p>
+      ) : null}
+
+      {openField && composerCopy ? (
+        <form
+          className="flex flex-col gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSaveNote(openField)
+          }}
+        >
+          <label htmlFor={fieldId} className="text-xs font-medium text-foreground">
+            {composerCopy.label(person)}
+          </label>
+          <Textarea
+            id={fieldId}
+            autoFocus
+            rows={2}
+            maxLength={500}
+            className="min-h-14 text-sm"
+            placeholder={composerCopy.placeholder}
+            value={draft}
+            onChange={(event) => onDraftChange(event.target.value)}
+          />
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button size="sm" type="submit" disabled={busy}>
+              {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+              {composerCopy.save}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              disabled={busy}
+              onClick={onCloseComposer}
+            >
+              Cancel
+            </Button>
+            <span className="text-xs text-muted-foreground">{composerCopy.hint}</span>
+          </div>
+        </form>
+      ) : null}
+    </li>
+  )
+}
+
+/**
+ * Adds a follow-up by hand, for when the model didn't hear it (or nobody
+ * recorded the meeting at all). The item deliberately does not appear on
+ * THIS meeting — it is a thing to raise later — so the form says where it
+ * will actually turn up before you commit to it.
+ */
+function AddFollowupForm({
+  idPrefix,
+  people,
+  upcomingMeetings,
+  pending,
+  onCancel,
+  onSubmit,
+}: {
+  /** Meeting-scoped so two open panels never share a label's `for` target. */
+  idPrefix: string
+  people: FollowupPersonOption[]
+  upcomingMeetings: FollowupTargetOption[]
+  pending: boolean
+  onCancel: () => void
+  onSubmit: (input: {
+    personUserId: string
+    text: string
+    kind: 'question' | 'action'
+    targetMeetingId: string | null
+  }) => void
+}) {
+  // One attendee means there is nothing to decide — preselect them.
+  const [personUserId, setPersonUserId] = useState(people.length === 1 ? people[0].id : '')
+  const [text, setText] = useState('')
+  const [kind, setKind] = useState<'question' | 'action'>('question')
+  const [target, setTarget] = useState<string>(NEXT_MEETING)
+
+  const person = people.find((option) => option.id === personUserId) ?? null
+  // Only meetings the chosen person is actually attending can be pinned to —
+  // anywhere else, the item would be filed where it can never surface.
+  const targetOptions = personUserId
+    ? upcomingMeetings.filter((meeting) => meeting.attendeeIds.includes(personUserId))
+    : []
+  // Derived rather than synced in an effect: changing the person can
+  // invalidate an already-picked meeting, and silently falling back to
+  // "their next meeting" is the honest default.
+  const effectiveTarget = targetOptions.some((meeting) => meeting.id === target)
+    ? target
+    : NEXT_MEETING
+  const pinned = targetOptions.find((meeting) => meeting.id === effectiveTarget) ?? null
+
+  if (people.length === 0) {
+    return (
+      <p className="flex items-start gap-1.5 rounded-md border border-dashed p-2.5 text-sm text-muted-foreground">
+        <AlertCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        <span>Add attendees to this meeting first — a follow-up has to belong to someone.</span>
+      </p>
+    )
+  }
+
+  return (
+    <form
+      className="flex flex-col gap-2 rounded-md border border-dashed p-2.5"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!personUserId || !text.trim()) return
+        onSubmit({
+          personUserId,
+          text: text.trim(),
+          kind,
+          targetMeetingId: effectiveTarget === NEXT_MEETING ? null : effectiveTarget,
+        })
+        setText('')
+      }}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="flex flex-col gap-1">
+          <label htmlFor={`${idPrefix}-person`} className="text-xs font-medium text-foreground">
+            Who it&rsquo;s for
+          </label>
+          <Select
+            value={personUserId}
+            onValueChange={(value) => setPersonUserId((value as string | null) ?? '')}
+          >
+            <SelectTrigger id={`${idPrefix}-person`} className="w-44">
+              <SelectValue>
+                {(value: string) =>
+                  people.find((option) => option.id === value)?.name ?? 'Pick a person'
+                }
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {people.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </span>
+        <span className="flex flex-col gap-1">
+          <label htmlFor={`${idPrefix}-kind`} className="text-xs font-medium text-foreground">
+            Type
+          </label>
+          <Select
+            value={kind}
+            onValueChange={(value) => setKind(value === 'action' ? 'action' : 'question')}
+          >
+            <SelectTrigger id={`${idPrefix}-kind`} className="w-32">
+              <SelectValue>
+                {(value: string) => (value === 'action' ? 'Action' : 'Question')}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="question">Question</SelectItem>
+              <SelectItem value="action">Action</SelectItem>
+            </SelectContent>
+          </Select>
+        </span>
+        <span className="flex flex-col gap-1">
+          <label htmlFor={`${idPrefix}-target`} className="text-xs font-medium text-foreground">
+            Comes up at
+          </label>
+          <Select
+            value={effectiveTarget}
+            onValueChange={(value) => setTarget((value as string | null) ?? NEXT_MEETING)}
+          >
+            <SelectTrigger id={`${idPrefix}-target`} className="w-56">
+              <SelectValue>
+                {(value: string) => {
+                  if (value === NEXT_MEETING) return 'Their next meeting'
+                  const meeting = targetOptions.find((option) => option.id === value)
+                  return meeting
+                    ? `${meeting.title} · ${format(meeting.startsAt, 'MMM d')}`
+                    : 'Their next meeting'
+                }}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NEXT_MEETING}>Their next meeting</SelectItem>
+              {targetOptions.map((meeting) => (
+                <SelectItem key={meeting.id} value={meeting.id}>
+                  {meeting.title} · {format(meeting.startsAt, 'MMM d')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </span>
+      </div>
+
+      <span className="flex flex-col gap-1">
+        <label htmlFor={`${idPrefix}-text`} className="text-xs font-medium text-foreground">
+          What should they answer or do?
+        </label>
+        <Textarea
+          id={`${idPrefix}-text`}
+          rows={2}
+          maxLength={300}
+          className="min-h-14 text-sm"
+          placeholder="e.g. Send the revised quote to the client"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </span>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button size="sm" type="submit" disabled={pending || !personUserId || !text.trim()}>
+          {pending ? <Loader2 className="animate-spin" aria-hidden /> : <Plus aria-hidden />}
+          Add follow-up
+        </Button>
+        <Button variant="ghost" size="sm" type="button" disabled={pending} onClick={onCancel}>
+          Cancel
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          {!person
+            ? 'Pick who it’s for first.'
+            : pinned
+              ? `It won’t show here — it comes up on “${pinned.title}” (${format(pinned.startsAt, 'MMM d')}), and stays open until someone resolves it.`
+              : `It won’t show here — ${person.name} sees it at the next meeting they attend, and it stays open until someone resolves it.`}
+        </span>
+      </div>
+    </form>
   )
 }

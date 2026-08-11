@@ -1,0 +1,689 @@
+{
+  "current": "v0.0.114",
+  "versions": [
+    {
+      "version": "v0.0.1",
+      "date": "2026-08-10",
+      "hash": "ff76a1a",
+      "change": "Initial commit"
+    },
+    {
+      "version": "v0.0.2",
+      "date": "2026-08-10",
+      "hash": "dce769f",
+      "change": "docs: add LogPup design spec"
+    },
+    {
+      "version": "v0.0.3",
+      "date": "2026-08-10",
+      "hash": "6dcbb3a",
+      "change": "docs: add implementation plan (next 16 / react 19 / latest stack)"
+    },
+    {
+      "version": "v0.0.4",
+      "date": "2026-08-10",
+      "hash": "b2a9607",
+      "change": "chore: scaffold next 16 + react 19 + tailwind v4 + shadcn/ui"
+    },
+    {
+      "version": "v0.0.5",
+      "date": "2026-08-10",
+      "hash": "fd6ccc9",
+      "change": "feat: drizzle schema + neon client + initial migration"
+    },
+    {
+      "version": "v0.0.6",
+      "date": "2026-08-10",
+      "hash": "651388e",
+      "change": "feat: google sign-in with domain restriction + user provisioning"
+    },
+    {
+      "version": "v0.0.7",
+      "date": "2026-08-10",
+      "hash": "4bbaad1",
+      "change": "fix: re-validate user role/active from DB on every session request"
+    },
+    {
+      "version": "v0.0.8",
+      "date": "2026-08-10",
+      "hash": "ec9a986",
+      "change": "."
+    },
+    {
+      "version": "v0.0.9",
+      "date": "2026-08-10",
+      "hash": "de900cb",
+      "change": "."
+    },
+    {
+      "version": "v0.0.10",
+      "date": "2026-08-10",
+      "hash": "96cca45",
+      "change": "feat: app shell + theme + vitest + ActionResult helper"
+    },
+    {
+      "version": "v0.0.11",
+      "date": "2026-08-10",
+      "hash": "0adc499",
+      "change": "Merge branch 'feature/logpup'"
+    },
+    {
+      "version": "v0.0.12",
+      "date": "2026-08-10",
+      "hash": "6ed8303",
+      "change": "chore: untrack generated next-env.d.ts"
+    },
+    {
+      "version": "v0.0.13",
+      "date": "2026-08-10",
+      "hash": "ac705f2",
+      "change": "feat: apps CRUD + grid page"
+    },
+    {
+      "version": "v0.0.14",
+      "date": "2026-08-10",
+      "hash": "a2d2ec4",
+      "change": "fix: updateApp no longer wipes omitted fields"
+    },
+    {
+      "version": "v0.0.15",
+      "date": "2026-08-10",
+      "hash": "e800b60",
+      "change": "."
+    },
+    {
+      "version": "v0.0.16",
+      "date": "2026-08-10",
+      "hash": "8580c50",
+      "change": "feat: assignments actions + allocation math with tests"
+    },
+    {
+      "version": "v0.0.17",
+      "date": "2026-08-10",
+      "hash": "5cf788c",
+      "change": "feat: app detail page + team management"
+    },
+    {
+      "version": "v0.0.18",
+      "date": "2026-08-10",
+      "hash": "da0767d",
+      "change": "feat: dev-only one-click login for local development"
+    },
+    {
+      "version": "v0.0.19",
+      "date": "2026-08-10",
+      "hash": "5fd1afe",
+      "change": "fix: app edit dialog resync + description clearing"
+    },
+    {
+      "version": "v0.0.20",
+      "date": "2026-08-10",
+      "hash": "cbbaf75",
+      "change": "feat: people directory + person detail"
+    },
+    {
+      "version": "v0.0.21",
+      "date": "2026-08-10",
+      "hash": "a1197f9",
+      "change": "feat: capacity dashboard"
+    },
+    {
+      "version": "v0.0.22",
+      "date": "2026-08-10",
+      "hash": "e60a5c5",
+      "change": "fix: fail-closed gating for passwordless test login"
+    },
+    {
+      "version": "v0.0.23",
+      "date": "2026-08-10",
+      "hash": "900f909",
+      "change": "test: extract and cover capacity sort order"
+    },
+    {
+      "version": "v0.0.24",
+      "date": "2026-08-10",
+      "hash": "e9ec703",
+      "change": "feat: sprints CRUD + switcher"
+    },
+    {
+      "version": "v0.0.25",
+      "date": "2026-08-10",
+      "hash": "bcf6b05",
+      "change": "feat: password login, multi-domain allowlist, admin backup (security-hardened)"
+    },
+    {
+      "version": "v0.0.26",
+      "date": "2026-08-10",
+      "hash": "2bca3d3",
+      "change": "feat: custom fonts (Satoshi + Cabinet Grotesk)"
+    },
+    {
+      "version": "v0.0.27",
+      "date": "2026-08-10",
+      "hash": "bb42867",
+      "change": "feat: task CRUD actions + move permissions"
+    },
+    {
+      "version": "v0.0.28",
+      "date": "2026-08-11",
+      "hash": "a21e8c1",
+      "change": "Merge branch 'feature/logpup'"
+    },
+    {
+      "version": "v0.0.29",
+      "date": "2026-08-11",
+      "hash": "72c2094",
+      "change": "fix: graceful FK-violation handling in createTask"
+    },
+    {
+      "version": "v0.0.30",
+      "date": "2026-08-11",
+      "hash": "c525efd",
+      "change": "feat: profile page (with set-password) + admin page (db clear)"
+    },
+    {
+      "version": "v0.0.31",
+      "date": "2026-08-11",
+      "hash": "0ce0520",
+      "change": "feat: kanban board with drag-drop + optimistic updates"
+    },
+    {
+      "version": "v0.0.32",
+      "date": "2026-08-11",
+      "hash": "f8153f2",
+      "change": "fix: lazy DB client so build doesn't require DATABASE_URL"
+    },
+    {
+      "version": "v0.0.33",
+      "date": "2026-08-11",
+      "hash": "3eff758",
+      "change": "fix: catch thrown server-action errors in board mutations"
+    },
+    {
+      "version": "v0.0.34",
+      "date": "2026-08-11",
+      "hash": "a86c3b4",
+      "change": "docs: UI redesign design spec"
+    },
+    {
+      "version": "v0.0.35",
+      "date": "2026-08-11",
+      "hash": "cf4ea79",
+      "change": "feat: watchdog-calm design foundation + ⌘K command center"
+    },
+    {
+      "version": "v0.0.36",
+      "date": "2026-08-11",
+      "hash": "c8ad57f",
+      "change": "feat: active sprints dashboard widget"
+    },
+    {
+      "version": "v0.0.37",
+      "date": "2026-08-11",
+      "hash": "aea56ac",
+      "change": "feat: admin panel for users and apps"
+    },
+    {
+      "version": "v0.0.38",
+      "date": "2026-08-11",
+      "hash": "aa28caf",
+      "change": "feat: one-way notion export for sprints"
+    },
+    {
+      "version": "v0.0.39",
+      "date": "2026-08-11",
+      "hash": "7ed8964",
+      "change": "chore: lint autofix in rate-limit test"
+    },
+    {
+      "version": "v0.0.40",
+      "date": "2026-08-11",
+      "hash": "fac0653",
+      "change": "feat: meetings CRUD + pages"
+    },
+    {
+      "version": "v0.0.41",
+      "date": "2026-08-11",
+      "hash": "2b1a285",
+      "change": "fix: paginate notion block deletion on re-export"
+    },
+    {
+      "version": "v0.0.42",
+      "date": "2026-08-11",
+      "hash": "5f1279e",
+      "change": "feat: google calendar invites for meetings"
+    },
+    {
+      "version": "v0.0.43",
+      "date": "2026-08-11",
+      "hash": "199a161",
+      "change": "fix: prevent removing the last active admin"
+    },
+    {
+      "version": "v0.0.44",
+      "date": "2026-08-11",
+      "hash": "e4a8ec5",
+      "change": "fix: board tab deep-link via tab search param"
+    },
+    {
+      "version": "v0.0.45",
+      "date": "2026-08-11",
+      "hash": "a96067d",
+      "change": "wip: design overhaul checkpoint (verified: tsc, tests, build green)"
+    },
+    {
+      "version": "v0.0.46",
+      "date": "2026-08-11",
+      "hash": "bfe02ed",
+      "change": "Merge branch 'worktree-agent-a5511135df5f6e335'"
+    },
+    {
+      "version": "v0.0.47",
+      "date": "2026-08-11",
+      "hash": "d0fef8d",
+      "change": "Merge branch 'worktree-agent-a6617e827552abb41'"
+    },
+    {
+      "version": "v0.0.48",
+      "date": "2026-08-11",
+      "hash": "230a842",
+      "change": "Merge branch 'worktree-agent-ac050e550c0911810'"
+    },
+    {
+      "version": "v0.0.49",
+      "date": "2026-08-11",
+      "hash": "b7127f3",
+      "change": "feat: per-user Gemini keys + AI meeting intelligence"
+    },
+    {
+      "version": "v0.0.50",
+      "date": "2026-08-11",
+      "hash": "6157839",
+      "change": "feat: page redesigns — dashboard, app detail, board, sign-in"
+    },
+    {
+      "version": "v0.0.51",
+      "date": "2026-08-11",
+      "hash": "659f99b",
+      "change": "feat: repo knowledge graph + Kibo UI components + dev conventions"
+    },
+    {
+      "version": "v0.0.52",
+      "date": "2026-08-11",
+      "hash": "97990ef",
+      "change": "fix: harden gemini key handling + consent disclosure"
+    },
+    {
+      "version": "v0.0.53",
+      "date": "2026-08-11",
+      "hash": "fb631a2",
+      "change": "test: playwright smoke suite with e2e auth bypass"
+    },
+    {
+      "version": "v0.0.54",
+      "date": "2026-08-11",
+      "hash": "9b46582",
+      "change": "docs: real README — features, setup, env vars, deploy notes"
+    },
+    {
+      "version": "v0.0.55",
+      "date": "2026-08-11",
+      "hash": "1760762",
+      "change": "feat: admin user onboarding + org tags + EMC role suggestions"
+    },
+    {
+      "version": "v0.0.56",
+      "date": "2026-08-11",
+      "hash": "dc7785a",
+      "change": "feat: @mentions + natural-language task assignment"
+    },
+    {
+      "version": "v0.0.57",
+      "date": "2026-08-11",
+      "hash": "f729250",
+      "change": "feat: PWA (installable) + favicon + header brand"
+    },
+    {
+      "version": "v0.0.58",
+      "date": "2026-08-11",
+      "hash": "438656f",
+      "change": "feat: sprint roadmap + count-up stats + mention polish, review fixes"
+    },
+    {
+      "version": "v0.0.59",
+      "date": "2026-08-11",
+      "hash": "5fa74c0",
+      "change": "chore: refresh knowledge graph after feature round"
+    },
+    {
+      "version": "v0.0.60",
+      "date": "2026-08-11",
+      "hash": "71e18fb",
+      "change": "fix: meetings day strip scrolls all 30 days inside its own container"
+    },
+    {
+      "version": "v0.0.61",
+      "date": "2026-08-11",
+      "hash": "9ff6600",
+      "change": "feat: polish app form dialog — tag chips, url normalization, field states"
+    },
+    {
+      "version": "v0.0.62",
+      "date": "2026-08-11",
+      "hash": "5bc1dde",
+      "change": "."
+    },
+    {
+      "version": "v0.0.63",
+      "date": "2026-08-11",
+      "hash": "0311254",
+      "change": "feat: one-click theme toggle instead of dropdown"
+    },
+    {
+      "version": "v0.0.64",
+      "date": "2026-08-11",
+      "hash": "78450fe",
+      "change": "feat: meetings calendar view (Kibo UI month grid)"
+    },
+    {
+      "version": "v0.0.65",
+      "date": "2026-08-11",
+      "hash": "ae401ec",
+      "change": "fix: lint suppression for next-themes mounted guard"
+    },
+    {
+      "version": "v0.0.66",
+      "date": "2026-08-11",
+      "hash": "38b4934",
+      "change": "feat: full-width responsive date strip — today marker, sundays, LK holidays"
+    },
+    {
+      "version": "v0.0.67",
+      "date": "2026-08-11",
+      "hash": "22a2cbf",
+      "change": "fix: wheel-picker CSS export path + Select handler type"
+    },
+    {
+      "version": "v0.0.68",
+      "date": "2026-08-11",
+      "hash": "a05f73a",
+      "change": "feat: meeting form picker + app-name select, job roles, auto org, gmail domain note"
+    },
+    {
+      "version": "v0.0.69",
+      "date": "2026-08-11",
+      "hash": "7389d77",
+      "change": "fix: show names not ids in remaining selects"
+    },
+    {
+      "version": "v0.0.70",
+      "date": "2026-08-11",
+      "hash": "0deb7d5",
+      "change": "feat: Untitled-style month event calendar for meetings"
+    },
+    {
+      "version": "v0.0.71",
+      "date": "2026-08-11",
+      "hash": "cfdb359",
+      "change": "feat: people page redesigned as a directory"
+    },
+    {
+      "version": "v0.0.72",
+      "date": "2026-08-11",
+      "hash": "9f656d0",
+      "change": "fix: meeting datetime picker renders correctly"
+    },
+    {
+      "version": "v0.0.73",
+      "date": "2026-08-11",
+      "hash": "64b0d62",
+      "change": "fix: pin Vercel framework preset + consolidate job roles"
+    },
+    {
+      "version": "v0.0.74",
+      "date": "2026-08-11",
+      "hash": "d5ed71c",
+      "change": "."
+    },
+    {
+      "version": "v0.0.75",
+      "date": "2026-08-11",
+      "hash": "bf7626f",
+      "change": "fix: datetime picker renders and lays out correctly"
+    },
+    {
+      "version": "v0.0.76",
+      "date": "2026-08-11",
+      "hash": "8194015",
+      "change": "fix: widen datetime picker popover and time columns"
+    },
+    {
+      "version": "v0.0.77",
+      "date": "2026-08-11",
+      "hash": "9d9a523",
+      "change": "Merge branch 'main' of https://github.com/DeegayuA/LogPup"
+    },
+    {
+      "version": "v0.0.78",
+      "date": "2026-08-11",
+      "hash": "d9da4a3",
+      "change": "/"
+    },
+    {
+      "version": "v0.0.79",
+      "date": "2026-08-11",
+      "hash": "7825193",
+      "change": "fix: final hardening wave — review findings"
+    },
+    {
+      "version": "v0.0.80",
+      "date": "2026-08-11",
+      "hash": "5c862e4",
+      "change": "."
+    },
+    {
+      "version": "v0.0.81",
+      "date": "2026-08-11",
+      "hash": "c94d8dd",
+      "change": "."
+    },
+    {
+      "version": "v0.0.82",
+      "date": "2026-08-11",
+      "hash": "d1eecfe",
+      "change": "."
+    },
+    {
+      "version": "v0.0.83",
+      "date": "2026-08-11",
+      "hash": "342d495",
+      "change": "Merge branch 'main' into feature/logpup"
+    },
+    {
+      "version": "v0.0.84",
+      "date": "2026-08-11",
+      "hash": "6385f39",
+      "change": "."
+    },
+    {
+      "version": "v0.0.85",
+      "date": "2026-08-11",
+      "hash": "21195a7",
+      "change": "."
+    },
+    {
+      "version": "v0.0.86",
+      "date": "2026-08-11",
+      "hash": "101ca1b",
+      "change": "fix: close proxy dot-path auth bypass, layout session guard, backup orgTags, wider picker"
+    },
+    {
+      "version": "v0.0.87",
+      "date": "2026-08-11",
+      "hash": "bbf3b5f",
+      "change": "feat: team phone numbers with call buttons + sign-in panel redesign"
+    },
+    {
+      "version": "v0.0.88",
+      "date": "2026-08-11",
+      "hash": "7deb98b",
+      "change": "chore: refresh knowledge graph (967 nodes, 78 communities)"
+    },
+    {
+      "version": "v0.0.89",
+      "date": "2026-08-11",
+      "hash": "615bb95",
+      "change": "Merge pull request #1 from DeegayuA/feature/logpup"
+    },
+    {
+      "version": "v0.0.90",
+      "date": "2026-08-11",
+      "hash": "ce885ff",
+      "change": "fix: design-craft pass — touch targets, named transitions, dialog parity, holiday marking in month view"
+    },
+    {
+      "version": "v0.0.91",
+      "date": "2026-08-11",
+      "hash": "68d5cde",
+      "change": "chore: remove dead code, consolidate meetings query, align brand constants"
+    },
+    {
+      "version": "v0.0.92",
+      "date": "2026-08-11",
+      "hash": "1c5f483",
+      "change": "Merge branch 'main' of https://github.com/DeegayuA/LogPup"
+    },
+    {
+      "version": "v0.0.93",
+      "date": "2026-08-11",
+      "hash": "f6bd734",
+      "change": "feat: backdrop art on the sign-in brand panel"
+    },
+    {
+      "version": "v0.0.94",
+      "date": "2026-08-11",
+      "hash": "d5adc6e",
+      "change": "feat: profile picture upload + auto-sync from Google"
+    },
+    {
+      "version": "v0.0.95",
+      "date": "2026-08-11",
+      "hash": "cc158d6",
+      "change": "feat: in-app notification system (mentions + meeting invites)"
+    },
+    {
+      "version": "v0.0.96",
+      "date": "2026-08-11",
+      "hash": "663328e",
+      "change": "fix: serve uploaded avatars from the private blob store"
+    },
+    {
+      "version": "v0.0.97",
+      "date": "2026-08-11",
+      "hash": "8ede065",
+      "change": "feat: orchestrated entrance animation on the sign-in page"
+    },
+    {
+      "version": "v0.0.98",
+      "date": "2026-08-11",
+      "hash": "488a458",
+      "change": "."
+    },
+    {
+      "version": "v0.0.99",
+      "date": "2026-08-11",
+      "hash": "5c43fde",
+      "change": "feat: rework the sign-in card — Google first, clearer hierarchy"
+    },
+    {
+      "version": "v0.0.100",
+      "date": "2026-08-11",
+      "hash": "de4c0c6",
+      "change": "feat: open signup with admin approval + onboarding"
+    },
+    {
+      "version": "v0.0.101",
+      "date": "2026-08-11",
+      "hash": "d87fff2",
+      "change": "fix: exclude pending users from team surfaces; untrack scratch scripts"
+    },
+    {
+      "version": "v0.0.102",
+      "date": "2026-08-11",
+      "hash": "3313706",
+      "change": "fix: day-strip cells — today marker collided with the month label"
+    },
+    {
+      "version": "v0.0.103",
+      "date": "2026-08-11",
+      "hash": "929faf8",
+      "change": "feat: live transcription + AI meeting minutes + person-linked follow-ups"
+    },
+    {
+      "version": "v0.0.104",
+      "date": "2026-08-11",
+      "hash": "accd422",
+      "change": "feat: natural-language task capture in the palette"
+    },
+    {
+      "version": "v0.0.105",
+      "date": "2026-08-11",
+      "hash": "f81e92b",
+      "change": "fix: render meeting summaries as Markdown; hide wheel scrollbars"
+    },
+    {
+      "version": "v0.0.106",
+      "date": "2026-08-11",
+      "hash": "a0a318e",
+      "change": "feat: show existing meeting notes without a click"
+    },
+    {
+      "version": "v0.0.107",
+      "date": "2026-08-11",
+      "hash": "42cbeb3",
+      "change": "feat: natural-language quick add in the New meeting dialog"
+    },
+    {
+      "version": "v0.0.108",
+      "date": "2026-08-11",
+      "hash": "9d0ac8f",
+      "change": "feat: People filters on every keystroke"
+    },
+    {
+      "version": "v0.0.109",
+      "date": "2026-08-11",
+      "hash": "4af23a0",
+      "change": "feat: keyboard save for meeting notes"
+    },
+    {
+      "version": "v0.0.110",
+      "date": "2026-08-11",
+      "hash": "e3090ca",
+      "change": "feat: resolve or defer carried-forward follow-ups, with an outcome note"
+    },
+    {
+      "version": "v0.0.111",
+      "date": "2026-08-11",
+      "hash": "631b775",
+      "change": "fix: widen MeetingIntent.appName so the resolved app can be attached"
+    },
+    {
+      "version": "v0.0.112",
+      "date": "2026-08-11",
+      "hash": "71b155c",
+      "change": "feat: one-click member approval, expanded job roles, job role in profile"
+    },
+    {
+      "version": "v0.0.113",
+      "date": "2026-08-11",
+      "hash": "9ec7b47",
+      "change": "."
+    },
+    {
+      "version": "v0.0.114",
+      "date": "2026-08-11",
+      "hash": "035ec0d",
+      "change": "feat: unified meeting notes with sources, speakers, and task suggestions"
+    }
+  ]
+}

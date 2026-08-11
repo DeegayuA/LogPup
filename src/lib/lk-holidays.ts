@@ -1,20 +1,19 @@
 /**
  * Sri Lankan public, bank, and mercantile holidays.
  *
- * The 26 dates keyed `['public', 'bank', 'mercantile', ...]` below are the
- * 2026 GAZETTE PUBLIC holidays (source: adaderana 2026 holiday calendar).
- * By Sri Lankan convention every gazetted Public holiday is also observed as
- * a Bank and a Mercantile holiday, and every Full Moon Poya Day additionally
- * carries the `'poya'` category (it is literally the day of the full moon).
- * A further three well-established bank/mercantile-only closing days — NOT
- * in the public-holiday gazette list — are appended separately below and
- * marked as such.
+ * The 26 dates keyed `[...PUBLIC]` / `[...PUBLIC_POYA]` below are the 2026
+ * GAZETTE PUBLIC holidays (source: adaderana 2026 holiday calendar). Every
+ * Full Moon Poya Day additionally carries the `'poya'` category (it is
+ * literally the day of the full moon). A further three well-established
+ * bank/mercantile-only closing days — NOT in the public-holiday gazette list
+ * — are appended separately below and marked as such.
  *
  * Sri Lankan holiday categories are gazette-published annually (only 2026 is
- * covered today): both the public-holiday list and the bank/mercantile-only
- * additions should be re-verified — and this file extended with new
- * `yyyy-mm-dd` entries — each year the next gazette is published. No other
- * code needs to change, since every lookup below is keyed by ISO date.
+ * covered today): the public-holiday list, the mercantile subset (see the
+ * warning on `PUBLIC` below) and the bank/mercantile-only additions should
+ * all be re-verified — and this file extended with new `yyyy-mm-dd` entries
+ * — each year the next gazette is published. No other code needs to change,
+ * since every lookup below is keyed by ISO date.
  */
 
 /** A single holiday can be observed under more than one of these at once —
@@ -26,7 +25,27 @@ export type LkHoliday = {
   categories: HolidayCategory[]
 }
 
-/** Every gazetted Public holiday is also a Bank and Mercantile holiday. */
+/**
+ * ⚠ THE MERCANTILE SUBSET BELOW IS AN APPROXIMATION — NOT GAZETTE-VERIFIED.
+ *
+ * In Sri Lankan practice the Mercantile holiday list (declared under the Shop
+ * and Office Employees Act) is a SUBSET of the Public holiday list, published
+ * in its own gazette annually — it is NOT the same list. Notably most Full
+ * Moon Poya Days are public and bank holidays but NOT mercantile holidays,
+ * while Vesak is all three.
+ *
+ * This file does not encode that subset, because we do not have the 2026
+ * mercantile gazette to hand and will not guess it. Instead `PUBLIC` DERIVES
+ * `'mercantile'` FROM `'public'` — i.e. it asserts every gazetted public
+ * holiday is also a mercantile holiday, which is knowingly too generous for
+ * some poya days. Treat any 'Mercantile holiday' label the UI shows for a
+ * public holiday as unverified until someone checks the gazette.
+ *
+ * To correct a date once the gazette is known: replace `[...PUBLIC]` /
+ * `[...PUBLIC_POYA]` on that entry with an explicit array that simply omits
+ * `'mercantile'` (e.g. `['public', 'bank', 'poya']`). Nothing else changes —
+ * `getHolidayIconKind` already distinguishes mercantile from bank-only days.
+ */
 const PUBLIC: readonly HolidayCategory[] = ['public', 'bank', 'mercantile']
 /** ...and a Full Moon Poya Day carries 'poya' on top of that. */
 const PUBLIC_POYA: readonly HolidayCategory[] = ['public', 'bank', 'mercantile', 'poya']
@@ -115,17 +134,24 @@ export function isLkSunday(date: Date, tz: string = LK_TIMEZONE): boolean {
 }
 
 /** The single icon kind the UI renders for a holiday — one of these ever, never several. */
-export type HolidayIconKind = 'poya' | 'public' | 'mercantile'
+export type HolidayIconKind = 'poya' | 'public' | 'mercantile' | 'bank'
 
 /**
  * Collapses a holiday's (possibly several) categories down to the one icon
- * kind the UI should show, applying the precedence poya > public >
- * bank/mercantile-only. Returns undefined for a non-holiday.
+ * kind the UI should show, applying the precedence
+ * poya > public > mercantile > bank. Returns undefined for a non-holiday.
+ *
+ * Mercantile outranks bank because a day that closes shops and offices
+ * (mercantile) is more relevant to this team's planning than one that only
+ * closes banks — so a day that is both reads as 'Mercantile holiday'. The
+ * bank kind is therefore what's left: bank-only closing days, which affect
+ * payments but not whether anyone is at their desk.
  */
 export function getHolidayIconKind(categories: HolidayCategory[] | undefined): HolidayIconKind | undefined {
   if (!categories || categories.length === 0) return undefined
   if (categories.includes('poya')) return 'poya'
   if (categories.includes('public')) return 'public'
-  if (categories.includes('bank') || categories.includes('mercantile')) return 'mercantile'
+  if (categories.includes('mercantile')) return 'mercantile'
+  if (categories.includes('bank')) return 'bank'
   return undefined
 }

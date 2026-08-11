@@ -31,6 +31,29 @@ export async function createCalendarEvent(opts: {
   return { eventId: res.data.id! }
 }
 
+/**
+ * Moves an already-created event to a new time window. `events.patch`, not
+ * `events.update`: only start/end are sent, so the summary, description and
+ * attendee list already on the event survive untouched. `sendUpdates: 'all'`
+ * re-notifies the invitees, which is the entire point of a reschedule.
+ */
+export async function updateCalendarEventTime(opts: {
+  refreshToken: string
+  eventId: string
+  startsAt: Date
+  endsAt: Date
+}): Promise<void> {
+  await client(opts.refreshToken).events.patch({
+    calendarId: 'primary',
+    eventId: opts.eventId,
+    sendUpdates: 'all',
+    requestBody: {
+      start: { dateTime: opts.startsAt.toISOString() },
+      end: { dateTime: opts.endsAt.toISOString() },
+    },
+  })
+}
+
 export async function deleteCalendarEvent(refreshToken: string, eventId: string): Promise<void> {
   await client(refreshToken).events.delete({
     calendarId: 'primary',

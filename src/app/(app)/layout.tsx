@@ -16,8 +16,8 @@ export default async function AppLayout({
   // it alone.
   if (!session?.user) redirect('/sign-in')
   const isAdmin = session.user.role === 'admin'
-  // Job role (users.title) isn't on the session/JWT (see setOwnTitle in
-  // features/auth/actions.ts, which never re-mints the token) — read it here,
+  // Job role (users.title) isn't on the session/JWT (setUserTitle in
+  // features/admin/actions.ts never re-mints the token) — read it here,
   // right alongside the session this layout already fetches, and thread it
   // into Header as a prop rather than adding a client-side fetch there.
   const title = await getOwnTitle(session.user.id)

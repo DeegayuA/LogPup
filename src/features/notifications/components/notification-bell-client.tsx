@@ -7,6 +7,7 @@ import { AtSign, Bell, CalendarPlus } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { markAllNotificationsRead } from '@/features/notifications/actions'

@@ -1,4 +1,4 @@
-import { Flag, Landmark, Moon } from 'lucide-react'
+import { Flag, Landmark, Moon, Store } from 'lucide-react'
 import {
   getHolidayIconKind,
   type HolidayCategory,
@@ -19,14 +19,19 @@ export const HOLIDAY_ICON_META: Record<
   // (it is literally the day of the full moon).
   poya: { Icon: Moon, tone: 'text-holiday', label: 'Poya day' },
   public: { Icon: Flag, tone: 'text-holiday', label: 'Public holiday' },
-  // Bank/mercantile-only days are NOT public holidays, so they get both a
-  // different icon and a different color token (--mercantile) rather than
-  // reusing --holiday, which would visually claim they're the same thing.
-  mercantile: { Icon: Landmark, tone: 'text-mercantile', label: 'Bank holiday' },
+  // Mercantile and bank days are NOT public holidays, so they share a
+  // different color token (--mercantile) rather than reusing --holiday, which
+  // would visually claim they're the same thing. They're told apart by glyph:
+  // a shopfront for the day that closes shops and offices, a columned bank
+  // building for the day that only closes banks — distinct silhouettes even
+  // at the 12px the day strip renders them at.
+  mercantile: { Icon: Store, tone: 'text-mercantile', label: 'Mercantile holiday' },
+  bank: { Icon: Landmark, tone: 'text-mercantile', label: 'Bank holiday' },
 }
 
-/** Render order for the legend and any other "all kinds at once" listing. */
-export const HOLIDAY_ICON_ORDER: HolidayIconKind[] = ['public', 'poya', 'mercantile']
+/** Render order for the legend and any other "all kinds at once" listing —
+    most to least disruptive to a working day. */
+export const HOLIDAY_ICON_ORDER: HolidayIconKind[] = ['public', 'poya', 'mercantile', 'bank']
 
 /** The accessible category label a screen reader should hear alongside a
     holiday's name (e.g. "Independence Day, Public holiday"). Undefined for

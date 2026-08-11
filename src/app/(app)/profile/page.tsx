@@ -1,3 +1,4 @@
+import { Briefcase, PawPrint } from 'lucide-react'
 import { auth } from '@/lib/auth'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -10,7 +11,6 @@ import {
 import { SetPasswordForm } from '@/features/auth/components/set-password-form'
 import { GeminiKeysCard } from '@/features/gemini/components/gemini-keys-card'
 import { PhoneField } from '@/features/auth/components/phone-field'
-import { JobRoleField } from '@/features/auth/components/job-role-field'
 import { getOwnPhone, getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
 import { AvatarUpload } from '@/features/auth/components/avatar-upload'
 import { listGeminiKeys } from '@/features/gemini/queries'
@@ -64,15 +64,39 @@ export default async function ProfilePage(props: {
               <span className="truncate font-mono text-xs text-muted-foreground">
                 {user?.email ?? '—'}
               </span>
-              {title ? (
-                <span className="truncate text-xs text-muted-foreground">{title}</span>
-              ) : null}
             </div>
             <AvatarUpload name={user?.name ?? '?'} avatarUrl={avatarUrl} />
           </CardContent>
         </Card>
 
-        <JobRoleField title={title} />
+        {/* Read-only on purpose: users.title is set by admins (setUserTitle in
+            features/admin/actions.ts), so there is no control here — not a
+            disabled one either, which would only invite a pointless click. */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Briefcase className="size-4" aria-hidden /> Job role
+            </CardTitle>
+            <CardDescription>
+              Shown to teammates on People and in your account menu. Admins keep this one
+              up to date, so ask yours if it changes.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {title ? (
+              <p className="text-sm font-medium">{title}</p>
+            ) : (
+              <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+                <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
+                <p className="text-sm font-medium">No job role yet.</p>
+                <p className="text-xs text-muted-foreground">
+                  An admin adds it from Admin → Users. Until then, teammates just see your
+                  name and email.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <PhoneField phone={phone} />
 

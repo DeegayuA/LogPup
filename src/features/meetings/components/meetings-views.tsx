@@ -91,6 +91,8 @@ export function MeetingsViews({
         <MeetingsMonthCalendar
           upcoming={upcoming}
           past={past}
+          currentUserId={currentUserId}
+          isAdmin={isAdmin}
           onSelectDay={(selected) => {
             setDay(selected)
             setView('list')

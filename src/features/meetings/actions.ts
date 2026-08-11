@@ -9,7 +9,11 @@ import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { format } from 'date-fns'
 import { getTeamForApp } from '@/features/people/queries'
-import { createCalendarEvent, deleteCalendarEvent } from '@/features/calendar/google-calendar'
+import {
+  createCalendarEvent,
+  deleteCalendarEvent,
+  updateCalendarEventTime,
+} from '@/features/calendar/google-calendar'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 
 const meetingInput = z
@@ -26,9 +30,24 @@ const meetingInput = z
     path: ['endsAt'],
   })
 
+const rescheduleInput = z
+  .object({
+    meetingId: z.uuid(),
+    startsAt: z.iso.datetime(),
+    endsAt: z.iso.datetime(),
+  })
+  .refine((data) => new Date(data.endsAt) > new Date(data.startsAt), {
+    message: 'End time must be after the start time',
+    path: ['endsAt'],
+  })
+
 const MAX_NOTES_LENGTH = 5000
 const NO_CALENDAR_ACCESS_WARNING = 'No Google Calendar access — sign out and back in to grant it'
 const CALENDAR_INVITE_FAILED_WARNING = 'Saved, but calendar invite failed — retry from the meeting list'
+const CALENDAR_MOVE_NO_ACCESS_WARNING =
+  'Moved here, but Google Calendar was not updated — no calendar access for the organiser'
+const CALENDAR_MOVE_FAILED_WARNING =
+  'Moved here, but the Google Calendar invite still shows the old time — update it in Google Calendar'
 
 async function requireSession() {
   const session = await auth()
@@ -132,6 +151,38 @@ async function syncCalendarInvite(
   }
 }
 
+/**
+ * Pushes a new time window onto a meeting's existing Google Calendar event.
+ * Same contract as syncCalendarInvite: never throws, and a failure comes back
+ * as a `calendarWarning` string rather than failing the move — the meeting row
+ * is the source of truth, and silently leaving the invite on the old time
+ * without telling anyone would be the worst of the three outcomes.
+ */
+async function syncCalendarTime(
+  organiserId: string,
+  eventId: string,
+  startsAt: Date,
+  endsAt: Date,
+): Promise<string | undefined> {
+  const [creator] = await db
+    .select({ googleRefreshToken: users.googleRefreshToken })
+    .from(users)
+    .where(eq(users.id, organiserId))
+  if (!creator?.googleRefreshToken) return CALENDAR_MOVE_NO_ACCESS_WARNING
+
+  try {
+    await updateCalendarEventTime({
+      refreshToken: creator.googleRefreshToken,
+      eventId,
+      startsAt,
+      endsAt,
+    })
+    return undefined
+  } catch {
+    return CALENDAR_MOVE_FAILED_WARNING
+  }
+}
+
 export async function createMeeting(
   input: unknown,
 ): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
@@ -231,6 +282,82 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
 
   await revalidateMeetingPaths(existing.appId)
   return ok(undefined)
+}
+
+/**
+ * Moves a meeting to a new time window — the server half of both dragging a
+ * chip onto another day in the month calendar and editing the start/end
+ * fields in the meeting detail panel.
+ *
+ * Same permission rule as every other write in this file: an admin, or the
+ * person who created the meeting. If the meeting already has a Google
+ * Calendar invite out, the event is patched to the new time and the invitees
+ * are re-notified; when that can't be done the move still succeeds and the
+ * desync is reported back as a `calendarWarning` for the caller to surface.
+ */
+export async function rescheduleMeeting(
+  meetingId: string,
+  startsAt: string,
+  endsAt: string,
+): Promise<ActionResult<{ calendarWarning?: string }>> {
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
+
+  const parsed = rescheduleInput.safeParse({ meetingId, startsAt, endsAt })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const existing = await meetingById(parsed.data.meetingId)
+  if (!existing) return err('Meeting not found')
+  if (!canManageMeeting(session, existing)) return err('Not allowed')
+
+  const nextStart = new Date(parsed.data.startsAt)
+  const nextEnd = new Date(parsed.data.endsAt)
+  if (
+    nextStart.getTime() === existing.startsAt.getTime() &&
+    nextEnd.getTime() === existing.endsAt.getTime()
+  ) {
+    // Nothing moved (e.g. a chip dropped back on its own day) — skip the
+    // write, the calendar round-trip and the "meeting moved" notifications.
+    return ok({})
+  }
+
+  await db
+    .update(meetings)
+    .set({ startsAt: nextStart, endsAt: nextEnd })
+    .where(eq(meetings.id, existing.id))
+
+  const calendarWarning = existing.googleEventId
+    ? await syncCalendarTime(existing.createdBy, existing.googleEventId, nextStart, nextEnd)
+    : undefined
+
+  // Tell the attendees their meeting moved — the same best-effort treatment
+  // as the invite notification in createMeeting: a notification failure must
+  // not fail a move that has already been written.
+  try {
+    const attendeeRows = await db
+      .select({ userId: meetingAttendees.userId })
+      .from(meetingAttendees)
+      .where(eq(meetingAttendees.meetingId, existing.id))
+    await createNotifications(
+      attendeeRows
+        .map((row) => row.userId)
+        .filter((userId) => userId !== session.user.id)
+        .map((userId) => ({
+          userId,
+          actorId: session.user.id,
+          type: 'meeting' as const,
+          title: `${session.user.name ?? 'Someone'} moved “${existing.title}”`,
+          body: format(nextStart, 'EEE, MMM d · h:mm a'),
+          link: '/meetings',
+          meetingId: existing.id,
+        })),
+    )
+  } catch (error) {
+    console.error('[notifications] meeting reschedule failed:', error)
+  }
+
+  await revalidateMeetingPaths(existing.appId)
+  return ok({ calendarWarning })
 }
 
 export async function updateMeetingNotes(meetingId: string, notes: string): Promise<ActionResult> {

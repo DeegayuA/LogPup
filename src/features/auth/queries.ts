@@ -26,8 +26,9 @@ export async function getOwnAvatarUrl(userId: string): Promise<string | null> {
 
 /**
  * The signed-in user's own job role (users.title) — read from the row, not
- * the session/JWT, for the same reason as getOwnAvatarUrl: setOwnTitle
- * doesn't re-mint the token, so the session copy would go stale immediately.
+ * the session/JWT, for the same reason as getOwnAvatarUrl: the admin-only
+ * setUserTitle doesn't re-mint anyone's token, so the session copy would go
+ * stale the moment an admin edited it. Read-only for the user themselves.
  */
 export async function getOwnTitle(userId: string): Promise<string | null> {
   const [row] = await db.select({ title: users.title }).from(users).where(eq(users.id, userId))

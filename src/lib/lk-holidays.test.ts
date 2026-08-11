@@ -115,8 +115,23 @@ describe('getHolidayIconKind', () => {
     expect(getHolidayIconKind(['public', 'bank', 'mercantile'])).toBe('public')
   })
 
-  it('resolves mercantile for a bank-only, non-public holiday', () => {
-    expect(getHolidayIconKind(['bank'])).toBe('mercantile')
+  it('resolves mercantile over bank when both are present', () => {
+    // A day that closes shops and offices matters more to planning than one
+    // that only closes banks, so it must not be labelled 'Bank holiday'.
+    expect(getHolidayIconKind(['bank', 'mercantile'])).toBe('mercantile')
+  })
+
+  it('resolves mercantile for a mercantile day that is not a public holiday', () => {
+    expect(getHolidayIconKind(['mercantile'])).toBe('mercantile')
+  })
+
+  it('resolves bank for a bank-only, non-public holiday', () => {
+    expect(getHolidayIconKind(['bank'])).toBe('bank')
+  })
+
+  it('keeps poya on top of the full public + bank + mercantile stack', () => {
+    expect(getHolidayIconKind(['mercantile', 'bank', 'poya'])).toBe('poya')
+    expect(getHolidayIconKind(['bank', 'poya'])).toBe('poya')
   })
 
   it('returns undefined for no categories', () => {

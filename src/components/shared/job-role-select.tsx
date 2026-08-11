@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { JOB_ROLE_GROUPS, JOB_ROLES } from '@/lib/job-roles'
+import { JOB_ROLE_GROUPS, JOB_ROLE_MAX_LENGTH, JOB_ROLES } from '@/lib/job-roles'
 
 const CUSTOM_JOB_ROLE = '__custom__'
 const NO_JOB_ROLE = '__none__'
@@ -22,6 +22,10 @@ const NO_JOB_ROLE = '__none__'
 // "Other…" reveals a text input that commits on blur/Enter, so titles
 // outside the curated list — including whatever is already saved — stay
 // valid and editable.
+//
+// Admin-only surface: every caller (the Add-user dialog and the Users table)
+// sits behind the admin guard, and the actions they call re-check it server
+// side. Nothing here is the access control.
 export function JobRoleSelect({
   value,
   onChange,
@@ -99,7 +103,7 @@ export function JobRoleSelect({
             }
           }}
           placeholder="Custom job role"
-          maxLength={80}
+          maxLength={JOB_ROLE_MAX_LENGTH}
           disabled={disabled}
           aria-label={ariaLabel ? `Custom ${ariaLabel}` : 'Custom job role'}
           className={size === 'sm' ? 'h-7 text-xs' : 'h-9'}

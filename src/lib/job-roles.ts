@@ -3,6 +3,15 @@
 // list is a curated set of suggestions, not an enum, so existing rows and
 // unusual titles keep working (see job-role-select.tsx).
 
+// One cap for the whole field, in one place. The zod schema that enforces it
+// lives in features/auth/title-schema.ts and imports this constant; the
+// "Other…" free-text input in job-role-select.tsx uses it for maxLength. Kept
+// here (a zero-dependency module) so the client input can share the number
+// without pulling zod into the browser bundle. Three independent caps on one
+// column is exactly how the admin table once rejected strings the Add-user
+// dialog happily accepted.
+export const JOB_ROLE_MAX_LENGTH = 60
+
 export const JOB_ROLE_GROUPS = [
   {
     label: 'Engineering',

@@ -13,6 +13,7 @@ import { orgForEmail } from '@/lib/org-from-domain'
 import { normalizePhone } from '@/lib/phone'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
+import { jobRoleInput } from '@/features/auth/title-schema'
 
 // Temporary testing tool. Enabled only when ENABLE_DB_CLEAR=1 so it can be turned off
 // (remove the flag) the moment testing is done. Wipes business data but KEEPS users,
@@ -54,6 +55,16 @@ function revalidateAdminPaths() {
   revalidatePath('/admin')
   revalidatePath('/people')
   revalidatePath('/')
+}
+
+// A job role surfaces in more places than the admin table it is edited from:
+// the People directory, each person's detail page, the header account menu
+// (rendered by the (app) layout) and the teammate's own Profile, which now
+// only reads it.
+function revalidateJobRolePaths() {
+  revalidateAdminPaths()
+  revalidatePath('/people/[id]', 'page')
+  revalidatePath('/profile')
 }
 
 // Counts active admins other than `excludeUserId` — used to check whether
@@ -148,9 +159,9 @@ const createUserInput = z.object({
   ),
   name: z.string().trim().min(1, 'Name is required').max(80, 'Name must be 80 characters or fewer'),
   role: roleInput.default('member'),
-  title: z.string().trim().max(80, 'Title must be 80 characters or fewer').optional(),
-  // Optional at creation — an admin can add it later from the user table, or
-  // the teammate sets their own from Profile.
+  title: jobRoleInput.optional(),
+  // Optional at creation — an admin can add it later from the user table.
+  // The teammate can't: users.title is admin-only.
   phone: z
     .string()
     .trim()
@@ -230,14 +241,6 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
   return ok(undefined)
 }
 
-// 80 to match createUserInput.title and the custom job-role input's own
-// maxLength — three different caps on one column meant the Users table rejected
-// strings the Add-user dialog happily accepted.
-const titleInput = z.string().trim().max(80, 'Job role must be 80 characters or fewer')
-
-// Sets the admin-facing "Job role" (users.title) — distinct from the
-// admin/member permission enum, which stays untouched here. Harmless to
-// apply to your own account, unlike role/active, so no self-target guard.
 /**
  * Contact number behind the call button. Blank clears it. Admins set it for
  * anyone; a user sets their own through setOwnPhone (features/auth/actions).
@@ -257,17 +260,32 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
   return ok(undefined)
 }
 
-export async function setUserTitle(userId: string, title: string): Promise<ActionResult> {
+/**
+ * Job role (users.title) — display metadata, distinct from the admin|member
+ * permission enum on users.role, which this never touches. Blank clears it.
+ *
+ * ADMIN-ONLY, and this guard is the enforcement: there is no self-service
+ * counterpart (the old setOwnTitle was deleted, not hidden — a server action
+ * keeps a callable endpoint long after its button is gone). Hiding the control
+ * for non-admins is presentation; requireAdmin() below is what actually stops
+ * the write. It re-reads the role from the session on every call, so nothing
+ * the client sends is trusted, and it fails closed: no session, an expired
+ * session, or a member session all return before the update runs.
+ *
+ * No self-target guard, unlike setUserRole/setUserActive: an admin retitling
+ * their own account can't lock anyone out.
+ */
+export async function setUserTitle(userId: string, title: unknown): Promise<ActionResult> {
   if (!(await requireAdmin())) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
 
-  const parsed = titleInput.safeParse(title)
+  const parsed = jobRoleInput.safeParse(title)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, parsedId.data))
-  revalidateAdminPaths()
+  revalidateJobRolePaths()
   return ok(undefined)
 }
 
