@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useTransition, type FormEvent } from 'react'
+import { useState, useTransition, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -15,7 +15,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { badgeVariants } from '@/components/ui/badge'
 import {
   Select,
   SelectContent,
@@ -23,8 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { cn } from '@/lib/utils'
-import { ALL_ROLES, ROLE_GROUPS } from '@/lib/roles'
+import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { createUser } from '@/features/admin/actions'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
 
@@ -56,18 +54,6 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
     setOpen(next)
     setForm(emptyState)
   }
-
-  // Curated job titles (src/lib/roles.ts) offered as one-click suggestions,
-  // filtered as the admin types. Free text stays allowed — these are hints,
-  // not an enum. Hidden once the input exactly matches a suggestion.
-  const titleSuggestions = useMemo(() => {
-    const q = form.title.trim().toLowerCase()
-    if (ALL_ROLES.some((r) => r.toLowerCase() === q)) return []
-    return ROLE_GROUPS.map((group) => ({
-      label: group.label,
-      roles: group.roles.filter((r) => r.toLowerCase().includes(q)),
-    })).filter((group) => group.roles.length > 0)
-  }, [form.title])
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -146,39 +132,14 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
             </Select>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="new-user-title">Title</Label>
-            <Input
-              id="new-user-title"
+            <Label htmlFor="new-user-job-role">Job role</Label>
+            <JobRoleSelect
+              id="new-user-job-role"
+              ariaLabel="Job role"
               value={form.title}
-              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              maxLength={80}
-              placeholder="e.g. Frontend Developer"
-              className="h-9"
+              onChange={(title) => setForm((f) => ({ ...f, title }))}
+              disabled={isPending}
             />
-            {titleSuggestions.length > 0 ? (
-              <div className="flex max-h-24 flex-col gap-1.5 overflow-y-auto">
-                {titleSuggestions.map((group) => (
-                  <div key={group.label} className="flex flex-col gap-1">
-                    <span className="text-xs text-muted-foreground">{group.label}</span>
-                    <div className="flex flex-wrap gap-1">
-                      {group.roles.map((role) => (
-                        <button
-                          key={role}
-                          type="button"
-                          onClick={() => setForm((f) => ({ ...f, title: role }))}
-                          className={cn(
-                            badgeVariants({ variant: 'outline' }),
-                            'cursor-pointer outline-none transition-colors hover:bg-muted hover:text-foreground',
-                          )}
-                        >
-                          {role}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
           <div className="flex flex-col gap-2">
             <Label htmlFor="new-user-org-tags">Organizations</Label>

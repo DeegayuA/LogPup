@@ -14,7 +14,14 @@ export type TeamMember = {
 }
 
 export type UserCapacity = {
-  user: { id: string; name: string; title: string | null; avatarUrl: string | null }
+  user: {
+    id: string
+    name: string
+    title: string | null
+    avatarUrl: string | null
+    role: 'admin' | 'member'
+    orgTags: string[]
+  }
   totalPct: number
   overallocated: boolean
   breakdown: { appId: string; appName: string; slug: string; role: string; allocationPct: number }[]
@@ -81,6 +88,8 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
       name: users.name,
       title: users.title,
       avatarUrl: users.avatarUrl,
+      userRole: users.role,
+      orgTags: users.orgTags,
       appId: apps.id,
       appName: apps.name,
       slug: apps.slug,
@@ -113,7 +122,14 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
     if (!entry) {
       const summary = totalsByUser.get(row.userId)
       entry = {
-        user: { id: row.userId, name: row.name, title: row.title, avatarUrl: row.avatarUrl },
+        user: {
+          id: row.userId,
+          name: row.name,
+          title: row.title,
+          avatarUrl: row.avatarUrl,
+          role: row.userRole,
+          orgTags: row.orgTags,
+        },
         totalPct: summary?.totalPct ?? 0,
         overallocated: summary?.overallocated ?? false,
         breakdown: [],
