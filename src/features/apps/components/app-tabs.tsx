@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { startTransition, useOptimistic, type ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
@@ -32,12 +32,37 @@ export function AppTabs({
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
+  // The URL owns the active tab, so a shared link, a reload and the back
+  // button all land on the same tab. That makes this a CONTROLLED Tabs:
+  // `defaultValue` would be re-initialised every time router.replace below
+  // re-renders the page with a new `initialTab`, which is exactly what Base
+  // UI warns about ("changing the default value state of an uncontrolled
+  // Tabs after being initialized").
+  // Roadmap and Settings are conditional (Settings is admin-only), so a link
+  // to ?tab=settings can outlive the permission that produced it. Falling back
+  // to Overview keeps that a working page rather than a tab with no panel.
+  const available = new Set<TabValue>(['overview', 'board', 'meetings'])
+  if (roadmap) available.add('roadmap')
+  if (settings) available.add('settings')
+  const requested = normalizeTab(searchParams.get('tab') ?? initialTab)
+  const urlTab = available.has(requested) ? requested : 'overview'
+
+  // ...but the URL round-trips through the server, so switching on `urlTab`
+  // alone would leave the tab visibly lagging the click. The optimistic value
+  // paints immediately and is reconciled back to the URL once the navigation
+  // settles — including when it fails, which snaps the tab back rather than
+  // stranding it on a tab the URL doesn't agree with.
+  const [activeTab, setActiveTab] = useOptimistic(urlTab)
+
   function handleValueChange(value: string) {
-    // Copy the existing params (e.g. ?sprint=...) so switching tabs never
-    // clobbers whatever else is in the URL.
-    const params = new URLSearchParams(searchParams.toString())
-    params.set('tab', value)
-    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+    startTransition(() => {
+      setActiveTab(normalizeTab(value))
+      // Copy the existing params (e.g. ?sprint=...) so switching tabs never
+      // clobbers whatever else is in the URL.
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('tab', value)
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+    })
   }
 
   // Underline-style tab bar: the trigger's own border-b-2 sits on the list's
@@ -47,7 +72,7 @@ export function AppTabs({
 
   return (
     <Tabs
-      defaultValue={normalizeTab(initialTab)}
+      value={activeTab}
       onValueChange={(value) => handleValueChange(value as string)}
       className="flex flex-1 flex-col gap-4"
     >

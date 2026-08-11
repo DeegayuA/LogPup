@@ -3,6 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { Textarea } from '@/components/ui/textarea'
+import { findMentionQuery, matchMentions, type ActiveMention } from '@/lib/mention-match'
 
 export type MentionUser = { id: string; name: string }
 
@@ -60,24 +61,6 @@ export function MentionText({
   return <span className={className}>{nodes}</span>
 }
 
-type ActiveMention = { start: number; query: string }
-
-/*
- * Finds the "@token" the caret is currently inside: the nearest '@' before
- * the caret that starts a word (start of text or after whitespace), with no
- * whitespace between it and the caret. Inserted mentions end with a space,
- * so completing one closes the popover on its own.
- */
-function findActiveMention(value: string, caret: number): ActiveMention | null {
-  const upToCaret = value.slice(0, caret)
-  const at = upToCaret.lastIndexOf('@')
-  if (at === -1) return null
-  if (at > 0 && !/\s/.test(upToCaret[at - 1])) return null
-  const query = upToCaret.slice(at + 1)
-  if (/\s/.test(query)) return null
-  return { start: at, query }
-}
-
 export function MentionTextarea({
   users,
   value,
@@ -100,17 +83,22 @@ export function MentionTextarea({
   /* The '@' position the user escaped out of — stays closed until they leave that token. */
   const [dismissedStart, setDismissedStart] = React.useState<number | null>(null)
 
-  const suggestions = React.useMemo(() => {
-    if (!mention) return []
-    const q = mention.query.toLowerCase()
-    return users.filter((u) => u.name.toLowerCase().includes(q)).slice(0, 6)
-  }, [mention, users])
+  /* Ranked in src/lib/mention-match.ts: prefixes, then two-word and initials
+     forms, then a typo fallback — so "@shan ayas" and "@deghayu" both land. */
+  const suggestions = React.useMemo(
+    () => (mention ? matchMentions(mention.query, users) : []),
+    [mention, users],
+  )
 
-  const open = mention !== null && suggestions.length > 0 && dismissedStart !== mention.start
+  /* The typo fallback only ever runs when nothing else matched, so one fuzzy
+     row means the whole list is fuzzy — hence a single hint above the group. */
+  const closest = suggestions[0]?.kind === 'fuzzy'
+  const open = mention !== null && dismissedStart !== mention.start
+  const hasSuggestions = suggestions.length > 0
   const active = Math.min(activeIndex, Math.max(suggestions.length - 1, 0))
 
   function syncMention(el: HTMLTextAreaElement) {
-    const next = findActiveMention(el.value, el.selectionStart ?? el.value.length)
+    const next = findMentionQuery(el.value, el.selectionStart ?? el.value.length)
     if (next?.start !== dismissedStart) setDismissedStart(null)
     if (next?.start !== mention?.start || next?.query !== mention?.query) setActiveIndex(0)
     setMention(next)
@@ -136,20 +124,22 @@ export function MentionTextarea({
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (open && !event.nativeEvent.isComposing) {
-      if (event.key === 'ArrowDown') {
+    if (open && mention && !event.nativeEvent.isComposing) {
+      /* Arrows and Enter belong to the textarea again the moment there is
+         nothing to pick — the popover is only saying "no match" then. */
+      if (hasSuggestions && event.key === 'ArrowDown') {
         event.preventDefault()
         setActiveIndex((active + 1) % suggestions.length)
         return
       }
-      if (event.key === 'ArrowUp') {
+      if (hasSuggestions && event.key === 'ArrowUp') {
         event.preventDefault()
         setActiveIndex((active - 1 + suggestions.length) % suggestions.length)
         return
       }
-      if (event.key === 'Enter') {
+      if (hasSuggestions && event.key === 'Enter') {
         event.preventDefault()
-        insertMention(suggestions[active])
+        insertMention(suggestions[active].user)
         return
       }
       if (event.key === 'Escape') {
@@ -187,23 +177,30 @@ export function MentionTextarea({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        aria-activedescendant={open ? `${listId}-${suggestions[active].id}` : undefined}
+        aria-activedescendant={
+          open && hasSuggestions ? `${listId}-${suggestions[active].user.id}` : undefined
+        }
       />
-      {open ? (
+      {open && mention ? (
         <ul
           id={listId}
           role="listbox"
-          aria-label="Mention a teammate"
-          className="absolute top-full left-0 z-50 mt-1 max-h-56 w-60 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-border"
+          aria-label={closest ? 'Closest matching teammates' : 'Mention a teammate'}
+          className="absolute top-full left-0 z-50 mt-1 max-h-56 w-60 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-border duration-150 ease-out animate-in fade-in-0 slide-in-from-top-1 motion-reduce:animate-none"
         >
-          {suggestions.map((user, index) => (
+          {closest ? (
+            <li role="presentation" className="px-2 pt-1 pb-1.5 text-xs text-muted-foreground">
+              Closest match{suggestions.length > 1 ? 'es' : ''}
+            </li>
+          ) : null}
+          {suggestions.map(({ user }, index) => (
             <li
               key={user.id}
               id={`${listId}-${user.id}`}
               role="option"
               aria-selected={index === active}
               data-selected={index === active || undefined}
-              className="cursor-default rounded-md px-2 py-1.5 text-sm select-none data-selected:bg-muted"
+              className="cursor-default rounded-md px-2 py-1.5 text-sm select-none hover:bg-muted data-selected:bg-muted"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => insertMention(user)}
               onMouseMove={() => setActiveIndex(index)}
@@ -214,6 +211,15 @@ export function MentionTextarea({
               {user.name}
             </li>
           ))}
+          {hasSuggestions ? null : (
+            /* Saying "nobody" out loud beats a popover that silently vanishes
+               and leaves an @name that will never notify anyone. */
+            <li role="presentation" className="px-2 py-1.5 text-sm text-muted-foreground">
+              {mention.query.trim()
+                ? `No teammate matches “${mention.query.trim()}”`
+                : 'No teammates to mention'}
+            </li>
+          )}
         </ul>
       ) : null}
     </div>
