@@ -2,50 +2,144 @@ import { describe, it, expect } from 'vitest'
 import {
   resolveSpeakerUserId,
   normalizeDueDate,
+  planSpeakerAssignment,
   suggestionToTaskPayload,
   orderNoteSegments,
   type OrderableSegment,
 } from './notes'
 
 describe('resolveSpeakerUserId', () => {
-  const attendees = [
-    { id: 'u1', name: 'Nadeesha Perera' },
-    { id: 'u2', name: 'Kasun Silva' },
-  ]
+  // These are the meeting's attendees. Their names are used as LABELS below
+  // on purpose: the point of every "returns null" case is that a label
+  // matching a real attendee's name is still only a guess.
+  const ATTENDEE_NAMES = ['Nadeesha Perera', 'Kasun Silva']
+
+  // Structural half of the regression guard. The function does not take the
+  // attendee list at all, so it cannot name-match even by accident — a
+  // behavioural assertion alone could be satisfied by a fallback that simply
+  // wasn't handed any attendees. Re-adding that parameter is the regression,
+  // and this fails the moment someone does.
+  it('cannot see the attendee list — it takes only a label and mappings', () => {
+    expect(resolveSpeakerUserId.length).toBe(2)
+  })
 
   it('returns null for a null/empty label', () => {
-    expect(resolveSpeakerUserId(null, [], attendees)).toBeNull()
-    expect(resolveSpeakerUserId('', [], attendees)).toBeNull()
+    expect(resolveSpeakerUserId(null, [])).toBeNull()
+    expect(resolveSpeakerUserId('', [])).toBeNull()
   })
 
   it('uses an explicit mapping when one exists', () => {
     const mappings = [{ label: 'Speaker 1', userId: 'u2' }]
-    expect(resolveSpeakerUserId('Speaker 1', mappings, attendees)).toBe('u2')
+    expect(resolveSpeakerUserId('Speaker 1', mappings)).toBe('u2')
   })
 
-  it('honors an explicit "not a listed attendee" mapping (null) without falling back to name-matching', () => {
+  it('honors an explicit "not a listed attendee" mapping (null)', () => {
     const mappings = [{ label: 'Nadeesha Perera', userId: null }]
-    expect(resolveSpeakerUserId('Nadeesha Perera', mappings, attendees)).toBeNull()
+    expect(resolveSpeakerUserId('Nadeesha Perera', mappings)).toBeNull()
   })
 
-  it('falls back to matching the label as a name when no mapping exists', () => {
-    expect(resolveSpeakerUserId('Kasun Silva', [], attendees)).toBe('u2')
+  // THE REGRESSION GUARD. A speaker label is a model guess — the analysis
+  // prompt asks Gemini to map speakers to attendee names, so a label matching
+  // an attendee's name is evidence of nothing. This function used to
+  // name-match here, which rendered a guess as fact: in production a note was
+  // attributed to someone who was talked ABOUT, not talking, and the same
+  // call pre-assigned a real task to them. No mapping row, no person. Ever.
+  it('returns null for an unmapped label that EXACTLY matches an attendee name', () => {
+    const [exactAttendeeName] = ATTENDEE_NAMES
+    expect(exactAttendeeName).toBe('Nadeesha Perera')
+    expect(resolveSpeakerUserId(exactAttendeeName, [])).toBeNull()
   })
 
-  it('falls back to matching an unambiguous first name', () => {
-    expect(resolveSpeakerUserId('Kasun', [], attendees)).toBe('u2')
+  it('returns null for an unmapped label matching an attendee first name', () => {
+    expect(ATTENDEE_NAMES[1].startsWith('Kasun')).toBe(true)
+    expect(resolveSpeakerUserId('Kasun', [])).toBeNull()
   })
 
-  it('returns null for a generic "Speaker N" label with no mapping and no name match', () => {
-    expect(resolveSpeakerUserId('Speaker 2', [], attendees)).toBeNull()
+  it('returns null for a generic "Speaker N" label with no mapping', () => {
+    expect(resolveSpeakerUserId('Speaker 2', [])).toBeNull()
   })
 
-  it('prefers the mapping for one label over a same-meeting mapping for a different label', () => {
+  it('ignores a mapping for a DIFFERENT label rather than treating it as a near-miss', () => {
+    const mappings = [{ label: 'Speaker 1', userId: 'u1' }]
+    expect(resolveSpeakerUserId('Speaker 2', mappings)).toBeNull()
+  })
+
+  it('picks the right mapping when several labels are mapped in the same meeting', () => {
     const mappings = [
       { label: 'Speaker 1', userId: 'u1' },
       { label: 'Speaker 2', userId: 'u2' },
     ]
-    expect(resolveSpeakerUserId('Speaker 2', mappings, attendees)).toBe('u2')
+    expect(resolveSpeakerUserId('Speaker 2', mappings)).toBe('u2')
+  })
+})
+
+describe('planSpeakerAssignment', () => {
+  it('plans nothing to add for "not a listed attendee"', () => {
+    expect(
+      planSpeakerAssignment({
+        userId: null,
+        attendeeIds: ['u1'],
+        appId: 'app1',
+        assignedAppIds: [],
+      }),
+    ).toEqual({ userId: null, addAttendee: false, addAssignment: false })
+  })
+
+  it('adds nothing for an attendee already assigned to the meeting’s app', () => {
+    expect(
+      planSpeakerAssignment({
+        userId: 'u1',
+        attendeeIds: ['u1', 'u2'],
+        appId: 'app1',
+        assignedAppIds: ['app1'],
+      }),
+    ).toEqual({ userId: 'u1', addAttendee: false, addAssignment: false })
+  })
+
+  // The non-attendee cascade: naming someone who isn't on the meeting is a
+  // claim they were in the room AND doing that app's work, so both rows are
+  // needed. This is the case that lands rows in all three tables.
+  it('adds both attendee and assignment for someone on neither', () => {
+    expect(
+      planSpeakerAssignment({
+        userId: 'u9',
+        attendeeIds: ['u1'],
+        appId: 'app1',
+        assignedAppIds: [],
+      }),
+    ).toEqual({ userId: 'u9', addAttendee: true, addAssignment: true })
+  })
+
+  it('adds only the attendee row when they already carry the app', () => {
+    expect(
+      planSpeakerAssignment({
+        userId: 'u9',
+        attendeeIds: ['u1'],
+        appId: 'app1',
+        assignedAppIds: ['app1'],
+      }),
+    ).toEqual({ userId: 'u9', addAttendee: true, addAssignment: false })
+  })
+
+  it('adds no assignment when the meeting is not linked to an app', () => {
+    expect(
+      planSpeakerAssignment({
+        userId: 'u9',
+        attendeeIds: [],
+        appId: null,
+        assignedAppIds: [],
+      }),
+    ).toEqual({ userId: 'u9', addAttendee: true, addAssignment: false })
+  })
+
+  it('does not confuse an assignment on a DIFFERENT app for one on this app', () => {
+    const plan = planSpeakerAssignment({
+      userId: 'u9',
+      attendeeIds: ['u9'],
+      appId: 'app1',
+      assignedAppIds: ['app2', 'app3'],
+    })
+    expect(plan).toEqual({ userId: 'u9', addAttendee: false, addAssignment: true })
   })
 })
 

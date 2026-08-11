@@ -14,6 +14,7 @@ import {
   PlusIcon,
   SparklesIcon,
   Trash2Icon,
+  UserSearchIcon,
   XIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -33,17 +34,20 @@ import { MarkdownLite } from '@/components/markdown-lite'
 import {
   acceptTaskSuggestion,
   addTypedNoteSegment,
+  assignFollowupPerson,
   deleteNoteSegment,
   dismissTaskSuggestion,
   editNoteSegment,
   getMeetingNoteTimeline,
-  setSpeakerMapping,
   type NoteSegmentView,
   type NoteTimelineData,
   type TaskSuggestionView,
 } from '@/features/meetings/ai-actions'
+import {
+  SpeakerAssignmentPanel,
+  SpeakerLabelChip,
+} from '@/features/meetings/components/speaker-assignment'
 
-const NOT_ATTENDEE = '__not_attendee__'
 const UNASSIGNED = '__unassigned__'
 
 const PRIORITY_OPTIONS = [
@@ -105,11 +109,11 @@ export function NoteTimeline({
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deletePending, startDeletePending] = useTransition()
 
-  const [speakerBusyLabel, setSpeakerBusyLabel] = useState<string | null>(null)
-  const [speakerPending, startSpeakerPending] = useTransition()
-
   const [suggestionBusyId, setSuggestionBusyId] = useState<string | null>(null)
   const [suggestionPending, startSuggestionPending] = useTransition()
+
+  const [followupBusyId, setFollowupBusyId] = useState<string | null>(null)
+  const [followupPending, startFollowupPending] = useTransition()
 
   const [editingSuggestion, setEditingSuggestion] = useState<TaskSuggestionView | null>(null)
   const [suggestionForm, setSuggestionForm] = useState<EditForm | null>(null)
@@ -209,25 +213,6 @@ export function NoteTimeline({
     })
   }
 
-  function handleAssignSpeaker(label: string, value: string) {
-    const userId = value === NOT_ATTENDEE ? null : value
-    setSpeakerBusyLabel(label)
-    startSpeakerPending(async () => {
-      try {
-        const res = await setSpeakerMapping(meetingId, label, userId)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        await load()
-      } catch {
-        toast.error('Something went wrong — try again')
-      } finally {
-        setSpeakerBusyLabel(null)
-      }
-    })
-  }
-
   function handleAcceptSuggestion(suggestion: TaskSuggestionView, overrides?: EditForm) {
     setSuggestionBusyId(suggestion.id)
     startSuggestionPending(async () => {
@@ -255,6 +240,25 @@ export function NoteTimeline({
         toast.error('Something went wrong — try again')
       } finally {
         setSuggestionBusyId(null)
+      }
+    })
+  }
+
+  function handleAssignFollowup(followupId: string, userId: string) {
+    setFollowupBusyId(followupId)
+    startFollowupPending(async () => {
+      try {
+        const res = await assignFollowupPerson(followupId, userId)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Follow-up assigned')
+        await load()
+      } catch {
+        toast.error('Something went wrong — try again')
+      } finally {
+        setFollowupBusyId(null)
       }
     })
   }
@@ -308,60 +312,27 @@ export function NoteTimeline({
     ),
   )
 
+  // Who an unresolved follow-up can be handed to: this meeting's attendees
+  // first (overwhelmingly the answer), then the rest of the org for the case
+  // where the item belongs to someone who wasn't formally invited. Attendees
+  // are listed first rather than merged-and-sorted so the likely answer is at
+  // the top of the list, not buried alphabetically among everyone.
+  const assignablePeople = [...data.attendees, ...data.orgPeople]
+
   return (
     <div className="flex flex-col gap-3">
-      {speakerLabels.length > 0 ? (
-        <section className="flex flex-col gap-1.5 rounded-lg border border-dashed p-2.5">
-          <h4 className="text-xs font-semibold text-muted-foreground">Who&rsquo;s who</h4>
-          <div className="flex flex-wrap gap-2">
-            {speakerLabels.map((label) => {
-              const mapping = data.speakers.find((s) => s.label === label)
-              const value = mapping ? (mapping.userId ?? NOT_ATTENDEE) : undefined
-              const busy = speakerBusyLabel === label && speakerPending
-              return (
-                <div key={label} className="flex items-center gap-1.5">
-                  <span className="text-xs text-muted-foreground">{label}</span>
-                  {canManage ? (
-                    <Select
-                      value={value}
-                      onValueChange={(v) => v && handleAssignSpeaker(label, v)}
-                      disabled={busy}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="pointer-coarse:min-h-11 w-40"
-                        aria-label={`Who is ${label}?`}
-                      >
-                        <SelectValue placeholder="Assign…">
-                          {(v: string) =>
-                            v === NOT_ATTENDEE
-                              ? 'Not an attendee'
-                              : (attendees.find((a) => a.id === v)?.name ?? 'Assign…')
-                          }
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {attendees.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}
-                          </SelectItem>
-                        ))}
-                        <SelectItem value={NOT_ATTENDEE}>Not a listed attendee</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <span className="text-xs font-medium">
-                      {mapping
-                        ? (mapping.userName ?? 'Not a listed attendee')
-                        : 'Unassigned'}
-                    </span>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      ) : null}
+      <SpeakerAssignmentPanel
+        meetingId={meetingId}
+        canManage={canManage}
+        data={{
+          labels: speakerLabels,
+          speakers: data.speakers,
+          attendees: data.attendees,
+          orgPeople: data.orgPeople,
+          canAddPeople: data.canAddPeople,
+        }}
+        onChanged={load}
+      />
 
       {data.segments.length === 0 ? (
         <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed px-4 py-6 text-center">
@@ -378,15 +349,23 @@ export function NoteTimeline({
             const Icon = meta.icon
             const isEditing = editingId === segment.id
             const canEditThis = canManage && segment.source !== 'voice' && !segment.isLegacy
-            const speakerDisplay =
-              segment.speakerName ?? segment.speakerLabel ?? (segment.source === 'typed' ? segment.createdByName : null)
+            // A resolved speaker is a PERSON and reads as one. An unresolved
+            // label is rendered as a label (mono chip) — never as a name, no
+            // matter how much it looks like one. That distinction is the
+            // whole fix: "Speaker 1" and "Irushi Anupama" are both just
+            // things the recording said until someone confirms them.
+            const speakerName =
+              segment.speakerName ?? (segment.source === 'typed' ? segment.createdByName : null)
             return (
               <li key={segment.id} className="flex flex-col gap-1 rounded-lg border border-border p-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Icon className="size-3.5 shrink-0" aria-hidden />
                     <span className="font-medium">{meta.label}</span>
-                    {speakerDisplay ? <span>· {speakerDisplay}</span> : null}
+                    {speakerName ? <span>· {speakerName}</span> : null}
+                    {!speakerName && segment.speakerLabel ? (
+                      <SpeakerLabelChip label={segment.speakerLabel} />
+                    ) : null}
                     <span className="font-mono tabular-nums">
                       {format(segment.createdAt, 'MMM d, h:mm a')}
                     </span>
@@ -553,6 +532,77 @@ export function NoteTimeline({
                         <XIcon aria-hidden />
                         <span className="sr-only">Dismiss suggestion</span>
                       </Button>
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* Follow-ups the AI raised but could not attribute. Before the
+          attribution fix these were silently name-matched onto whoever
+          happened to share the name; now they wait here, visibly unowned,
+          until someone says who they belong to. An item nobody is assigned
+          carries forward to nobody, so this is the only place it surfaces —
+          which is exactly why it has to surface. */}
+      {data.unassignedFollowups.length > 0 ? (
+        <section className="flex flex-col gap-1.5">
+          <h4 className="flex items-center gap-1.5 font-heading text-sm font-semibold">
+            <UserSearchIcon className="size-3.5 text-primary" aria-hidden />
+            Who owes this?
+          </h4>
+          <p className="text-xs text-muted-foreground">
+            LogPup heard these as follow-ups but couldn&rsquo;t tell whose they are. The name is
+            what the recording said, not a confirmed person.
+          </p>
+          <ul className="flex flex-col gap-2">
+            {data.unassignedFollowups.map((item) => {
+              const busy = followupBusyId === item.id && followupPending
+              return (
+                <li
+                  key={item.id}
+                  className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed p-2.5"
+                >
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <p className="text-sm text-foreground">{item.text}</p>
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                      <span>{item.kind === 'question' ? 'Question' : 'Action'}</span>
+                      <span aria-hidden>·</span>
+                      <span>heard as</span>
+                      <SpeakerLabelChip label={item.personName} />
+                    </p>
+                  </div>
+                  {canManage ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Select
+                        value={undefined}
+                        onValueChange={(v: string | null | undefined) => {
+                          if (v) handleAssignFollowup(item.id, v)
+                        }}
+                        disabled={busy}
+                      >
+                        <SelectTrigger
+                          size="sm"
+                          className="pointer-coarse:min-h-11 w-44"
+                          aria-label={`Who owes “${item.text}”?`}
+                        >
+                          <SelectValue placeholder="Assign to…">
+                            {(v: string) => assignablePeople.find((p) => p.id === v)?.name ?? 'Assign to…'}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {assignablePeople.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {busy ? (
+                        <Loader2Icon className="size-3.5 animate-spin text-muted-foreground" aria-hidden />
+                      ) : null}
                     </div>
                   ) : null}
                 </li>

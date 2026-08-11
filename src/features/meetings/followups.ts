@@ -2,6 +2,13 @@
 // system. Kept free of DB/network calls on purpose — the server actions in
 // ai-actions.ts fetch rows and call these functions to decide what to do
 // with them.
+//
+// Depends on notes.ts (one direction only — notes.ts imports nothing) so that
+// "what resolves a model-produced name to a person" is ONE function shared by
+// the note timeline and the follow-up derivation, rather than two rules that
+// can drift apart.
+
+import { resolveSpeakerUserId, type SpeakerMapping } from '@/features/meetings/notes'
 
 export type FollowupKind = 'question' | 'action'
 
@@ -38,6 +45,67 @@ export function matchPersonToAttendee(
   if (firstNameMatches.length === 1) return firstNameMatches[0].id
 
   return null
+}
+
+export type DerivedFollowupRow = {
+  sourceMeetingId: string
+  userId: string | null
+  personName: string
+  text: string
+  kind: FollowupKind
+}
+
+/**
+ * Turns the model's per-person notes and prep questions into follow-up rows.
+ *
+ * The person name here is a MODEL GUESS in exactly the way a speaker label is:
+ * the analysis prompt asks Gemini to attribute points and action items to
+ * named people, and it will happily name someone who was discussed rather than
+ * speaking. So attribution goes through resolveSpeakerUserId against the
+ * meeting's confirmed `meeting_speakers` mappings — the same single rule the
+ * note timeline uses — and NOT through matchPersonToAttendee, which would
+ * resolve any label that happens to match an attendee's name and render the
+ * guess as fact. That was the bug: an unconfirmed match here silently made a
+ * real person owe work they never agreed to, and carried it into every future
+ * meeting they attended.
+ *
+ * `personName` always keeps the raw text, mapped or not, so nothing the model
+ * observed is lost — an unresolved row renders that name as a LABEL and stays
+ * assignable by a human (assignFollowupPerson).
+ */
+export function buildFollowupRows(
+  sourceMeetingId: string,
+  perPerson: { name: string; actionItems?: string[] }[],
+  questions: { person: string; questions?: string[] }[],
+  mappings: SpeakerMapping[],
+): DerivedFollowupRow[] {
+  const rows: DerivedFollowupRow[] = []
+
+  for (const person of perPerson) {
+    if (!person.name) continue
+    const userId = resolveSpeakerUserId(person.name, mappings)
+    for (const action of person.actionItems ?? []) {
+      if (!action) continue
+      rows.push({ sourceMeetingId, userId, personName: person.name, text: action, kind: 'action' })
+    }
+  }
+
+  for (const entry of questions) {
+    if (!entry.person) continue
+    const userId = resolveSpeakerUserId(entry.person, mappings)
+    for (const question of entry.questions ?? []) {
+      if (!question) continue
+      rows.push({
+        sourceMeetingId,
+        userId,
+        personName: entry.person,
+        text: question,
+        kind: 'question',
+      })
+    }
+  }
+
+  return rows
 }
 
 export type OpenFollowupItem = {
