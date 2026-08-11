@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { Sidebar } from '@/components/shell/sidebar'
 import { Header } from '@/components/shell/header'

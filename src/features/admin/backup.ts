@@ -24,6 +24,7 @@ const backupUserColumns = {
   name: users.name,
   avatarUrl: users.avatarUrl,
   title: users.title,
+  orgTags: users.orgTags,
   role: users.role,
   active: users.active,
   createdAt: users.createdAt,
