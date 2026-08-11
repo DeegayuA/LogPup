@@ -1,34 +1,51 @@
+import { format } from 'date-fns'
 import { auth } from '@/lib/auth'
 import { getUserCapacities } from '@/features/people/queries'
+import { getActiveSprints } from '@/features/sprints/queries'
+import { getUpcomingMeetingsForUser } from '@/features/meetings/queries'
 import { CapacityHeat } from '@/features/dashboard/components/capacity-heat'
-import { DbClearButton } from '@/features/admin/components/db-clear-button'
-import { SetPasswordForm } from '@/features/auth/components/set-password-form'
+import { ActiveSprints } from '@/features/dashboard/components/active-sprints'
+import { UpcomingMeetings } from '@/features/dashboard/components/upcoming-meetings'
+
+const UPCOMING_MEETING_WINDOW_DAYS = 7
+
+function greetingFor(hour: number): string {
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
 
 export default async function DashboardPage() {
-  const [capacities, session] = await Promise.all([getUserCapacities(), auth()])
-  const showDbClear = process.env.ENABLE_DB_CLEAR === '1' && session?.user?.role === 'admin'
+  const session = await auth()
+  const [capacities, activeSprints, upcomingMeetings] = await Promise.all([
+    getUserCapacities(),
+    getActiveSprints(),
+    session?.user
+      ? getUpcomingMeetingsForUser(session.user.id, UPCOMING_MEETING_WINDOW_DAYS)
+      : Promise.resolve([]),
+  ])
+
+  const now = new Date()
+  const firstName = session?.user?.name?.trim().split(/\s+/)[0]
+  const greeting = firstName
+    ? `${greetingFor(now.getHours())}, ${firstName}`
+    : greetingFor(now.getHours())
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-6">
-      <h1 className="font-heading text-xl font-medium">Dashboard</h1>
-      {/* Grid holds room for future widgets (Tasks 13/14): capacity heat is
-          section 1 of 3, spanning full width until the others land. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="lg:col-span-2">
-          <CapacityHeat capacities={capacities} />
+    <div className="flex flex-1 flex-col gap-6 p-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="font-heading text-2xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-sm text-muted-foreground">
+          {greeting} · {format(now, 'EEEE, MMMM d')}
+        </p>
+      </header>
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        <CapacityHeat capacities={capacities} />
+        <div className="flex flex-col gap-6">
+          <ActiveSprints sprints={activeSprints} />
+          <UpcomingMeetings meetings={upcomingMeetings} />
         </div>
       </div>
-      {/* Gives any signed-in user (Google, Notion, dev login) a way to add password
-          login for their own account — the only UI path that can set a passwordHash. */}
-      <div className="lg:max-w-xs">
-        <SetPasswordForm />
-      </div>
-      {showDbClear && (
-        <div className="mt-2 flex flex-col gap-2 rounded-lg border border-dashed p-4">
-          <p className="text-sm font-medium">Testing tools</p>
-          <DbClearButton />
-        </div>
-      )}
     </div>
   )
 }

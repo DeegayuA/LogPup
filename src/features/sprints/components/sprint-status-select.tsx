@@ -39,7 +39,7 @@ export function SprintStatusSelect({ sprintId, status }: { sprintId: string; sta
 
   return (
     <Select value={status} onValueChange={handleChange} disabled={isPending}>
-      <SelectTrigger className="w-36" aria-label="Sprint status">
+      <SelectTrigger className="h-8 w-36" aria-label="Sprint status">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

@@ -15,6 +15,7 @@
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 
 # production
@@ -41,3 +42,20 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 /.next-e2e
+
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/e2e/.auth/
+
+# Claude agent worktrees
+.claude/
+
+# graphify internals (keep graph.json/report/html committed)
+graphify-out/.graphify_*
+graphify-out/cost.json
+
+# Playwright e2e build output
+.next-e2e/

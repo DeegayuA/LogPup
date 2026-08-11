@@ -67,7 +67,7 @@ export function SprintFormDialog({ appId }: { appId: string }) {
           <DialogDescription>Plan the next sprint for this app.</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="sprint-name">Name</Label>
             <Input
               id="sprint-name"
@@ -78,7 +78,7 @@ export function SprintFormDialog({ appId }: { appId: string }) {
               required
             />
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
             <Label htmlFor="sprint-goal">Goal</Label>
             <Textarea
               id="sprint-goal"
@@ -88,21 +88,23 @@ export function SprintFormDialog({ appId }: { appId: string }) {
             />
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="sprint-start">Start date</Label>
               <Input
                 id="sprint-start"
                 type="date"
+                className="font-mono"
                 value={form.startDate}
                 onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
                 required
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-2">
               <Label htmlFor="sprint-end">End date</Label>
               <Input
                 id="sprint-end"
                 type="date"
+                className="font-mono"
                 value={form.endDate}
                 onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))}
                 required

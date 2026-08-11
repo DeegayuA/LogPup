@@ -48,6 +48,26 @@ async function requireAdmin() {
   return session
 }
 
+/**
+ * Walks an error's `.cause` chain looking for a Postgres foreign-key
+ * violation (bogus appId/sprintId/assigneeId). Same shape as
+ * `isUniqueViolation` in people/actions.ts — the neon-http driver / drizzle
+ * wrap the underlying NeonDbError, so the `code`/`message` we want may be a
+ * few levels down.
+ */
+function isForeignKeyViolation(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    const e = current as { code?: unknown; message?: unknown; cause?: unknown }
+    if (e.code === '23503') return true
+    if (typeof e.message === 'string' && e.message.includes('foreign key')) return true
+    current = e.cause
+  }
+  return false
+}
+
 async function taskById(taskId: string) {
   const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId))
   return task ?? null
@@ -70,18 +90,24 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const { appId, sprintId, title, description, assigneeId, priority, status } = parsed.data
-  const [created] = await db
-    .insert(tasks)
-    .values({
-      appId,
-      sprintId,
-      title,
-      description: description || null,
-      assigneeId,
-      priority,
-      status,
-    })
-    .returning({ id: tasks.id })
+  let created: { id: string } | undefined
+  try {
+    ;[created] = await db
+      .insert(tasks)
+      .values({
+        appId,
+        sprintId,
+        title,
+        description: description || null,
+        assigneeId,
+        priority,
+        status,
+      })
+      .returning({ id: tasks.id })
+  } catch (error) {
+    if (isForeignKeyViolation(error)) return err('Invalid app, sprint, or assignee')
+    throw error
+  }
 
   await revalidateApp(appId)
   return ok({ taskId: created.id })

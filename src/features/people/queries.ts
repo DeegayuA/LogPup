@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, ilike, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, assignments, meetingAttendees, meetings, tasks, users } from '@/db/schema'
 import { summarizeAllocations } from '@/features/people/allocation'
@@ -14,7 +14,15 @@ export type TeamMember = {
 }
 
 export type UserCapacity = {
-  user: { id: string; name: string; title: string | null; avatarUrl: string | null }
+  user: {
+    id: string
+    name: string
+    title: string | null
+    phone: string | null
+    avatarUrl: string | null
+    role: 'admin' | 'member'
+    orgTags: string[]
+  }
   totalPct: number
   overallocated: boolean
   breakdown: { appId: string; appName: string; slug: string; role: string; allocationPct: number }[]
@@ -46,6 +54,7 @@ export type PersonDetail = {
     name: string
     email: string
     title: string | null
+    phone: string | null
     avatarUrl: string | null
     role: 'admin' | 'member'
     active: boolean
@@ -80,7 +89,10 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
       userId: users.id,
       name: users.name,
       title: users.title,
+      phone: users.phone,
       avatarUrl: users.avatarUrl,
+      userRole: users.role,
+      orgTags: users.orgTags,
       appId: apps.id,
       appName: apps.name,
       slug: apps.slug,
@@ -90,7 +102,13 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
     .from(users)
     .leftJoin(assignments, eq(assignments.userId, users.id))
     .leftJoin(apps, eq(assignments.appId, apps.id))
-    .where(and(eq(users.active, true), q ? ilike(users.name, `%${q}%`) : undefined))
+    .where(
+      and(
+        eq(users.active, true),
+        // Escape LIKE metacharacters so "%"/"_" in the search box match literally.
+        q ? ilike(users.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`) : undefined,
+      ),
+    )
     .orderBy(asc(users.name))
 
   const totalsByUser = new Map(
@@ -107,7 +125,15 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
     if (!entry) {
       const summary = totalsByUser.get(row.userId)
       entry = {
-        user: { id: row.userId, name: row.name, title: row.title, avatarUrl: row.avatarUrl },
+        user: {
+          id: row.userId,
+          name: row.name,
+          title: row.title,
+          phone: row.phone,
+          avatarUrl: row.avatarUrl,
+          role: row.userRole,
+          orgTags: row.orgTags,
+        },
         totalPct: summary?.totalPct ?? 0,
         overallocated: summary?.overallocated ?? false,
         breakdown: [],
@@ -128,6 +154,41 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
   return [...byUser.values()]
 }
 
+export type ActivityDay = { date: string; count: number; level: 0 | 1 | 2 | 3 | 4 }
+
+/**
+ * Per-day task activity (tasks created for + assigned to the user) over the
+ * last ~26 weeks, as a dense series for the contribution graph. Level ramp:
+ * 0 = none, 1 = 1, 2 = 2–3, 3 = 4–5, 4 = 6+.
+ */
+export async function getPersonActivity(userId: string): Promise<ActivityDay[]> {
+  const since = new Date()
+  since.setDate(since.getDate() - 26 * 7)
+  since.setHours(0, 0, 0, 0)
+
+  const rows = await db
+    .select({
+      day: sql<string>`to_char(${tasks.createdAt}, 'YYYY-MM-DD')`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(tasks)
+    .where(and(eq(tasks.assigneeId, userId), gte(tasks.createdAt, since)))
+    .groupBy(sql`to_char(${tasks.createdAt}, 'YYYY-MM-DD')`)
+
+  const byDay = new Map(rows.map((row) => [row.day, row.count]))
+  const series: ActivityDay[] = []
+  const cursor = new Date(since)
+  const today = new Date()
+  while (cursor <= today) {
+    const key = cursor.toISOString().slice(0, 10)
+    const count = byDay.get(key) ?? 0
+    const level = count === 0 ? 0 : count === 1 ? 1 : count <= 3 ? 2 : count <= 5 ? 3 : 4
+    series.push({ date: key, count, level })
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return series
+}
+
 export async function listActiveUsers(): Promise<ActiveUser[]> {
   return db
     .select({ id: users.id, name: users.name })
@@ -143,6 +204,7 @@ export async function getPersonDetail(userId: string): Promise<PersonDetail | nu
       name: users.name,
       email: users.email,
       title: users.title,
+      phone: users.phone,
       avatarUrl: users.avatarUrl,
       role: users.role,
       active: users.active,

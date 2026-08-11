@@ -2,43 +2,112 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Users, AppWindow, CalendarDays, ShieldCheck } from 'lucide-react'
+import {
+  LayoutDashboard,
+  Users,
+  AppWindow,
+  CalendarDays,
+  ShieldCheck,
+  PawPrint,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/people', label: 'People', icon: Users },
-  { href: '/apps', label: 'Apps', icon: AppWindow },
-  { href: '/meetings', label: 'Meetings', icon: CalendarDays },
+  { href: '/', label: 'Dashboard', icon: LayoutDashboard, key: 'D' },
+  { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
+  { href: '/people', label: 'People', icon: Users, key: 'P' },
+  { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },
 ] as const
 
-const adminItem = { href: '/admin', label: 'Admin', icon: ShieldCheck } as const
+function NavLink({
+  href,
+  label,
+  icon: Icon,
+  active,
+  hint,
+}: {
+  href: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  active: boolean
+  hint?: string
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm',
+        'transition-colors duration-150',
+        active
+          ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+          : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full transition-opacity duration-150',
+          active ? 'bg-primary opacity-100' : 'opacity-0',
+        )}
+      />
+      <Icon className="size-4 shrink-0" />
+      {label}
+      {hint ? (
+        <kbd className="ml-auto hidden font-mono text-2xs text-sidebar-foreground/70 group-hover:inline group-focus-visible:inline">
+          G {hint}
+        </kbd>
+      ) : null}
+    </Link>
+  )
+}
 
 export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname()
-  const items = isAdmin ? [...navItems, adminItem] : navItems
 
   return (
-    <nav className="flex h-full w-56 shrink-0 flex-col gap-1 border-r border-border bg-sidebar p-3 text-sidebar-foreground">
-      <div className="px-2 py-2 text-lg font-semibold">LogPup</div>
-      {items.map(({ href, label, icon: Icon }) => {
-        const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
-        return (
-          <Link
+    <nav className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col self-start overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+      <Link href="/" className="flex items-center gap-2.5 px-4 pb-6 pt-4">
+        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <PawPrint className="size-4" aria-hidden />
+        </span>
+        <span className="font-heading text-base font-bold tracking-tight">LogPup</span>
+      </Link>
+
+      <div className="flex flex-col gap-0.5 px-2">
+        {navItems.map(({ href, label, icon, key }) => (
+          <NavLink
             key={href}
             href={href}
-            className={cn(
-              'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
-              active
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-            )}
-          >
-            <Icon className="size-4" />
-            {label}
-          </Link>
-        )
-      })}
+            label={label}
+            icon={icon}
+            hint={key}
+            active={href === '/' ? pathname === '/' : pathname.startsWith(href)}
+          />
+        ))}
+      </div>
+
+      {isAdmin ? (
+        <div className="mt-6 flex flex-col gap-0.5 px-2">
+          <div className="px-2.5 pb-1 text-2xs font-medium uppercase tracking-wider text-sidebar-foreground/70">
+            Manage
+          </div>
+          <NavLink
+            href="/admin"
+            label="Admin"
+            icon={ShieldCheck}
+            active={pathname.startsWith('/admin')}
+          />
+        </div>
+      ) : null}
+
+      <div className="mt-auto border-t border-sidebar-border px-4 py-3 text-2xs text-sidebar-foreground/70">
+        Press{' '}
+        <kbd className="rounded border border-sidebar-border bg-sidebar-accent/50 px-1 font-mono">
+          Ctrl/⌘ K
+        </kbd>{' '}
+        to fetch anything
+      </div>
     </nav>
   )
 }

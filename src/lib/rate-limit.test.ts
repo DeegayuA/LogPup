@@ -3,7 +3,7 @@ import { createRateLimiter } from './rate-limit'
 
 describe('rate limiter', () => {
   it('allows attempts under the limit', () => {
-    let now = 0
+    const now = 0
     const limiter = createRateLimiter({ maxAttempts: 5, windowMs: 1000, now: () => now })
     for (let i = 0; i < 4; i++) {
       expect(limiter.isBlocked('a@b.com')).toBe(false)
@@ -13,7 +13,7 @@ describe('rate limiter', () => {
   })
 
   it('blocks once max failed attempts is reached within the window', () => {
-    let now = 0
+    const now = 0
     const limiter = createRateLimiter({ maxAttempts: 5, windowMs: 1000, now: () => now })
     for (let i = 0; i < 5; i++) limiter.recordFailure('a@b.com')
     expect(limiter.isBlocked('a@b.com')).toBe(true)
@@ -42,7 +42,7 @@ describe('rate limiter', () => {
   })
 
   it('reset clears attempt history for a key', () => {
-    let now = 0
+    const now = 0
     const limiter = createRateLimiter({ maxAttempts: 5, windowMs: 1000, now: () => now })
     for (let i = 0; i < 5; i++) limiter.recordFailure('a@b.com')
     expect(limiter.isBlocked('a@b.com')).toBe(true)
@@ -51,7 +51,7 @@ describe('rate limiter', () => {
   })
 
   it('tracks keys independently', () => {
-    let now = 0
+    const now = 0
     const limiter = createRateLimiter({ maxAttempts: 5, windowMs: 1000, now: () => now })
     for (let i = 0; i < 5; i++) limiter.recordFailure('a@b.com')
     expect(limiter.isBlocked('a@b.com')).toBe(true)

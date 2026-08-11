@@ -5,14 +5,21 @@ import { useFormStatus } from 'react-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { setOwnPassword } from '@/features/auth/actions'
 import type { ActionResult } from '@/lib/action-result'
 
 function SubmitButton() {
   const { pending } = useFormStatus()
   return (
-    <Button type="submit" size="sm" disabled={pending}>
+    <Button type="submit" disabled={pending} className="self-start">
       {pending ? 'Saving…' : 'Set password'}
     </Button>
   )
@@ -36,19 +43,28 @@ export function SetPasswordForm() {
   }, [state])
 
   return (
-    <Card size="sm">
-      <CardHeader><CardTitle className="text-sm">Set password</CardTitle></CardHeader>
+    <Card>
+      <CardHeader>
+        <CardTitle>Password</CardTitle>
+        <CardDescription>
+          Set a password to sign in with your email, alongside Google sign-in.
+        </CardDescription>
+      </CardHeader>
       <CardContent>
-        <form ref={formRef} action={formAction} className="flex flex-wrap items-center gap-2">
-          <Input
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={10}
-            placeholder="At least 10 characters"
-            className="max-w-xs"
-          />
+        <form ref={formRef} action={formAction} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="profile-new-password">New password</Label>
+            <Input
+              id="profile-new-password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={10}
+              className="h-9 max-w-xs"
+            />
+            <p className="text-xs text-muted-foreground">At least 10 characters.</p>
+          </div>
           <SubmitButton />
         </form>
       </CardContent>

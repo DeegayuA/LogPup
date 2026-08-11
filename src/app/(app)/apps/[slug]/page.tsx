@@ -1,25 +1,34 @@
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ExternalLink } from 'lucide-react'
 import { format } from 'date-fns'
 import { auth } from '@/lib/auth'
 import { Badge } from '@/components/ui/badge'
-import { getAppBySlug } from '@/features/apps/queries'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { getAppBySlug, listApps } from '@/features/apps/queries'
 import { getTeamForApp, listActiveUsers } from '@/features/people/queries'
-import { getSprintsForApp } from '@/features/sprints/queries'
+import { getBoard, getSprintsForApp } from '@/features/sprints/queries'
+import { getMeetingsForApp } from '@/features/meetings/queries'
 import { AppTabs } from '@/features/apps/components/app-tabs'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { TeamPanel } from '@/features/people/components/team-panel'
 import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
+import { Board } from '@/features/sprints/components/board'
+import { Roadmap } from '@/features/sprints/components/roadmap'
+import { ExportButton } from '@/features/notion/components/export-button'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
+import { MeetingList } from '@/features/meetings/components/meeting-list'
 
-const STATUS_VARIANT = {
-  active: 'default',
-  paused: 'outline',
-  archived: 'secondary',
-} as const
+const STATUS_DOT: Record<'active' | 'paused' | 'archived', string> = {
+  active: 'bg-primary',
+  paused: 'bg-chart-1',
+  archived: 'bg-muted-foreground/60',
+}
 
-const STATUS_LABEL: Record<keyof typeof STATUS_VARIANT, string> = {
+const STATUS_LABEL: Record<keyof typeof STATUS_DOT, string> = {
   active: 'Active',
   paused: 'Paused',
   archived: 'Archived',
@@ -47,63 +56,108 @@ function formatSprintDate(isoDate: string): string {
 
 export default async function AppDetailPage(props: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ sprint?: string }>
+  searchParams: Promise<{ sprint?: string; tab?: string }>
 }) {
   const { slug } = await props.params
-  const { sprint: sprintParam } = await props.searchParams
+  const { sprint: sprintParam, tab: tabParam } = await props.searchParams
   const app = await getAppBySlug(slug)
   if (!app) notFound()
 
-  const [session, team, activeUsers, sprints] = await Promise.all([
+  const [session, team, activeUsers, sprints, appMeetings, allApps] = await Promise.all([
     auth(),
     getTeamForApp(app.id),
     listActiveUsers(),
     getSprintsForApp(app.id),
+    getMeetingsForApp(app.id),
+    listApps(),
   ])
   const isAdmin = session?.user?.role === 'admin'
   const lead = app.leadId ? activeUsers.find((user) => user.id === app.leadId) : undefined
 
-  const selectedSprint =
-    (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
-    sprints.find((s) => s.status === 'active') ??
-    sprints[0]
+  // A `sprint=backlog` query param is a synthetic selection, not a real
+  // sprint id: it maps to `getBoard(appId, null)`, which returns tasks that
+  // aren't attached to any sprint.
+  const isBacklog = sprintParam === 'backlog'
+  const selectedSprint = isBacklog
+    ? undefined
+    : (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
+      sprints.find((s) => s.status === 'active') ??
+      sprints[0]
+  const showBoard = isBacklog || Boolean(selectedSprint)
+  const boardSprintId = isBacklog ? null : (selectedSprint?.id ?? null)
+  const board = showBoard ? await getBoard(app.id, boardSprintId) : null
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-6">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-3">
-          <h1 className="font-heading text-xl font-medium">{app.name}</h1>
-          <Badge variant={STATUS_VARIANT[app.status]}>{STATUS_LABEL[app.status]}</Badge>
+          <h1 className="font-heading text-2xl font-bold tracking-tight">{app.name}</h1>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
+            <span aria-hidden className={`size-1.5 rounded-full ${STATUS_DOT[app.status]}`} />
+            {STATUS_LABEL[app.status]}
+          </span>
         </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
           {lead ? <span>Lead: {lead.name}</span> : null}
           {app.repoUrl ? (
             <a
               href={app.repoUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 hover:text-foreground"
+              className="inline-flex items-center gap-1 rounded-sm outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               Repo <ExternalLink className="size-3.5" />
             </a>
+          ) : null}
+          {app.techTags.length > 0 ? (
+            <span className="flex flex-wrap items-center gap-1.5">
+              {app.techTags.map((tag) => (
+                <Badge key={tag} variant="outline" className="font-normal text-muted-foreground">
+                  {tag}
+                </Badge>
+              ))}
+            </span>
           ) : null}
         </div>
       </div>
 
       <AppTabs
+        initialTab={tabParam}
         overview={
           <TeamPanel appId={app.id} team={team} activeUsers={activeUsers} isAdmin={isAdmin} />
         }
         board={
           <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <SprintSwitcher sprints={sprints} selectedId={selectedSprint?.id ?? ''} />
-              {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              <div className="flex flex-wrap items-center gap-2">
+                <SprintSwitcher
+                  sprints={sprints}
+                  selectedId={isBacklog ? '' : (selectedSprint?.id ?? '')}
+                />
+                <Link
+                  href={
+                    isBacklog ? `/apps/${slug}` : `/apps/${slug}?sprint=backlog`
+                  }
+                  className={cn(
+                    buttonVariants({ variant: isBacklog ? 'default' : 'outline' }),
+                  )}
+                >
+                  Backlog
+                </Link>
+              </div>
+              <div className="flex items-center gap-2">
+                <div id="board-export-slot">
+                  {isAdmin && !isBacklog && selectedSprint ? (
+                    <ExportButton sprintId={selectedSprint.id} />
+                  ) : null}
+                </div>
+                {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              </div>
             </div>
-            {selectedSprint ? (
-              <div className="flex flex-col gap-2 rounded-lg border p-4">
+            {!isBacklog && selectedSprint ? (
+              <div className="flex flex-col gap-1 rounded-xl bg-card p-3 ring-1 ring-foreground/10">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="font-medium">{selectedSprint.name}</h2>
+                  <h2 className="font-heading text-base font-semibold">{selectedSprint.name}</h2>
                   {isAdmin ? (
                     <SprintStatusSelect
                       sprintId={selectedSprint.id}
@@ -118,20 +172,58 @@ export default async function AppDetailPage(props: {
                 {selectedSprint.goal ? (
                   <p className="text-sm text-muted-foreground">{selectedSprint.goal}</p>
                 ) : null}
-                <p className="text-sm text-muted-foreground">
+                <p className="font-mono text-xs text-muted-foreground">
                   {formatSprintDate(selectedSprint.startDate)} –{' '}
                   {formatSprintDate(selectedSprint.endDate)}
                 </p>
               </div>
-            ) : (
+            ) : null}
+            {isBacklog ? (
               <p className="text-sm text-muted-foreground">
-                No sprints yet.{isAdmin ? ' Create one to start planning.' : ''}
+                Backlog — tasks not assigned to any sprint.
               </p>
+            ) : null}
+            {board && session?.user ? (
+              <Board
+                initialBoard={board}
+                team={team.map((member) => ({ userId: member.userId, name: member.name }))}
+                appId={app.id}
+                sprintId={boardSprintId}
+                currentUser={{ id: session.user.id, role: session.user.role }}
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-6 py-12 text-center">
+                <p className="font-heading text-base font-semibold">Nothing to fetch here yet</p>
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  {isAdmin
+                    ? 'This app has no sprints. Create the first one and LogPup will keep watch over the board.'
+                    : 'No sprints planned for this app yet. LogPup is keeping an eye out — check back soon.'}
+                </p>
+                {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              </div>
             )}
-            <p className="text-sm text-muted-foreground">Task board arrives in Task 12</p>
           </div>
         }
-        meetings={<p className="text-sm text-muted-foreground">Meetings arrive soon</p>}
+        roadmap={<Roadmap sprints={sprints} slug={slug} />}
+        meetings={
+          <div className="flex flex-col gap-4">
+            <div className="flex justify-end">
+              <MeetingForm
+                apps={allApps.map((a) => ({ id: a.id, name: a.name }))}
+                activeUsers={activeUsers}
+                defaultAppId={app.id}
+                trigger={<Button size="sm">New meeting</Button>}
+              />
+            </div>
+            <MeetingList
+              meetings={appMeetings}
+              currentUserId={session?.user?.id ?? ''}
+              isAdmin={isAdmin}
+              showAppBadge={false}
+              users={activeUsers}
+            />
+          </div>
+        }
         settings={
           isAdmin ? (
             <div className="flex flex-col gap-3">

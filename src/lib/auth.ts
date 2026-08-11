@@ -6,12 +6,26 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
+import { orgForEmail } from '@/lib/org-from-domain'
 import { verifyPassword } from '@/lib/password'
 import { loginRateLimiter, RateLimitError, LOCKOUT_MESSAGE } from '@/lib/rate-limit'
 
 const MAX_PASSWORD_LENGTH = 200
 
 const authBaseUrl = process.env.AUTH_URL ?? 'http://localhost:3000'
+
+// "May sign in" (ALLOWED_EMAIL_DOMAINS) and "may be created on first sign-in"
+// are two different questions. The allowlist is deliberately allowed to carry
+// personal domains (e.g. gmail.com) so a named individual can be given an
+// account; if that same list also drove provisioning, every mailbox on that
+// domain could click "Continue with Google" and hand itself an active member
+// row. Auto-provisioning is therefore opt-in per corporate domain, and fails
+// closed when unset.
+const autoProvisionDomains = (): string[] =>
+  (process.env.AUTO_PROVISION_EMAIL_DOMAINS ?? '')
+    .split(',')
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+    .filter(Boolean)
 
 // Fail closed: the passwordless provider must NEVER be reachable in a production
 // runtime. Crash at boot rather than silently accept a leaked test flag.
@@ -88,8 +102,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             // every other address must already exist (unchanged prior behavior).
             const devEmail = process.env.DEV_LOGIN_EMAIL?.trim().toLowerCase()
             if (email !== devEmail) return null
+            const derivedOrg = orgForEmail(email)
             const [created] = await db.insert(users)
-              .values({ email, name: email.split('@')[0], role: 'admin' })
+              .values({
+                email,
+                name: email.split('@')[0],
+                role: 'admin',
+                orgTags: derivedOrg ? [derivedOrg] : [],
+              })
               .returning()
             return { id: created.id, email: created.email, name: created.name }
           },
@@ -149,25 +169,47 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
         return true
       }
+
+      // No user row yet: only a domain explicitly marked auto-provisionable may
+      // self-register. Everyone else needs an admin to create the account first
+      // (same posture as Notion above).
+      const domain = email.slice(email.lastIndexOf('@') + 1)
+      if (!autoProvisionDomains().includes(domain)) {
+        console.warn(
+          `[auth] denied: ${email} has no user row and ${domain} is not auto-provisioned`,
+        )
+        return false
+      }
+      const derivedOrg = orgForEmail(email)
       await db.insert(users).values({
         email,
         name: profile?.name ?? email,
         avatarUrl: (profile as { picture?: string } | undefined)?.picture,
         googleRefreshToken: account?.refresh_token,
+        orgTags: derivedOrg ? [derivedOrg] : [],
       })
       return true
     },
     async jwt({ token }) {
       if (!token.email) return token
-      const [u] = await db.select().from(users).where(eq(users.email, token.email))
+      // Provisioning always stores emails lowercase (see signIn/authorize
+      // above); normalize here too so a provider that hands back mixed-case
+      // email casing (observed from some OAuth IdPs) still matches the row.
+      const email = token.email.toLowerCase()
+      const [u] = await db.select().from(users).where(eq(users.email, email))
       if (!u?.active) return null
       token.userId = u.id
       token.role = u.role
+      // This callback hits the DB on every session read (not just at sign-in),
+      // so the flag refreshes per request: the moment setOwnPassword clears it
+      // on the users row, the very next request unsticks — no re-login needed.
+      token.mustChangePassword = u.mustChangePassword
       return token
     },
     async session({ session, token }) {
       session.user.id = token.userId as string
       session.user.role = token.role as 'admin' | 'member'
+      session.user.mustChangePassword = token.mustChangePassword === true
       return session
     },
   },

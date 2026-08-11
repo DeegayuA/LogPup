@@ -8,6 +8,8 @@ import { users } from '@/db/schema'
 import { auth, signIn } from '@/lib/auth'
 import { hashPassword } from '@/lib/password'
 import { RateLimitError } from '@/lib/rate-limit'
+import { normalizePhone } from '@/lib/phone'
+import { revalidatePath } from 'next/cache'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
 // Sign in an existing password account. Wrong credentials surface as a friendly error;
@@ -43,6 +45,21 @@ const setPasswordInput = z.object({
 // path: it would let anyone set a password on any existing account (all rows start with
 // a NULL passwordHash), which is an account takeover. This only ever updates the
 // session user's own row; it never inserts a user or touches anyone else's account.
+/** Self-serve contact number — anyone can set their own; blank clears it. */
+export async function setOwnPhone(phone: string): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const trimmed = phone.trim()
+  const value = trimmed === '' ? null : normalizePhone(trimmed)
+  if (trimmed !== '' && value === null) return err('That does not look like a phone number')
+
+  await db.update(users).set({ phone: value }).where(eq(users.id, session.user.id))
+  revalidatePath('/profile')
+  revalidatePath('/people')
+  return ok(undefined)
+}
+
 export async function setOwnPassword(
   _prev: ActionResult | null,
   formData: FormData,
@@ -53,8 +70,12 @@ export async function setOwnPassword(
   const parsed = setPasswordInput.safeParse({ password: formData.get('password') })
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  // Clearing mustChangePassword here releases the first-login gate in
+  // src/proxy.ts — the jwt callback re-reads the row on the next request.
   const passwordHash = hashPassword(parsed.data.password)
-  await db.update(users).set({ passwordHash }).where(eq(users.id, session.user.id))
+  await db.update(users)
+    .set({ passwordHash, mustChangePassword: false })
+    .where(eq(users.id, session.user.id))
 
   return ok(undefined)
 }
