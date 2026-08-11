@@ -155,6 +155,7 @@ export function Board({
               status={col.status}
               title={col.title}
               tasks={board[col.status]}
+              team={team}
               appId={appId}
               sprintId={sprintId}
               currentUser={currentUser}

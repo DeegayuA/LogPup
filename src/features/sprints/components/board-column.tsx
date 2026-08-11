@@ -12,10 +12,41 @@ import { TaskCard } from '@/features/sprints/components/task-card'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 import type { TaskStatus } from '@/features/sprints/components/board'
 
+/*
+ * "@sam Fix login" or "Fix login @sam" — a single-word token fuzzy-matched
+ * against the team (case-insensitive contains). Unknown or ambiguous names
+ * leave the title untouched, mention and all.
+ */
+function parseMentionToken(
+  raw: string,
+  team: { userId: string; name: string }[],
+): { title: string; assigneeId: string | null } {
+  const words = raw.split(/\s+/)
+  let token: string | undefined
+  let rest: string | undefined
+  if (words.length >= 2) {
+    const first = words[0]
+    const last = words[words.length - 1]
+    if (first.length > 1 && first.startsWith('@')) {
+      token = first.slice(1)
+      rest = words.slice(1).join(' ')
+    } else if (last.length > 1 && last.startsWith('@')) {
+      token = last.slice(1)
+      rest = words.slice(0, -1).join(' ')
+    }
+  }
+  if (!token || !rest) return { title: raw, assigneeId: null }
+  const needle = token.toLowerCase()
+  const matches = team.filter((m) => m.name.toLowerCase().includes(needle))
+  if (matches.length !== 1) return { title: raw, assigneeId: null }
+  return { title: rest, assigneeId: matches[0].userId }
+}
+
 export function BoardColumn({
   status,
   title,
   tasks,
+  team,
   appId,
   sprintId,
   currentUser,
@@ -24,6 +55,7 @@ export function BoardColumn({
   status: TaskStatus
   title: string
   tasks: TaskWithAssignee[]
+  team: { userId: string; name: string }[]
   appId: string
   sprintId: string | null
   currentUser: { id: string; role: 'admin' | 'member' }
@@ -35,15 +67,16 @@ export function BoardColumn({
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== 'Enter') return
-    const title = draft.trim()
-    if (!title || isPending) return
+    const raw = draft.trim()
+    if (!raw || isPending) return
+    const parsed = parseMentionToken(raw, team)
     startTransition(async () => {
       try {
         const res = await createTask({
           appId,
           sprintId,
-          title,
-          assigneeId: null,
+          title: parsed.title,
+          assigneeId: parsed.assigneeId,
           priority: 0,
           status,
         })

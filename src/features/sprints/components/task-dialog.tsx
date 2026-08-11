@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
+import { MentionTextarea } from '@/components/mention-textarea'
 import {
   Select,
   SelectContent,
@@ -157,10 +157,20 @@ export function TaskDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="task-description">Description</Label>
-            <Textarea
+            <MentionTextarea
               id="task-description"
+              users={team.map((m) => ({ id: m.userId, name: m.name }))}
               value={form.description}
-              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              onValueChange={(description) => setForm((f) => ({ ...f, description }))}
+              onMention={(user) => {
+                /* A mention doubles as an assignment hint — but only when the
+                   assignee is still unset and the mentioned user is actually
+                   a valid assignee option. */
+                if (form.assigneeId !== UNASSIGNED) return
+                if (!team.some((m) => m.userId === user.id)) return
+                setForm((f) => ({ ...f, assigneeId: user.id }))
+                toast.info(`Assigned to ${user.name} from mention`)
+              }}
               maxLength={2000}
               className="min-h-24"
             />

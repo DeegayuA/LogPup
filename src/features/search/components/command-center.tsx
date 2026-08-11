@@ -37,7 +37,12 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { cn } from '@/lib/utils'
-import { universalSearch, signOutFromPalette, type SearchResults } from '../actions'
+import {
+  universalSearch,
+  signOutFromPalette,
+  quickAssignTask,
+  type SearchResults,
+} from '../actions'
 
 type Recent = {
   type: 'app' | 'person' | 'task' | 'sprint' | 'meeting' | 'page'
@@ -124,6 +129,7 @@ export function CommandCenterProvider({
   const [query, setQuery] = React.useState('')
   const [results, setResults] = React.useState<SearchResults>(EMPTY_RESULTS)
   const [searching, setSearching] = React.useState(false)
+  const [assigning, setAssigning] = React.useState(false)
   const [recents, setRecents] = React.useState<Recent[]>([])
   const searchSeq = React.useRef(0)
   const goPrefix = React.useRef<number | null>(null)
@@ -258,6 +264,31 @@ export function CommandCenterProvider({
     }
   }
 
+  /* Natural-language quick-assign: "@sam fix login" or
+     "assign fix login to sam on logpup" creates a backlog task directly. */
+  const rawQuery = query.trim()
+  const smartIntent =
+    rawQuery.startsWith('@') || /\b(assign|create task|task)\b.+\b(to|for)\b/i.test(rawQuery)
+
+  const handleQuickAssign = React.useCallback(async () => {
+    const raw = query.trim()
+    if (!raw || assigning) return
+    setAssigning(true)
+    try {
+      const res = await quickAssignTask(raw)
+      if (res.ok) {
+        toast.success(`Task "${res.data.title}" → ${res.data.assigneeName} on ${res.data.appName}`)
+        go(res.data.href)
+      } else {
+        toast.error(res.error)
+      }
+    } catch {
+      toast.error('Something went wrong — try again')
+    } finally {
+      setAssigning(false)
+    }
+  }, [assigning, go, query])
+
   const q = query.trim().toLowerCase()
   const pages = [
     { label: 'Dashboard', href: '/', icon: LayoutDashboard, shortcut: 'G D' },
@@ -293,6 +324,7 @@ export function CommandCenterProvider({
   const nothingAtAll =
     q.length >= 2 &&
     !searching &&
+    !smartIntent &&
     !hasEntityResults &&
     pages.length === 0 &&
     themeActions.length === 0 &&
@@ -333,6 +365,22 @@ export function CommandCenterProvider({
                   Nothing to fetch for “{query.trim()}”.
                 </span>
               </CommandEmpty>
+            ) : null}
+
+            {smartIntent ? (
+              <CommandGroup heading="Smart">
+                <CommandItem
+                  value="smart-quick-assign"
+                  disabled={assigning}
+                  onSelect={() => void handleQuickAssign()}
+                >
+                  {assigning ? <Loader2 className="animate-spin" /> : <Plus />}
+                  <span className="truncate">➕ {rawQuery}</span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    Create &amp; assign task — press Enter
+                  </span>
+                </CommandItem>
+              </CommandGroup>
             ) : null}
 
             {!q && recents.length > 0 ? (
