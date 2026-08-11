@@ -15,6 +15,8 @@ export const appStatus = pgEnum('app_status', ['active', 'paused', 'archived'])
 export const sprintStatus = pgEnum('sprint_status', ['planned', 'active', 'done'])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
 export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
+export const followupKind = pgEnum('followup_kind', ['question', 'action'])
+export const followupStatus = pgEnum('followup_status', ['open', 'resolved'])
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -142,6 +144,35 @@ export const meetingAiNotes = pgTable('meeting_ai_notes', {
   questions: jsonb('questions'),
   model: text('model').notNull(),
   createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// Person-linked follow-ups derived from a meeting's AI analysis: an open
+// question or action item attributed to a specific person. These carry
+// forward to whatever future meeting that person attends next (see
+// getMeetingIntel's prep computation) instead of only surfacing in "the
+// previous meeting" the way the old questions-only prep did.
+//   userId          resolved from personName against the SOURCE meeting's
+//                    attendees (see matchPersonToAttendee); null when the
+//                    name didn't match exactly one attendee — personName is
+//                    always kept regardless so the raw text isn't lost.
+//   resolvedInMeetingId / resolvedAt  set either by an admin/creator/the
+//                    person themself manually resolving it, or by the AI
+//                    "did this come up" pass run after analyzing a later
+//                    meeting (analyzeMeetingAudio) — resolvedInMeetingId
+//                    distinguishes the two (null on a manual resolve).
+export const meetingFollowups = pgTable('meeting_followups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sourceMeetingId: uuid('source_meeting_id').notNull()
+    .references(() => meetings.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  personName: text('person_name').notNull(),
+  text: text('text').notNull(),
+  kind: followupKind('kind').notNull(),
+  status: followupStatus('status').notNull().default('open'),
+  resolvedInMeetingId: uuid('resolved_in_meeting_id')
+    .references(() => meetings.id, { onDelete: 'set null' }),
+  resolvedAt: timestamp('resolved_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 

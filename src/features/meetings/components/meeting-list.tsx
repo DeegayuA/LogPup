@@ -61,6 +61,7 @@ export function MeetingList({
           key={meeting.id}
           meeting={meeting}
           canManage={isAdmin || meeting.createdBy === currentUserId}
+          currentUserId={currentUserId}
           showAppBadge={showAppBadge}
           users={users}
         />
@@ -72,11 +73,13 @@ export function MeetingList({
 function MeetingRow({
   meeting,
   canManage,
+  currentUserId,
   showAppBadge,
   users,
 }: {
   meeting: MeetingSummary
   canManage: boolean
+  currentUserId: string
   showAppBadge: boolean
   users: MentionUser[]
 }) {
@@ -242,7 +245,7 @@ function MeetingRow({
       ) : meeting.notes ? (
         <p className="text-sm text-muted-foreground">Notes: {meeting.notes}</p>
       ) : null}
-      <MeetingIntelPanel meetingId={meeting.id} canRecord={canManage} />
+      <MeetingIntelPanel meetingId={meeting.id} canRecord={canManage} currentUserId={currentUserId} />
     </li>
   )
 }

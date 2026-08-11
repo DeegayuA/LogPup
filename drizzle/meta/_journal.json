@@ -50,6 +50,13 @@
       "when": 1786448335749,
       "tag": "0006_user-status",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786450943803,
+      "tag": "0007_early_greymalkin",
+      "breakpoints": true
     }
   ]
 }
