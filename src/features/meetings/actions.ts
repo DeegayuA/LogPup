@@ -3,8 +3,9 @@
 import { z } from 'zod'
 import { eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
+import { del } from '@vercel/blob'
 import { db } from '@/db'
-import { apps, meetingAttendees, meetings, users } from '@/db/schema'
+import { apps, meetingAttendees, meetingScreenshots, meetings, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { format } from 'date-fns'
@@ -448,6 +449,25 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
     } catch {
       // Ignore — proceed with the DB delete regardless.
     }
+  }
+
+  // Screen keyframes (meeting_screenshots) live in Blob storage — the
+  // meetingId foreign key cascades and removes the DB rows below, but that
+  // cascade never touches the actual objects in Blob storage, so they'd be
+  // orphaned forever without this. Fetched before the delete since the rows
+  // (and so their pathnames) are gone the instant the cascade fires. Same
+  // best-effort, never-block-the-DB-delete posture as the Google Calendar
+  // cleanup above.
+  try {
+    const screenshotRows = await db
+      .select({ blobPathname: meetingScreenshots.blobPathname })
+      .from(meetingScreenshots)
+      .where(eq(meetingScreenshots.meetingId, meetingId))
+    if (screenshotRows.length > 0) {
+      await del(screenshotRows.map((row) => row.blobPathname))
+    }
+  } catch {
+    // Ignore — proceed with the DB delete regardless.
   }
 
   await db.delete(meetings).where(eq(meetings.id, meetingId))

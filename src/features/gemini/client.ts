@@ -305,26 +305,29 @@ const FILE_ACTIVE_POLL_DELAY_MS = 500
 type GeminiFile = { name: string; uri: string; mimeType: string; state: string }
 
 /**
- * Uploads audio bytes to Gemini's Files API and returns a { mimeType,
- * fileUri } reference for a generateContent `fileData` part, used instead of
- * inlineData for anything over INLINE_AUDIO_MAX_BYTES (audio-strategy.ts).
- * Files uploaded this way expire ~48h after upload (a fixed Gemini
- * retention window, not configurable) — a non-issue here since a segment is
- * referenced once, within seconds of being uploaded, and never again.
+ * Uploads bytes (audio or, since keyframes, images) to Gemini's Files API
+ * and returns a { mimeType, fileUri } reference for a generateContent
+ * `fileData` part — used instead of inlineData for anything over the inline
+ * size ceiling (shouldUseInlineAudio, audio-strategy.ts; reused unchanged
+ * for images, see buildImagePart below). Files uploaded this way expire
+ * ~48h after upload (a fixed Gemini retention window, not configurable) — a
+ * non-issue here since a segment/keyframe is referenced once, within
+ * seconds of being uploaded, and never again.
  */
-async function uploadAudioFile(
+async function uploadFileToGemini(
   apiKey: string,
-  audioBytes: Buffer,
+  bytes: Buffer,
   mimeType: string,
+  displayName: string,
 ): Promise<{ mimeType: string; fileUri: string }> {
   const form = new FormData()
   form.append(
     'metadata',
-    new Blob([JSON.stringify({ file: { displayName: 'meeting-audio-segment' } })], {
+    new Blob([JSON.stringify({ file: { displayName } })], {
       type: 'application/json',
     }),
   )
-  form.append('file', new Blob([new Uint8Array(audioBytes)], { type: mimeType }))
+  form.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }))
 
   const uploadRes = await fetch(FILES_UPLOAD_URL, {
     method: 'POST',
@@ -370,7 +373,29 @@ async function buildAudioPart(
   if (shouldUseInlineAudio(audioBytes.byteLength)) {
     return { inlineData: { mimeType, data: audioBytes.toString('base64') } }
   }
-  const file = await uploadAudioFile(apiKey, audioBytes, mimeType)
+  const file = await uploadFileToGemini(apiKey, audioBytes, mimeType, 'meeting-audio-segment')
+  return { fileData: file }
+}
+
+/**
+ * Builds one image GeminiPart for a captured screen keyframe. Same
+ * inline-vs-Files-API choice as audio, reused as-is (shouldUseInlineAudio)
+ * rather than a separate image-specific threshold — the actual tradeoff it
+ * encodes (base64 inflating the payload ~33% vs paying for an extra Files
+ * API round trip) is about payload size, not content type. In practice this
+ * branch is academic for keyframes: they're capped at 1MB server-side (see
+ * MAX_KEYFRAME_BYTES in ai-actions.ts), comfortably under
+ * INLINE_AUDIO_MAX_BYTES (4MB), so every keyframe goes inline.
+ */
+async function buildImagePart(
+  apiKey: string,
+  imageBytes: Buffer,
+  mimeType: string,
+): Promise<GeminiPart> {
+  if (shouldUseInlineAudio(imageBytes.byteLength)) {
+    return { inlineData: { mimeType, data: imageBytes.toString('base64') } }
+  }
+  const file = await uploadFileToGemini(apiKey, imageBytes, mimeType, 'meeting-screen-keyframe')
   return { fileData: file }
 }
 
@@ -392,6 +417,43 @@ export async function callGeminiWithAudio(
   return callGemini(
     userId,
     async (apiKey) => [...textParts, await buildAudioPart(apiKey, audioBytes, mimeType)],
+    opts,
+  )
+}
+
+/** One image to attach to a callGeminiWithImages call — `label` is a short
+ *  text part inserted immediately before the image itself (e.g. "Screen at
+ *  12:34"), since generateContent has no other way to caption a part; it's
+ *  what lets the model say which timestamp a screenshot came from. */
+export type GeminiImageInput = { bytes: Buffer; mimeType: string; label: string }
+
+/**
+ * callGemini, specialized for "some text parts plus zero or more labelled
+ * images" — used by finalizeMeetingRecording (ai-actions.ts) to hand the
+ * kept screen keyframes to the final synthesis pass alongside the
+ * transcript. Images are rebuilt per API key attempted, same reason as
+ * buildAudioPart above (a Files-API upload is scoped to the key/project that
+ * made it). Each image is preceded by its own `label` text part, in the
+ * order given — callers are expected to pass images already sorted by
+ * capture time so "in captured-at order" holds without this function
+ * re-deriving it.
+ */
+export async function callGeminiWithImages(
+  userId: string,
+  textParts: { text: string }[],
+  images: GeminiImageInput[],
+  opts?: { model?: string; responseJson?: boolean },
+): Promise<{ text: string; model: string }> {
+  return callGemini(
+    userId,
+    async (apiKey) => {
+      const imageParts: GeminiPart[] = []
+      for (const image of images) {
+        imageParts.push({ text: image.label })
+        imageParts.push(await buildImagePart(apiKey, image.bytes, image.mimeType))
+      }
+      return [...textParts, ...imageParts]
+    },
     opts,
   )
 }

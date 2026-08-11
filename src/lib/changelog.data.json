@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.124",
+  "current": "v0.0.129",
   "versions": [
     {
       "version": "v0.0.1",
@@ -744,6 +744,36 @@
       "date": "2026-08-11",
       "hash": "72a142b",
       "change": "fix: sprints activate by date so the dashboard reflects reality"
+    },
+    {
+      "version": "v0.0.125",
+      "date": "2026-08-11",
+      "hash": "c7382ff",
+      "change": "feat: editable team workload with allocation history"
+    },
+    {
+      "version": "v0.0.126",
+      "date": "2026-08-11",
+      "hash": "1cc46e0",
+      "change": "."
+    },
+    {
+      "version": "v0.0.127",
+      "date": "2026-08-11",
+      "hash": "506ba4e",
+      "change": "fix: workload history review findings"
+    },
+    {
+      "version": "v0.0.128",
+      "date": "2026-08-11",
+      "hash": "05489b8",
+      "change": "feat: calendar invites that work without Google OAuth"
+    },
+    {
+      "version": "v0.0.129",
+      "date": "2026-08-11",
+      "hash": "0d339a4",
+      "change": "feat: segmented recording and incremental transcription for long meetings"
     }
   ]
 }

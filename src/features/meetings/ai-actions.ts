@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { and, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
+import { del, put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import {
@@ -12,12 +13,20 @@ import {
   meetingFollowups,
   meetingNoteSegments,
   meetingRecordingSegments,
+  meetingScreenshots,
   meetingSpeakers,
   meetingTaskSuggestions,
   meetings,
   users,
 } from '@/db/schema'
-import { DEFAULT_GEMINI_MODEL, callGemini, callGeminiWithAudio, GeminiError } from '@/features/gemini/client'
+import {
+  DEFAULT_GEMINI_MODEL,
+  callGemini,
+  callGeminiWithAudio,
+  callGeminiWithImages,
+  GeminiError,
+  type GeminiImageInput,
+} from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { updateMeetingNotes } from '@/features/meetings/actions'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
@@ -41,6 +50,7 @@ import {
   type SpeakerMapping,
 } from '@/features/meetings/notes'
 import { concatenateSegments } from '@/features/meetings/recording-segments'
+import { formatCapturedAt, MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
 
 // Legacy single-shot path (analyzeMeetingAudio, below): the whole recording
 // as one inline-base64 upload. Superseded for live recordings by the
@@ -145,6 +155,8 @@ export type MeetingIntel = {
   people: FollowupPersonOption[]
   /** Later meetings the caller can see, for the optional "link to" picker. */
   upcomingMeetings: FollowupTargetOption[]
+  /** Change-detected screen keyframes captured during recording, oldest first. */
+  screenshots: MeetingScreenshotView[]
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -912,6 +924,38 @@ export async function finalizeMeetingRecording(
   const attendees = await fetchAttendees(id)
   const attendeeNames = attendees.map((a) => a.name)
 
+  // Change-detected screen keyframes captured alongside the audio (see
+  // screen-keyframes.ts) — fetched here and handed to Gemini as labelled
+  // image parts so the final synthesis pass can read on-screen content
+  // (slides, diagrams, shared code, dashboards) the audio alone never
+  // captures. Ordered by capturedAtMs so "in captured-at order" holds
+  // without callGeminiWithImages having to re-sort. Best-effort per image —
+  // one bad Blob fetch drops just that frame, never the whole analysis.
+  const screenshotRows = await db
+    .select({
+      blobPathname: meetingScreenshots.blobPathname,
+      capturedAtMs: meetingScreenshots.capturedAtMs,
+    })
+    .from(meetingScreenshots)
+    .where(eq(meetingScreenshots.meetingId, id))
+    .orderBy(meetingScreenshots.capturedAtMs)
+
+  const images: GeminiImageInput[] = []
+  for (const row of screenshotRows) {
+    try {
+      const result = await getBlob(row.blobPathname, { access: 'private' })
+      if (!result || result.statusCode !== 200) continue
+      const bytes = Buffer.from(await new Response(result.stream).arrayBuffer())
+      images.push({
+        bytes,
+        mimeType: result.blob.contentType || 'image/jpeg',
+        label: `Screen capture at ${formatCapturedAt(row.capturedAtMs)} into the recording:`,
+      })
+    } catch (error) {
+      console.error(`[meeting-recording] failed to load screen keyframe for meeting ${id}:`, error)
+    }
+  }
+
   const prompt = `You are LogPup's meeting analyst for a software team. Below is the FULL transcript of
 the meeting "${meeting.title}"${meeting.agenda ? ` (agenda: ${meeting.agenda})` : ''}, assembled from
 several ~5-minute segments that were each transcribed independently (audio was never sent to you
@@ -932,6 +976,16 @@ ${
     ? `\nA live, noisy speech-to-text capture made during the meeting is included below as a HINT ONLY —
 use it only to help spell attendee names, product/technical terms, and numbers correctly; the
 transcript above is authoritative for content and language.\n\nLive transcript hint:\n"""\n${hint}\n"""\n`
+    : ''
+}
+${
+  images.length > 0
+    ? `\n${images.length} screen capture(s) from this meeting are attached below this prompt, each preceded
+by its own label giving its timestamp offset into the recording, in chronological order (earliest first).
+Use them for ON-SCREEN CONTEXT — slides, diagrams, shared code, dashboards — that the transcript alone
+doesn't capture. When something shown on screen materially informs a decision, deadline, or action item,
+reference what was actually shown and when (e.g. "per the architecture diagram at 12:34" or "the PR shown
+at 5:02"). Don't narrate every screenshot — only mention one when it actually matters to the minutes.\n`
     : ''
 }
 Transcript:
@@ -967,15 +1021,166 @@ suggestedDueDate must be a real ISO date or null.`
   let raw: string
   let modelUsed: string = DEFAULT_GEMINI_MODEL
   try {
-    ;({ text: raw, model: modelUsed } = await callGemini(session.user.id, [{ text: prompt }], {
-      responseJson: true,
-    }))
+    ;({ text: raw, model: modelUsed } =
+      images.length > 0
+        ? await callGeminiWithImages(session.user.id, [{ text: prompt }], images, { responseJson: true })
+        : await callGemini(session.user.id, [{ text: prompt }], { responseJson: true }))
   } catch (error) {
     if (error instanceof GeminiError) return err(error.message)
     return err('Gemini request failed — try again')
   }
 
   return persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
+}
+
+// --- Screen keyframes: change-detected screenshots captured alongside a
+// "screen + mic" recording (see screen-keyframes.ts for the capture-side
+// logic — sampling cadence, perceptual-hash keep/skip decision, and the
+// downscale/JPEG-quality constants the client encodes with before calling
+// this). Stored in Blob storage (private access — internal meeting screens,
+// never world-readable) with metadata in meetingScreenshots; served back to
+// the browser through /api/meeting-keyframes, the same private-blob proxy
+// pattern avatars use, never as a raw Blob URL.
+
+const KEYFRAME_PROXY_PREFIX = '/api/meeting-keyframes/'
+
+/** Same single-encoded-segment trick avatar-actions.ts uses — the pathname
+ *  (which itself contains '/') is one URL-encoded path segment, decoded and
+ *  reconstructed by the proxy route rather than split across multiple. */
+function keyframeProxyUrl(pathname: string): string {
+  return KEYFRAME_PROXY_PREFIX + encodeURIComponent(pathname)
+}
+
+// Hard reject ceiling for one uploaded keyframe. A downscaled (max 1280px
+// long edge), JPEG-quality-0.7 screen capture normally lands well under this
+// — it exists to catch a client that sent something unexpected (e.g. the
+// downscale step was skipped) with a clear per-frame error instead of a
+// generic body-size failure.
+const MAX_KEYFRAME_BYTES = 1 * 1024 * 1024
+const ALLOWED_KEYFRAME_TYPES = ['image/jpeg']
+
+export type MeetingScreenshotView = {
+  id: string
+  url: string
+  capturedAtMs: number
+  width: number | null
+  height: number | null
+  byteSize: number | null
+}
+
+const uploadKeyframeInput = z.object({
+  meetingId: z.uuid(),
+  capturedAtMs: z.number().int().min(0),
+  width: z.number().int().min(1).max(20_000),
+  height: z.number().int().min(1).max(20_000),
+})
+
+/**
+ * Uploads one change-detected screen keyframe. Same entitlement as the rest
+ * of the recording pipeline (canManageMeeting — only an admin or the
+ * meeting's creator can record) rather than the looser read rule, since this
+ * writes new content tied to the recording, same posture as
+ * transcribeSegment.
+ *
+ * MAX_KEYFRAMES_PER_MEETING is enforced here too, not just by the client's
+ * own counter (use-screen-keyframes.ts) — a client-side cap alone is not a
+ * real limit, it's just a UI nicety a modified client could ignore.
+ */
+export async function uploadMeetingKeyframe(
+  meetingId: string,
+  file: File,
+  capturedAtMs: number,
+  width: number,
+  height: number,
+): Promise<ActionResult<MeetingScreenshotView>> {
+  const parsed = uploadKeyframeInput.safeParse({ meetingId, capturedAtMs, width, height })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const id = parsed.data.meetingId
+
+  if (!(file instanceof File) || file.size === 0) return err('No image received')
+  if (file.size > MAX_KEYFRAME_BYTES) return err('Screen capture came out larger than expected — skipped')
+  if (!ALLOWED_KEYFRAME_TYPES.includes(file.type)) return err('Unsupported image type')
+
+  const ctx = await canManageMeeting(id)
+  if (!ctx) return err('Only admins or the meeting creator can capture screen keyframes')
+  const { session, meeting } = ctx
+
+  const existing = await db
+    .select({ id: meetingScreenshots.id })
+    .from(meetingScreenshots)
+    .where(eq(meetingScreenshots.meetingId, id))
+  if (existing.length >= MAX_KEYFRAMES_PER_MEETING) {
+    return err(`Reached the ${MAX_KEYFRAMES_PER_MEETING}-screenshot cap for this meeting`)
+  }
+
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return err('Image storage is not configured — set BLOB_READ_WRITE_TOKEN to enable screen capture')
+  }
+
+  let blob: Awaited<ReturnType<typeof put>>
+  try {
+    blob = await put(`meeting-keyframes/${id}/${crypto.randomUUID()}.jpg`, file, {
+      access: 'private',
+      contentType: file.type,
+    })
+  } catch {
+    return err('Upload failed — try again')
+  }
+
+  const [row] = await db
+    .insert(meetingScreenshots)
+    .values({
+      meetingId: id,
+      blobUrl: blob.url,
+      blobPathname: blob.pathname,
+      capturedAtMs: parsed.data.capturedAtMs,
+      width: parsed.data.width,
+      height: parsed.data.height,
+      byteSize: file.size,
+      createdBy: session.user.id,
+    })
+    .returning({ id: meetingScreenshots.id })
+
+  revalidatePath('/meetings')
+  return ok({
+    id: row.id,
+    url: keyframeProxyUrl(blob.pathname),
+    capturedAtMs: parsed.data.capturedAtMs,
+    width: parsed.data.width,
+    height: parsed.data.height,
+    byteSize: file.size,
+  })
+}
+
+/**
+ * Deletes one keyframe someone doesn't want kept — same canManageMeeting
+ * gate as capturing it in the first place. The DB row goes first; the Blob
+ * delete is best-effort (same never-block posture as deleteMeeting's Google
+ * Calendar cleanup) since a stray object left in Blob storage is cleanup
+ * debt, not something that should block the person's actual request.
+ */
+export async function deleteMeetingKeyframe(screenshotId: string): Promise<ActionResult> {
+  const parsed = idInput.safeParse(screenshotId)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [row] = await db
+    .select()
+    .from(meetingScreenshots)
+    .where(eq(meetingScreenshots.id, parsed.data))
+  if (!row) return err('Not found')
+
+  const ctx = await canManageMeeting(row.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  await db.delete(meetingScreenshots).where(eq(meetingScreenshots.id, row.id))
+  try {
+    await del(row.blobPathname)
+  } catch {
+    // Ignore — the DB row (and so the filmstrip entry) is already gone.
+  }
+
+  revalidatePath('/meetings')
+  return ok(undefined)
 }
 
 export async function getMeetingIntel(meetingId: string): Promise<ActionResult<MeetingIntel>> {
@@ -1051,6 +1256,19 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     }),
   )
 
+  const screenshotRows = await db
+    .select({
+      id: meetingScreenshots.id,
+      blobPathname: meetingScreenshots.blobPathname,
+      capturedAtMs: meetingScreenshots.capturedAtMs,
+      width: meetingScreenshots.width,
+      height: meetingScreenshots.height,
+      byteSize: meetingScreenshots.byteSize,
+    })
+    .from(meetingScreenshots)
+    .where(eq(meetingScreenshots.meetingId, id))
+    .orderBy(meetingScreenshots.capturedAtMs)
+
   return ok({
     notes: notesRow
       ? {
@@ -1071,6 +1289,14 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
       { id, startsAt: meeting.startsAt },
       { id: session.user.id, isAdmin },
     ),
+    screenshots: screenshotRows.map((row) => ({
+      id: row.id,
+      url: keyframeProxyUrl(row.blobPathname),
+      capturedAtMs: row.capturedAtMs,
+      width: row.width,
+      height: row.height,
+      byteSize: row.byteSize,
+    })),
   })
 }
 

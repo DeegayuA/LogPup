@@ -408,3 +408,35 @@ export const meetingRecordingSegments = pgTable('meeting_recording_segments', {
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [uniqueIndex('meeting_recording_segments_meeting_index_idx').on(t.meetingId, t.index)])
+
+// Change-detected screen keyframes captured during a "screen + mic" recording
+// (see screen-keyframes.ts). Full-video recording was rejected on cost (720p
+// runs ~450-900 MB/hour vs the ~14 MB/hour the segmented audio path costs) —
+// this is the cheap alternative: sample the shared screen periodically, keep
+// a frame only when it perceptually changed (a new slide, a diagram, a code
+// diff), and hand the kept frames to Gemini alongside the transcript so it
+// can read on-screen content the audio alone can't capture. Bounded per
+// meeting by MAX_KEYFRAMES_PER_MEETING (screen-keyframes.ts), enforced both
+// client- and server-side (uploadMeetingKeyframe in ai-actions.ts).
+// `blobUrl` is the raw Vercel Blob URL returned at upload time (record-
+// keeping only — it's a PRIVATE blob, not directly fetchable by a browser);
+// `blobPathname` is what actually gets used to fetch (via the
+// /api/meeting-keyframes proxy, same private-blob pattern as avatars) and to
+// delete (deleteMeeting's best-effort Blob cleanup, and the per-keyframe
+// delete action) — kept as its own column rather than parsed out of the URL
+// so a delete never depends on URL shape staying stable.
+// `capturedAtMs` is the offset from the start of the recording, not a wall-
+// clock timestamp — what the filmstip and the Gemini prompt label frames
+// with ("screen at 12:34").
+export const meetingScreenshots = pgTable('meeting_screenshots', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  blobUrl: text('blob_url').notNull(),
+  blobPathname: text('blob_pathname').notNull(),
+  capturedAtMs: integer('captured_at_ms').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  byteSize: integer('byte_size'),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [index('meeting_screenshots_meeting_captured_idx').on(t.meetingId, t.capturedAtMs)])

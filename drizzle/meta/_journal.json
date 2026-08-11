@@ -120,6 +120,13 @@
       "when": 1786461260474,
       "tag": "0017_meeting_recording_segments",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786462691932,
+      "tag": "0018_meeting_screenshots",
+      "breakpoints": true
     }
   ]
 }
