@@ -1,6 +1,6 @@
 import {
   pgTable, pgEnum, text, uuid, integer, boolean, date, timestamp,
-  uniqueIndex, primaryKey,
+  uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
 
 export const userRole = pgEnum('user_role', ['admin', 'member'])
@@ -82,3 +82,41 @@ export const meetingAttendees = pgTable('meeting_attendees', {
   meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
 }, (t) => [primaryKey({ columns: [t.meetingId, t.userId] })])
+
+// Per-user Gemini API keys. Multiple keys per user; requests roll across
+// active keys (least-recently-used first) so free-tier rate limits spread out.
+// The key itself is AES-256-GCM encrypted at rest (see src/lib/crypto.ts);
+// last4 is kept for display only.
+export const geminiKeys = pgTable('gemini_keys', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  label: text('label').notNull(),
+  encryptedKey: text('encrypted_key').notNull(),
+  last4: text('last4').notNull(),
+  active: boolean('active').notNull().default(true),
+  failCount: integer('fail_count').notNull().default(0),
+  lastUsedAt: timestamp('last_used_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// AI analysis of a recorded meeting (transcript + structured notes), one row
+// per meeting. jsonb shapes:
+//   perPerson:  [{ name, points: string[], actionItems: string[] }]
+//   deadlines:  [{ item, owner, due }]            (due = free-text date phrase)
+//   terms:      [{ term, explanation, sinhala }]  (software terms glossary)
+//   questions:  [{ person, questions: string[] }] (prep for the next meeting)
+export const meetingAiNotes = pgTable('meeting_ai_notes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().unique()
+    .references(() => meetings.id, { onDelete: 'cascade' }),
+  language: text('language').notNull().default('en'),
+  transcript: text('transcript'),
+  summary: text('summary'),
+  perPerson: jsonb('per_person'),
+  deadlines: jsonb('deadlines'),
+  terms: jsonb('terms'),
+  questions: jsonb('questions'),
+  model: text('model').notNull(),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})

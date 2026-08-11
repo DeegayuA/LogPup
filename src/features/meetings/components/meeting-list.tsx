@@ -4,7 +4,13 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import { CalendarCheckIcon, PencilIcon, SendIcon, Trash2Icon } from 'lucide-react'
+import {
+  CalendarCheckIcon,
+  CalendarDaysIcon,
+  PencilIcon,
+  SendIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,6 +27,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { deleteMeeting, retryCalendarInvite, updateMeetingNotes } from '@/features/meetings/actions'
+import { MeetingIntelPanel } from '@/features/meetings/components/meeting-intel'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
 export function MeetingList({
@@ -35,7 +42,13 @@ export function MeetingList({
   showAppBadge?: boolean
 }) {
   if (meetings.length === 0) {
-    return <p className="text-sm text-muted-foreground">No meetings.</p>
+    return (
+      <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+        <CalendarDaysIcon className="size-5 text-muted-foreground/60" aria-hidden />
+        <p className="text-sm font-medium">No meetings.</p>
+        <p className="text-xs text-muted-foreground">Schedule one to get the team in sync.</p>
+      </div>
+    )
   }
 
   return (
@@ -221,6 +234,7 @@ function MeetingRow({
       ) : meeting.notes ? (
         <p className="text-sm text-muted-foreground">Notes: {meeting.notes}</p>
       ) : null}
+      <MeetingIntelPanel meetingId={meeting.id} canRecord={canManage} />
     </li>
   )
 }
