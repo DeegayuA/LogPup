@@ -27,6 +27,11 @@ import {
   resolveFollowup,
   type MeetingIntel,
 } from '@/features/meetings/ai-actions'
+import {
+  otherLanguage,
+  shouldSwitchLanguage,
+  type ActiveLanguage,
+} from '@/features/meetings/language-switch'
 
 // --- Minimal Web Speech API typings ------------------------------------
 // Not part of TypeScript's DOM lib (non-standard, webkit-prefixed). Declared
@@ -34,6 +39,10 @@ import {
 // component actually uses.
 interface SpeechRecognitionAlternativeLike {
   readonly transcript: string
+  // Omitted by some browsers entirely — never assume a number here, and
+  // never treat a missing value as evidence of low confidence (see
+  // language-switch.ts).
+  readonly confidence?: number
 }
 interface SpeechRecognitionResultLike {
   readonly isFinal: boolean
@@ -195,6 +204,27 @@ export function MeetingIntelPanel({
   }
 
   useEffect(() => cleanupCapture, [])
+
+  // Notes that already exist should just be there — reading them shouldn't
+  // cost a click. Fetch once on mount and open the panel only when there is
+  // something to show, so meetings without analysis stay collapsed.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await getMeetingIntel(meetingId)
+        if (cancelled || !res.ok) return
+        setIntel(res.data)
+        if (res.data.notes || res.data.prep.length > 0) setOpen(true)
+      } catch {
+        /* Silent: this is an unprompted prefetch, not a user action. The
+           Intelligence button still loads on demand and reports failures. */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [meetingId])
 
   // Auto-scroll the live panel to the newest line, but only when the user
   // was already near the bottom — don't fight someone scrolling up to
