@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@ncdai/react-wheel-picker/style.css";
 
 @custom-variant dark (&:is(.dark *));
 
