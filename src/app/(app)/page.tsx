@@ -1,6 +1,6 @@
 import { format } from 'date-fns'
 import { auth } from '@/lib/auth'
-import { getUserCapacities } from '@/features/people/queries'
+import { getUserCapacities, listAssignableApps } from '@/features/people/queries'
 import { getActiveSprints, getNextUpcomingSprint } from '@/features/sprints/queries'
 import { getUpcomingMeetingsForUser } from '@/features/meetings/queries'
 import { CapacityHeat } from '@/features/dashboard/components/capacity-heat'
@@ -17,12 +17,16 @@ function greetingFor(hour: number): string {
 
 export default async function DashboardPage() {
   const session = await auth()
-  const [capacities, activeSprints, upcomingMeetings] = await Promise.all([
+  const isAdmin = session?.user?.role === 'admin'
+  const [capacities, activeSprints, upcomingMeetings, assignableApps] = await Promise.all([
     getUserCapacities(),
     getActiveSprints(),
     session?.user
       ? getUpcomingMeetingsForUser(session.user.id, UPCOMING_MEETING_WINDOW_DAYS)
       : Promise.resolve([]),
+    // Only the admin's inline "Assign to app" control needs the app list —
+    // a member never renders it, so don't pay for the query.
+    isAdmin ? listAssignableApps() : Promise.resolve([]),
   ])
   // Only needed for the card's empty-but-not-really state, so it's fetched
   // after we already know whether anything is running now rather than
@@ -44,7 +48,7 @@ export default async function DashboardPage() {
         </p>
       </header>
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-        <CapacityHeat capacities={capacities} />
+        <CapacityHeat capacities={capacities} isAdmin={isAdmin} apps={assignableApps} />
         <div className="flex flex-col gap-6">
           <ActiveSprints sprints={activeSprints} nextSprint={nextSprint} />
           <UpcomingMeetings meetings={upcomingMeetings} />

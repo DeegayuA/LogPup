@@ -1,104 +1,84 @@
-import Link from 'next/link'
-import { StatNumber } from '@/components/animate-ui/stat-number'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
-import type { UserCapacity } from '@/features/people/queries'
+import type { AssignableApp, UserCapacity } from '@/features/people/queries'
 import { sortCapacities } from '@/features/dashboard/sort-capacities'
-import { cn } from '@/lib/utils'
-
-const linkClass =
-  'rounded-sm underline-offset-2 transition-colors duration-150 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
+import {
+  CapacityCard,
+  CapacityEmpty,
+  PersonAvatar,
+  PersonHeading,
+} from '@/features/dashboard/components/capacity-card'
+import { CapacityHeatEditable } from '@/features/dashboard/components/capacity-heat-editable'
 
 /**
  * Server-safe: no client-only APIs, so it can render directly from the
  * dashboard server component. Rows sorted overallocated-first, then by
  * totalPct descending, so the people who need attention float to the top.
+ *
+ * An admin gets the editable list instead — same chrome, same sort, but each
+ * app chip opens an inline allocation editor. Everyone else (and every
+ * historical "as of" render, which has nothing editable behind it) keeps this
+ * static path, which never ships the mutation code to the browser at all.
  */
-export function CapacityHeat({ capacities }: { capacities: UserCapacity[] }) {
+export function CapacityHeat({
+  capacities,
+  isAdmin = false,
+  apps = [],
+  title,
+  description,
+  emptyTitle = 'Nobody in the pack yet.',
+  emptyHint = 'Add people and assign them to apps to see capacity here.',
+}: {
+  capacities: UserCapacity[]
+  isAdmin?: boolean
+  apps?: AssignableApp[]
+  title?: string
+  description?: string
+  emptyTitle?: string
+  emptyHint?: string
+}) {
+  if (isAdmin) return <CapacityHeatEditable capacities={capacities} apps={apps} />
+
   const sorted = sortCapacities(capacities)
   const overCount = sorted.filter((person) => person.overallocated).length
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Team capacity</CardTitle>
-        {sorted.length > 0 ? (
-          <CardAction>
-            <span
-              className={cn(
-                'font-mono text-xs',
-                overCount > 0 ? 'font-medium text-destructive' : 'text-muted-foreground',
-              )}
-            >
-              {overCount > 0 ? (
-                <>
-                  <StatNumber value={overCount} /> over
-                </>
-              ) : (
-                <>
-                  <StatNumber value={sorted.length} />{' '}
-                  {sorted.length === 1 ? 'person' : 'people'}
-                </>
-              )}
-            </span>
-          </CardAction>
-        ) : null}
-      </CardHeader>
-      <CardContent>
-        {sorted.length === 0 ? (
-          <div className="flex flex-col gap-1 py-4 text-center">
-            <p className="text-sm font-medium">Nobody in the pack yet.</p>
-            <p className="text-xs text-muted-foreground">
-              Add people and assign them to apps to see capacity here.
-            </p>
-          </div>
-        ) : (
-          <ul className="flex flex-col divide-y divide-border">
-            {sorted.map((person) => (
-              <li
-                key={person.user.id}
-                className="flex items-center gap-3 py-3 first:pt-0 last:pb-0"
-              >
-                <Avatar>
-                  {person.user.avatarUrl ? (
-                    <AvatarImage src={person.user.avatarUrl} alt={person.user.name} />
-                  ) : null}
-                  <AvatarFallback>
-                    {person.user.name.slice(0, 1).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <Link
-                      href={`/people/${person.user.id}`}
-                      className={cn('truncate text-sm font-medium', linkClass)}
-                    >
-                      {person.user.name}
-                    </Link>
-                    {person.overallocated ? (
-                      <Badge variant="destructive">Over</Badge>
-                    ) : null}
+    <CapacityCard
+      title={title}
+      description={description}
+      count={sorted.length}
+      overCount={overCount}
+    >
+      {sorted.length === 0 ? (
+        <CapacityEmpty title={emptyTitle} hint={emptyHint} />
+      ) : (
+        <ul className="flex flex-col divide-y divide-border">
+          {sorted.map((person) => (
+            <li key={person.user.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+              <PersonAvatar person={person} />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <PersonHeading person={person} />
+                {person.breakdown.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {person.breakdown.map((entry) => (
+                      // Name only, no percentage: this is the non-admin view
+                      // and it stays pixel-identical to what shipped before
+                      // the editor existed. The per-app split is a click away
+                      // on the person page; the total is right below.
+                      <Badge key={entry.appId} variant="secondary" className="text-[10px]">
+                        {entry.appName}
+                      </Badge>
+                    ))}
                   </div>
-                  {person.breakdown.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {person.breakdown.map((entry) => (
-                        <Badge key={entry.appId} variant="secondary" className="text-[10px]">
-                          {entry.appName}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">No app assignments</p>
-                  )}
-                  <CapacityBar totalPct={person.totalPct} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No app assignments</p>
+                )}
+                <CapacityBar totalPct={person.totalPct} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </CapacityCard>
   )
 }

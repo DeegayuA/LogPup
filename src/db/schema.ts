@@ -1,6 +1,6 @@
 import {
   pgTable, pgEnum, text, uuid, integer, boolean, date, timestamp,
-  uniqueIndex, primaryKey, jsonb,
+  index, uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
 
 export const userRole = pgEnum('user_role', ['admin', 'member'])
@@ -20,6 +20,7 @@ export const followupKind = pgEnum('followup_kind', ['question', 'action'])
 export const followupStatus = pgEnum('followup_status', ['open', 'resolved'])
 export const noteSource = pgEnum('note_source', ['typed', 'voice', 'ai'])
 export const suggestionStatus = pgEnum('suggestion_status', ['open', 'accepted', 'dismissed'])
+export const allocationChange = pgEnum('allocation_change', ['assigned', 'updated', 'removed'])
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -69,6 +70,59 @@ export const assignments = pgTable('assignments', {
   role: text('role').notNull(),
   allocationPct: integer('allocation_pct').notNull(),
 }, (t) => [uniqueIndex('assignments_user_app_idx').on(t.userId, t.appId)])
+
+// Append-only audit of who was allocated to what, and when. `assignments` is
+// deliberately left untouched as THE live state — every existing read path
+// keeps working with no new filter to remember (the class of bug that once
+// silently leaked rows here). This table is written alongside it and is only
+// ever read by the history/"as of" surfaces.
+//
+// SHAPE — one row per (userId, appId) *interval*, half-open [from, to):
+//   effectiveTo NULL  = still the state as of now
+//   effectiveTo set   = superseded at that instant by the next row, whose
+//                       effectiveFrom is the identical timestamp (both are
+//                       written from one JS `Date` in a single db.batch, so
+//                       the intervals abut exactly and never overlap).
+// The invariant is therefore: AT MOST ONE open row per (userId, appId).
+//
+// REMOVAL SEMANTICS (one of the two options, chosen and applied everywhere):
+//   a removal CLOSES the open row and INSERTS a tombstone — changeKind
+//   'removed' with allocationPct 0, left open. It is *not* close-only. Two
+//   reasons: (1) the timeline needs an event carrying who removed it and
+//   when — a close-only write records the instant but not the actor; (2) the
+//   "as of" query stays one uniform rule ("the row open at the date wins")
+//   with no special case for "no open row", because an unassigned person is
+//   represented explicitly as 0%. Callers must therefore drop changeKind
+//   'removed' rows from any *breakdown* list — they contribute 0 to totals
+//   and must not render as an app chip. See selectRowsAsOf / capacityAsOf in
+//   src/features/people/allocation-history.ts, which own that rule.
+//
+// changedBy is the admin who made the change. Backfilled rows (see migration
+// 0015) carry the app's lead, or the oldest admin as a fallback, plus a note
+// saying so — they are the only rows whose actor is inferred rather than
+// observed.
+export const assignmentHistory = pgTable('assignment_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  role: text('role').notNull(),
+  allocationPct: integer('allocation_pct').notNull(),
+  effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull().defaultNow(),
+  effectiveTo: timestamp('effective_to', { withTimezone: true }),
+  changedBy: uuid('changed_by').notNull().references(() => users.id),
+  changeKind: allocationChange('change_kind').notNull(),
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // Person timeline (/people/[id]) and the per-person trend.
+  index('assignment_history_user_from_idx').on(t.userId, t.effectiveFrom),
+  // Per-app history.
+  index('assignment_history_app_from_idx').on(t.appId, t.effectiveFrom),
+  // "As of" lookups: the whole-team scan filters on the interval bounds, so
+  // this covers `effective_from <= $at AND (effective_to IS NULL OR
+  // effective_to > $at)` without touching userId/appId first.
+  index('assignment_history_as_of_idx').on(t.effectiveFrom, t.effectiveTo),
+])
 
 export const sprints = pgTable('sprints', {
   id: uuid('id').primaryKey().defaultRandom(),

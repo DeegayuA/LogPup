@@ -1,7 +1,23 @@
-import { and, asc, desc, eq, gte, ilike, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, ilike, isNull, lte, ne, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
-import { apps, assignments, meetingAttendees, meetings, tasks, users } from '@/db/schema'
+import {
+  apps,
+  assignmentHistory,
+  assignments,
+  meetingAttendees,
+  meetings,
+  tasks,
+  users,
+} from '@/db/schema'
 import { summarizeAllocations } from '@/features/people/allocation'
+import {
+  allocationTotalSeries,
+  buildAllocationTimeline,
+  capacityAsOf,
+  type HistoryRow,
+  type PersonAllocationHistoryView,
+} from '@/features/people/allocation-history'
 
 export type TeamMember = {
   assignmentId: string
@@ -11,6 +27,21 @@ export type TeamMember = {
   avatarUrl: string | null
   role: string
   allocationPct: number
+}
+
+export type CapacityBreakdownEntry = {
+  appId: string
+  appName: string
+  slug: string
+  role: string
+  allocationPct: number
+  /**
+   * The live `assignments` row this entry came from, so the dashboard can
+   * edit it in place through the existing actions. Null for a historical
+   * ("as of") read: those entries describe an interval that may no longer
+   * have — or never had — a live row, and are read-only by construction.
+   */
+  assignmentId: string | null
 }
 
 export type UserCapacity = {
@@ -25,10 +56,13 @@ export type UserCapacity = {
   }
   totalPct: number
   overallocated: boolean
-  breakdown: { appId: string; appName: string; slug: string; role: string; allocationPct: number }[]
+  breakdown: CapacityBreakdownEntry[]
 }
 
 export type ActiveUser = { id: string; name: string }
+
+/** An app the dashboard's inline "Assign to app" control can target. */
+export type AssignableApp = { id: string; name: string; slug: string }
 
 export type PersonBreakdownEntry = {
   appId: string
@@ -93,6 +127,7 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
       avatarUrl: users.avatarUrl,
       userRole: users.role,
       orgTags: users.orgTags,
+      assignmentId: assignments.id,
       appId: apps.id,
       appName: apps.name,
       slug: apps.slug,
@@ -149,11 +184,142 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
         slug: row.slug,
         role: row.role,
         allocationPct: row.allocationPct,
+        assignmentId: row.assignmentId,
       })
     }
   }
 
   return [...byUser.values()]
+}
+
+/**
+ * The team capacity list exactly as it stood at `at`, in the SAME shape as
+ * getUserCapacities so the identical UI renders it.
+ *
+ * Two deliberate limits, both about scope rather than accuracy:
+ *  - the ROSTER is today's roster (active, approved users). There is no user
+ *    history table, so this answers "how were today's people loaded back
+ *    then", not "who worked here back then". Someone deactivated since is
+ *    absent even if they carried work on that date.
+ *  - `assignmentId` is null throughout: a past interval is not something the
+ *    edit actions can target, and the read-only view is the point.
+ *
+ * The interval predicate is applied in SQL (so a long history doesn't ship
+ * wholesale to the server) and again by capacityAsOf, which is the tested
+ * definition of "in force". Applying it twice is free — the predicate is
+ * idempotent — and keeps one source of truth for the boundary rule.
+ */
+export async function getTeamCapacityAsOf(at: Date): Promise<UserCapacity[]> {
+  const [roster, historyRows] = await Promise.all([
+    db
+      .select({
+        id: users.id,
+        name: users.name,
+        title: users.title,
+        phone: users.phone,
+        avatarUrl: users.avatarUrl,
+        role: users.role,
+        orgTags: users.orgTags,
+      })
+      .from(users)
+      .where(and(eq(users.active, true), eq(users.status, 'approved')))
+      .orderBy(asc(users.name)),
+    db
+      .select({
+        userId: assignmentHistory.userId,
+        appId: apps.id,
+        appName: apps.name,
+        slug: apps.slug,
+        role: assignmentHistory.role,
+        allocationPct: assignmentHistory.allocationPct,
+        changeKind: assignmentHistory.changeKind,
+        effectiveFrom: assignmentHistory.effectiveFrom,
+        effectiveTo: assignmentHistory.effectiveTo,
+      })
+      .from(assignmentHistory)
+      .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+      .where(
+        and(
+          lte(assignmentHistory.effectiveFrom, at),
+          or(isNull(assignmentHistory.effectiveTo), gt(assignmentHistory.effectiveTo, at)),
+        ),
+      ),
+  ])
+
+  const byUser = new Map(
+    capacityAsOf(historyRows satisfies HistoryRow[], at).map((entry) => [entry.userId, entry]),
+  )
+
+  return roster.map((user) => {
+    const capacity = byUser.get(user.id)
+    return {
+      user: {
+        id: user.id,
+        name: user.name,
+        title: user.title,
+        phone: user.phone,
+        avatarUrl: user.avatarUrl,
+        role: user.role,
+        orgTags: user.orgTags,
+      },
+      totalPct: capacity?.totalPct ?? 0,
+      overallocated: capacity?.overallocated ?? false,
+      breakdown: (capacity?.breakdown ?? []).map((entry) => ({ ...entry, assignmentId: null })),
+    }
+  })
+}
+
+export type PersonAllocationHistory = PersonAllocationHistoryView
+
+/**
+ * Everything the person page's history card needs: the annotated change
+ * timeline (newest first, each entry knowing what it replaced) and the total
+ * allocation trend. One query, two pure derivations — the shaping lives in
+ * allocation-history.ts so it is unit-tested without a database.
+ */
+export async function getPersonAllocationHistory(
+  userId: string,
+): Promise<PersonAllocationHistory> {
+  const changer = alias(users, 'changer')
+  const rows = await db
+    .select({
+      id: assignmentHistory.id,
+      appId: apps.id,
+      appName: apps.name,
+      slug: apps.slug,
+      role: assignmentHistory.role,
+      allocationPct: assignmentHistory.allocationPct,
+      changeKind: assignmentHistory.changeKind,
+      effectiveFrom: assignmentHistory.effectiveFrom,
+      effectiveTo: assignmentHistory.effectiveTo,
+      changedByName: changer.name,
+      note: assignmentHistory.note,
+    })
+    .from(assignmentHistory)
+    .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+    // Left join: an admin account deleted since must not make their changes
+    // vanish from the audit trail.
+    .leftJoin(changer, eq(assignmentHistory.changedBy, changer.id))
+    .where(eq(assignmentHistory.userId, userId))
+    .orderBy(desc(assignmentHistory.effectiveFrom))
+
+  return {
+    timeline: buildAllocationTimeline(rows),
+    trend: allocationTotalSeries(rows),
+  }
+}
+
+/**
+ * Apps the dashboard's inline assign control offers. Archived apps are
+ * excluded — assigning fresh capacity to a shut-down app is never the intent
+ * — but paused ones stay, since work resuming there is normal.
+ */
+export async function listAssignableApps(): Promise<AssignableApp[]> {
+  return db
+    .select({ id: apps.id, name: apps.name, slug: apps.slug })
+    .from(apps)
+    .where(ne(apps.status, 'archived'))
+    .orderBy(asc(apps.name))
 }
 
 export type ActivityDay = { date: string; count: number; level: 0 | 1 | 2 | 3 | 4 }

@@ -7,8 +7,13 @@ import { telHref } from '@/lib/phone'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { getPersonActivity, getPersonDetail } from '@/features/people/queries'
+import {
+  getPersonActivity,
+  getPersonAllocationHistory,
+  getPersonDetail,
+} from '@/features/people/queries'
 import { ActivityGraph } from '@/features/people/components/activity-graph'
+import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import { cn } from '@/lib/utils'
 
@@ -31,7 +36,11 @@ const linkClass =
 
 export default async function PersonDetailPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params
-  const [person, activity] = await Promise.all([getPersonDetail(id), getPersonActivity(id)])
+  const [person, activity, history] = await Promise.all([
+    getPersonDetail(id),
+    getPersonActivity(id),
+    getPersonAllocationHistory(id),
+  ])
   if (!person) notFound()
 
   const { user, totalPct, overallocated, breakdown, tasks, meetings } = person
@@ -143,6 +152,10 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
             </>
           )}
         </Card>
+
+        {/* Sits directly after Allocation: the current split and how it got
+            that way are one story, and on mobile they stack in that order. */}
+        <AllocationHistoryCard history={history} />
 
         <Card>
           <CardHeader>

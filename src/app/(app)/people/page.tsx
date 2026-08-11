@@ -1,4 +1,6 @@
-import { PawPrint } from 'lucide-react'
+import Link from 'next/link'
+import { History, PawPrint } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { getUserCapacities } from '@/features/people/queries'
 import { PeopleDirectory } from '@/features/people/components/directory'
 
@@ -36,6 +38,9 @@ export default async function PeoplePage() {
               Who&apos;s on what, and how much room they have left.
             </p>
           </div>
+          <Button variant="outline" size="sm" render={<Link href="/people/history" />}>
+            <History aria-hidden /> Capacity history
+          </Button>
         </div>
       </div>
 
