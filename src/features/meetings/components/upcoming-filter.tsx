@@ -8,6 +8,7 @@ import {
   MiniCalendarDay,
   MiniCalendarDays,
   MiniCalendarNavigation,
+  MiniCalendarTodayButton,
 } from '@/components/kibo-ui/mini-calendar'
 import { Button } from '@/components/ui/button'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
@@ -89,6 +90,7 @@ export function UpcomingMeetingsFiltered({
           days={STRIP_DAYS}
           className="bg-card"
         >
+          <MiniCalendarTodayButton />
           <MiniCalendarNavigation direction="prev" aria-label="Show earlier days" />
           {/* All 30 days render at once; the strip fills the full width of its
               container edge-to-edge and scrolls horizontally in its own

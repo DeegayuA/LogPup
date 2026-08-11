@@ -162,10 +162,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
           return false
         }
-        if (account?.refresh_token) {
-          await db.update(users)
-            .set({ googleRefreshToken: account.refresh_token })
-            .where(eq(users.id, existing.id))
+
+        const updates: { googleRefreshToken?: string; avatarUrl?: string } = {}
+        if (account?.refresh_token) updates.googleRefreshToken = account.refresh_token
+
+        // Keep the Google profile picture in sync on every sign-in — but never
+        // clobber a picture the user uploaded themselves (those are Vercel Blob
+        // URLs; see features/auth/avatar-actions.ts). Removing an uploaded
+        // avatar sets the column NULL, so the next sign-in re-adopts Google's.
+        const picture = (profile as { picture?: string } | undefined)?.picture
+        const isUploaded = existing.avatarUrl?.includes('.blob.vercel-storage.com') ?? false
+        if (picture && !isUploaded && picture !== existing.avatarUrl) {
+          updates.avatarUrl = picture
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await db.update(users).set(updates).where(eq(users.id, existing.id))
         }
         return true
       }

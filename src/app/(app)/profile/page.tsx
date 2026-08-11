@@ -1,5 +1,4 @@
 import { auth } from '@/lib/auth'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import {
   Card,
@@ -11,7 +10,8 @@ import {
 import { SetPasswordForm } from '@/features/auth/components/set-password-form'
 import { GeminiKeysCard } from '@/features/gemini/components/gemini-keys-card'
 import { PhoneField } from '@/features/auth/components/phone-field'
-import { getOwnPhone } from '@/features/auth/queries'
+import { getOwnPhone, getOwnAvatarUrl } from '@/features/auth/queries'
+import { AvatarUpload } from '@/features/auth/components/avatar-upload'
 import { listGeminiKeys } from '@/features/gemini/queries'
 
 export default async function ProfilePage(props: {
@@ -20,10 +20,13 @@ export default async function ProfilePage(props: {
   const [session, { firstLogin }] = await Promise.all([auth(), props.searchParams])
   const user = session?.user
   const role = user?.role ?? 'member'
-  const initials = (user?.name ?? '?').slice(0, 1).toUpperCase()
-  const [geminiKeys, phone] = user?.id
-    ? await Promise.all([listGeminiKeys(user.id), getOwnPhone(user.id)])
-    : [[], null]
+  const [geminiKeys, phone, avatarUrl] = user?.id
+    ? await Promise.all([
+        listGeminiKeys(user.id),
+        getOwnPhone(user.id),
+        getOwnAvatarUrl(user.id),
+      ])
+    : [[], null, null]
   const showFirstLoginBanner = firstLogin === '1' || user?.mustChangePassword === true
 
   return (
@@ -43,13 +46,7 @@ export default async function ProfilePage(props: {
         ) : null}
 
         <Card>
-          <CardContent className="flex items-center gap-4">
-            <Avatar size="lg" className="size-14!">
-              {user?.image ? <AvatarImage src={user.image} alt={user.name ?? ''} /> : null}
-              <AvatarFallback className="font-heading text-lg font-semibold">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
+          <CardContent className="flex flex-col gap-5">
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-heading text-lg leading-tight font-semibold">
@@ -66,6 +63,7 @@ export default async function ProfilePage(props: {
                 {user?.email ?? '—'}
               </span>
             </div>
+            <AvatarUpload name={user?.name ?? '?'} avatarUrl={avatarUrl} />
           </CardContent>
         </Card>
 

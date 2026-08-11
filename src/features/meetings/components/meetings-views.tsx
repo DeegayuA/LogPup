@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { CalendarDays, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { HolidayLegend } from '@/components/shared/holiday-icon'
 import { UpcomingMeetingsFiltered } from '@/features/meetings/components/upcoming-filter'
 import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
 import { MeetingsMonthCalendar } from '@/features/meetings/components/meetings-month-calendar'
@@ -37,27 +38,33 @@ export function MeetingsViews({
 
   return (
     <div className="flex flex-col gap-4">
-      <div
-        role="group"
-        aria-label="Meetings view"
-        className="flex w-fit items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5"
-      >
-        {/* Filled variant for the active view — `bg-card` on this `muted/50`
-            track resolves to the same color as the track in dark theme, i.e. no
-            visible selected state at all. */}
-        {VIEWS.map(({ id, label, icon: Icon }) => (
-          <Button
-            key={id}
-            variant={view === id ? 'default' : 'ghost'}
-            size="sm"
-            type="button"
-            aria-pressed={view === id}
-            onClick={() => setView(id)}
-            className="h-7 px-2.5"
-          >
-            <Icon /> {label}
-          </Button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          role="group"
+          aria-label="Meetings view"
+          className="flex w-fit items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5"
+        >
+          {/* Filled variant for the active view — `bg-card` on this `muted/50`
+              track resolves to the same color as the track in dark theme, i.e. no
+              visible selected state at all. */}
+          {VIEWS.map(({ id, label, icon: Icon }) => (
+            <Button
+              key={id}
+              variant={view === id ? 'default' : 'ghost'}
+              size="sm"
+              type="button"
+              aria-pressed={view === id}
+              onClick={() => setView(id)}
+              className="h-7 px-2.5"
+            >
+              <Icon /> {label}
+            </Button>
+          ))}
+        </div>
+        {/* Both the day strip (list view) and the month grid (calendar view)
+            mark holidays with these icons — one legend covers whichever view
+            is active instead of duplicating it per-view. */}
+        <HolidayLegend />
       </div>
 
       {view === 'list' ? (

@@ -10,3 +10,16 @@ export async function getOwnPhone(userId: string): Promise<string | null> {
   const [row] = await db.select({ phone: users.phone }).from(users).where(eq(users.id, userId))
   return row?.phone ?? null
 }
+
+/**
+ * The signed-in user's own avatar. Read from the row, not the session: the JWT
+ * carries whatever the picture was when the token was minted, so an upload
+ * would keep showing the old image until the next sign-in.
+ */
+export async function getOwnAvatarUrl(userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(eq(users.id, userId))
+  return row?.avatarUrl ?? null
+}

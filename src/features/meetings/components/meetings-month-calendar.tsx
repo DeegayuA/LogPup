@@ -14,7 +14,8 @@ import {
 } from 'date-fns'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { isLkHoliday, isLkSunday } from '@/lib/lk-holidays'
+import { HolidayIcon, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
+import { getLkHoliday, isLkSunday } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
@@ -164,10 +165,11 @@ export function MeetingsMonthCalendar({
               // Same Sri Lanka holiday/Sunday markers as the mini-calendar day
               // strip (src/components/kibo-ui/mini-calendar), reusing its
               // helpers rather than re-deriving the rules here. A Sunday that
-              // is also a public holiday still reads as a holiday (holiday
-              // wins) — the dot marker is what keeps that legible without
-              // relying on the red/orange hue alone.
-              const holidayName = isLkHoliday(day)
+              // is also a holiday still reads as a holiday (holiday wins) —
+              // the icon is what keeps that legible without relying on hue
+              // alone.
+              const holiday = getLkHoliday(day)
+              const holidayName = holiday?.name
               const isWeekendDay = isLkSunday(day) && !holidayName
               return (
                 <div
@@ -180,13 +182,13 @@ export function MeetingsMonthCalendar({
                   <div className="flex items-center gap-1">
                     <span
                       aria-hidden
-                      title={holidayName}
+                      title={holidayName ? [holidayName, holidayCategoryLabel(holiday?.categories)].filter(Boolean).join(' — ') : undefined}
                       className={cn(
                         'flex size-5 items-center justify-center rounded-full font-mono text-xs',
                         isToday(day)
                           ? 'bg-primary font-semibold text-primary-foreground'
-                          : holidayName
-                            ? 'text-holiday'
+                          : holiday
+                            ? holidayToneClass(holiday.categories)
                             : isWeekendDay
                               ? 'text-weekend'
                               : inMonth
@@ -199,12 +201,13 @@ export function MeetingsMonthCalendar({
                     >
                       {format(day, 'd')}
                     </span>
-                    {holidayName ? (
-                      <span aria-hidden className="size-1 shrink-0 rounded-full bg-holiday" />
+                    {holiday ? (
+                      <HolidayIcon categories={holiday.categories} className="size-3 shrink-0" />
                     ) : null}
                     <span className="sr-only">
                       {format(day, 'EEEE, MMMM d')}
                       {holidayName ? `, ${holidayName}` : ''}
+                      {holiday ? `, ${holidayCategoryLabel(holiday.categories)}` : ''}
                     </span>
                   </div>
                   {visible.map(({ meeting, isPast }) => (

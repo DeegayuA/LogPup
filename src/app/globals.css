@@ -41,6 +41,7 @@
   --color-card: var(--card);
   --color-weekend: var(--weekend);
   --color-holiday: var(--holiday);
+  --color-mercantile: var(--mercantile);
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
   --radius-sm: calc(var(--radius) * 0.6);
@@ -73,6 +74,11 @@
   --destructive: oklch(0.55 0.21 27);
   --weekend: oklch(0.5 0.19 25);
   --holiday: oklch(0.55 0.15 55);
+  /* Bank/mercantile-only holidays (not gazetted public holidays): a blue
+     family, clearly distinct from --holiday (orange) and --weekend (red).
+     oklch(0.48 0.17 265) checks at ~6.4:1 against --background and ~6.8:1
+     against --card, both well past the WCAG AA 3:1 floor for non-text/UI. */
+  --mercantile: oklch(0.48 0.17 265);
   --border: oklch(0.905 0.008 100);
   --input: oklch(0.905 0.008 100);
   --ring: oklch(0.56 0.08 165);
@@ -110,6 +116,9 @@
   --destructive: oklch(0.66 0.19 25);
   --weekend: oklch(0.72 0.18 25);
   --holiday: oklch(0.78 0.15 60);
+  /* Same blue family as light mode, lightened for a dark surface: ~9.4:1
+     against --background and ~8.7:1 against --card. */
+  --mercantile: oklch(0.78 0.12 268);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.68 0.08 165);

@@ -14,8 +14,9 @@ import {
   useContext,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { HolidayIcon, holidayCategoryLabel, holidayToneClass } from "@/components/shared/holiday-icon";
 import {
-  isLkHoliday,
+  getLkHoliday,
   isLkSunday,
   LK_TIMEZONE,
   toIsoDateInTimeZone,
@@ -28,6 +29,8 @@ type MiniCalendarContextType = {
   onDateSelect: (date: Date) => void;
   startDate: Date;
   onNavigate: (direction: "prev" | "next") => void;
+  /** Resets the strip window to start on today AND selects today, in one shot. */
+  onJumpToToday: () => void;
   days: number;
 };
 
@@ -115,11 +118,18 @@ export const MiniCalendar = ({
     setCurrentStartDate(newStartDate);
   };
 
+  const handleJumpToToday = () => {
+    const today = new Date();
+    setCurrentStartDate(today);
+    setSelectedDate(today);
+  };
+
   const contextValue: MiniCalendarContextType = {
     selectedDate: selectedDate || null,
     onDateSelect: handleDateSelect,
     startDate: currentStartDate || new Date(),
     onNavigate: handleNavigate,
+    onJumpToToday: handleJumpToToday,
     days,
   };
 
@@ -185,6 +195,59 @@ export const MiniCalendarNavigation = ({
   );
 };
 
+export type MiniCalendarTodayButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  asChild?: boolean;
+};
+
+export const MiniCalendarTodayButton = ({
+  asChild = false,
+  children,
+  onClick,
+  className,
+  ...props
+}: MiniCalendarTodayButtonProps) => {
+  const { onJumpToToday, selectedDate, startDate } = useMiniCalendar();
+
+  // A click here is a true no-op exactly when today is already both the
+  // selection AND the first visible day of the strip — the same two things
+  // handleJumpToToday itself sets — so this can never disagree with what
+  // pressing the button would actually do.
+  const isNoOp =
+    selectedDate != null &&
+    isSameDay(selectedDate, new Date()) &&
+    isSameDay(startDate, new Date());
+
+  const handleClick: MouseEventHandler<HTMLButtonElement> = (event) => {
+    onJumpToToday();
+    onClick?.(event);
+  };
+
+  if (asChild) {
+    return (
+      <Slot.Root onClick={handleClick} className={className} {...props}>
+        {children}
+      </Slot.Root>
+    );
+  }
+
+  return (
+    <Button
+      // Matches the chevrons' 44px square footprint so the row reads as one
+      // control cluster; disabled reuses the shared disabled: tokens
+      // (opacity + pointer-events) rather than a bespoke inactive style.
+      className={cn("h-11 shrink-0 px-3", className)}
+      disabled={isNoOp}
+      onClick={handleClick}
+      size="sm"
+      type="button"
+      variant="ghost"
+      {...props}
+    >
+      {children ?? "Today"}
+    </Button>
+  );
+};
+
 export type MiniCalendarDaysProps = Omit<
   HTMLAttributes<HTMLDivElement>,
   "children"
@@ -236,16 +299,20 @@ export const MiniCalendarDay = ({
   // time/UTC — otherwise the marker can land on the wrong cell right around
   // midnight in either timezone.
   const isTodayDate = toIsoDateInTimeZone(date) === toIsoDateInTimeZone(new Date());
-  const holidayName = isLkHoliday(date);
-  // A Sunday that is also a public holiday is still marked orange (holiday
-  // wins) — the dot marker below is what keeps that distinguishable from a
-  // plain Sunday for anyone who can't rely on the red/orange hue alone.
+  const holiday = getLkHoliday(date);
+  const holidayName = holiday?.name;
+  const categoryLabel = holidayCategoryLabel(holiday?.categories);
+  // A Sunday that is also a holiday is still marked (holiday wins) — the
+  // icon below is what keeps that distinguishable from a plain Sunday for
+  // anyone who can't rely on hue alone.
   const isWeekend = isLkSunday(date) && !holidayName;
 
   // The visible "Feb" / "4" fragments are marked aria-hidden and a single
   // sr-only span carries the full accessible name instead, so today/holiday
   // context is always announced regardless of what aria-label (if any) a
-  // caller passes through `props`.
+  // caller passes through `props`. The category label ("Public holiday" /
+  // "Poya day" / "Bank holiday") is spoken too — the icon alone is never
+  // the only signal (WCAG 1.4.1).
   const accessibleLabel = [
     new Intl.DateTimeFormat("en-US", {
       timeZone: LK_TIMEZONE,
@@ -255,6 +322,7 @@ export const MiniCalendarDay = ({
     }).format(date),
     isTodayDate && "Today",
     holidayName,
+    categoryLabel,
   ]
     .filter(Boolean)
     .join(", ");
@@ -270,7 +338,7 @@ export const MiniCalendarDay = ({
       )}
       onClick={() => onDateSelect(date)}
       size="sm"
-      title={holidayName}
+      title={holidayName ? [holidayName, categoryLabel].filter(Boolean).join(" — ") : undefined}
       type="button"
       variant={isSelected ? "default" : "ghost"}
       {...props}
@@ -288,14 +356,14 @@ export const MiniCalendarDay = ({
         aria-hidden
         className={cn(
           "font-semibold text-sm",
-          !isSelected && holidayName && "text-holiday",
+          !isSelected && holiday && holidayToneClass(holiday.categories),
           !isSelected && isWeekend && "text-weekend"
         )}
       >
         {day}
       </span>
-      {holidayName ? (
-        <span aria-hidden className="absolute bottom-1 size-1 rounded-full bg-holiday" />
+      {holiday ? (
+        <HolidayIcon categories={holiday.categories} className="absolute bottom-0.5 size-2.5" />
       ) : null}
       <span className="sr-only">{accessibleLabel}</span>
     </Button>
