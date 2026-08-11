@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
-import { and, eq, inArray, isNotNull, lt, ne, or } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
@@ -18,6 +18,7 @@ import {
 } from '@/db/schema'
 import { DEFAULT_GEMINI_MODEL, callGemini, GeminiError } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { updateMeetingNotes } from '@/features/meetings/actions'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { createTask } from '@/features/sprints/task-actions'
 import {
@@ -42,7 +43,15 @@ import {
 const MAX_AUDIO_BYTES = 15 * 1024 * 1024 // inline Gemini requests cap around 20MB
 const MAX_LIVE_TRANSCRIPT_CHARS = 100_000
 const MAX_RESOLUTION_NOTE_CHARS = 500
+// Same ceiling for the two open-item notes (what they said / why it's not
+// done): they're the same kind of short, typed-in-the-moment sentence.
+const MAX_FOLLOWUP_NOTE_CHARS = 500
+const MAX_FOLLOWUP_TEXT_CHARS = 300
 const MAX_SEGMENT_LENGTH = 5000 // matches MAX_NOTES_LENGTH in actions.ts
+// How many upcoming meetings a hand-added follow-up can be pinned to. A
+// picker is a decision aid, not an archive — past this, "their next meeting"
+// is the better answer anyway.
+const MAX_FOLLOWUP_TARGETS = 25
 
 // A malformed (non-UUID) meetingId would otherwise reach the DB as a raw
 // `uuid` column comparison and throw a Postgres "invalid input syntax"
@@ -72,13 +81,24 @@ export type FollowupStatus = 'open' | 'resolved'
 /**
  * A carried-forward item as the UI needs it: the pure carry-forward entry
  * plus where it stands. `status` is what separates "still owed" from "dealt
- * with", and `resolutionNote` carries the answer someone typed when they
- * resolved it — the record of WHAT changed, not just that something did.
+ * with"; the three note fields are deliberately distinct records that answer
+ * different questions and never overwrite each other:
+ *   resolutionNote  what came of it (only meaningful once resolved)
+ *   responseNote    what the person actually said about it, still open
+ *   deferReason     why it isn't done yet, still open
+ * All three are optional — every action here is one click, and the writing
+ * is enrichment layered on afterwards.
  */
 export type CarriedForwardItem = CarriedForwardEntry & {
   status: FollowupStatus
   resolutionNote: string | null
+  responseNote: string | null
+  deferReason: string | null
   resolvedAt: Date | null
+  /** Set when a person added this by hand; null for AI-derived items. */
+  createdBy: string | null
+  /** Set when it was pinned to one specific meeting instead of carrying. */
+  targetMeetingId: string | null
 }
 
 export type CarriedForwardItemGroup = {
@@ -87,9 +107,28 @@ export type CarriedForwardItemGroup = {
   items: CarriedForwardItem[]
 }
 
+/** Someone a hand-added follow-up can be attributed to. */
+export type FollowupPersonOption = { id: string; name: string }
+
+/**
+ * A meeting a hand-added follow-up can be pinned to. `attendeeIds` lets the
+ * picker only offer meetings the chosen person will actually be at — an item
+ * pinned to a meeting they don't attend would never surface.
+ */
+export type FollowupTargetOption = {
+  id: string
+  title: string
+  startsAt: Date
+  attendeeIds: string[]
+}
+
 export type MeetingIntel = {
   notes: MeetingAiNotesView | null
   prep: CarriedForwardItemGroup[]
+  /** This meeting's attendees — the people a new follow-up can be given to. */
+  people: FollowupPersonOption[]
+  /** Later meetings the caller can see, for the optional "link to" picker. */
+  upcomingMeetings: FollowupTargetOption[]
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -226,7 +265,11 @@ async function fetchAttendees(meetingId: string): Promise<AttendeeRef[]> {
 type FollowupCarryRow = OpenFollowupItem & {
   status: FollowupStatus
   resolutionNote: string | null
+  responseNote: string | null
+  deferReason: string | null
   resolvedAt: Date | null
+  createdBy: string | null
+  targetMeetingId: string | null
 }
 
 /**
@@ -247,8 +290,16 @@ type FollowupCarryRow = OpenFollowupItem & {
  * else, which is what keeps it out of every future meeting. Leave it off
  * for anything that treats the result as work still owed (the AI
  * "did this come up" pass).
+ *
+ * Two ways an item lands on a meeting:
+ *   - PINNED (targetMeetingId set, by someone adding it by hand and choosing
+ *     a meeting): it shows on that meeting and on no other, whatever its
+ *     source meeting was.
+ *   - CARRIED (targetMeetingId null — every AI-derived item): the original
+ *     rule, i.e. any earlier meeting's still-open item follows its person to
+ *     whatever meeting they attend next.
  */
-async function fetchFollowupsBefore(
+async function fetchCarriedFollowups(
   meeting: { id: string; startsAt: Date },
   caller: { id: string; isAdmin: boolean },
   { includeResolvedHere = false }: { includeResolvedHere?: boolean } = {},
@@ -262,7 +313,11 @@ async function fetchFollowupsBefore(
       kind: meetingFollowups.kind,
       status: meetingFollowups.status,
       resolutionNote: meetingFollowups.resolutionNote,
+      responseNote: meetingFollowups.responseNote,
+      deferReason: meetingFollowups.deferReason,
       resolvedAt: meetingFollowups.resolvedAt,
+      createdBy: meetingFollowups.createdBy,
+      targetMeetingId: meetingFollowups.targetMeetingId,
       sourceMeetingId: meetingFollowups.sourceMeetingId,
       sourceMeetingTitle: meetings.title,
       sourceMeetingStartsAt: meetings.startsAt,
@@ -282,14 +337,69 @@ async function fetchFollowupsBefore(
             )
           : eq(meetingFollowups.status, 'open'),
         isNotNull(meetingFollowups.userId),
-        ne(meetingFollowups.sourceMeetingId, meeting.id),
-        lt(meetings.startsAt, meeting.startsAt),
+        or(
+          eq(meetingFollowups.targetMeetingId, meeting.id),
+          and(
+            isNull(meetingFollowups.targetMeetingId),
+            ne(meetingFollowups.sourceMeetingId, meeting.id),
+            lt(meetings.startsAt, meeting.startsAt),
+          ),
+        ),
         caller.isAdmin
           ? undefined
           : or(eq(meetings.createdBy, caller.id), isNotNull(meetingAttendees.userId)),
       ),
     )
   return rows
+}
+
+/**
+ * Later meetings the caller is entitled to see, with their attendee lists —
+ * the options for "link this follow-up to a specific meeting" instead of
+ * letting it find its person at whatever meeting comes next. Same
+ * admin/creator/attendee rule as everything else here, so the picker can
+ * never disclose a meeting the caller couldn't otherwise see.
+ */
+async function fetchFollowupTargets(
+  meeting: { id: string; startsAt: Date },
+  caller: { id: string; isAdmin: boolean },
+): Promise<FollowupTargetOption[]> {
+  const callerMeetingIds = db
+    .select({ meetingId: meetingAttendees.meetingId })
+    .from(meetingAttendees)
+    .where(eq(meetingAttendees.userId, caller.id))
+
+  const rows = await db
+    .select({
+      id: meetings.id,
+      title: meetings.title,
+      startsAt: meetings.startsAt,
+      attendeeId: meetingAttendees.userId,
+    })
+    .from(meetings)
+    .innerJoin(meetingAttendees, eq(meetingAttendees.meetingId, meetings.id))
+    .where(
+      and(
+        gt(meetings.startsAt, meeting.startsAt),
+        ne(meetings.id, meeting.id),
+        caller.isAdmin
+          ? undefined
+          : or(eq(meetings.createdBy, caller.id), inArray(meetings.id, callerMeetingIds)),
+      ),
+    )
+    .orderBy(meetings.startsAt)
+
+  const byId = new Map<string, FollowupTargetOption>()
+  for (const row of rows) {
+    let option = byId.get(row.id)
+    if (!option) {
+      if (byId.size >= MAX_FOLLOWUP_TARGETS) continue
+      option = { id: row.id, title: row.title, startsAt: row.startsAt, attendeeIds: [] }
+      byId.set(row.id, option)
+    }
+    option.attendeeIds.push(row.attendeeId)
+  }
+  return [...byId.values()]
 }
 
 /** Derives person-linked follow-ups from the model's per-person notes and inserts them. */
@@ -548,7 +658,7 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
   // undo the analysis that already succeeded above.
   try {
     const isAdmin = session.user.role === 'admin'
-    const openBefore = await fetchFollowupsBefore(
+    const openBefore = await fetchCarriedFollowups(
       { id, startsAt: meeting.startsAt },
       { id: session.user.id, isAdmin },
     )
@@ -601,17 +711,14 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   // throwaway meeting that happens to share an attendee with someone else's
   // confidential meeting and read that meeting's follow-up text here.
   const isAdmin = session.user.role === 'admin'
-  const attendeeIdRows = await db
-    .select({ userId: meetingAttendees.userId })
-    .from(meetingAttendees)
-    .where(eq(meetingAttendees.meetingId, id))
-  const attendeeIds = attendeeIdRows.map((row) => row.userId)
+  const attendees = await fetchAttendees(id)
+  const attendeeIds = attendees.map((row) => row.id)
 
   // Items resolved in THIS meeting come back too (includeResolvedHere) so a
   // resolve is visible as a settled row with its outcome note rather than a
   // disappearance — and can be undone. They stay pinned to this one meeting,
   // so nothing resolved is ever carried into a future one.
-  const carried = await fetchFollowupsBefore(
+  const carried = await fetchCarriedFollowups(
     { id, startsAt: meeting.startsAt },
     { id: session.user.id, isAdmin },
     { includeResolvedHere: true },
@@ -628,7 +735,11 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
             ...item,
             status: row?.status ?? 'open',
             resolutionNote: row?.resolutionNote ?? null,
+            responseNote: row?.responseNote ?? null,
+            deferReason: row?.deferReason ?? null,
             resolvedAt: row?.resolvedAt ?? null,
+            createdBy: row?.createdBy ?? null,
+            targetMeetingId: row?.targetMeetingId ?? null,
           }
         })
         // Still-owed work first; the settled ones are a record, not a to-do.
@@ -652,6 +763,11 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
         }
       : null,
     prep,
+    people: attendees.map((attendee) => ({ id: attendee.id, name: attendee.name })),
+    upcomingMeetings: await fetchFollowupTargets(
+      { id, startsAt: meeting.startsAt },
+      { id: session.user.id, isAdmin },
+    ),
   })
 }
 
@@ -706,9 +822,11 @@ async function authorizeFollowupWrite(
 }
 
 /**
- * Manual resolve for a carried-in follow-up, with the outcome attached:
- * `note` is what the answer/change actually was, which is the whole point of
- * closing an item rather than just silencing it.
+ * Manual resolve for a carried-in follow-up. Closing it is ONE click and
+ * never waits on prose: `note` (what the answer/change actually was) is
+ * optional and can be added — or edited, or cleared — afterwards by calling
+ * this again on an already-resolved item, which is how the UI's "Add
+ * outcome" affordance works without ever gating the resolve itself.
  */
 export async function resolveFollowup(
   followupId: string,
@@ -741,10 +859,10 @@ export async function resolveFollowup(
   }
 
   const alreadyResolved = row.status === 'resolved'
-  // Re-resolving an already-resolved item is only meaningful when it adds
-  // the note that was missing; otherwise leave the original timestamp and
-  // meeting alone.
-  if (alreadyResolved && !resolutionNote) return ok(undefined)
+  // Re-resolving an already-resolved item only ever edits its outcome note —
+  // the original timestamp and meeting stay put. When there's no note to
+  // write and none to clear, there is genuinely nothing to do.
+  if (alreadyResolved && !resolutionNote && !row.resolutionNote) return ok(undefined)
 
   await db
     .update(meetingFollowups)
@@ -788,6 +906,199 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
   }
 
   return ok(undefined)
+}
+
+const followupNoteInput = z.object({
+  followupId: z.uuid(),
+  // Blank is meaningful: it clears whatever was written before. Nothing here
+  // is ever required, so there has to be a way back to nothing.
+  note: z.string().trim().max(MAX_FOLLOWUP_NOTE_CHARS),
+})
+
+/**
+ * Shared writer for the two notes an item can carry while it is still OPEN —
+ * what the person said, and why it isn't done yet. Neither touches `status`:
+ * that's the whole point. An item with a response is still owed, and still
+ * carries forward, until someone actually resolves it.
+ */
+async function writeOpenFollowupNote(
+  followupId: string,
+  note: string,
+  column: 'responseNote' | 'deferReason',
+  verb: string,
+): Promise<ActionResult> {
+  const parsed = followupNoteInput.safeParse({ followupId, note })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const authorized = await authorizeFollowupWrite(parsed.data.followupId, verb)
+  if (!authorized.ok) return authorized
+  const { row } = authorized.data
+
+  const value = parsed.data.note ? parsed.data.note : null
+  await db
+    .update(meetingFollowups)
+    .set(column === 'responseNote' ? { responseNote: value } : { deferReason: value })
+    .where(eq(meetingFollowups.id, row.id))
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+/**
+ * Records what the person actually said about an open item — an update, not
+ * an answer. The item stays open and keeps carrying forward; passing a blank
+ * note clears it.
+ */
+export async function noteFollowup(followupId: string, note: string): Promise<ActionResult> {
+  return writeOpenFollowupNote(followupId, note, 'responseNote', 'record a response on')
+}
+
+/**
+ * Records WHY an item isn't resolved yet — the reason behind "not yet".
+ * Stored separately from both the response and the outcome so the three
+ * never collapse into one ambiguous blob. Blank clears it.
+ */
+export async function deferFollowupReason(
+  followupId: string,
+  reason: string,
+): Promise<ActionResult> {
+  return writeOpenFollowupNote(followupId, reason, 'deferReason', 'add a reason to')
+}
+
+const addFollowupInput = z.object({
+  meetingId: z.uuid(),
+  personUserId: z.uuid(),
+  text: z.string().trim().min(1).max(MAX_FOLLOWUP_TEXT_CHARS),
+  kind: z.enum(['question', 'action']),
+  // Optional pin. Omitted, the item behaves like every AI-derived one: it
+  // finds its person at whatever meeting they attend next.
+  targetMeetingId: z.uuid().nullish(),
+})
+
+/**
+ * Adds a follow-up by hand — the same kind of open question/action item the
+ * analysis derives, except a person decided it should exist. It is sourced
+ * at the meeting it was added from, which is exactly why it does NOT appear
+ * there: an open item shows up at the NEXT meeting its person attends (or at
+ * `targetMeetingId`, if one was picked).
+ *
+ * Same read gate as the panel it's added from, plus: the person has to be
+ * someone this caller could legitimately name (an attendee of this meeting,
+ * or an active user), and a chosen target meeting has to be one the caller
+ * can see AND one that person is actually attending — otherwise the item
+ * would be filed somewhere it can never surface.
+ */
+export async function addFollowup(input: {
+  meetingId: string
+  personUserId: string
+  text: string
+  kind: FollowupKind
+  targetMeetingId?: string | null
+}): Promise<ActionResult> {
+  const parsed = addFollowupInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, parsed.data.meetingId))
+  if (!meeting) return err('Meeting not found')
+  if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
+
+  const [person] = await db
+    .select({ id: users.id, name: users.name, active: users.active })
+    .from(users)
+    .where(eq(users.id, parsed.data.personUserId))
+  if (!person) return err('Pick who this is for')
+
+  if (!person.active) {
+    const [attendee] = await db
+      .select({ userId: meetingAttendees.userId })
+      .from(meetingAttendees)
+      .where(
+        and(
+          eq(meetingAttendees.meetingId, meeting.id),
+          eq(meetingAttendees.userId, person.id),
+        ),
+      )
+    if (!attendee) return err('That person is no longer active')
+  }
+
+  let targetMeetingId: string | null = null
+  if (parsed.data.targetMeetingId) {
+    const [target] = await db
+      .select()
+      .from(meetings)
+      .where(eq(meetings.id, parsed.data.targetMeetingId))
+    if (!target) return err('That meeting no longer exists')
+    if (!(await canReadMeetingIntel(session.user, target))) return err('Not available')
+    const [going] = await db
+      .select({ userId: meetingAttendees.userId })
+      .from(meetingAttendees)
+      .where(
+        and(eq(meetingAttendees.meetingId, target.id), eq(meetingAttendees.userId, person.id)),
+      )
+    if (!going) {
+      return err(`${person.name} isn’t on that meeting — pick another, or leave it to their next one`)
+    }
+    targetMeetingId = target.id
+  }
+
+  await db.insert(meetingFollowups).values({
+    sourceMeetingId: meeting.id,
+    userId: person.id,
+    personName: person.name,
+    text: parsed.data.text,
+    kind: parsed.data.kind,
+    status: 'open',
+    createdBy: session.user.id,
+    targetMeetingId,
+  })
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+const copyResponseInput = z.object({ followupId: z.uuid(), meetingId: z.uuid() })
+
+/**
+ * Puts a recorded response into the meeting's own notes, attributed —
+ * "Shanika Ayasmanthi: the client hasn't replied yet". Always an explicit
+ * action, never automatic: what someone said in passing is not
+ * automatically part of the record, and the panel only offers this once a
+ * response has actually been written down.
+ *
+ * Appends via the existing updateMeetingNotes so its rules apply unchanged
+ * (only an admin or the meeting's creator can write notes, the length cap
+ * holds, @mentions still notify, the same paths revalidate).
+ */
+export async function copyFollowupResponseToNotes(
+  followupId: string,
+  meetingId: string,
+): Promise<ActionResult> {
+  const parsed = copyResponseInput.safeParse({ followupId, meetingId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'copy')
+  if (!authorized.ok) return authorized
+  const { user, row } = authorized.data
+
+  const response = row.responseNote?.trim()
+  if (!response) return err('Write down what they said first')
+
+  const [contextMeeting] = await db
+    .select()
+    .from(meetings)
+    .where(eq(meetings.id, parsed.data.meetingId))
+  if (!contextMeeting) return err('Meeting not found')
+  if (!(await canReadMeetingIntel(user, contextMeeting))) return err('Not available')
+
+  const line = `${row.personName}: ${response}`
+  const existing = contextMeeting.notes ?? ''
+  if (existing.includes(line)) return err('That’s already in this meeting’s notes')
+
+  const nextNotes = existing.trim() ? `${existing.trimEnd()}\n${line}` : line
+  return updateMeetingNotes(contextMeeting.id, nextNotes)
 }
 
 // --- Unified note timeline: segments, speaker assignment, task suggestions ---

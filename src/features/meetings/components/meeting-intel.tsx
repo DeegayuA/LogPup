@@ -150,7 +150,8 @@ export function MeetingIntelPanel({
   /** Wider mention pool for the note composer; falls back to attendees. */
   mentionUsers?: MentionUser[]
 }) {
-  const [open, setOpen] = useState(false)
+  // Notes are shown by default — no need to click a button to reveal them.
+  const [open, setOpen] = useState(true)
   const [intel, setIntel] = useState<MeetingIntel | null>(null)
   const [loading, setLoading] = useState(false)
   const [analyzing, startAnalyzing] = useTransition()
