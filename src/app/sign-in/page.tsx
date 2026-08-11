@@ -3,6 +3,7 @@ import { signIn } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { PasswordAuth } from '@/features/auth/components/password-auth'
+import { SignInBackdrop } from '@/features/auth/components/sign-in-backdrop'
 import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
 
 export const metadata = { title: 'Sign in' }
@@ -24,8 +25,9 @@ export default function SignInPage() {
       {/* Landing here means there is no session — drop any Cache Storage the
           previous user's install may still be holding. */}
       <ClearCachedShell />
-      <aside className="hidden flex-col border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
-        <div className="flex items-center gap-3">
+      <aside className="relative hidden flex-col overflow-hidden border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
+        <SignInBackdrop />
+        <div className="relative flex items-center gap-3">
           <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <PawPrint className="size-5" aria-hidden />
           </div>
@@ -34,7 +36,7 @@ export default function SignInPage() {
 
         {/* The panel earns its width by saying what the product actually does,
             rather than stranding a tagline at the bottom of empty space. */}
-        <div className="my-auto flex max-w-md flex-col gap-8 py-10">
+        <div className="relative my-auto flex max-w-md flex-col gap-8 py-10">
           <p className="font-heading text-3xl leading-tight font-bold tracking-tight">
             The watchdog for your team&apos;s apps, people, and sprints.
           </p>
@@ -51,7 +53,7 @@ export default function SignInPage() {
           </ul>
         </div>
 
-        <p className="text-xs text-sidebar-foreground/60">
+        <p className="relative text-xs text-sidebar-foreground/60">
           Internal tool · sign in with your work account
         </p>
       </aside>
