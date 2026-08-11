@@ -1,52 +1,112 @@
-import { asc, count, eq, gte, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
-import { apps, meetingAttendees, meetings } from '@/db/schema'
+import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 
-export type UpcomingMeeting = {
+export type MeetingAttendee = { id: string; name: string; avatarUrl: string | null }
+
+export type MeetingSummary = {
   id: string
   title: string
-  startsAt: Date
-  endsAt: Date
+  appId: string | null
   appName: string | null
   appSlug: string | null
+  startsAt: Date
+  endsAt: Date
+  agenda: string | null
+  notes: string | null
   googleEventId: string | null
-  attendeeCount: number
+  createdBy: string
+  attendees: MeetingAttendee[]
 }
 
-export async function listUpcomingMeetings(): Promise<UpcomingMeeting[]> {
-  const rows = await db
-    .select({
-      id: meetings.id,
-      title: meetings.title,
-      startsAt: meetings.startsAt,
-      endsAt: meetings.endsAt,
-      appName: apps.name,
-      appSlug: apps.slug,
-      googleEventId: meetings.googleEventId,
-    })
-    .from(meetings)
-    .leftJoin(apps, eq(meetings.appId, apps.id))
-    .where(gte(meetings.startsAt, new Date()))
-    .orderBy(asc(meetings.startsAt))
-    .limit(30)
+const meetingColumns = {
+  id: meetings.id,
+  title: meetings.title,
+  appId: meetings.appId,
+  appName: apps.name,
+  appSlug: apps.slug,
+  startsAt: meetings.startsAt,
+  endsAt: meetings.endsAt,
+  agenda: meetings.agenda,
+  notes: meetings.notes,
+  googleEventId: meetings.googleEventId,
+  createdBy: meetings.createdBy,
+}
 
+/**
+ * Meeting attendees are fetched in a second query keyed by meeting id
+ * rather than joined into the main query — joining would multiply each
+ * meeting row per attendee and complicate the ordering/pagination above.
+ */
+async function attachAttendees(
+  rows: Omit<MeetingSummary, 'attendees'>[],
+): Promise<MeetingSummary[]> {
   if (rows.length === 0) return []
 
-  const counts = await db
-    .select({ meetingId: meetingAttendees.meetingId, attendeeCount: count() })
+  const attendeeRows = await db
+    .select({
+      meetingId: meetingAttendees.meetingId,
+      id: users.id,
+      name: users.name,
+      avatarUrl: users.avatarUrl,
+    })
     .from(meetingAttendees)
+    .innerJoin(users, eq(meetingAttendees.userId, users.id))
+    .where(inArray(meetingAttendees.meetingId, rows.map((r) => r.id)))
+
+  const byMeeting = new Map<string, MeetingAttendee[]>()
+  for (const row of attendeeRows) {
+    const list = byMeeting.get(row.meetingId) ?? []
+    list.push({ id: row.id, name: row.name, avatarUrl: row.avatarUrl })
+    byMeeting.set(row.meetingId, list)
+  }
+
+  return rows.map((r) => ({ ...r, attendees: byMeeting.get(r.id) ?? [] }))
+}
+
+export async function listMeetings(opts: { upcomingOnly: boolean }): Promise<MeetingSummary[]> {
+  const rows = await db
+    .select(meetingColumns)
+    .from(meetings)
+    .leftJoin(apps, eq(meetings.appId, apps.id))
+    .where(opts.upcomingOnly ? gte(meetings.startsAt, new Date()) : undefined)
+    .orderBy(opts.upcomingOnly ? asc(meetings.startsAt) : desc(meetings.startsAt))
+
+  return attachAttendees(rows)
+}
+
+export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]> {
+  const rows = await db
+    .select(meetingColumns)
+    .from(meetings)
+    .leftJoin(apps, eq(meetings.appId, apps.id))
+    .where(eq(meetings.appId, appId))
+    .orderBy(desc(meetings.startsAt))
+
+  return attachAttendees(rows)
+}
+
+export async function getUpcomingMeetingsForUser(
+  userId: string,
+  days: number,
+): Promise<MeetingSummary[]> {
+  const now = new Date()
+  const until = new Date(now)
+  until.setDate(until.getDate() + days)
+
+  const rows = await db
+    .select(meetingColumns)
+    .from(meetingAttendees)
+    .innerJoin(meetings, eq(meetingAttendees.meetingId, meetings.id))
+    .leftJoin(apps, eq(meetings.appId, apps.id))
     .where(
-      inArray(
-        meetingAttendees.meetingId,
-        rows.map((r) => r.id),
+      and(
+        eq(meetingAttendees.userId, userId),
+        gte(meetings.startsAt, now),
+        lte(meetings.startsAt, until),
       ),
     )
-    .groupBy(meetingAttendees.meetingId)
+    .orderBy(asc(meetings.startsAt))
 
-  const countByMeeting = new Map(counts.map((c) => [c.meetingId, c.attendeeCount]))
-
-  return rows.map((row) => ({
-    ...row,
-    attendeeCount: countByMeeting.get(row.id) ?? 0,
-  }))
+  return attachAttendees(rows)
 }
