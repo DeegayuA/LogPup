@@ -23,3 +23,13 @@ export async function getOwnAvatarUrl(userId: string): Promise<string | null> {
     .where(eq(users.id, userId))
   return row?.avatarUrl ?? null
 }
+
+/**
+ * The signed-in user's own job role (users.title) — read from the row, not
+ * the session/JWT, for the same reason as getOwnAvatarUrl: setOwnTitle
+ * doesn't re-mint the token, so the session copy would go stale immediately.
+ */
+export async function getOwnTitle(userId: string): Promise<string | null> {
+  const [row] = await db.select({ title: users.title }).from(users).where(eq(users.id, userId))
+  return row?.title ?? null
+}

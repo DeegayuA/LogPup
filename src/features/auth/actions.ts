@@ -11,6 +11,7 @@ import { RateLimitError } from '@/lib/rate-limit'
 import { normalizePhone } from '@/lib/phone'
 import { revalidatePath } from 'next/cache'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { ownTitleInput } from '@/features/auth/title-schema'
 
 // Sign in an existing password account. Wrong credentials surface as a friendly error;
 // the NEXT_REDIRECT thrown on success must propagate, so only AuthError is swallowed.
@@ -57,6 +58,25 @@ export async function setOwnPhone(phone: string): Promise<ActionResult> {
   await db.update(users).set({ phone: value }).where(eq(users.id, session.user.id))
   revalidatePath('/profile')
   revalidatePath('/people')
+  return ok(undefined)
+}
+
+// Self-serve job role/title — shown on Profile and in the header account
+// menu (see components/shared/job-role-select.tsx for the curated picker).
+// Distinct from the admin/member permission enum on users.role, which this
+// never touches. Only ever writes the caller's own row, same guard as
+// setOwnPhone above.
+export async function setOwnTitle(title: string): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const parsed = ownTitleInput.safeParse(title)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, session.user.id))
+  revalidatePath('/profile')
+  revalidatePath('/people')
+  revalidatePath('/admin')
   return ok(undefined)
 }
 

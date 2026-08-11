@@ -10,7 +10,8 @@ import {
 import { SetPasswordForm } from '@/features/auth/components/set-password-form'
 import { GeminiKeysCard } from '@/features/gemini/components/gemini-keys-card'
 import { PhoneField } from '@/features/auth/components/phone-field'
-import { getOwnPhone, getOwnAvatarUrl } from '@/features/auth/queries'
+import { JobRoleField } from '@/features/auth/components/job-role-field'
+import { getOwnPhone, getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
 import { AvatarUpload } from '@/features/auth/components/avatar-upload'
 import { listGeminiKeys } from '@/features/gemini/queries'
 
@@ -20,13 +21,14 @@ export default async function ProfilePage(props: {
   const [session, { firstLogin }] = await Promise.all([auth(), props.searchParams])
   const user = session?.user
   const role = user?.role ?? 'member'
-  const [geminiKeys, phone, avatarUrl] = user?.id
+  const [geminiKeys, phone, avatarUrl, title] = user?.id
     ? await Promise.all([
         listGeminiKeys(user.id),
         getOwnPhone(user.id),
         getOwnAvatarUrl(user.id),
+        getOwnTitle(user.id),
       ])
-    : [[], null, null]
+    : [[], null, null, null]
   const showFirstLoginBanner = firstLogin === '1' || user?.mustChangePassword === true
 
   return (
@@ -62,10 +64,15 @@ export default async function ProfilePage(props: {
               <span className="truncate font-mono text-xs text-muted-foreground">
                 {user?.email ?? '—'}
               </span>
+              {title ? (
+                <span className="truncate text-xs text-muted-foreground">{title}</span>
+              ) : null}
             </div>
             <AvatarUpload name={user?.name ?? '?'} avatarUrl={avatarUrl} />
           </CardContent>
         </Card>
+
+        <JobRoleField title={title} />
 
         <PhoneField phone={phone} />
 

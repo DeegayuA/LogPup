@@ -26,6 +26,10 @@ import { NotificationBell } from '@/features/notifications/components/notificati
 type HeaderUser = {
   name?: string | null
   image?: string | null
+  // Job role (users.title) — distinct from the admin/member permission role
+  // shown just below it. Threaded in from the (app) layout's own DB read
+  // (see getOwnTitle) rather than the session/JWT, which doesn't carry it.
+  title?: string | null
 }
 
 export function Header({ user, isAdmin }: { user: HeaderUser; isAdmin: boolean }) {
@@ -113,6 +117,9 @@ export function Header({ user, isAdmin }: { user: HeaderUser; isAdmin: boolean }
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{user.name ?? 'Account'}</p>
                 <p className="text-xs text-muted-foreground">{isAdmin ? 'Admin' : 'Member'}</p>
+                {user.title ? (
+                  <p className="truncate text-xs text-muted-foreground">{user.title}</p>
+                ) : null}
               </div>
             </div>
             <DropdownMenuSeparator />
