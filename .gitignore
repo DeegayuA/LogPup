@@ -59,3 +59,6 @@ graphify-out/cost.json
 
 # Playwright e2e build output
 .next-e2e/
+
+# throwaway debug/migration scripts — never committed
+.scratch/

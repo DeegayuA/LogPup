@@ -62,7 +62,16 @@ async function otherActiveAdminCount(excludeUserId: string): Promise<number> {
   const [row] = await db
     .select({ count: count() })
     .from(users)
-    .where(and(eq(users.role, 'admin'), eq(users.active, true), ne(users.id, excludeUserId)))
+    .where(
+      and(
+        eq(users.role, 'admin'),
+        eq(users.active, true),
+        // A pending admin must not count toward "there is still another
+        // admin" — otherwise the last-admin guard below could be defeated.
+        eq(users.status, 'approved'),
+        ne(users.id, excludeUserId),
+      ),
+    )
   return row?.count ?? 0
 }
 

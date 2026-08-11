@@ -65,6 +65,8 @@ export async function universalSearch(q: string): Promise<SearchResults> {
       .where(
         and(
           eq(users.active, true),
+          // Excludes self-signed-up users still awaiting admin approval.
+          eq(users.status, 'approved'),
           or(ilike(users.name, pattern), ilike(users.email, pattern), ilike(users.title, pattern)),
         ),
       )
@@ -192,7 +194,14 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
   const candidates = await db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(and(eq(users.active, true), ilike(users.name, likePattern(parsed.name))))
+    .where(
+      and(
+        eq(users.active, true),
+        // Excludes self-signed-up users still awaiting admin approval.
+        eq(users.status, 'approved'),
+        ilike(users.name, likePattern(parsed.name)),
+      ),
+    )
     .orderBy(asc(users.name))
     .limit(6)
   if (candidates.length === 0) return err(`No one matches "${parsed.name}"`)

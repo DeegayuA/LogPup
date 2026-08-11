@@ -105,6 +105,8 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
     .where(
       and(
         eq(users.active, true),
+        // Excludes self-signed-up users still awaiting admin approval.
+        eq(users.status, 'approved'),
         // Escape LIKE metacharacters so "%"/"_" in the search box match literally.
         q ? ilike(users.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`) : undefined,
       ),
@@ -193,7 +195,8 @@ export async function listActiveUsers(): Promise<ActiveUser[]> {
   return db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(eq(users.active, true))
+    // Excludes self-signed-up users still awaiting admin approval.
+    .where(and(eq(users.active, true), eq(users.status, 'approved')))
     .orderBy(asc(users.name))
 }
 
