@@ -1,6 +1,14 @@
 'use client'
 
-import { useMemo, useOptimistic, useRef, useState, useTransition, type KeyboardEvent } from 'react'
+import {
+  useCallback,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+  type KeyboardEvent,
+} from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -302,11 +310,19 @@ export function Roadmap({
     commitReorder(sprintId, sortOrder)
   }
 
-  function nameForId(id: string): string {
-    const sprintId = sprintIdFromDragId(id)
-    return rows.find((s) => s.id === sprintId)?.name ?? 'the sprint'
-  }
-  const announcements = useMemo(() => buildDragAnnouncements(nameForId), [rows])
+  // useCallback so the memo below can depend on the function itself rather
+  // than reaching past it to what it closes over. Identity changes exactly
+  // when `rows` does, so `announcements` is rebuilt on precisely the same
+  // renders as the previous `[rows]` dependency — this is the dependency the
+  // memo always had, now stated honestly instead of by proxy.
+  const nameForId = useCallback(
+    (id: string): string => {
+      const sprintId = sprintIdFromDragId(id)
+      return rows.find((s) => s.id === sprintId)?.name ?? 'the sprint'
+    },
+    [rows],
+  )
+  const announcements = useMemo(() => buildDragAnnouncements(nameForId), [nameForId])
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(String(event.active.id))
@@ -603,9 +619,28 @@ function RoadmapRow({
     isDragging: isReordering,
   } = useSortable({ id: sprint.id, disabled: !isAdmin })
 
-  const shiftDraggable = useDraggable({ id: `${sprint.id}${SHIFT_SUFFIX}`, disabled: !isAdmin })
-  const startDraggable = useDraggable({ id: `${sprint.id}${START_SUFFIX}`, disabled: !isAdmin })
-  const endDraggable = useDraggable({ id: `${sprint.id}${END_SUFFIX}`, disabled: !isAdmin })
+  // Destructured at the call site, exactly like the useSortable above.
+  // Holding the whole hook result and reaching into it from the JSX reads, to
+  // the compiler and to anyone else, as touching a ref container mid-render —
+  // `setNodeRef` IS a ref setter and the result object carries dnd-kit's own
+  // `node` ref alongside it. Naming what we need up front keeps the render
+  // body free of that, and is what the sortable in this same component does.
+  const {
+    setNodeRef: setShiftNodeRef,
+    attributes: shiftAttributes,
+    listeners: shiftListeners,
+    transform: shiftTransform,
+  } = useDraggable({ id: `${sprint.id}${SHIFT_SUFFIX}`, disabled: !isAdmin })
+  const {
+    setNodeRef: setStartNodeRef,
+    listeners: startListeners,
+    transform: startTransform,
+  } = useDraggable({ id: `${sprint.id}${START_SUFFIX}`, disabled: !isAdmin })
+  const {
+    setNodeRef: setEndNodeRef,
+    listeners: endListeners,
+    transform: endTransform,
+  } = useDraggable({ id: `${sprint.id}${END_SUFFIX}`, disabled: !isAdmin })
 
   const rowStyle = {
     transform: rowTransform ? `translate3d(0, ${rowTransform.y}px, 0)` : undefined,
@@ -617,9 +652,9 @@ function RoadmapRow({
   const barLeft = differenceInCalendarDays(start, timelineStart) * PX_PER_DAY
   const barWidth = Math.max((differenceInCalendarDays(end, start) + 1) * PX_PER_DAY, PX_PER_DAY * 2)
 
-  const barTranslateX = shiftDraggable.transform?.x ?? 0
-  const startTranslateX = startDraggable.transform?.x ?? 0
-  const endTranslateX = endDraggable.transform?.x ?? 0
+  const barTranslateX = shiftTransform?.x ?? 0
+  const startTranslateX = startTransform?.x ?? 0
+  const endTranslateX = endTransform?.x ?? 0
 
   function handleBarKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (!isAdmin) return
@@ -714,14 +749,14 @@ function RoadmapRow({
       </div>
       <div className="relative shrink-0" style={{ width: timelineWidth, height: ROW_HEIGHT }}>
         <div
-          ref={shiftDraggable.setNodeRef}
+          ref={setShiftNodeRef}
           aria-label={
             isAdmin
               ? `${sprint.name}, ${formatRange(start, end)}. Drag, or use the arrow keys, to move.`
               : undefined
           }
-          {...(isAdmin ? shiftDraggable.attributes : {})}
-          {...(isAdmin ? shiftDraggable.listeners : {})}
+          {...(isAdmin ? shiftAttributes : {})}
+          {...(isAdmin ? shiftListeners : {})}
           // Overrides whatever onKeyDown the spread above just set: dnd-kit's
           // own KeyboardSensor (Space-to-lift) is deliberately not used on
           // this bar — the direct Left/Right/Alt+Up/Down nudge model below
@@ -738,16 +773,16 @@ function RoadmapRow({
           {isAdmin ? (
             <>
               <div
-                ref={startDraggable.setNodeRef}
+                ref={setStartNodeRef}
                 aria-hidden
-                {...startDraggable.listeners}
+                {...startListeners}
                 className="absolute inset-y-0 left-0 w-2 cursor-ew-resize touch-none opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
                 style={{ transform: `translateX(${startTranslateX}px)` }}
               />
               <div
-                ref={endDraggable.setNodeRef}
+                ref={setEndNodeRef}
                 aria-hidden
-                {...endDraggable.listeners}
+                {...endListeners}
                 className="absolute inset-y-0 right-0 w-2 cursor-ew-resize touch-none opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
                 style={{ transform: `translateX(${endTranslateX}px)` }}
               />

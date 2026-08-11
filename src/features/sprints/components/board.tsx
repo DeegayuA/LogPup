@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useOptimistic, useState, useTransition } from 'react'
+import { useCallback, useMemo, useOptimistic, useState, useTransition } from 'react'
 import { DragOverlay, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { toast } from 'sonner'
 import { DragSurface, buildDragAnnouncements } from '@/components/shared/drag-surface'
@@ -75,11 +75,18 @@ export function Board({
   // Names any id the board's DndContext might report — a task's own id, or
   // one of the three column ids it can be dropped on — for the shared
   // announcements builder.
-  function nameForId(id: string): string {
-    if (id in COLUMN_TITLE) return `the ${COLUMN_TITLE[id as TaskStatus]} column`
-    return findTask(board, id)?.title ?? 'the task'
-  }
-  const announcements = useMemo(() => buildDragAnnouncements(nameForId), [board])
+  // useCallback so the memo depends on the function rather than on what it
+  // closes over. Identity changes exactly when `board` does, so announcements
+  // are rebuilt on precisely the same renders as the previous `[board]`
+  // dependency did — same trigger, now stated directly.
+  const nameForId = useCallback(
+    (id: string): string => {
+      if (id in COLUMN_TITLE) return `the ${COLUMN_TITLE[id as TaskStatus]} column`
+      return findTask(board, id)?.title ?? 'the task'
+    },
+    [board],
+  )
+  const announcements = useMemo(() => buildDragAnnouncements(nameForId), [nameForId])
 
   function handleDragStart(event: DragStartEvent) {
     setDraggingId(String(event.active.id))
