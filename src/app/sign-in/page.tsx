@@ -27,7 +27,10 @@ export default function SignInPage() {
       <ClearCachedShell />
       <aside className="relative hidden flex-col overflow-hidden border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
         <SignInBackdrop />
-        <div className="relative flex items-center gap-3">
+        {/* One orchestrated page-load sequence: the brand resolves top-down,
+            then the card arrives. Opacity + transform only, and every step is
+            dropped under prefers-reduced-motion. */}
+        <div className="relative flex items-center gap-3 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-500 motion-safe:ease-out">
           <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <PawPrint className="size-5" aria-hidden />
           </div>
@@ -37,12 +40,18 @@ export default function SignInPage() {
         {/* The panel earns its width by saying what the product actually does,
             rather than stranding a tagline at the bottom of empty space. */}
         <div className="relative my-auto flex max-w-md flex-col gap-8 py-10">
-          <p className="font-heading text-3xl leading-tight font-bold tracking-tight">
+          <p className="font-heading text-3xl leading-tight font-bold tracking-tight motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:120ms] motion-safe:[animation-fill-mode:backwards]">
             The watchdog for your team&apos;s apps, people, and sprints.
           </p>
           <ul className="flex flex-col divide-y divide-sidebar-border">
-            {CAPABILITIES.map(({ icon: Icon, title, detail }) => (
-              <li key={title} className="flex items-start gap-3 py-3">
+            {CAPABILITIES.map(({ icon: Icon, title, detail }, index) => (
+              <li
+                key={title}
+                // Staggered off the row index so the list reads top-down
+                // rather than all four landing at once.
+                style={{ animationDelay: `${220 + index * 70}ms` }}
+                className="flex items-start gap-3 py-3 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-fill-mode:backwards]"
+              >
                 <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
                 <div className="flex flex-col gap-0.5">
                   <span className="text-sm font-medium">{title}</span>
@@ -53,7 +62,7 @@ export default function SignInPage() {
           </ul>
         </div>
 
-        <p className="relative text-xs text-sidebar-foreground/60">
+        <p className="relative text-xs text-sidebar-foreground/60 motion-safe:animate-in motion-safe:fade-in motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:520ms] motion-safe:[animation-fill-mode:backwards]">
           Internal tool · sign in with your work account
         </p>
       </aside>
@@ -66,13 +75,19 @@ export default function SignInPage() {
           <span className="font-heading text-lg font-bold tracking-tight">LogPup</span>
         </div>
 
-        <Card className="w-full max-w-sm">
+        <Card className="w-full max-w-sm motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:100ms] motion-safe:[animation-fill-mode:backwards]">
           <CardHeader>
             <h1 className="font-heading text-2xl font-bold tracking-tight">Sign in</h1>
           </CardHeader>
           <CardContent className="space-y-4">
+            {notionConfigured && (
+              <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
+                <Button type="submit" size="lg" className="w-full">Continue with Notion</Button>
+              </form>
+            )}
+
             <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/' }) }}>
-              <Button type="submit" size="lg" className="w-full">Continue with Google</Button>
+              <Button type="submit" size="lg" variant="outline" className="w-full">Continue with Google</Button>
             </form>
 
             <div className="relative">
@@ -83,14 +98,6 @@ export default function SignInPage() {
             </div>
 
             <PasswordAuth />
-
-            {notionConfigured && (
-              <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
-                <Button type="submit" variant="outline" size="lg" className="w-full text-muted-foreground">
-                  Continue with Notion
-                </Button>
-              </form>
-            )}
 
             {devLoginEmail && (
               <div className="rounded-lg border border-dashed p-3">

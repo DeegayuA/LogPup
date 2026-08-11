@@ -26,7 +26,9 @@ export function SignInBackdrop() {
   return (
     <svg
       aria-hidden
-      className="pointer-events-none absolute inset-0 size-full text-primary"
+      // Slower and quieter than the text sequence so the contours settle in
+      // behind the content instead of competing with it for attention.
+      className="pointer-events-none absolute inset-0 size-full text-primary motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-1000 motion-safe:ease-out"
       viewBox="0 0 900 1200"
       preserveAspectRatio="xMidYMid slice"
       fill="none"
