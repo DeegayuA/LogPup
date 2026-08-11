@@ -24,5 +24,8 @@ export const config = {
   // route self-authenticates via a constant-time CRON_SECRET check (see
   // src/app/api/cron/backup/route.ts) — without this exclusion the redirect
   // above sends cron requests to /sign-in and backups silently never run.
-  matcher: ['/((?!api/auth|api/cron|_next/static|_next/image|favicon.ico|sign-in).*)'],
+  // Also skip PWA/static assets — the icon routes and anything with a file extension
+  // (manifest.webmanifest, sw.js, icon.svg, favicon.ico, images) — so they load
+  // without a session; otherwise install/manifest fetches redirect to /sign-in.
+  matcher: ['/((?!api/auth|api/cron|_next/static|_next/image|sign-in|pwa-icon|apple-icon|.*\\.).*)'],
 }

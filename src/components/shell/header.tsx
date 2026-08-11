@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ThemeToggle } from '@/components/shell/theme-toggle'
 import { CommandCenterTrigger } from '@/features/search/components/command-center'
+import { InstallButton } from '@/features/pwa/pwa'
 
 type HeaderUser = {
   name?: string | null
@@ -68,9 +69,17 @@ export function Header({ user, isAdmin }: { user: HeaderUser; isAdmin: boolean }
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {/* Desktop brand (sidebar carries it on mobile). */}
+      <Link href="/" className="hidden items-center gap-2 md:flex">
+        <span className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <PawPrint className="size-4" aria-hidden />
+        </span>
+        <span className="font-heading text-lg font-semibold tracking-tight">LogPup</span>
+      </Link>
       <div className="flex flex-1 justify-center">
         <CommandCenterTrigger />
       </div>
+      <InstallButton />
       <ThemeToggle />
       <DropdownMenu>
         <DropdownMenuTrigger
