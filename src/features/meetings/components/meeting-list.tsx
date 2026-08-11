@@ -25,7 +25,7 @@ import {
 import { Avatar, AvatarFallback, AvatarGroup, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
+import { MentionTextarea, type MentionUser } from '@/components/mention-textarea'
 import { deleteMeeting, retryCalendarInvite, updateMeetingNotes } from '@/features/meetings/actions'
 import { MeetingIntelPanel } from '@/features/meetings/components/meeting-intel'
 import type { MeetingSummary } from '@/features/meetings/queries'
@@ -35,11 +35,14 @@ export function MeetingList({
   currentUserId,
   isAdmin,
   showAppBadge = true,
+  users = [],
 }: {
   meetings: MeetingSummary[]
   currentUserId: string
   isAdmin: boolean
   showAppBadge?: boolean
+  /** Mention pool for the notes editor. Empty just means no suggestions pop up. */
+  users?: MentionUser[]
 }) {
   if (meetings.length === 0) {
     return (
@@ -59,6 +62,7 @@ export function MeetingList({
           meeting={meeting}
           canManage={isAdmin || meeting.createdBy === currentUserId}
           showAppBadge={showAppBadge}
+          users={users}
         />
       ))}
     </ul>
@@ -69,10 +73,12 @@ function MeetingRow({
   meeting,
   canManage,
   showAppBadge,
+  users,
 }: {
   meeting: MeetingSummary
   canManage: boolean
   showAppBadge: boolean
+  users: MentionUser[]
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -208,11 +214,13 @@ function MeetingRow({
       </div>
       {editingNotes ? (
         <div className="flex flex-col gap-2">
-          <Textarea
+          <MentionTextarea
+            users={users}
             value={notesDraft}
-            onChange={(e) => setNotesDraft(e.target.value)}
+            onValueChange={setNotesDraft}
             maxLength={5000}
             rows={3}
+            aria-label={`Notes for ${meeting.title}`}
           />
           <div className="flex justify-end gap-2">
             <Button

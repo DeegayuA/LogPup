@@ -107,7 +107,7 @@ export async function universalSearch(q: string): Promise<SearchResults> {
       .from(meetings)
       .leftJoin(apps, eq(meetings.appId, apps.id))
       .where(or(ilike(meetings.title, pattern), ilike(meetings.agenda, pattern)))
-      .orderBy(asc(meetings.startsAt))
+      .orderBy(desc(meetings.startsAt))
       .limit(LIMIT),
   ])
 
@@ -203,20 +203,62 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
   }
   const assignee = candidates[0]
 
+  // Pattern A captures only the first word of the name, so "@sam perera fix X"
+  // would otherwise title the task "perera fix X" — consume title words that
+  // continue the matched user's real name.
+  let taskTitle = title.data
+  let appQuery = parsed.app
+  {
+    const nameWords = assignee.name.toLowerCase().split(/\s+/)
+    let i = nameWords.indexOf(parsed.name.toLowerCase())
+    let words = taskTitle.split(/\s+/)
+    while (
+      i >= 0 &&
+      i + 1 < nameWords.length &&
+      words.length > 1 &&
+      nameWords[i + 1] === words[0].toLowerCase()
+    ) {
+      i++
+      words = words.slice(1)
+    }
+    taskTitle = words.join(' ')
+  }
+
+  // Pattern A can also carry an explicit app suffix: "@sam fix login on logpup".
+  // Only strip it when the suffix actually resolves to an app, so titles that
+  // legitimately end in "on <something>" survive.
+  if (!appQuery) {
+    const trailing = /^([\s\S]+?)\s+on\s+(\S[\s\S]*)$/i.exec(taskTitle)
+    if (trailing) {
+      const candidateApp = trailing[2].trim()
+      const matches = await db
+        .select({ id: apps.id })
+        .from(apps)
+        .where(
+          or(ilike(apps.name, likePattern(candidateApp)), ilike(apps.slug, likePattern(candidateApp))),
+        )
+        .limit(2)
+      if (matches.length === 1) {
+        taskTitle = trailing[1].trim()
+        appQuery = candidateApp
+      }
+    }
+  }
+
   let app: { id: string; name: string; slug: string } | undefined
-  if (parsed.app) {
+  if (appQuery) {
     const appMatches = await db
       .select({ id: apps.id, name: apps.name, slug: apps.slug })
       .from(apps)
       .where(
-        or(ilike(apps.name, likePattern(parsed.app)), ilike(apps.slug, likePattern(parsed.app))),
+        or(ilike(apps.name, likePattern(appQuery)), ilike(apps.slug, likePattern(appQuery))),
       )
       .orderBy(asc(apps.name))
       .limit(6)
-    if (appMatches.length === 0) return err(`No app matches "${parsed.app}"`)
+    if (appMatches.length === 0) return err(`No app matches "${appQuery}"`)
     if (appMatches.length > 1) {
       return err(
-        `"${parsed.app}" could be ${appMatches.map((a) => a.name).join(' or ')} — be more specific`,
+        `"${appQuery}" could be ${appMatches.map((a) => a.name).join(' or ')} — be more specific`,
       )
     }
     app = appMatches[0]
@@ -237,7 +279,7 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
   await db.insert(tasks).values({
     appId: app.id,
     sprintId: null,
-    title: title.data,
+    title: taskTitle,
     status: 'todo',
     assigneeId: assignee.id,
     priority: 0,
@@ -246,7 +288,7 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
 
   revalidatePath('/apps/' + app.slug)
   return ok({
-    title: title.data,
+    title: taskTitle,
     assigneeName: assignee.name,
     appName: app.name,
     appSlug: app.slug,

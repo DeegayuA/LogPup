@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { format } from 'date-fns'
 import { PawPrint } from 'lucide-react'
+import { StatNumber } from '@/components/animate-ui/stat-number'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { ActiveSprintSummary } from '@/features/sprints/queries'
 import { sprintProgress, daysRemaining } from '@/features/dashboard/sprint-progress'
@@ -32,7 +33,9 @@ export function ActiveSprints({ sprints }: { sprints: ActiveSprintSummary[] }) {
         <CardTitle>Active sprints</CardTitle>
         {sprints.length > 0 ? (
           <CardAction>
-            <span className="font-mono text-xs text-muted-foreground">{sprints.length}</span>
+            <span className="font-mono text-xs text-muted-foreground">
+              <StatNumber value={sprints.length} />
+            </span>
           </CardAction>
         ) : null}
       </CardHeader>
@@ -84,7 +87,8 @@ export function ActiveSprints({ sprints }: { sprints: ActiveSprintSummary[] }) {
                         />
                       </div>
                       <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                        {sprint.counts.done}/{total}
+                        <StatNumber value={sprint.counts.done} />/
+                        <StatNumber value={total} />
                       </span>
                     </div>
                   </Link>

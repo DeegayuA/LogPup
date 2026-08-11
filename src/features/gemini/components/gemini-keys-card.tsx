@@ -108,7 +108,7 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
                   <span className="font-mono text-xs text-muted-foreground">
                     ••••{row.last4}
                     {row.failCount > 0 ? (
-                      <span className="ml-2 text-chart-1">
+                      <span className="ml-2 text-destructive">
                         {row.failCount} recent failure{row.failCount === 1 ? '' : 's'}
                       </span>
                     ) : null}

@@ -70,11 +70,14 @@ export function TaskDialog({
   team,
   isAdmin,
   onOpenChange,
+  mentionUsers,
 }: {
   task: TaskWithAssignee | null
   team: { userId: string; name: string }[]
   isAdmin: boolean
   onOpenChange: (open: boolean) => void
+  /** Wider mention pool (e.g. all active users) — falls back to the app team. */
+  mentionUsers?: { id: string; name: string }[]
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -159,7 +162,7 @@ export function TaskDialog({
             <Label htmlFor="task-description">Description</Label>
             <MentionTextarea
               id="task-description"
-              users={team.map((m) => ({ id: m.userId, name: m.name }))}
+              users={mentionUsers ?? team.map((m) => ({ id: m.userId, name: m.name }))}
               value={form.description}
               onValueChange={(description) => setForm((f) => ({ ...f, description }))}
               onMention={(user) => {

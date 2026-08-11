@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-const TAB_VALUES = ['overview', 'board', 'meetings', 'settings'] as const
+const TAB_VALUES = ['overview', 'board', 'roadmap', 'meetings', 'settings'] as const
 type TabValue = (typeof TAB_VALUES)[number]
 
 function normalizeTab(value: string | undefined): TabValue {
@@ -16,12 +16,14 @@ function normalizeTab(value: string | undefined): TabValue {
 export function AppTabs({
   overview,
   board,
+  roadmap,
   meetings,
   settings,
   initialTab,
 }: {
   overview: ReactNode
   board: ReactNode
+  roadmap?: ReactNode
   meetings: ReactNode
   settings?: ReactNode
   initialTab?: string
@@ -56,6 +58,11 @@ export function AppTabs({
         <TabsTrigger value="board" className={triggerClassName}>
           Board
         </TabsTrigger>
+        {roadmap ? (
+          <TabsTrigger value="roadmap" className={triggerClassName}>
+            Roadmap
+          </TabsTrigger>
+        ) : null}
         <TabsTrigger value="meetings" className={triggerClassName}>
           Meetings
         </TabsTrigger>
@@ -67,6 +74,7 @@ export function AppTabs({
       </TabsList>
       <TabsContent value="overview">{overview}</TabsContent>
       <TabsContent value="board">{board}</TabsContent>
+      {roadmap ? <TabsContent value="roadmap">{roadmap}</TabsContent> : null}
       <TabsContent value="meetings">{meetings}</TabsContent>
       {settings ? <TabsContent value="settings">{settings}</TabsContent> : null}
     </Tabs>

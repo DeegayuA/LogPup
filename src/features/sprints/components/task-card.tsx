@@ -57,7 +57,16 @@ export function TaskCard({
       style={style}
       {...attributes}
       {...listeners}
+      tabIndex={0}
       onClick={() => onOpen(task)}
+      onKeyDown={(event) => {
+        // dnd-kit registers only PointerSensor, so Enter/Space are free to
+        // open the dialog — a div never fires click from the keyboard.
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen(task)
+        }
+      }}
       className={cn(
         'relative flex flex-col gap-2 overflow-hidden rounded-lg border bg-card p-3 text-left shadow-xs outline-none transition-[border-color,box-shadow] duration-150 hover:border-ring/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50',
         draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
@@ -66,6 +75,7 @@ export function TaskCard({
     >
       {bar ? (
         <span
+          role="img"
           className={cn('absolute inset-y-0 left-0 w-1', bar)}
           aria-label={PRIORITY_LABEL[task.priority]}
           title={PRIORITY_LABEL[task.priority]}

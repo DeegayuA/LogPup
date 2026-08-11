@@ -167,7 +167,7 @@ export function MeetingIntelPanel({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="ghost" size="sm" type="button" onClick={toggleOpen}>
+        <Button variant="ghost" size="sm" type="button" onClick={toggleOpen} aria-expanded={open}>
           <Sparkles />
           Intelligence
           <ChevronDown

@@ -44,10 +44,16 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
           meetings={upcoming}
           currentUserId={currentUserId}
           isAdmin={isAdmin}
+          users={activeUsers}
         />
       </section>
 
-      <PastMeetingsSection meetings={past} currentUserId={currentUserId} isAdmin={isAdmin} />
+      <PastMeetingsSection
+        meetings={past}
+        currentUserId={currentUserId}
+        isAdmin={isAdmin}
+        users={activeUsers}
+      />
     </div>
   )
 }

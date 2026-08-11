@@ -55,3 +55,6 @@ next-env.d.ts
 # graphify internals (keep graph.json/report/html committed)
 graphify-out/.graphify_*
 graphify-out/cost.json
+
+# Playwright e2e build output
+.next-e2e/

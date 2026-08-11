@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
-import { and, desc, eq, isNotNull, lt, ne } from 'drizzle-orm'
+import { and, desc, eq, isNull, lt, ne } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { meetingAiNotes, meetingAttendees, meetings, users } from '@/db/schema'
@@ -182,7 +182,9 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
       and(
         ne(meetings.id, id),
         lt(meetings.startsAt, meeting.startsAt),
-        meeting.appId ? eq(meetings.appId, meeting.appId) : isNotNull(meetings.id),
+        // App-less meetings only pull prep from other app-less meetings —
+        // never from an unrelated project's analyzed notes.
+        meeting.appId ? eq(meetings.appId, meeting.appId) : isNull(meetings.appId),
       ),
     )
     .orderBy(desc(meetings.startsAt))

@@ -17,6 +17,7 @@ import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
 import { Board } from '@/features/sprints/components/board'
+import { Roadmap } from '@/features/sprints/components/roadmap'
 import { ExportButton } from '@/features/notion/components/export-button'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
@@ -203,6 +204,7 @@ export default async function AppDetailPage(props: {
             )}
           </div>
         }
+        roadmap={<Roadmap sprints={sprints} slug={slug} />}
         meetings={
           <div className="flex flex-col gap-4">
             <div className="flex justify-end">
@@ -218,6 +220,7 @@ export default async function AppDetailPage(props: {
               currentUserId={session?.user?.id ?? ''}
               isAdmin={isAdmin}
               showAppBadge={false}
+              users={activeUsers}
             />
           </div>
         }

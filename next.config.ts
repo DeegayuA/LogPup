@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Meeting audio uploads go through a server action; the default 1MB
+  // body limit rejects anything beyond ~2 minutes of opus. 16mb leaves
+  // multipart headroom over the 15MB client/server cap.
+  experimental: { serverActions: { bodySizeLimit: '16mb' } },
   // playwright.config.ts runs its own `next dev` (E2E_TEST_MODE=1) alongside
   // whatever dev server a human already has open on :3000. Next 16 dev
   // servers hold a per-distDir lock for the life of the process, so reusing

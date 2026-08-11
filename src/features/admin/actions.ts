@@ -1,5 +1,6 @@
 'use server'
 
+import { randomBytes } from 'crypto'
 import { z } from 'zod'
 import { and, count, eq, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -112,10 +113,11 @@ export async function setUserActive(userId: string, active: boolean): Promise<Ac
   return ok(undefined)
 }
 
-// Every admin-created account starts with this shared password and
-// mustChangePassword=true, so the proxy pins the user to /profile until they
-// replace it (see src/proxy.ts). It never survives past first sign-in.
-const STARTER_PASSWORD = '1234567890'
+// Every admin-created account starts with a RANDOM per-user starter password
+// (shown once to the admin) and mustChangePassword=true, so the proxy pins the
+// user to /profile until they replace it (see src/proxy.ts). A shared constant
+// starter would let anyone who knows an invitee's email take the account
+// before their first sign-in.
 
 const orgTagsInput = z
   .array(
@@ -141,7 +143,9 @@ const createUserInput = z.object({
 
 // Admin-created account: the teammate signs in with email + the starter
 // password and is forced to set their own before doing anything else.
-export async function createUser(input: unknown): Promise<ActionResult> {
+export async function createUser(
+  input: unknown,
+): Promise<ActionResult<{ starterPassword: string }>> {
   if (!(await requireAdmin())) return err('Admins only')
 
   const parsed = createUserInput.safeParse(input)
@@ -160,6 +164,7 @@ export async function createUser(input: unknown): Promise<ActionResult> {
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email))
   if (existing) return err('A user with that email already exists')
 
+  const starterPassword = randomBytes(6).toString('base64url')
   try {
     await db.insert(users).values({
       email,
@@ -167,7 +172,7 @@ export async function createUser(input: unknown): Promise<ActionResult> {
       role,
       title: title || null,
       orgTags,
-      passwordHash: hashPassword(STARTER_PASSWORD),
+      passwordHash: hashPassword(starterPassword),
       mustChangePassword: true,
       active: true,
     })
@@ -177,7 +182,7 @@ export async function createUser(input: unknown): Promise<ActionResult> {
   }
 
   revalidateAdminPaths()
-  return ok(undefined)
+  return ok({ starterPassword })
 }
 
 export async function setUserOrgTags(userId: string, tags: unknown): Promise<ActionResult> {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { isSameDay } from 'date-fns'
+import { format, isSameDay } from 'date-fns'
 import { X } from 'lucide-react'
 import {
   MiniCalendar,
@@ -11,6 +11,7 @@ import {
 } from '@/components/kibo-ui/mini-calendar'
 import { Button } from '@/components/ui/button'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
+import type { MentionUser } from '@/components/mention-textarea'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
 /** Upcoming meetings with a Kibo mini-calendar day strip as a quick filter. */
@@ -18,10 +19,12 @@ export function UpcomingMeetingsFiltered({
   meetings,
   currentUserId,
   isAdmin,
+  users = [],
 }: {
   meetings: MeetingSummary[]
   currentUserId: string
   isAdmin: boolean
+  users?: MentionUser[]
 }) {
   const [selected, setSelected] = useState<Date | undefined>(undefined)
   const filtered = selected
@@ -37,11 +40,18 @@ export function UpcomingMeetingsFiltered({
           days={7}
           className="bg-card"
         >
-          <MiniCalendarNavigation direction="prev" />
+          <MiniCalendarNavigation direction="prev" aria-label="Show earlier days" />
           <MiniCalendarDays>
-            {(date) => <MiniCalendarDay date={date} key={date.toISOString()} />}
+            {(date) => (
+              <MiniCalendarDay
+                date={date}
+                key={date.toISOString()}
+                aria-label={format(date, 'EEEE, MMMM d')}
+                aria-pressed={selected ? isSameDay(date, selected) : false}
+              />
+            )}
           </MiniCalendarDays>
-          <MiniCalendarNavigation direction="next" />
+          <MiniCalendarNavigation direction="next" aria-label="Show later days" />
         </MiniCalendar>
         {selected ? (
           <Button variant="ghost" size="sm" type="button" onClick={() => setSelected(undefined)}>
@@ -54,7 +64,12 @@ export function UpcomingMeetingsFiltered({
           No meetings that day — pick another or clear the filter.
         </p>
       ) : (
-        <MeetingList meetings={filtered} currentUserId={currentUserId} isAdmin={isAdmin} />
+        <MeetingList
+          meetings={filtered}
+          currentUserId={currentUserId}
+          isAdmin={isAdmin}
+          users={users}
+        />
       )}
     </div>
   )

@@ -84,7 +84,8 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
         return
       }
       toast.success(
-        'User added — first password is 1234567890, they must change it on first sign-in',
+        `User added — starter password: ${res.data.starterPassword} (share it once; they must change it on first sign-in)`,
+        { duration: 15000 },
       )
       handleOpenChange(false)
       router.refresh()

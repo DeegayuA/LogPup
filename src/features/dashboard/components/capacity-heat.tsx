@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { StatNumber } from '@/components/animate-ui/stat-number'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -18,7 +19,6 @@ const linkClass =
 export function CapacityHeat({ capacities }: { capacities: UserCapacity[] }) {
   const sorted = sortCapacities(capacities)
   const overCount = sorted.filter((person) => person.overallocated).length
-  const peopleLabel = `${sorted.length} ${sorted.length === 1 ? 'person' : 'people'}`
 
   return (
     <Card>
@@ -32,7 +32,16 @@ export function CapacityHeat({ capacities }: { capacities: UserCapacity[] }) {
                 overCount > 0 ? 'font-medium text-destructive' : 'text-muted-foreground',
               )}
             >
-              {overCount > 0 ? `${overCount} over` : peopleLabel}
+              {overCount > 0 ? (
+                <>
+                  <StatNumber value={overCount} /> over
+                </>
+              ) : (
+                <>
+                  <StatNumber value={sorted.length} />{' '}
+                  {sorted.length === 1 ? 'person' : 'people'}
+                </>
+              )}
             </span>
           </CardAction>
         ) : null}
