@@ -16,10 +16,12 @@ export function VersionBadge() {
       <DropdownMenuTrigger
         render={
           <button
+            type="button"
             aria-label={`Version ${CURRENT_VERSION} — view changelog`}
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-xs text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            /* The quietest thing in the footer: no dot (it signalled nothing),
+               no chrome until hovered. Tabular so the digits stay aligned. */
+            className="inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 font-mono text-2xs tabular-nums text-sidebar-foreground/60 outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring/60 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
           >
-            <span aria-hidden className="size-1.5 rounded-full bg-primary" />
             {CURRENT_VERSION}
           </button>
         }

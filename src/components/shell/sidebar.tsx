@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VersionBadge } from '@/components/shell/version-badge'
+import { InstallButton } from '@/features/pwa/pwa'
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard, key: 'D' },
@@ -63,7 +65,34 @@ function NavLink({
   )
 }
 
-export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
+/* The ⌘K hint, matching CommandCenterTrigger's chip. Server-rendered as the
+   Mac form and corrected after hydration, so the markup is stable either way. */
+function CommandHint() {
+  const [isMac, setIsMac] = useState(true)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydration-safe platform detection
+    setIsMac(/Mac|iPhone|iPad/.test(window.navigator.userAgent))
+  }, [])
+
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-2xs text-sidebar-foreground/70">
+      <kbd className="rounded border border-sidebar-border bg-sidebar-accent/60 px-1 py-0.5 font-mono leading-none">
+        {isMac ? '⌘K' : 'Ctrl K'}
+      </kbd>
+      <span className="truncate">Fetch anything</span>
+    </span>
+  )
+}
+
+export function Sidebar({
+  isAdmin,
+  account,
+}: {
+  isAdmin: boolean
+  /* Rendered by the (app) layout so the account menu can stay a server
+     component (its sign-out is an inline server action). */
+  account?: React.ReactNode
+}) {
   const pathname = usePathname()
 
   return (
@@ -102,15 +131,18 @@ export function Sidebar({ isAdmin }: { isAdmin: boolean }) {
         </div>
       ) : null}
 
-      <div className="mt-auto flex flex-col gap-2 border-t border-sidebar-border px-2 py-3">
-        <div className="px-2 text-2xs text-sidebar-foreground/70">
-          Press{' '}
-          <kbd className="rounded border border-sidebar-border bg-sidebar-accent/50 px-1 font-mono">
-            Ctrl/⌘ K
-          </kbd>{' '}
-          to fetch anything
+      {/* Workspace footer: who you are (primary), install (secondary, and only
+          when the browser actually offers it), then a single quiet meta line
+          for the ⌘K hint and the version. */}
+      <div className="mt-auto flex flex-col gap-1 border-t border-sidebar-border px-2 pt-2 pb-2.5">
+        <div className="flex items-center gap-1">
+          {account}
+          <InstallButton variant="icon" />
         </div>
-        <VersionBadge />
+        <div className="flex items-center justify-between gap-2 pl-2">
+          <CommandHint />
+          <VersionBadge />
+        </div>
       </div>
     </nav>
   )

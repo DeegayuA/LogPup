@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { Sidebar } from '@/components/shell/sidebar'
 import { Header } from '@/components/shell/header'
+import { AccountMenu } from '@/components/shell/account-menu'
 import { CommandCenterProvider } from '@/features/search/components/command-center'
 import { getOwnTitle } from '@/features/auth/queries'
 
@@ -21,16 +22,20 @@ export default async function AppLayout({
   // right alongside the session this layout already fetches, and thread it
   // into Header as a prop rather than adding a client-side fetch there.
   const title = await getOwnTitle(session.user.id)
+  const user = { name: session.user.name, image: session.user.image, title }
 
   return (
     <CommandCenterProvider isAdmin={isAdmin}>
       <div className="flex min-h-full flex-1">
-        <Sidebar isAdmin={isAdmin} />
+        {/* AccountMenu is a server component (its sign-out is an inline server
+            action), so it is rendered here and threaded into the client
+            Sidebar as a slot rather than imported by it. */}
+        <Sidebar
+          isAdmin={isAdmin}
+          account={<AccountMenu user={user} isAdmin={isAdmin} variant="sidebar" />}
+        />
         <div className="flex flex-1 flex-col">
-          <Header
-            user={{ name: session?.user?.name, image: session?.user?.image, title }}
-            isAdmin={isAdmin}
-          />
+          <Header user={user} isAdmin={isAdmin} />
           <main className="flex flex-1 flex-col">{children}</main>
         </div>
       </div>
