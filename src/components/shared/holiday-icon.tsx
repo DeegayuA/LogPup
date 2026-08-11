@@ -1,6 +1,7 @@
 import { Flag, Landmark, Moon, Store } from 'lucide-react'
 import {
   getHolidayIconKind,
+  getHolidayIconKinds,
   type HolidayCategory,
   type HolidayIconKind,
 } from '@/lib/lk-holidays'
@@ -69,6 +70,31 @@ export function HolidayIcon({
   if (!kind) return null
   const { Icon, tone } = HOLIDAY_ICON_META[kind]
   return <Icon aria-hidden className={cn(tone, className)} />
+}
+
+/**
+ * Renders ALL of a day's holiday glyphs side by side — Poya + Public +
+ * Mercantile when they all apply — rather than collapsing to one. Same
+ * accessibility contract as HolidayIcon: aria-hidden, so callers still carry
+ * the name + category label as text.
+ */
+export function HolidayIcons({
+  categories,
+  className,
+}: {
+  categories: HolidayCategory[] | undefined
+  className?: string
+}) {
+  const kinds = getHolidayIconKinds(categories)
+  if (kinds.length === 0) return null
+  return (
+    <span className="flex items-center gap-0.5">
+      {kinds.map((kind) => {
+        const { Icon, tone } = HOLIDAY_ICON_META[kind]
+        return <Icon key={kind} aria-hidden className={cn(tone, className)} />
+      })}
+    </span>
+  )
 }
 
 /** Compact icon -> category key. The meetings page shows these holiday

@@ -38,6 +38,46 @@ export function shouldCutSegment(elapsedMs: number, bytes: number): boolean {
   return elapsedMs >= SEGMENT_TARGET_MS || bytes >= SEGMENT_BYTE_SOFT_CAP
 }
 
+/**
+ * How many times ONE segment's upload+transcription is attempted before the
+ * UI gives up and asks a human to press Retry. A meeting is a live event
+ * nobody wants to babysit: a single dropped request, a server restart mid-
+ * deploy, or a 30-second network hiccup should heal itself silently rather
+ * than leave an amber "segment 3 failed" box the person recording only
+ * notices an hour later. Four attempts spread over ~13s (see
+ * segmentRetryDelayMs) cover all of those without stalling the
+ * genuinely-broken case for long.
+ */
+export const SEGMENT_UPLOAD_ATTEMPTS = 4
+
+/**
+ * Backoff before the next attempt (1-based: the delay BEFORE attempt 2 is
+ * segmentRetryDelayMs(1)). Exponential from 1s — 1s, 3s, 9s — because the
+ * failures worth retrying are exactly the ones that clear on their own given
+ * a few seconds, and a fixed short delay would burn every attempt inside a
+ * single outage window.
+ */
+export function segmentRetryDelayMs(attempt: number): number {
+  return 1000 * 3 ** Math.max(0, attempt - 1)
+}
+
+/**
+ * Whether a failed attempt is worth retrying automatically. Some failures are
+ * permanent by construction and retrying them is pure noise: a segment the
+ * server rejected as oversized will be exactly as oversized next time, a
+ * caller without permission still won't have it, and a database missing a
+ * migration stays missing until a person applies it. Everything else — a
+ * network blip, an overloaded Gemini, a server restarting mid-deploy — is
+ * retried. Matched on the server's own message text (the strings in
+ * ai-actions.ts) rather than an error code, because a server action can only
+ * hand back a string; keep the two in sync when either changes.
+ */
+export function isRetriableSegmentError(message: string): boolean {
+  return !/unexpectedly large|Only admins|No audio received|pending migration has not been applied/i.test(
+    message,
+  )
+}
+
 export type TranscribedSegment = { index: number; transcript: string }
 
 export type ConcatenatedSegments = {

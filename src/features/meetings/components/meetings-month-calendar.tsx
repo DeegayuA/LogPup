@@ -27,7 +27,7 @@ import {
 import { toast } from 'sonner'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { HolidayIcon, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
+import { HolidayIcons, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
 import { getLkHoliday, isLkSunday } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
 import { rescheduleMeeting } from '@/features/meetings/actions'
@@ -438,7 +438,7 @@ function DayCell({
         >
           {format(day, 'd')}
         </span>
-        {holiday ? <HolidayIcon categories={holiday.categories} className="size-3 shrink-0" /> : null}
+        {holiday ? <HolidayIcons categories={holiday.categories} className="size-3 shrink-0" /> : null}
         <span className="sr-only">
           {format(day, 'EEEE, MMMM d')}
           {holidayName ? `, ${holidayName}` : ''}

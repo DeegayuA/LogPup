@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.129",
+  "current": "v0.0.132",
   "versions": [
     {
       "version": "v0.0.1",
@@ -774,6 +774,24 @@
       "date": "2026-08-11",
       "hash": "0d339a4",
       "change": "feat: segmented recording and incremental transcription for long meetings"
+    },
+    {
+      "version": "v0.0.130",
+      "date": "2026-08-11",
+      "hash": "f705304",
+      "change": "chore: pin Gemini model to gemini-3.6-flash"
+    },
+    {
+      "version": "v0.0.131",
+      "date": "2026-08-11",
+      "hash": "74cb140",
+      "change": "."
+    },
+    {
+      "version": "v0.0.132",
+      "date": "2026-08-11",
+      "hash": "18c57ee",
+      "change": "feat: account menu and install in the sidebar footer"
     }
   ]
 }

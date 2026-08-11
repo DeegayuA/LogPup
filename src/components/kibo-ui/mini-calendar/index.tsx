@@ -14,7 +14,7 @@ import {
   useContext,
 } from "react";
 import { Button } from "@/components/ui/button";
-import { HolidayIcon, holidayCategoryLabel, holidayToneClass } from "@/components/shared/holiday-icon";
+import { HolidayIcons, holidayCategoryLabel, holidayToneClass } from "@/components/shared/holiday-icon";
 import {
   getLkHoliday,
   isLkSunday,
@@ -386,7 +386,7 @@ export const MiniCalendarDay = ({
           isSelected ? "text-primary-foreground/80" : "text-muted-foreground"
         )}
       >
-        {holiday ? <HolidayIcon categories={holiday.categories} className="size-3" /> : null}
+        {holiday ? <HolidayIcons categories={holiday.categories} className="size-2.5" /> : null}
       </span>
       <span className="sr-only">{accessibleLabel}</span>
     </Button>

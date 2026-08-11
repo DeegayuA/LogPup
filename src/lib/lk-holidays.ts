@@ -155,3 +155,20 @@ export function getHolidayIconKind(categories: HolidayCategory[] | undefined): H
   if (categories.includes('bank')) return 'bank'
   return undefined
 }
+
+/**
+ * Every icon kind that applies to a day, most-distinctive first — so a day that
+ * is a Poya AND a Public AND a Mercantile holiday shows all three glyphs rather
+ * than collapsing to one. `mercantile` and `bank` are mutually exclusive (a day
+ * that closes offices is mercantile; one that only closes banks is bank-only),
+ * so at most one of those two ever appears.
+ */
+export function getHolidayIconKinds(categories: HolidayCategory[] | undefined): HolidayIconKind[] {
+  if (!categories || categories.length === 0) return []
+  const kinds: HolidayIconKind[] = []
+  if (categories.includes('poya')) kinds.push('poya')
+  if (categories.includes('public')) kinds.push('public')
+  if (categories.includes('mercantile')) kinds.push('mercantile')
+  else if (categories.includes('bank')) kinds.push('bank')
+  return kinds
+}

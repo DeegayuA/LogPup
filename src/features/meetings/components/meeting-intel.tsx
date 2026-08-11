@@ -53,7 +53,17 @@ import {
   type ActiveLanguage,
   type UtteranceCandidate,
 } from '@/features/meetings/language-switch'
-import { shouldCutSegment } from '@/features/meetings/recording-segments'
+import {
+  isRetriableSegmentError,
+  segmentRetryDelayMs,
+  shouldCutSegment,
+  SEGMENT_UPLOAD_ATTEMPTS,
+} from '@/features/meetings/recording-segments'
+import {
+  loadParkedSegments,
+  parkSegment,
+  releaseSegment,
+} from '@/features/meetings/segment-store'
 
 // --- Minimal Web Speech API typings ------------------------------------
 // Not part of TypeScript's DOM lib (non-standard, webkit-prefixed). Declared
@@ -163,7 +173,19 @@ function formatBytes(bytes: number): string {
 // instead of to a two-hour blob that would otherwise vanish the instant a
 // transient Gemini failure happened at minute 119.
 type SegmentStatus = 'uploading' | 'done' | 'failed'
-type RecordingSegment = { index: number; status: SegmentStatus; blob: Blob; error?: string }
+type RecordingSegment = {
+  index: number
+  status: SegmentStatus
+  blob: Blob
+  error?: string
+  /** 1-based attempt currently in flight — shown while retrying so a slow
+   *  self-healing upload reads as "still working on it", not as a hang. */
+  attempt?: number
+  /** True for a segment recovered from IndexedDB after a reload/crash rather
+   *  than cut by the recorder in this page load (see segment-store.ts). Only
+   *  affects wording — the retry path is identical. */
+  recovered?: boolean
+}
 
 // The three separate things that can be written about one follow-up. They
 // are never the same sentence: 'outcome' is what came of it (resolved
@@ -770,21 +792,50 @@ export function MeetingIntelPanel({
   // pass. A failure here leaves the segment's Blob sitting in `segments`
   // with a retry affordance (the failed-segments list further down in the
   // render) — the whole meeting is never aborted over one bad segment.
-  async function uploadSegment(index: number, blob: Blob) {
-    upsertSegment({ index, status: 'uploading', blob })
-    try {
-      const formData = new FormData()
-      formData.append('audio', new File([blob], `segment-${index}`, { type: blob.type }))
-      const hint = finalTranscriptRef.current
-      if (hint.trim()) formData.append('liveTranscriptHint', hint)
-      const res = await transcribeSegment(meetingId, index, formData)
-      upsertSegment(
-        res.ok
-          ? { index, status: 'done', blob }
-          : { index, status: 'failed', blob, error: res.error },
-      )
-    } catch {
-      upsertSegment({ index, status: 'failed', blob, error: 'Upload failed — try again' })
+  async function uploadSegment(index: number, blob: Blob, recovered = false) {
+    // Retries in place, with backoff, before ever showing a failure. Most of
+    // what goes wrong here is transient — a dropped request, a server
+    // restarting mid-deploy, Gemini briefly overloaded — and the person in
+    // the meeting can do exactly nothing useful about any of it. Only a
+    // failure that survives every attempt (or is permanent by construction,
+    // see isRetriableSegmentError) is worth interrupting them for.
+    for (let attempt = 1; attempt <= SEGMENT_UPLOAD_ATTEMPTS; attempt += 1) {
+      upsertSegment({ index, status: 'uploading', blob, attempt, recovered })
+      let error: string
+      try {
+        const formData = new FormData()
+        formData.append('audio', new File([blob], `segment-${index}`, { type: blob.type }))
+        const hint = finalTranscriptRef.current
+        if (hint.trim()) formData.append('liveTranscriptHint', hint)
+        const res = await transcribeSegment(meetingId, index, formData)
+        if (res.ok) {
+          upsertSegment({ index, status: 'done', blob, recovered })
+          // The transcript is in the database now — that's the durable copy
+          // from here on, so the parked audio has done its job. This is the
+          // only place parked audio is ever dropped.
+          await releaseSegment(meetingId, index)
+          return
+        }
+        error = res.error
+      } catch (thrown) {
+        // A rejected server action: the network, or the action never
+        // reaching the server at all. Keep the real message — the old bare
+        // `catch {}` here is what turned every server-side fault into an
+        // indistinguishable "Upload failed — try again" with no way to tell
+        // a flaky connection from an unapplied database migration.
+        error =
+          thrown instanceof Error
+            ? `Could not reach the server (${thrown.message})`
+            : 'Could not reach the server'
+        console.error(`[meeting-recording] segment ${index + 1} upload attempt ${attempt} threw:`, thrown)
+      }
+
+      const lastAttempt = attempt === SEGMENT_UPLOAD_ATTEMPTS
+      if (lastAttempt || !isRetriableSegmentError(error)) {
+        upsertSegment({ index, status: 'failed', blob, error, recovered })
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, segmentRetryDelayMs(attempt)))
     }
   }
 
@@ -806,14 +857,55 @@ export function MeetingIntelPanel({
     chunksRef.current = []
     segmentBytesRef.current = 0
     segmentStartRef.current = Date.now()
+    // Park BEFORE uploading, and don't wait for it: the audio is on disk
+    // before the first byte goes out, so a crash mid-upload is recoverable,
+    // and a slow/unavailable IndexedDB can never delay the recorder.
+    void parkSegment(meetingId, index, blob)
     segmentUploadPromisesRef.current.push(uploadSegment(index, blob))
   }
 
   function retrySegment(index: number) {
     const segment = segmentsRef.current.find((s) => s.index === index)
     if (!segment || segment.status === 'uploading') return
-    segmentUploadPromisesRef.current.push(uploadSegment(index, segment.blob))
+    segmentUploadPromisesRef.current.push(uploadSegment(index, segment.blob, segment.recovered))
   }
+
+  // Crash/reload recovery. Any segment still parked in IndexedDB (see
+  // segment-store.ts) is audio that was recorded but never confirmed
+  // transcribed — the tab was closed mid-upload, the browser reaped it, the
+  // laptop slept. Pick it straight back up rather than waiting to be asked:
+  // the person who recorded it has no way of knowing it's even there, and the
+  // server-side upsert on (meetingId, index) makes re-sending one that did
+  // actually land harmless. Declared here, after uploadSegment, because it
+  // calls it.
+  useEffect(() => {
+    if (!canRecord) return
+    let cancelled = false
+    void (async () => {
+      const parked = await loadParkedSegments(meetingId)
+      if (cancelled || parked.length === 0) return
+      // Never renumber over recovered work — same reasoning as startRecording.
+      segmentIndexRef.current = parked.reduce(
+        (next, segment) => Math.max(next, segment.index + 1),
+        segmentIndexRef.current,
+      )
+      for (const segment of parked) {
+        segmentUploadPromisesRef.current.push(uploadSegment(segment.index, segment.blob, true))
+      }
+      toast.info(
+        parked.length === 1
+          ? 'Recovered 1 unfinished recording segment — transcribing it now'
+          : `Recovered ${parked.length} unfinished recording segments — transcribing them now`,
+      )
+    })()
+    return () => {
+      cancelled = true
+    }
+    // uploadSegment closes only over refs and meetingId; adding it as a
+    // dependency would re-run this on every render and re-upload the same
+    // recovered audio.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetingId, canRecord])
 
   // Runs once recording stops (and again if the user retries): waits for
   // every segment upload/transcription currently in flight to settle, then
@@ -896,14 +988,19 @@ export function MeetingIntelPanel({
       headerChunkRef.current = null
       segmentBytesRef.current = 0
       segmentStartRef.current = Date.now()
-      segmentIndexRef.current = 0
       segmentUploadPromisesRef.current = []
       mimeBaseRef.current = mimeType.split(';')[0]
-      // A fresh recording starting is the one deliberate point where it's
-      // safe to drop whatever unfinalized segments came before — the user
-      // is choosing to record again rather than retry the old ones.
-      segmentsRef.current = []
-      setSegments([])
+      // Continue numbering AFTER anything already recorded for this meeting
+      // rather than restarting at 0. Segment index is the primary key on the
+      // server (upsert on meetingId+index), so restarting the count would
+      // silently overwrite the transcripts of an earlier take — and any
+      // untranscribed segment still sitting here (failed, or recovered from a
+      // previous page load) would lose its slot too. Recording a second time
+      // now appends to the meeting instead of replacing it.
+      segmentIndexRef.current = segmentsRef.current.reduce(
+        (next, segment) => Math.max(next, segment.index + 1),
+        0,
+      )
       setFinalizeError(null)
 
       // 32 kbps mono Opus: ~4 KB/s -> ~14.4 MB/hour, vs Chrome's ~128 kbps
@@ -1333,9 +1430,12 @@ export function MeetingIntelPanel({
                       aria-hidden
                     />
                     <span>
-                      Segment {segment.index + 1} didn&rsquo;t transcribe
+                      Segment {segment.index + 1} didn&rsquo;t transcribe after{' '}
+                      {SEGMENT_UPLOAD_ATTEMPTS} tries
                       {segment.error ? ` — ${segment.error}` : ''}. Its audio (
-                      {formatBytes(segment.blob.size)}) is still here.
+                      {formatBytes(segment.blob.size)}) is saved on this device
+                      {segment.recovered ? ', recovered from an earlier session' : ''} and survives a
+                      reload.
                     </span>
                   </span>
                   <Button

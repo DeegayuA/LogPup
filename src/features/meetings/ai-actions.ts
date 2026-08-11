@@ -759,6 +759,45 @@ const transcribeSegmentInput = z.object({
 export type TranscribeSegmentResult = { index: number; transcript: string }
 
 /**
+ * Anything THROWN inside a server action rejects the client's promise, and a
+ * rejection carries no message across the boundary in production — the caller
+ * can only render "something went wrong", and the real cause never reaches a
+ * human. That is exactly how an unapplied `meeting_recording_segments`
+ * migration presented itself: a Postgres `relation ... does not exist` on
+ * every insert, shown as a bare "Upload failed — try again" that no amount of
+ * retrying could ever clear.
+ *
+ * Every recording action funnels its UNEXPECTED failures through here
+ * instead: the full error is logged server-side with the meeting it belongs
+ * to, and the caller gets a specific ActionResult it can act on — crucially
+ * distinguishing "retry will work" (transient) from "retrying forever is
+ * pointless, a person has to fix the deployment" (schema/config).
+ */
+function recordingFailure(context: string, error: unknown): ActionResult<never> {
+  console.error(`[meeting-recording] ${context}:`, error)
+  const message = error instanceof Error ? error.message : String(error)
+
+  // A missing relation/column means a migration in drizzle/ was never applied
+  // to this database. Not transient, not the user's fault, and not fixable by
+  // pressing retry — say what actually has to happen, and say the audio is
+  // still safe so nobody stops the meeting over it.
+  if (/relation ".+" does not exist|column ".+" does not exist/i.test(message)) {
+    return err(
+      'LogPup’s database is missing a table this feature needs — a pending migration has not been applied. Your audio is still here; ask an admin to run the migrations, then retry.',
+    )
+  }
+  // Connection-level faults are genuinely transient — worth retrying.
+  if (
+    /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|connection|terminated unexpectedly|fetch failed/i.test(
+      message,
+    )
+  ) {
+    return err('Could not reach the database just now — your audio is kept, retry in a moment.')
+  }
+  return err(`${context} failed on the server (${message.slice(0, 160)}) — your audio is kept, retry.`)
+}
+
+/**
  * Transcribes ONE ~5-minute recording segment and stores it. Called from the
  * client in the background while a meeting is still being recorded — each
  * call is independent (its own Gemini request, its own retry via
@@ -775,6 +814,18 @@ export type TranscribeSegmentResult = { index: number; transcript: string }
  * doubling it in the eventual concatenated transcript.
  */
 export async function transcribeSegment(
+  meetingId: string,
+  index: number,
+  formData: FormData,
+): Promise<ActionResult<TranscribeSegmentResult>> {
+  try {
+    return await transcribeSegmentInner(meetingId, index, formData)
+  } catch (error) {
+    return recordingFailure(`Transcribing segment ${index + 1}`, error)
+  }
+}
+
+async function transcribeSegmentInner(
   meetingId: string,
   index: number,
   formData: FormData,
@@ -891,6 +942,17 @@ const finalizeRecordingInput = z.object({ meetingId: z.uuid() })
  * re-reads whatever segments exist now and re-runs synthesis.
  */
 export async function finalizeMeetingRecording(
+  meetingId: string,
+  liveTranscriptHint?: string,
+): Promise<ActionResult> {
+  try {
+    return await finalizeMeetingRecordingInner(meetingId, liveTranscriptHint)
+  } catch (error) {
+    return recordingFailure('Writing up the minutes', error)
+  }
+}
+
+async function finalizeMeetingRecordingInner(
   meetingId: string,
   liveTranscriptHint?: string,
 ): Promise<ActionResult> {

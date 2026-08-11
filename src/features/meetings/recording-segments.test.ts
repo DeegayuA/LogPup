@@ -2,9 +2,64 @@ import { describe, expect, it } from 'vitest'
 import {
   SEGMENT_BYTE_SOFT_CAP,
   SEGMENT_TARGET_MS,
+  SEGMENT_UPLOAD_ATTEMPTS,
   concatenateSegments,
+  isRetriableSegmentError,
+  segmentRetryDelayMs,
   shouldCutSegment,
 } from './recording-segments'
+
+describe('segmentRetryDelayMs', () => {
+  it('backs off exponentially from one second', () => {
+    expect(segmentRetryDelayMs(1)).toBe(1000)
+    expect(segmentRetryDelayMs(2)).toBe(3000)
+    expect(segmentRetryDelayMs(3)).toBe(9000)
+  })
+
+  it('never returns a negative or sub-second delay for a bad attempt number', () => {
+    expect(segmentRetryDelayMs(0)).toBe(1000)
+    expect(segmentRetryDelayMs(-5)).toBe(1000)
+  })
+
+  it('finishes every retry inside a window a person would wait through', () => {
+    let total = 0
+    for (let attempt = 1; attempt < SEGMENT_UPLOAD_ATTEMPTS; attempt += 1) {
+      total += segmentRetryDelayMs(attempt)
+    }
+    expect(total).toBeLessThanOrEqual(15_000)
+  })
+})
+
+describe('isRetriableSegmentError', () => {
+  it('retries transient transport and upstream failures', () => {
+    expect(isRetriableSegmentError('Could not reach the server (Failed to fetch)')).toBe(true)
+    expect(isRetriableSegmentError('All Gemini models are busy right now')).toBe(true)
+    expect(isRetriableSegmentError('Gemini returned a malformed transcript for this segment')).toBe(
+      true,
+    )
+    expect(isRetriableSegmentError('Could not reach the database just now')).toBe(true)
+  })
+
+  it('does not retry failures that are permanent by construction', () => {
+    // Same bytes next time — the size check rejects it identically.
+    expect(
+      isRetriableSegmentError('Segment 3 came out unexpectedly large — try recording again'),
+    ).toBe(false)
+    // Permissions do not change between attempts.
+    expect(isRetriableSegmentError('Only admins or the meeting creator can record analysis')).toBe(
+      false,
+    )
+    expect(isRetriableSegmentError('No audio received for segment 2')).toBe(false)
+    // A missing table stays missing until a person applies the migration —
+    // this is the failure that originally presented as an endlessly
+    // retryable "Upload failed — try again".
+    expect(
+      isRetriableSegmentError(
+        'LogPup’s database is missing a table this feature needs — a pending migration has not been applied. Your audio is still here; ask an admin to run the migrations, then retry.',
+      ),
+    ).toBe(false)
+  })
+})
 
 describe('shouldCutSegment', () => {
   it('does not cut before either threshold is reached', () => {
