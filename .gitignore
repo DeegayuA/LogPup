@@ -43,3 +43,7 @@ next-env.d.ts
 
 # Claude agent worktrees
 .claude/
+
+# graphify internals (keep graph.json/report/html committed)
+graphify-out/.graphify_*
+graphify-out/cost.json

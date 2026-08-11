@@ -5,7 +5,8 @@ import { PawPrint, ShieldCheck } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { getPersonDetail } from '@/features/people/queries'
+import { getPersonActivity, getPersonDetail } from '@/features/people/queries'
+import { ActivityGraph } from '@/features/people/components/activity-graph'
 import { cn } from '@/lib/utils'
 
 const TASK_STATUS_ORDER = ['todo', 'in_progress', 'done'] as const
@@ -33,7 +34,7 @@ const linkClass =
 
 export default async function PersonDetailPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params
-  const person = await getPersonDetail(id)
+  const [person, activity] = await Promise.all([getPersonDetail(id), getPersonActivity(id)])
   if (!person) notFound()
 
   const { user, totalPct, overallocated, breakdown, tasks, meetings } = person
@@ -142,6 +143,15 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
               </CardContent>
             </>
           )}
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ActivityGraph data={activity} />
+          </CardContent>
         </Card>
 
         <div className="flex flex-col gap-6">

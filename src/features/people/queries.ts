@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, ilike } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, ilike, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, assignments, meetingAttendees, meetings, tasks, users } from '@/db/schema'
 import { summarizeAllocations } from '@/features/people/allocation'
@@ -132,6 +132,41 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
   }
 
   return [...byUser.values()]
+}
+
+export type ActivityDay = { date: string; count: number; level: 0 | 1 | 2 | 3 | 4 }
+
+/**
+ * Per-day task activity (tasks created for + assigned to the user) over the
+ * last ~26 weeks, as a dense series for the contribution graph. Level ramp:
+ * 0 = none, 1 = 1, 2 = 2–3, 3 = 4–5, 4 = 6+.
+ */
+export async function getPersonActivity(userId: string): Promise<ActivityDay[]> {
+  const since = new Date()
+  since.setDate(since.getDate() - 26 * 7)
+  since.setHours(0, 0, 0, 0)
+
+  const rows = await db
+    .select({
+      day: sql<string>`to_char(${tasks.createdAt}, 'YYYY-MM-DD')`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(tasks)
+    .where(and(eq(tasks.assigneeId, userId), gte(tasks.createdAt, since)))
+    .groupBy(sql`to_char(${tasks.createdAt}, 'YYYY-MM-DD')`)
+
+  const byDay = new Map(rows.map((row) => [row.day, row.count]))
+  const series: ActivityDay[] = []
+  const cursor = new Date(since)
+  const today = new Date()
+  while (cursor <= today) {
+    const key = cursor.toISOString().slice(0, 10)
+    const count = byDay.get(key) ?? 0
+    const level = count === 0 ? 0 : count === 1 ? 1 : count <= 3 ? 2 : count <= 5 ? 3 : 4
+    series.push({ date: key, count, level })
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return series
 }
 
 export async function listActiveUsers(): Promise<ActiveUser[]> {
