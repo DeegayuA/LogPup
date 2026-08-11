@@ -380,3 +380,31 @@ export const meetingTaskSuggestions = pgTable('meeting_task_suggestions', {
   createdTaskId: uuid('created_task_id').references(() => tasks.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
+
+// Raw per-segment transcripts from a SEGMENTED recording (see
+// transcribeSegment/finalizeMeetingRecording in meetings/ai-actions.ts and
+// SEGMENT_TARGET_MS in meetings/recording-segments.ts) — the long-meeting
+// answer to the old "one Blob for the whole meeting, one server action at
+// the end" design, which broke down around 17 minutes (server action body
+// limit) and again around 20 minutes (Gemini's inline payload ceiling).
+// Distinct from meetingNoteSegments on purpose: this is transcription
+// bookkeeping (one row per ~5-minute audio segment, keyed by its position in
+// the recording), not display content — nothing here renders directly in
+// the note timeline. Once the meeting is stopped, finalizeMeetingRecording
+// reads every row for the meeting ordered by `index` (concatenateSegments in
+// recording-segments.ts — reports rather than silently skips a missing
+// index, e.g. a segment whose upload failed and was never retried), runs ONE
+// text-only synthesis pass over the concatenated transcript, and inserts the
+// result into meetingAiNotes/meetingNoteSegments/meetingFollowups exactly as
+// the legacy single-shot analyzeMeetingAudio always has.
+// `index` is 0-based, unique per meeting (a retried segment upserts its own
+// row rather than duplicating).
+export const meetingRecordingSegments = pgTable('meeting_recording_segments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  index: integer('index').notNull(),
+  transcript: text('transcript').notNull(),
+  model: text('model').notNull(),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [uniqueIndex('meeting_recording_segments_meeting_index_idx').on(t.meetingId, t.index)])

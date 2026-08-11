@@ -11,12 +11,13 @@ import {
   meetingAttendees,
   meetingFollowups,
   meetingNoteSegments,
+  meetingRecordingSegments,
   meetingSpeakers,
   meetingTaskSuggestions,
   meetings,
   users,
 } from '@/db/schema'
-import { DEFAULT_GEMINI_MODEL, callGemini, GeminiError } from '@/features/gemini/client'
+import { DEFAULT_GEMINI_MODEL, callGemini, callGeminiWithAudio, GeminiError } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { updateMeetingNotes } from '@/features/meetings/actions'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
@@ -39,8 +40,23 @@ import {
   type NoteSource,
   type SpeakerMapping,
 } from '@/features/meetings/notes'
+import { concatenateSegments } from '@/features/meetings/recording-segments'
 
-const MAX_AUDIO_BYTES = 15 * 1024 * 1024 // inline Gemini requests cap around 20MB
+// Legacy single-shot path (analyzeMeetingAudio, below): the whole recording
+// as one inline-base64 upload. Superseded for live recordings by the
+// segmented pipeline (transcribeSegment + finalizeMeetingRecording, further
+// down) — kept working for anything that still calls it directly. 7MB stays
+// under next.config.ts's 8MB server action body limit with headroom for
+// multipart overhead; the old 15MB figure predates that limit being lowered
+// (see next.config.ts's comment for why 8MB, not the audio size itself,
+// changed).
+const MAX_AUDIO_BYTES = 7 * 1024 * 1024
+// One recording segment (~5 minutes at 32kbps, ~1.2MB nominal — see
+// SEGMENT_TARGET_MS in recording-segments.ts) should never come close to
+// this; it exists to reject a segment that's wildly oversized (e.g. a
+// browser ignoring the requested bitrate) with a clear per-segment error
+// instead of a generic 413 from the Next.js body-size limit.
+const MAX_SEGMENT_AUDIO_BYTES = 6 * 1024 * 1024
 const MAX_LIVE_TRANSCRIPT_CHARS = 100_000
 const MAX_RESOLUTION_NOTE_CHARS = 500
 // Same ceiling for the two open-item notes (what they said / why it's not
@@ -528,7 +544,7 @@ export async function analyzeMeetingAudio(
   const audio = formData.get('audio')
   if (!(audio instanceof File) || audio.size === 0) return err('No audio received')
   if (audio.size > MAX_AUDIO_BYTES) {
-    return err('Recording is over 15MB — record shorter segments (about 20 minutes max)')
+    return err('Recording is over 7MB — use the segmented recording flow for longer meetings')
   }
 
   const liveTranscriptRaw = formData.get('liveTranscript')
@@ -596,15 +612,17 @@ distinct labels you are not confident about. actionItems are the concrete next s
 discussion (overlap with perPerson's actionItems is fine); suggestedDueDate must be a real ISO date
 or null, and confidence is your own 0–1 estimate of how sure you are about the assignee/due date.`
 
-  const base64 = Buffer.from(await audio.arrayBuffer()).toString('base64')
+  const audioBytes = Buffer.from(await audio.arrayBuffer())
   const mimeType = audio.type || 'audio/webm'
 
   let raw: string
   let modelUsed: string = DEFAULT_GEMINI_MODEL
   try {
-    ;({ text: raw, model: modelUsed } = await callGemini(
+    ;({ text: raw, model: modelUsed } = await callGeminiWithAudio(
       session.user.id,
-      [{ text: prompt }, { inlineData: { mimeType, data: base64 } }],
+      [{ text: prompt }],
+      audioBytes,
+      mimeType,
       { responseJson: true },
     ))
   } catch (error) {
@@ -618,6 +636,29 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
     return err('Gemini request failed — try again')
   }
 
+  return persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
+}
+
+/**
+ * Shared tail of both analysis paths — the legacy single-shot
+ * analyzeMeetingAudio above (whole recording, one audio call) and
+ * finalizeMeetingRecording below (segmented recording, one text-only call
+ * over the concatenated segment transcripts). Everything past "we have raw
+ * JSON text back from Gemini" is identical either way: parse it, store the
+ * structured notes, auto-insert the note-timeline segments and task
+ * suggestions, derive this meeting's own follow-ups, and check whether any
+ * carried-in follow-up was addressed here. Kept as one function so the two
+ * entry points can never drift on what "analyzed" means.
+ */
+async function persistMeetingAnalysis(
+  id: string,
+  meeting: { title: string; startsAt: Date },
+  author: { id: string; role?: string | null },
+  attendees: AttendeeRef[],
+  raw: string,
+  modelUsed: string,
+): Promise<ActionResult> {
+  const createdBy = author.id
   let parsed: Record<string, unknown>
   try {
     parsed = JSON.parse(raw.replace(/^```(?:json)?\n?|```$/g, '').trim())
@@ -648,7 +689,7 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
     terms: asArray(parsed.terms),
     questions,
     model: modelUsed,
-    createdBy: session.user.id,
+    createdBy,
     createdAt: new Date(),
   }
 
@@ -665,7 +706,7 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
   // as the carry-forward pass below — a failure here must not undo the
   // analysis that already succeeded.
   try {
-    await insertAutoNotesAndSuggestions(id, session.user.id, summary, speakerSegments, actionItems, attendees)
+    await insertAutoNotesAndSuggestions(id, createdBy, summary, speakerSegments, actionItems, attendees)
   } catch (error) {
     console.error('[meeting-notes] auto note/suggestion insert failed:', error)
   }
@@ -675,22 +716,266 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
   // addressed here, and resolve them. Best-effort — a failure here must not
   // undo the analysis that already succeeded above.
   try {
-    const isAdmin = session.user.role === 'admin'
+    const isAdmin = author.role === 'admin'
     const openBefore = await fetchCarriedFollowups(
       { id, startsAt: meeting.startsAt },
-      { id: session.user.id, isAdmin },
+      { id: createdBy, isAdmin },
     )
     const carriedIn = selectCarriedForward(
       openBefore,
       attendees.map((a) => a.id),
     )
-    await resolveAddressedFollowups(session.user.id, { id, title: meeting.title }, carriedIn, transcript, summary)
+    await resolveAddressedFollowups(createdBy, { id, title: meeting.title }, carriedIn, transcript, summary)
   } catch (error) {
     console.error('[meeting-followups] carry-forward resolution failed:', error)
   }
 
   revalidatePath('/meetings')
   return ok(undefined)
+}
+
+// --- Segmented recording: incremental per-segment transcription + one
+// text-only final synthesis pass. See recording-segments.ts (SEGMENT_TARGET_MS,
+// shouldCutSegment, concatenateSegments) and meetingRecordingSegments in
+// schema.ts for the rest of the design.
+
+const transcribeSegmentInput = z.object({
+  meetingId: z.uuid(),
+  index: z.number().int().min(0),
+})
+
+export type TranscribeSegmentResult = { index: number; transcript: string }
+
+/**
+ * Transcribes ONE ~5-minute recording segment and stores it. Called from the
+ * client in the background while a meeting is still being recorded — each
+ * call is independent (its own Gemini request, its own retry via
+ * callGemini/callGeminiWithAudio's built-in backoff, see retry.ts), so one
+ * segment failing never touches any other segment or aborts the recording.
+ * The client keeps that segment's audio in memory and re-offers this action
+ * on failure — the same "nothing recorded is lost" guarantee
+ * analyzeMeetingAudio always made, just scoped to one segment (a couple MB)
+ * instead of the whole meeting.
+ *
+ * onConflictDoUpdate makes a retry (same meetingId+index) an upsert rather
+ * than a duplicate row — safe to call again for a segment that already
+ * succeeded (e.g. the client didn't see the first response) without
+ * doubling it in the eventual concatenated transcript.
+ */
+export async function transcribeSegment(
+  meetingId: string,
+  index: number,
+  formData: FormData,
+): Promise<ActionResult<TranscribeSegmentResult>> {
+  const parsed = transcribeSegmentInput.safeParse({ meetingId, index })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const id = parsed.data.meetingId
+
+  const ctx = await canManageMeeting(id)
+  if (!ctx) return err('Only admins or the meeting creator can record analysis')
+  const { session, meeting } = ctx
+
+  const audio = formData.get('audio')
+  if (!(audio instanceof File) || audio.size === 0) {
+    return err(`No audio received for segment ${parsed.data.index + 1}`)
+  }
+  if (audio.size > MAX_SEGMENT_AUDIO_BYTES) {
+    return err(`Segment ${parsed.data.index + 1} came out unexpectedly large — try recording again`)
+  }
+
+  const hintRaw = formData.get('liveTranscriptHint')
+  const hintParsed = liveTranscriptInput.safeParse(
+    typeof hintRaw === 'string' && hintRaw.trim().length > 0 ? hintRaw : '',
+  )
+  const liveTranscriptHint = hintParsed.success ? hintParsed.data || null : null
+
+  const attendees = await fetchAttendees(id)
+  const attendeeNames = attendees.map((a) => a.name)
+
+  const prompt = `You are LogPup's meeting transcriber for a software team. This is ONE ~5-minute
+segment (segment ${parsed.data.index + 1}) of a longer recording of the meeting "${meeting.title}"
+${meeting.agenda ? `(agenda: ${meeting.agenda})` : ''} — audio for just this stretch is attached.
+Transcribe only what is actually in THIS audio; you were not given earlier or later segments, so
+never guess at content you can't hear.
+Known attendees: ${attendeeNames.length > 0 ? attendeeNames.join(', ') : 'unknown'}.
+This is a Sri Lankan team meeting. Speakers routinely CODE-SWITCH between Sinhala and English — often
+mid-sentence — and that is normal, not an error to correct. Transcribe each phrase in whichever
+language it was ACTUALLY spoken in: Sinhala words in Sinhala script (සිංහල), English words in Latin
+script, on the same line, exactly as a bilingual person would write it down. Do NOT force-translate
+into one language. Technical/product terms Sinhala speakers commonly say untranslated (e.g. "sprint",
+"deploy", "bug", "PR", "server", app or feature names) must stay in English/Latin script even inside
+an otherwise-Sinhala sentence.
+${
+  liveTranscriptHint
+    ? `\nA live, noisy speech-to-text capture made during the meeting is included below as a HINT ONLY
+— use it only to help spell attendee names, product/technical terms, and numbers correctly; the audio
+is authoritative for content and language.\n\nLive transcript hint (whole meeting so far):\n"""\n${liveTranscriptHint}\n"""\n`
+    : ''
+}
+Return STRICT JSON only, matching exactly:
+{ "transcript": "full transcript of just this segment, with speaker labels where identifiable — each
+phrase kept in the language it was actually spoken in, per the code-switching rules above" }
+Label speakers as attendee names where recognizable, else "Speaker 1"/"Speaker 2"/… consistently
+WITHIN this segment. These labels are local to this segment only — you have no way to know if
+"Speaker 1" here is the same person as "Speaker 1" in another segment, so don't worry about matching
+across segments; a later pass reconciles identity across the whole meeting.`
+
+  const audioBytes = Buffer.from(await audio.arrayBuffer())
+  const mimeType = audio.type || 'audio/webm'
+
+  let raw: string
+  let modelUsed: string = DEFAULT_GEMINI_MODEL
+  try {
+    ;({ text: raw, model: modelUsed } = await callGeminiWithAudio(
+      session.user.id,
+      [{ text: prompt }],
+      audioBytes,
+      mimeType,
+      { responseJson: true },
+    ))
+  } catch (error) {
+    if (error instanceof GeminiError) return err(error.message)
+    return err('Gemini request failed — try again')
+  }
+
+  let parsedJson: Record<string, unknown>
+  try {
+    parsedJson = JSON.parse(raw.replace(/^```(?:json)?\n?|```$/g, '').trim())
+  } catch {
+    return err('Gemini returned a malformed transcript for this segment — try again')
+  }
+  const transcript = typeof parsedJson.transcript === 'string' ? parsedJson.transcript.trim() : ''
+  if (!transcript) return err('Gemini returned an empty transcript for this segment — try again')
+
+  await db
+    .insert(meetingRecordingSegments)
+    .values({ meetingId: id, index: parsed.data.index, transcript, model: modelUsed, createdBy: session.user.id })
+    .onConflictDoUpdate({
+      target: [meetingRecordingSegments.meetingId, meetingRecordingSegments.index],
+      set: { transcript, model: modelUsed, createdBy: session.user.id },
+    })
+
+  return ok({ index: parsed.data.index, transcript })
+}
+
+const finalizeRecordingInput = z.object({ meetingId: z.uuid() })
+
+/**
+ * Runs once, when the user stops recording: a single TEXT-ONLY Gemini pass
+ * over every segment transcribed so far (concatenateSegments — ordered by
+ * index, any gap reported inline rather than silently skipped), producing
+ * the same structured minutes/per-person notes/deadlines/terms/questions/
+ * speakerSegments/actionItems shape analyzeMeetingAudio always has, then
+ * handing off to the same persistMeetingAnalysis tail. Text-only means no
+ * practical size ceiling and far cheaper than re-sending hours of audio —
+ * the whole point of segmenting in the first place.
+ *
+ * Proceeds even if some segments are missing (still uploading, or failed and
+ * not yet retried) — "never abort the meeting" — the gap is reported to the
+ * model (so it doesn't fabricate content for it) and surfaces in
+ * `missingIndices` isn't currently threaded further than a console note,
+ * matching how analyzeMeetingAudio has never blocked on partial data either.
+ * Safe to call again later (e.g. after retrying a failed segment) — it just
+ * re-reads whatever segments exist now and re-runs synthesis.
+ */
+export async function finalizeMeetingRecording(
+  meetingId: string,
+  liveTranscriptHint?: string,
+): Promise<ActionResult> {
+  const parsed = finalizeRecordingInput.safeParse({ meetingId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const id = parsed.data.meetingId
+
+  const ctx = await canManageMeeting(id)
+  if (!ctx) return err('Only admins or the meeting creator can record analysis')
+  const { session, meeting } = ctx
+
+  const segmentRows = await db
+    .select({ index: meetingRecordingSegments.index, transcript: meetingRecordingSegments.transcript })
+    .from(meetingRecordingSegments)
+    .where(eq(meetingRecordingSegments.meetingId, id))
+
+  if (segmentRows.length === 0) return err('No transcribed audio yet — record something first')
+
+  const { text: combinedTranscript, missingIndices } = concatenateSegments(segmentRows)
+  if (missingIndices.length > 0) {
+    console.warn(
+      `[meeting-recording] finalize for meeting ${id} is missing segment(s) ${missingIndices.join(', ')} — proceeding with the gap reported to the model`,
+    )
+  }
+
+  const hintParsed = liveTranscriptInput.safeParse(
+    typeof liveTranscriptHint === 'string' && liveTranscriptHint.trim().length > 0 ? liveTranscriptHint : '',
+  )
+  const hint = hintParsed.success ? hintParsed.data || null : null
+
+  const attendees = await fetchAttendees(id)
+  const attendeeNames = attendees.map((a) => a.name)
+
+  const prompt = `You are LogPup's meeting analyst for a software team. Below is the FULL transcript of
+the meeting "${meeting.title}"${meeting.agenda ? ` (agenda: ${meeting.agenda})` : ''}, assembled from
+several ~5-minute segments that were each transcribed independently (audio was never sent to you
+directly here — only this assembled text). Segment boundaries are marked "--- segment N ---"; a
+boundary marked "(missing — not transcribed, audio lost)" means that stretch of the meeting genuinely
+has no transcript — treat it as a real gap in the record, never invent what might have been said
+during it. IMPORTANT: speaker labels like "Speaker 1" were assigned independently per segment and do
+NOT necessarily refer to the same person across a segment boundary — use content, names actually
+mentioned, and context to attribute speech consistently in YOUR OWN speakerSegments output below,
+rather than trusting the per-segment labels to already match up.
+Known attendees: ${attendeeNames.length > 0 ? attendeeNames.join(', ') : 'unknown'}.
+This is a Sri Lankan team that routinely code-switches between Sinhala and English mid-sentence — the
+transcript already reflects that (Sinhala in සිංහල script, English in Latin script, technical terms
+like "sprint"/"deploy"/"PR" left in English) — keep it that way in your own output, never
+force-translate or paraphrase into a single language.
+${
+  hint
+    ? `\nA live, noisy speech-to-text capture made during the meeting is included below as a HINT ONLY —
+use it only to help spell attendee names, product/technical terms, and numbers correctly; the
+transcript above is authoritative for content and language.\n\nLive transcript hint:\n"""\n${hint}\n"""\n`
+    : ''
+}
+Transcript:
+"""
+${combinedTranscript.slice(0, 200_000)}
+"""
+
+Return STRICT JSON only, matching exactly:
+{
+  "language": "en" | "si" | "bilingual",
+  "transcript": "the full transcript above, lightly cleaned up (you may smooth segment-boundary
+    artifacts) but never re-translated or condensed — this is the record of what was said",
+  "summary": "professional meeting minutes in English (if mainly Sinhala, append a Sinhala section) with three clear parts: Decisions made, Discussion highlights, and Next steps — written for someone who was not in the room, not a raw dump of everything said",
+  "perPerson": [{ "name": "...", "points": ["key things this person said or decided"], "actionItems": ["..."] }],
+  "deadlines": [{ "item": "...", "owner": "...", "due": "date or phrase as spoken" }],
+  "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
+  "questions": [{ "person": "...", "questions": ["question this person should answer at the next meeting"] }],
+  "speakerSegments": [{ "speaker": "attendee name if identifiable, else \"Speaker 1\"/\"Speaker 2\"/… used CONSISTENTLY for the same voice across the WHOLE meeting, or null", "text": "what this speaker said in this turn, verbatim in whichever language(s) they actually used" }],
+  "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0 }]
+}
+Use "bilingual" for "language" whenever the meeting code-switches between Sinhala and English — the
+common case for this team — and "en"/"si" only when it is genuinely all one language throughout.
+Map speakers to attendee names where possible; unknown voices become "Speaker 1", "Speaker 2", … —
+assigned by YOU, consistently, across the whole meeting (not copied from the per-segment labels in
+the transcript above). Deadlines and action items must be concrete. Give each person 1–3 follow-up
+questions about their commitments, blockers, and deadlines from THIS meeting.
+speakerSegments must cover the whole meeting, in chronological order, one entry per speaker turn. If
+you genuinely cannot tell speakers apart, return exactly ONE entry with "speaker": null and "text" set
+to the full transcript — never invent distinct labels you are not confident about. actionItems are the
+concrete next steps raised in the discussion (overlap with perPerson's actionItems is fine);
+suggestedDueDate must be a real ISO date or null.`
+
+  let raw: string
+  let modelUsed: string = DEFAULT_GEMINI_MODEL
+  try {
+    ;({ text: raw, model: modelUsed } = await callGemini(session.user.id, [{ text: prompt }], {
+      responseJson: true,
+    }))
+  } catch (error) {
+    if (error instanceof GeminiError) return err(error.message)
+    return err('Gemini request failed — try again')
+  }
+
+  return persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
 }
 
 export async function getMeetingIntel(meetingId: string): Promise<ActionResult<MeetingIntel>> {

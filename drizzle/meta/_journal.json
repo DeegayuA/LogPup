@@ -113,6 +113,13 @@
       "when": 1786460764175,
       "tag": "0016_assignment_history_one_open",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786461260474,
+      "tag": "0017_meeting_recording_segments",
+      "breakpoints": true
     }
   ]
 }

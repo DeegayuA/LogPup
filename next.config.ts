@@ -1,10 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Meeting audio uploads go through a server action; the default 1MB
-  // body limit rejects anything beyond ~2 minutes of opus. 16mb leaves
-  // multipart headroom over the 15MB client/server cap.
-  experimental: { serverActions: { bodySizeLimit: '16mb' } },
+  // Meeting audio uploads go through a server action; the default 1MB body
+  // limit rejects anything beyond ~2 minutes of opus. Recording is now
+  // SEGMENTED (~5 minutes per upload, ~1.2MB at the 32kbps mono Opus the
+  // recorder uses — see SEGMENT_TARGET_MS in
+  // src/features/meetings/recording-segments.ts) instead of one blob for
+  // the whole meeting, so 8mb is comfortably above a single segment
+  // (~6.5x headroom for multipart overhead and bitrate variance) — do NOT
+  // "optimize" this back toward the old whole-recording size; a multi-hour
+  // meeting now never needs more than one segment's worth of body size at a
+  // time, no matter how long the meeting runs.
+  experimental: { serverActions: { bodySizeLimit: '8mb' } },
   // playwright.config.ts runs its own `next dev` (E2E_TEST_MODE=1) alongside
   // whatever dev server a human already has open on :3000. Next 16 dev
   // servers hold a per-distDir lock for the life of the process, so reusing

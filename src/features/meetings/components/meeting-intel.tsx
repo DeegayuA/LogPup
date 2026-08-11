@@ -33,13 +33,14 @@ import type { MentionUser } from '@/components/mention-textarea'
 import { NoteTimeline } from '@/features/meetings/components/note-timeline'
 import {
   addFollowup,
-  analyzeMeetingAudio,
   copyFollowupResponseToNotes,
   deferFollowupReason,
+  finalizeMeetingRecording,
   getMeetingIntel,
   noteFollowup,
   reopenFollowup,
   resolveFollowup,
+  transcribeSegment,
   type CarriedForwardItem,
   type FollowupPersonOption,
   type FollowupTargetOption,
@@ -52,6 +53,7 @@ import {
   type ActiveLanguage,
   type UtteranceCandidate,
 } from '@/features/meetings/language-switch'
+import { shouldCutSegment } from '@/features/meetings/recording-segments'
 
 // --- Minimal Web Speech API typings ------------------------------------
 // Not part of TypeScript's DOM lib (non-standard, webkit-prefixed). Declared
@@ -152,12 +154,16 @@ function formatBytes(bytes: number): string {
   return `${(kb / 1024).toFixed(1)} MB`
 }
 
-// A recording that finished but hasn't been successfully analyzed yet —
-// kept in memory (not just a closure inside the onstop handler) so a
-// transient Gemini failure never loses the recording: the Analyze action
-// stays available to retry the exact same audio/transcript, no re-recording
-// needed. Cleared only on a successful analysis or an explicit discard.
-type PendingAudio = { blob: Blob; liveTranscript: string }
+// One ~5-minute slice of the recording (see SEGMENT_TARGET_MS in
+// recording-segments.ts), tracked from the moment it's cut until it's
+// successfully transcribed. `blob` is what makes this the safety net a
+// single PendingAudio blob used to be for the WHOLE meeting: if a segment's
+// upload/transcription fails, its (couple-MB) audio stays right here with a
+// retry affordance — "nothing recorded is lost" now applies per segment
+// instead of to a two-hour blob that would otherwise vanish the instant a
+// transient Gemini failure happened at minute 119.
+type SegmentStatus = 'uploading' | 'done' | 'failed'
+type RecordingSegment = { index: number; status: SegmentStatus; blob: Blob; error?: string }
 
 // The three separate things that can be written about one follow-up. They
 // are never the same sentence: 'outcome' is what came of it (resolved
@@ -229,7 +235,13 @@ export function MeetingIntelPanel({
   const [open, setOpen] = useState(true)
   const [intel, setIntel] = useState<MeetingIntel | null>(null)
   const [loading, setLoading] = useState(false)
-  const [analyzing, startAnalyzing] = useTransition()
+  // The final, text-only synthesis pass over every transcribed segment — see
+  // finalizeMeetingRecording. Runs automatically once recording stops (once
+  // every in-flight segment upload has settled), and stays available to
+  // re-run by hand (e.g. after retrying a segment that failed the first
+  // time) without touching the recorder again.
+  const [finalizing, startFinalizing] = useTransition()
+  const [finalizeError, setFinalizeError] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [language, setLanguageState] = useState<LanguagePreference>('bilingual')
@@ -249,9 +261,10 @@ export function MeetingIntelPanel({
   const [liveUnavailable, setLiveUnavailable] = useState(false)
   const [finalText, setFinalText] = useState('')
   const [interimText, setInterimText] = useState('')
-  // See PendingAudio above — set the moment a recording finishes, cleared
-  // only once analysis actually succeeds (or the user discards it).
-  const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null)
+  // See RecordingSegment above. One entry per cut segment, from the moment
+  // it's cut until finalize has consumed it; mirrors segmentsRef so a retry
+  // (which needs the actual Blob back) never reads stale render state.
+  const [segments, setSegments] = useState<RecordingSegment[]>([])
   // Follow-up state. Every action (resolve, not yet, reopen) is one click and
   // writes immediately; `composer` is the single open text field, since the
   // writing is always optional enrichment layered on afterwards. `drafts` is
@@ -274,7 +287,44 @@ export function MeetingIntelPanel({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamsRef = useRef<MediaStream[]>([])
   const audioCtxRef = useRef<AudioContext | null>(null)
+  // Chunks for the CURRENT segment only — not the whole meeting. Cutting a
+  // segment (see cutSegment) hands these off to an upload and resets this to
+  // [], which is what releases a finished segment's memory instead of
+  // accumulating ~115MB in here across a 2-hour meeting the way a single
+  // whole-meeting Blob used to.
   const chunksRef = useRef<Blob[]>([])
+  // The very first ondataavailable Blob of the whole recording — contains
+  // the WebM/Opus container header (EBML + Segment + Tracks). MediaRecorder
+  // is never stopped/restarted mid-recording (that would cost a real audio
+  // gap at every cut), so every chunk after the first is a bare
+  // Cluster/SimpleBlock with no header of its own. Segment 0's Blob already
+  // starts with this chunk; every later segment is built as [header,
+  // ...thatSegment'sChunks] so it's still an independently decodable WebM
+  // file on its own — the same header-reuse trick ffmpeg and most WebM
+  // muxers rely on for chunked/fragmented output. The very first ~few ms of
+  // audio in segments after the first can have a small Opus lookahead
+  // transient at the join (Opus is a lapped/overlap codec) — inaudible for
+  // speech transcription purposes, and the only cost paid for a zero-gap,
+  // zero-stop/restart segmentation scheme.
+  const headerChunkRef = useRef<Blob | null>(null)
+  // Byte total and start time of the segment currently accumulating in
+  // chunksRef — shouldCutSegment (recording-segments.ts) is checked against
+  // both on every ondataavailable event.
+  const segmentBytesRef = useRef(0)
+  const segmentStartRef = useRef(0)
+  // Next segment index to assign — 0-based, matches meetingRecordingSegments.index.
+  const segmentIndexRef = useRef(0)
+  // Base mimeType (codec suffix stripped, e.g. "audio/webm") used to build
+  // every segment's Blob — captured once at recording start.
+  const mimeBaseRef = useRef('')
+  // Every in-flight segment upload's promise, so Stop can wait for all of
+  // them to settle (success or failure) before running the final synthesis
+  // pass — see runFinalize.
+  const segmentUploadPromisesRef = useRef<Promise<void>[]>([])
+  // Mirrors `segments` state; see that state's comment for why a ref is the
+  // source of truth here (retrySegment needs the live Blob, not whatever the
+  // render closure captured).
+  const segmentsRef = useRef<RecordingSegment[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // One recognizer per language, keyed by ActiveLanguage. Dual (bilingual)
   // mode populates both keys; manual mode populates exactly one. A missing
@@ -698,30 +748,108 @@ export function MeetingIntelPanel({
     }
   }
 
-  // Runs (or re-runs) analysis on already-captured audio. `pendingAudio`
-  // is set by the caller *before* this fires and is only cleared on
-  // success — so a 503/network failure, or any other error, leaves the
-  // recording sitting there with the Analyze action still available
-  // instead of vanishing. See PendingAudio's comment for why this exists.
-  function runAnalysis(blob: Blob, liveTranscript: string) {
-    startAnalyzing(async () => {
+  // Publishes segmentsRef (the source of truth) to render state. Every
+  // mutation below goes through upsertSegment so a retry can always read the
+  // live Blob back out of segmentsRef instead of a stale render closure.
+  function publishSegments() {
+    setSegments([...segmentsRef.current])
+  }
+  function upsertSegment(patch: RecordingSegment) {
+    const index = segmentsRef.current.findIndex((s) => s.index === patch.index)
+    segmentsRef.current =
+      index === -1
+        ? [...segmentsRef.current, patch].sort((a, b) => a.index - b.index)
+        : segmentsRef.current.map((s, i) => (i === index ? patch : s))
+    publishSegments()
+  }
+
+  // Uploads and transcribes ONE segment in the background — never awaited by
+  // the recorder itself, so recording keeps running while this happens (see
+  // cutSegment). Tracked in segmentUploadPromisesRef so Stop can wait for
+  // every in-flight upload to settle before running the final synthesis
+  // pass. A failure here leaves the segment's Blob sitting in `segments`
+  // with a retry affordance (the failed-segments list further down in the
+  // render) — the whole meeting is never aborted over one bad segment.
+  async function uploadSegment(index: number, blob: Blob) {
+    upsertSegment({ index, status: 'uploading', blob })
+    try {
+      const formData = new FormData()
+      formData.append('audio', new File([blob], `segment-${index}`, { type: blob.type }))
+      const hint = finalTranscriptRef.current
+      if (hint.trim()) formData.append('liveTranscriptHint', hint)
+      const res = await transcribeSegment(meetingId, index, formData)
+      upsertSegment(
+        res.ok
+          ? { index, status: 'done', blob }
+          : { index, status: 'failed', blob, error: res.error },
+      )
+    } catch {
+      upsertSegment({ index, status: 'failed', blob, error: 'Upload failed — try again' })
+    }
+  }
+
+  // Cuts whatever's accumulated in chunksRef into its own segment: builds an
+  // independently-decodable Blob (header-prepended for every segment after
+  // the first — see headerChunkRef's comment), releases the chunk array for
+  // GC, and kicks off that segment's upload/transcription in the
+  // background. Called both mid-recording (from ondataavailable, once
+  // shouldCutSegment says so) and once more at Stop to flush the tail — a
+  // no-op if nothing has accumulated since the last cut.
+  function cutSegment() {
+    if (chunksRef.current.length === 0) return
+    const index = segmentIndexRef.current
+    segmentIndexRef.current += 1
+    const parts = index === 0 || !headerChunkRef.current
+      ? chunksRef.current
+      : [headerChunkRef.current, ...chunksRef.current]
+    const blob = new Blob(parts, { type: mimeBaseRef.current })
+    chunksRef.current = []
+    segmentBytesRef.current = 0
+    segmentStartRef.current = Date.now()
+    segmentUploadPromisesRef.current.push(uploadSegment(index, blob))
+  }
+
+  function retrySegment(index: number) {
+    const segment = segmentsRef.current.find((s) => s.index === index)
+    if (!segment || segment.status === 'uploading') return
+    segmentUploadPromisesRef.current.push(uploadSegment(index, segment.blob))
+  }
+
+  // Runs once recording stops (and again if the user retries): waits for
+  // every segment upload/transcription currently in flight to settle, then
+  // runs the one text-only final synthesis pass over whatever's been
+  // transcribed so far. Proceeds even if a segment is still 'failed' —
+  // finalizeMeetingRecording reports the gap rather than blocking on it
+  // (concatenateSegments) — so a person can see minutes with a noted gap
+  // instead of nothing at all, retry the failed segment, and run this again
+  // to fill it in.
+  function runFinalize() {
+    setFinalizeError(null)
+    startFinalizing(async () => {
       try {
-        const formData = new FormData()
-        formData.append('audio', new File([blob], 'meeting-audio', { type: blob.type }))
-        if (liveTranscript.trim()) formData.append('liveTranscript', liveTranscript)
-        const res = await analyzeMeetingAudio(meetingId, formData)
+        await Promise.allSettled(segmentUploadPromisesRef.current)
+        const res = await finalizeMeetingRecording(meetingId, finalTranscriptRef.current)
         if (!res.ok) {
-          // Server-side message is already specific and actionable (busy /
-          // key rejected / generic — see GeminiError in client.ts) and
-          // never includes the key itself.
+          setFinalizeError(res.error)
           toast.error(res.error)
           return
         }
-        setPendingAudio(null)
-        toast.success('Meeting analyzed — notes are ready')
+        // Drop only the segments finalize actually consumed. A 'failed'
+        // segment survives this — finalize proceeds even with a gap
+        // (concatenateSegments reports it rather than blocking), so its
+        // audio has to stay retryable, or that stretch of the meeting is
+        // gone for good the moment this succeeds.
+        segmentsRef.current = segmentsRef.current.filter((s) => s.status !== 'done')
+        publishSegments()
+        toast.success(
+          segmentsRef.current.length > 0
+            ? 'Meeting analyzed — one or more segments still need a retry (see below)'
+            : 'Meeting analyzed — notes are ready',
+        )
         await loadIntel()
       } catch {
-        toast.error('Something went wrong — your recording is saved, try Analyze again')
+        setFinalizeError('Something went wrong — try again')
+        toast.error('Something went wrong — your segments are saved, try again')
       }
     })
   }
@@ -733,7 +861,10 @@ export function MeetingIntelPanel({
       return
     }
     try {
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Mono (channelCount: 1) — speech transcription gets nothing from a
+      // second channel, and halves what the encoder has to push through
+      // before audioBitsPerSecond even applies below.
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
       streamsRef.current.push(mic)
       let captureStream = mic
 
@@ -762,33 +893,53 @@ export function MeetingIntelPanel({
       }
 
       chunksRef.current = []
-      const recorder = new MediaRecorder(captureStream, { mimeType })
+      headerChunkRef.current = null
+      segmentBytesRef.current = 0
+      segmentStartRef.current = Date.now()
+      segmentIndexRef.current = 0
+      segmentUploadPromisesRef.current = []
+      mimeBaseRef.current = mimeType.split(';')[0]
+      // A fresh recording starting is the one deliberate point where it's
+      // safe to drop whatever unfinalized segments came before — the user
+      // is choosing to record again rather than retry the old ones.
+      segmentsRef.current = []
+      setSegments([])
+      setFinalizeError(null)
+
+      // 32 kbps mono Opus: ~4 KB/s -> ~14.4 MB/hour, vs Chrome's ~128 kbps
+      // default (~58 MB/hour). Opus at 32 kbps is well within its
+      // "comfortably intelligible speech" range (its voice-optimized mode
+      // stays usable down to ~6-16 kbps) — this is a file-size choice, not a
+      // quality tradeoff for a meeting recording. Combined with mono capture
+      // above and 5-minute segmenting below (recording-segments.ts), this is
+      // what makes an hours-long meeting a series of ~1.2MB uploads instead
+      // of one ever-growing in-memory Blob.
+      const recorder = new MediaRecorder(captureStream, { mimeType, audioBitsPerSecond: 32_000 })
       recorderRef.current = recorder
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data)
+        if (event.data.size === 0) return
+        if (!headerChunkRef.current) headerChunkRef.current = event.data
+        chunksRef.current.push(event.data)
+        segmentBytesRef.current += event.data.size
+        if (shouldCutSegment(Date.now() - segmentStartRef.current, segmentBytesRef.current)) {
+          cutSegment()
+        }
       }
       recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mimeType.split(';')[0] })
-        const liveTranscript = finalTranscriptRef.current
+        // Flush whatever's accumulated since the last cut as its own
+        // (possibly short) final segment — the recorder is never
+        // stopped/restarted mid-meeting, only here at the very end, so this
+        // is the one and only place a segment can be shorter than the
+        // ~5-minute target.
+        cutSegment()
+        const capturedSegments = segmentIndexRef.current
         cleanupCapture()
-        if (blob.size === 0) {
+        if (capturedSegments === 0) {
           toast.error('Nothing was recorded')
           return
         }
-        if (blob.size > 15 * 1024 * 1024) {
-          toast.error('Recording is over 15MB — keep segments under ~20 minutes')
-          return
-        }
-        // Stash the recording BEFORE attempting analysis — if the request
-        // fails (or throws) it stays here for the retry affordance below,
-        // instead of only living in this closure and disappearing.
-        setPendingAudio({ blob, liveTranscript })
-        runAnalysis(blob, liveTranscript)
+        runFinalize()
       }
-      // A fresh recording starting is the one deliberate point where it's
-      // safe to drop whatever unanalyzed recording came before — the user
-      // is choosing to record again rather than retry the old one.
-      setPendingAudio(null)
       recorder.start(1000)
       setRecording(true)
       recordingRef.current = true
@@ -983,6 +1134,10 @@ export function MeetingIntelPanel({
     })
   }
 
+  const doneSegmentCount = segments.filter((s) => s.status === 'done').length
+  const failedSegments = segments.filter((s) => s.status === 'failed')
+  const uploadingSegmentCount = segments.filter((s) => s.status === 'uploading').length
+
   const notes = intel?.notes ?? null
   const prep = intel?.prep ?? []
   const people = intel?.people ?? []
@@ -1011,7 +1166,7 @@ export function MeetingIntelPanel({
             aria-hidden
           />
         </Button>
-        {open && canRecord && !recording && !analyzing ? (
+        {open && canRecord && !recording && !finalizing ? (
           <>
             <Button variant="outline" size="sm" type="button" onClick={() => startRecording(false)}>
               <Mic /> Record mic
@@ -1060,6 +1215,31 @@ export function MeetingIntelPanel({
               />
               Recording — audio is sent to Google Gemini for analysis
             </span>
+            {/* Segment progress — "12 min captured · 2 segments transcribed".
+                Mono/tabular-nums on the numbers since they update every
+                second and shouldn't visually jitter as digits change. */}
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="font-mono tabular-nums">{Math.floor(seconds / 60)}</span> min captured
+              {segments.length > 0 ? (
+                <>
+                  {' · '}
+                  <span className="font-mono tabular-nums">{doneSegmentCount}</span> segment
+                  {doneSegmentCount === 1 ? '' : 's'} transcribed
+                  {uploadingSegmentCount > 0 ? (
+                    <>
+                      {' · '}
+                      <span className="font-mono tabular-nums">{uploadingSegmentCount}</span> in progress
+                    </>
+                  ) : null}
+                  {failedSegments.length > 0 ? (
+                    <span className="text-destructive">
+                      {' · '}
+                      <span className="font-mono tabular-nums">{failedSegments.length}</span> failed
+                    </span>
+                  ) : null}
+                </>
+              ) : null}
+            </span>
             {showLiveText ? (
               // Subtle, not a status announcement — which engine is currently
               // winning is a nicety to confirm bilingual mode is doing
@@ -1073,15 +1253,15 @@ export function MeetingIntelPanel({
             ) : null}
           </>
         ) : null}
-        {analyzing ? (
+        {finalizing ? (
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="size-3 animate-spin" aria-hidden />
-            Transcribing and taking notes…
+            Writing up the minutes…
           </span>
         ) : null}
       </div>
 
-      {open && canRecord && !recording && !analyzing ? (
+      {open && canRecord && !recording && !finalizing ? (
         <p className="text-xs text-muted-foreground">
           Audio is processed by Google Gemini using your API key. Make sure attendees consent to
           recording.
@@ -1118,35 +1298,71 @@ export function MeetingIntelPanel({
         </div>
       ) : null}
 
-      {/* Analysis failed (or hasn't been retried yet) — the recording itself
-          was never discarded, so offer to try again on the exact same
-          audio/transcript instead of forcing a re-record. Shown regardless
-          of the panel's open/closed state so it's never silently missed. */}
-      {pendingAudio && !recording && !analyzing ? (
+      {/* Post-recording safety net, adapted for segments: what has to
+          survive a failure is no longer a whole recording (one Blob for a
+          2-hour meeting) but just the not-yet-transcribed TAIL — each
+          failed segment's couple-MB Blob, kept right here with its own
+          retry. Shown regardless of the panel's open/closed state so it's
+          never silently missed. Empties out once finalize has consumed
+          every successfully-transcribed segment (see runFinalize). */}
+      {!recording && (segments.length > 0 || finalizeError) ? (
         <div
-          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/10 p-3"
+          className="flex flex-col gap-2 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/10 p-3"
           role="status"
         >
-          <p className="flex items-start gap-1.5 text-sm">
-            <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
-            <span>
-              Analysis didn&rsquo;t finish, but your recording ({formatBytes(pendingAudio.blob.size)}) is
-              still here — nothing was lost. Try again when you&rsquo;re ready.
+          {finalizeError ? (
+            <p className="flex items-start gap-1.5 text-sm">
+              <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+              <span>
+                {finalizeError} Your transcribed segments are saved — nothing was lost. Try again when
+                you&rsquo;re ready.
+              </span>
+            </p>
+          ) : null}
+
+          {failedSegments.length > 0 ? (
+            <ul className="flex flex-col gap-1.5">
+              {failedSegments.map((segment) => (
+                <li
+                  key={segment.index}
+                  className="flex flex-wrap items-center justify-between gap-2 text-sm"
+                >
+                  <span className="flex min-w-0 items-start gap-1.5">
+                    <AlertCircle
+                      className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+                      aria-hidden
+                    />
+                    <span>
+                      Segment {segment.index + 1} didn&rsquo;t transcribe
+                      {segment.error ? ` — ${segment.error}` : ''}. Its audio (
+                      {formatBytes(segment.blob.size)}) is still here.
+                    </span>
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={finalizing}
+                    onClick={() => retrySegment(segment.index)}
+                  >
+                    <RotateCcw aria-hidden /> Retry segment
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {!finalizing ? (
+            <span className="flex shrink-0 items-center gap-1.5">
+              <Button variant="outline" size="sm" type="button" onClick={runFinalize}>
+                <Sparkles aria-hidden /> {finalizeError ? 'Retry analysis' : 'Analyze again'}
+              </Button>
             </span>
-          </p>
-          <span className="flex shrink-0 items-center gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              type="button"
-              onClick={() => runAnalysis(pendingAudio.blob, pendingAudio.liveTranscript)}
-            >
-              <Sparkles /> Retry analysis
-            </Button>
-            <Button variant="ghost" size="sm" type="button" onClick={() => setPendingAudio(null)}>
-              Discard
-            </Button>
-          </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" aria-hidden /> Writing up the minutes…
+            </span>
+          )}
         </div>
       ) : null}
 
