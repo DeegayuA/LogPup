@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { format, isSameDay } from 'date-fns'
+import { isSameDay } from 'date-fns'
 import { X } from 'lucide-react'
 import {
   MiniCalendar,
@@ -38,19 +38,19 @@ export function UpcomingMeetingsFiltered({
           value={selected}
           onValueChange={setSelected}
           days={30}
-          className="w-full min-w-0 max-w-2xl bg-card"
+          className="bg-card"
         >
           <MiniCalendarNavigation direction="prev" aria-label="Show earlier days" />
-          {/* All 30 days render at once; the strip scrolls horizontally in its
-              own container (min-w-0 lets the flex child shrink instead of
-              widening the page), arrows still page for keyboard users. */}
-          <MiniCalendarDays className="min-w-0 flex-1 snap-x scroll-px-2 overflow-x-auto">
+          {/* All 30 days render at once; the strip fills the full width of its
+              container edge-to-edge and scrolls horizontally in its own
+              overflow-x container (never the page body), arrows still page
+              for keyboard users. */}
+          <MiniCalendarDays>
             {(date) => (
               <MiniCalendarDay
                 date={date}
                 key={date.toISOString()}
                 className="snap-start"
-                aria-label={format(date, 'EEEE, MMMM d')}
                 aria-pressed={selected ? isSameDay(date, selected) : false}
               />
             )}

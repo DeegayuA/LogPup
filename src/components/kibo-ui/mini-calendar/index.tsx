@@ -1,7 +1,7 @@
 "use client";
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state";
-import { addDays, format, isSameDay, isToday } from "date-fns";
+import { addDays, format, isSameDay } from "date-fns";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Slot } from "radix-ui";
 import {
@@ -14,6 +14,7 @@ import {
   useContext,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { isLkHoliday, isLkSunday, toIsoDateInTimeZone } from "@/lib/lk-holidays";
 import { cn } from "@/lib/utils";
 
 // Context for sharing state between components
@@ -114,7 +115,7 @@ export const MiniCalendar = ({
     <MiniCalendarContext.Provider value={contextValue}>
       <div
         className={cn(
-          "flex items-center gap-2 rounded-lg border bg-background p-2",
+          "flex w-full min-w-0 items-center gap-2 rounded-lg border bg-background p-2",
           className
         )}
         {...props}
@@ -136,6 +137,7 @@ export const MiniCalendarNavigation = ({
   asChild = false,
   children,
   onClick,
+  className,
   ...props
 }: MiniCalendarNavigationProps) => {
   const { onNavigate } = useMiniCalendar();
@@ -148,7 +150,7 @@ export const MiniCalendarNavigation = ({
 
   if (asChild) {
     return (
-      <Slot.Root onClick={handleClick} {...props}>
+      <Slot.Root onClick={handleClick} className={className} {...props}>
         {children}
       </Slot.Root>
     );
@@ -156,10 +158,14 @@ export const MiniCalendarNavigation = ({
 
   return (
     <Button
+      // 44px square — WCAG 2.5.8 minimum touch target, so paging stays
+      // reachable at mobile widths without shrinking below the icon's
+      // default 32px "icon" size.
+      className={cn("size-11 shrink-0", className)}
       onClick={handleClick}
-      size={asChild ? undefined : "icon"}
+      size="icon"
       type="button"
-      variant={asChild ? undefined : "ghost"}
+      variant="ghost"
       {...props}
     >
       {children ?? <Icon className="size-4" />}
@@ -183,7 +189,18 @@ export const MiniCalendarDays = ({
   const days = getDays(startDate, dayCount);
 
   return (
-    <div className={cn("flex items-center gap-1", className)} {...props}>
+    <div
+      className={cn(
+        // `min-w-0` lets this flex child shrink below its content's
+        // intrinsic width instead of stretching the page — the row scrolls
+        // in its own container edge-to-edge, the page body never does.
+        // `motion-safe:` keeps the snap scroll instant for
+        // prefers-reduced-motion instead of unconditionally animating it.
+        "flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scroll-px-2 snap-x snap-mandatory motion-safe:scroll-smooth",
+        className
+      )}
+      {...props}
+    >
       {days.map((date) => children(date))}
     </div>
   );
@@ -201,22 +218,42 @@ export const MiniCalendarDay = ({
   const { selectedDate, onDateSelect } = useMiniCalendar();
   const { month, day } = formatDate(date);
   const isSelected = selectedDate && isSameDay(date, selectedDate);
-  const isTodayDate = isToday(date);
+
+  // "Today" and weekend/holiday status are computed against the Sri Lanka
+  // wall clock (Asia/Colombo), never the server or browser's local
+  // time/UTC — otherwise the marker can land on the wrong cell right around
+  // midnight in either timezone.
+  const isTodayDate = toIsoDateInTimeZone(date) === toIsoDateInTimeZone(new Date());
+  const holidayName = isLkHoliday(date);
+  // A Sunday that is also a public holiday is still marked orange (holiday
+  // wins) — the dot marker below is what keeps that distinguishable from a
+  // plain Sunday for anyone who can't rely on the red/orange hue alone.
+  const isWeekend = isLkSunday(date) && !holidayName;
+
+  // The visible "Feb" / "4" fragments are marked aria-hidden and a single
+  // sr-only span carries the full accessible name instead, so today/holiday
+  // context is always announced regardless of what aria-label (if any) a
+  // caller passes through `props`.
+  const accessibleLabel = [format(date, "EEEE, MMMM d"), isTodayDate && "Today", holidayName]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <Button
       className={cn(
-        "h-auto min-w-[3rem] flex-col gap-0 p-2 text-xs",
-        isTodayDate && !isSelected && "bg-accent",
+        "relative h-auto min-h-11 min-w-11 flex-col gap-0.5 p-2 text-xs",
+        isTodayDate && !isSelected && "bg-accent ring-2 ring-inset ring-primary",
         className
       )}
       onClick={() => onDateSelect(date)}
       size="sm"
+      title={holidayName}
       type="button"
       variant={isSelected ? "default" : "ghost"}
       {...props}
     >
       <span
+        aria-hidden
         className={cn(
           "font-medium text-[10px] text-muted-foreground",
           isSelected && "text-primary-foreground/70"
@@ -224,7 +261,20 @@ export const MiniCalendarDay = ({
       >
         {month}
       </span>
-      <span className="font-semibold text-sm">{day}</span>
+      <span
+        aria-hidden
+        className={cn(
+          "font-semibold text-sm",
+          !isSelected && holidayName && "text-holiday",
+          !isSelected && isWeekend && "text-weekend"
+        )}
+      >
+        {day}
+      </span>
+      {holidayName ? (
+        <span aria-hidden className="absolute bottom-1 size-1 rounded-full bg-holiday" />
+      ) : null}
+      <span className="sr-only">{accessibleLabel}</span>
     </Button>
   );
 };

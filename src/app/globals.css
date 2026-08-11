@@ -39,6 +39,8 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-weekend: var(--weekend);
+  --color-holiday: var(--holiday);
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
   --radius-sm: calc(var(--radius) * 0.6);
@@ -69,6 +71,8 @@
   --accent: oklch(0.94 0.015 155);
   --accent-foreground: oklch(0.3 0.05 162);
   --destructive: oklch(0.55 0.21 27);
+  --weekend: oklch(0.5 0.19 25);
+  --holiday: oklch(0.55 0.15 55);
   --border: oklch(0.905 0.008 100);
   --input: oklch(0.905 0.008 100);
   --ring: oklch(0.56 0.08 165);
@@ -104,6 +108,8 @@
   --accent: oklch(0.28 0.02 163);
   --accent-foreground: oklch(0.93 0.01 140);
   --destructive: oklch(0.66 0.19 25);
+  --weekend: oklch(0.72 0.18 25);
+  --holiday: oklch(0.78 0.15 60);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.68 0.08 165);
