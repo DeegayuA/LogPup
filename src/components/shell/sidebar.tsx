@@ -3,26 +3,16 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  LayoutDashboard,
-  Users,
-  AppWindow,
-  CalendarDays,
-  ShieldCheck,
-  PawPrint,
-} from 'lucide-react'
+import { PawPrint } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VersionBadge } from '@/components/shell/version-badge'
 import { InstallButton } from '@/features/pwa/pwa'
+import { adminNavItems, navItems } from '@/components/shell/nav-items'
 
-const navItems = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard, key: 'D' },
-  { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
-  { href: '/people', label: 'People', icon: Users, key: 'P' },
-  { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },
-] as const
-
-function NavLink({
+// Exported so MobileNav (the mobile nav sheet) can render the exact same
+// link markup for the exact same nav-items.ts data — one implementation of
+// "what a nav row looks like," not a copy that can drift.
+export function NavLink({
   href,
   label,
   icon: Icon,
@@ -122,12 +112,9 @@ export function Sidebar({
           <div className="px-2.5 pb-1 text-2xs font-medium uppercase tracking-wider text-sidebar-foreground/70">
             Manage
           </div>
-          <NavLink
-            href="/admin"
-            label="Admin"
-            icon={ShieldCheck}
-            active={pathname.startsWith('/admin')}
-          />
+          {adminNavItems.map(({ href, label, icon }) => (
+            <NavLink key={href} href={href} label={label} icon={icon} active={pathname.startsWith(href)} />
+          ))}
         </div>
       ) : null}
 
@@ -137,7 +124,7 @@ export function Sidebar({
       <div className="mt-auto flex flex-col gap-1 border-t border-sidebar-border px-2 pt-2 pb-2.5">
         <div className="flex items-center gap-1">
           {account}
-          <InstallButton variant="icon" />
+          <InstallButton surface="sidebar" />
         </div>
         <div className="flex items-center justify-between gap-2 pl-2">
           <CommandHint />

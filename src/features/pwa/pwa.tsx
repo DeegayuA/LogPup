@@ -64,54 +64,39 @@ function useInstallPrompt() {
  * One-click install. Renders nothing at all unless the browser offered a real
  * install prompt — see useInstallPrompt.
  *
- * `variant="icon"` is the sidebar-footer form: icon only, sized to sit beside
- * the account row, named for screen readers via aria-label.
+ * Icon-only everywhere it appears (sidebar footer on desktop, header on
+ * phones) — there is no visible label, so the accessible name lives in
+ * `aria-label`, backed by a `title` for the mouse-hover tooltip. `surface`
+ * only changes the tint to match the background it sits on: `sidebar` for
+ * the dark sidebar footer, `default` for the header's neutral surface.
  */
 export function InstallButton({
-  variant = 'default',
+  surface = 'default',
   className,
 }: {
-  variant?: 'default' | 'icon'
+  surface?: 'default' | 'sidebar'
   className?: string
 }) {
   const { canInstall, install } = useInstallPrompt()
 
   if (!canInstall) return null
 
-  if (variant === 'icon') {
-    return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Install LogPup as an app"
-        title="Install LogPup as an app"
-        onClick={install}
-        className={cn(
-          'shrink-0 text-sidebar-foreground/70',
-          'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-          'focus-visible:ring-sidebar-ring/60',
-          className,
-        )}
-      >
-        <Download />
-      </Button>
-    )
-  }
-
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
-      // The label collapses below `sm`, so name the button explicitly rather
-      // than leaving a bare icon with no accessible name.
+      variant="ghost"
+      size="icon-sm"
       aria-label="Install LogPup as an app"
+      title="Install LogPup as an app"
       onClick={install}
-      className={className}
+      className={cn(
+        'shrink-0',
+        surface === 'sidebar' &&
+          'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-sidebar-ring/60',
+        className,
+      )}
     >
-      <Download className="size-4" />
-      <span className="hidden sm:inline">Install app</span>
+      <Download />
     </Button>
   )
 }
