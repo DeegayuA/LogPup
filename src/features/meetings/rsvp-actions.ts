@@ -7,10 +7,10 @@ import { db } from '@/db'
 import { meetingAttendees, meetings } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { MEETING_URL_ERROR, meetingUrlSchema } from '@/features/meetings/meeting-url'
 
 const RESPONSES = ['going', 'maybe', 'declined'] as const
 const responseSchema = z.enum(RESPONSES)
-const linkSchema = z.union([z.url(), z.literal('')])
 
 // An attendee marks whether they're coming. Scoped to the caller's own
 // attendee row — you can only set your own RSVP, and only for a meeting you're
@@ -42,8 +42,8 @@ export async function respondToMeeting(
 export async function setMeetingLink(meetingId: string, url: string): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user?.id) return err('Sign in required')
-  const parsed = linkSchema.safeParse(url.trim())
-  if (!parsed.success) return err('Enter a valid URL')
+  const parsed = meetingUrlSchema.safeParse(url)
+  if (!parsed.success) return err(MEETING_URL_ERROR)
 
   const [meeting] = await db
     .select({ createdBy: meetings.createdBy })
@@ -54,7 +54,7 @@ export async function setMeetingLink(meetingId: string, url: string): Promise<Ac
     return err('Only the organizer can set the link')
   }
 
-  await db.update(meetings).set({ meetingUrl: parsed.data || null }).where(eq(meetings.id, meetingId))
+  await db.update(meetings).set({ meetingUrl: parsed.data }).where(eq(meetings.id, meetingId))
   revalidatePath('/meetings')
   return ok(undefined)
 }
