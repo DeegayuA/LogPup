@@ -124,7 +124,12 @@ export function AppsTable({
                   onValueChange={(value) => handleLeadChange(app.id, value ?? NO_LEAD)}
                 >
                   <SelectTrigger size="sm" aria-label={`Lead for ${app.name}`}>
-                    <SelectValue />
+                    {/* Explicit label mapping — the raw id is the Select's `value`,
+                        so without this the trigger falls back to rendering that id
+                        (a UUID) instead of the lead's name. */}
+                    <SelectValue>
+                      {(value: string) => activeUsers.find((user) => user.id === value)?.name ?? 'No lead'}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NO_LEAD}>No lead</SelectItem>

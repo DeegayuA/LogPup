@@ -106,7 +106,14 @@ export function AssignDialog({
               <Label htmlFor="assign-user">Member</Label>
               <Select value={userId} onValueChange={(value) => setUserId(value ?? '')}>
                 <SelectTrigger id="assign-user" className="w-full">
-                  <SelectValue placeholder="Select a person" />
+                  {/* Explicit label mapping — the raw id is the Select's `value`,
+                      so without this the trigger falls back to rendering that id
+                      (a UUID) instead of the person's name. */}
+                  <SelectValue placeholder="Select a person">
+                    {(value: string) =>
+                      value ? (activeUsers.find((user) => user.id === value)?.name ?? 'Select a person') : 'Select a person'
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {activeUsers.map((user) => (

@@ -36,7 +36,12 @@ export function SprintSwitcher({
   return (
     <Select value={selectedId} onValueChange={handleChange}>
       <SelectTrigger className="h-8 w-56" aria-label="Select sprint">
-        <SelectValue />
+        {/* Explicit label mapping — the raw id is the Select's `value`, so
+            without this the trigger falls back to rendering that id (a UUID)
+            instead of the sprint's name. */}
+        <SelectValue>
+          {(value: string) => sprints.find((sprint) => sprint.id === value)?.name ?? 'Select sprint'}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {sprints.map((sprint) => (

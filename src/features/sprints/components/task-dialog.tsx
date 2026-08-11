@@ -186,7 +186,16 @@ export function TaskDialog({
                 onValueChange={(value) => setForm((f) => ({ ...f, assigneeId: value ?? UNASSIGNED }))}
               >
                 <SelectTrigger id="task-assignee" className="w-full">
-                  <SelectValue />
+                  {/* Explicit label mapping — the raw id is the Select's `value`,
+                      so without this the trigger falls back to rendering that id
+                      (a UUID) instead of the assignee's name. */}
+                  <SelectValue>
+                    {(value: string) =>
+                      value === UNASSIGNED
+                        ? 'Unassigned'
+                        : (team.find((member) => member.userId === value)?.name ?? 'Unassigned')
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
@@ -205,7 +214,13 @@ export function TaskDialog({
                 onValueChange={(value) => setForm((f) => ({ ...f, priority: value ?? '0' }))}
               >
                 <SelectTrigger id="task-priority" className="w-full">
-                  <SelectValue />
+                  {/* Same explicit mapping as the assignee select above — the
+                      value is a numeric code ('0'-'3'), not the label. */}
+                  <SelectValue>
+                    {(value: string) =>
+                      PRIORITY_OPTIONS.find((opt) => opt.value === value)?.label ?? 'None'
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {PRIORITY_OPTIONS.map((opt) => (
