@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import {
   AppWindow,
   CalendarDays,
+  History,
   Keyboard,
   LayoutDashboard,
   Loader2,
@@ -37,6 +38,7 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import { cn } from '@/lib/utils'
+import { createDeduper } from '@/lib/dedupe'
 import {
   universalSearch,
   signOutFromPalette,
@@ -56,6 +58,28 @@ type Recent = {
 const RECENTS_KEY = 'logpup.recents.v1'
 const GO_SHORTCUTS_KEY = 'logpup.goShortcuts'
 const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints: [], meetings: [] }
+
+/**
+ * REQUEST DEDUPLICATION for the palette's two server round trips.
+ *
+ * The 180ms debounce below stops a *keystroke* from being a request, and the
+ * sequence guard stops a slow response from overwriting a newer one — but
+ * neither stops the same query being asked for twice. Typing "pupp",
+ * backspacing to "pup", and typing forward again lands on a query that was
+ * just answered; opening the palette and retyping a name a few seconds later
+ * does the same. Both hit the database again for a result the browser already
+ * had.
+ *
+ * Module-level so it survives closing and reopening the dialog, which is
+ * exactly when a repeat is most likely. The TTL is short on purpose: results
+ * name live tasks, sprints and people, and 30 seconds is about as stale as a
+ * jump-to-thing list can be before it starts sending people to the wrong
+ * place. `quickAssignTask` clears both — it creates a task, so every retained
+ * answer is now potentially wrong.
+ */
+const SEARCH_TTL_MS = 30_000
+const searchDeduper = createDeduper<SearchResults>({ ttlMs: SEARCH_TTL_MS })
+const intentDeduper = createDeduper<TaskIntentPreview | null>({ ttlMs: SEARCH_TTL_MS })
 
 const CommandCenterContext = React.createContext<{ setOpen: (open: boolean) => void } | null>(null)
 
@@ -204,7 +228,7 @@ export function CommandCenterProvider({
     const seq = ++intentSeq.current
     const timer = setTimeout(async () => {
       try {
-        const parsed = await previewTaskIntent(trimmed)
+        const parsed = await intentDeduper.run(trimmed, () => previewTaskIntent(trimmed))
         if (intentSeq.current === seq) setIntent(parsed)
       } catch {
         if (intentSeq.current === seq) setIntent(null)
@@ -227,7 +251,7 @@ export function CommandCenterProvider({
     const seq = ++searchSeq.current
     const timer = setTimeout(async () => {
       try {
-        const res = await universalSearch(trimmed)
+        const res = await searchDeduper.run(trimmed, () => universalSearch(trimmed))
         if (searchSeq.current === seq) setResults(res)
       } catch {
         if (searchSeq.current === seq) setResults(EMPTY_RESULTS)
@@ -301,6 +325,11 @@ export function CommandCenterProvider({
     setAssigning(true)
     try {
       const res = await quickAssignTask(raw)
+      // A task now exists that no retained answer knows about — drop them all
+      // rather than let the palette keep serving a pre-write view of the
+      // workspace for the rest of the TTL.
+      searchDeduper.clear()
+      intentDeduper.clear()
       if (res.ok) {
         toast.success(`Task "${res.data.title}" → ${res.data.assigneeName} on ${res.data.appName}`)
         go(res.data.href)
@@ -320,6 +349,7 @@ export function CommandCenterProvider({
     { label: 'Apps', href: '/apps', icon: AppWindow, shortcut: 'G A' },
     { label: 'People', href: '/people', icon: Users, shortcut: 'G P' },
     { label: 'Meetings', href: '/meetings', icon: CalendarDays, shortcut: 'G M' },
+    { label: 'Activity', href: '/activity', icon: History, shortcut: undefined },
     { label: 'Profile', href: '/profile', icon: User, shortcut: undefined },
     ...(isAdmin
       ? [{ label: 'Admin', href: '/admin', icon: ShieldCheck, shortcut: undefined }]

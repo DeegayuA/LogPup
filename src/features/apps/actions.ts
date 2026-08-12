@@ -8,6 +8,7 @@ import { apps } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 import { buildAppUpdate } from '@/features/apps/update-input'
 
 const appInput = z.object({
@@ -26,7 +27,8 @@ async function requireAdmin() {
 }
 
 export async function createApp(input: unknown): Promise<ActionResult<{ slug: string }>> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   const parsed = appInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
   const slug = slugify(parsed.data.name)
@@ -55,7 +57,20 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
   }
 
   try {
-    await db.insert(apps).values({ ...parsed.data, repoUrl: parsed.data.repoUrl || null, slug })
+    const [created] = await db
+      .insert(apps)
+      .values({ ...parsed.data, repoUrl: parsed.data.repoUrl || null, slug })
+      .returning({ id: apps.id })
+    await logActivity({
+      actorId: session.user.id,
+      verb: 'created',
+      entityType: 'app',
+      entityId: created.id,
+      entityLabel: parsed.data.name,
+      appId: created.id,
+      appName: parsed.data.name,
+      pagePath: `/apps/${slug}`,
+    })
   } catch (error) {
     console.error('[apps] createApp failed:', error)
     return err('Could not create the app — try again')
@@ -65,7 +80,8 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
 }
 
 export async function updateApp(appId: string, input: unknown): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   // Every other action in the codebase validates the id shape before it
   // reaches the DB; this one used to pass the raw string through, so a
   // malformed id surfaced as a driver-level rejection rather than an error
@@ -76,7 +92,10 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   const result = buildAppUpdate(input)
   if (!result.ok) return err(result.error)
 
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, parsedId.data))
+  const [app] = await db
+    .select({ slug: apps.slug, name: apps.name, status: apps.status })
+    .from(apps)
+    .where(eq(apps.id, parsedId.data))
   if (!app) return err('App not found')
 
   try {
@@ -85,13 +104,29 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
     console.error('[apps] updateApp failed:', error)
     return err('Could not save the changes — try again')
   }
+  const name = typeof result.set.name === 'string' ? result.set.name : app.name
+  const newStatus = typeof result.set.status === 'string' ? result.set.status : null
+  const statusChanged = newStatus !== null && newStatus !== app.status
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'app',
+    entityId: parsedId.data,
+    entityLabel: name,
+    appId: parsedId.data,
+    appName: name,
+    pagePath: `/apps/${app.slug}`,
+    detail: statusChanged ? `status to ${newStatus}` : null,
+    metadata: statusChanged ? { status: { from: app.status, to: newStatus } } : null,
+  })
   revalidatePath('/apps')
   revalidatePath(`/apps/${app.slug}`)
   return ok(undefined)
 }
 
 export async function archiveApp(appId: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
   try {
@@ -106,8 +141,20 @@ export async function archiveApp(appId: string): Promise<ActionResult> {
       .update(apps)
       .set({ status: 'archived' })
       .where(eq(apps.id, parsedId.data))
-      .returning({ slug: apps.slug })
+      .returning({ slug: apps.slug, name: apps.name })
     if (!archived) return err('App not found')
+    await logActivity({
+      actorId: session.user.id,
+      verb: 'updated',
+      entityType: 'app',
+      entityId: parsedId.data,
+      entityLabel: archived.name,
+      appId: parsedId.data,
+      appName: archived.name,
+      pagePath: `/apps/${archived.slug}`,
+      detail: 'status to archived',
+      metadata: { status: { to: 'archived' } },
+    })
     revalidatePath('/apps')
     revalidatePath(`/apps/${archived.slug}`)
   } catch (error) {

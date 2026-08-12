@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { and, asc, desc, eq, gt, gte, isNull, lte, or } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, sprints, tasks, users } from '@/db/schema'
@@ -76,7 +77,7 @@ export async function getSprintsForApp(appId: string): Promise<Sprint[]> {
  * as a SQL predicate instead of a per-row JS filter so the query stays
  * narrow.
  */
-export async function getActiveSprints(): Promise<ActiveSprintSummary[]> {
+export const getActiveSprints = cache(async function getActiveSprints(): Promise<ActiveSprintSummary[]> {
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
   const rows = await db
     .select({
@@ -123,7 +124,7 @@ export async function getActiveSprints(): Promise<ActiveSprintSummary[]> {
   }
 
   return [...bySprint.values()]
-}
+})
 
 /**
  * The single soonest sprint that hasn't started yet (startDate strictly

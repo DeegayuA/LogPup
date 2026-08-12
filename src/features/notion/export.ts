@@ -1,6 +1,58 @@
 import { Client } from '@notionhq/client'
+import { pickParentPage, type NotionPageCandidate } from '@/features/notion/parent-page'
 
 const notion = () => new Client({ auth: process.env.NOTION_TOKEN })
+
+/** Thrown when no export destination can be determined — the message is
+ *  written for the person who has to fix it, and actions.ts passes it
+ *  through verbatim rather than flattening it into a generic failure. */
+export class NotionParentError extends Error {}
+
+/**
+ * Where new sprint pages get created. NOTION_PARENT_PAGE_ID wins when set;
+ * otherwise the integration's own visibility decides (see parent-page.ts).
+ * The discovered id is cached for the life of the server process — the
+ * shared-pages set changes when a human reshapes the workspace, not between
+ * two exports — and a restart (or setting the env var) picks up changes.
+ */
+let discoveredParentId: string | null = null
+
+async function resolveParentPageId(client: Client): Promise<string> {
+  if (process.env.NOTION_PARENT_PAGE_ID) return process.env.NOTION_PARENT_PAGE_ID
+  if (discoveredParentId) return discoveredParentId
+
+  const search = await client.search({
+    filter: { property: 'object', value: 'page' },
+    page_size: 50,
+  })
+  const candidates: NotionPageCandidate[] = search.results
+    .filter((result): result is typeof result & { parent: { type: string } } => 'parent' in result)
+    .map((page) => ({
+      id: page.id,
+      parentType: page.parent.type,
+      title:
+        'properties' in page
+          ? Object.values(page.properties)
+              .flatMap((prop) => ('title' in prop ? prop.title : []))
+              .map((t) => t.plain_text)
+              .join('')
+          : '',
+    }))
+
+  const decision = pickParentPage(candidates)
+  if (decision.kind === 'use') {
+    discoveredParentId = decision.id
+    return decision.id
+  }
+  if (decision.kind === 'none') {
+    throw new NotionParentError(
+      'The Notion integration cannot see any page yet. In Notion, open the page exports should live under → ••• → Connections → add "logpup", then export again.',
+    )
+  }
+  throw new NotionParentError(
+    `Several Notion pages are shared with the integration (${decision.titles.join(', ')}) — set NOTION_PARENT_PAGE_ID to the one exports should live under.`,
+  )
+}
 
 export type SprintExportData = {
   appName: string
@@ -56,7 +108,7 @@ export async function upsertSprintPage(
     return { pageId: existingPageId, pageUrl: (page as { url?: string }).url ?? '' }
   }
   const page = await client.pages.create({
-    parent: { page_id: process.env.NOTION_PARENT_PAGE_ID! },
+    parent: { page_id: await resolveParentPageId(client) },
     properties: { title: { title: [{ text: { content: title } }] } },
     children: buildBlocks(data) as never,
   })

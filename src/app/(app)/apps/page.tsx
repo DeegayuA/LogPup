@@ -1,5 +1,5 @@
 import { PawPrint } from 'lucide-react'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { listActiveUsers } from '@/features/people/queries'
 import { listApps, listDistinctTechTags } from '@/features/apps/queries'
@@ -13,13 +13,17 @@ export default async function AppsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   // One batch, deliberately including the two admin-only lookups that feed
-  // the New app dialog. Gating them on `isAdmin` would mean awaiting `auth()`
-  // first, and `auth()` reads the DB on every session (see the jwt callback in
-  // lib/auth.ts) — so that "saving" would cost every visitor an extra serial
-  // round trip to avoid two indexed queries that run in parallel anyway.
+  // the New app dialog. Gating them on `isAdmin` would mean awaiting the
+  // session first, which serializes this batch behind it for zero benefit —
+  // the two lookups are indexed and run in parallel anyway.
+  //
+  // The session read itself is `getSession`, not `auth()`: the (app) layout
+  // has already read it for this request, so this is a memo hit rather than
+  // the second of three identical `select … from users` round trips (see
+  // lib/session.ts).
   const [rawParams, session, apps, workspaceTechTags, activeUsers] = await Promise.all([
     props.searchParams,
-    auth(),
+    getSession(),
     listApps(),
     listDistinctTechTags(),
     listActiveUsers(),

@@ -155,6 +155,20 @@
       "when": 1786500404715,
       "tag": "0022_meeting_task_auto_assign",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786516987567,
+      "tag": "0023_sprint_checkins",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786517302115,
+      "tag": "0024_meeting_followup_task_link",
+      "breakpoints": true
     }
   ]
 }

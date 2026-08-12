@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
@@ -56,7 +57,7 @@ export type PendingUser = {
 // Self-signed-up Google accounts (see src/lib/auth.ts signIn callback)
 // waiting on an admin's role choice + approve/reject decision. Oldest first —
 // whoever has been waiting longest surfaces at the top of the card.
-export async function listPendingUsers(): Promise<PendingUser[]> {
+export const listPendingUsers = cache(async function listPendingUsers(): Promise<PendingUser[]> {
   return db
     .select({
       id: users.id,
@@ -70,4 +71,4 @@ export async function listPendingUsers(): Promise<PendingUser[]> {
     .from(users)
     .where(eq(users.status, 'pending'))
     .orderBy(asc(users.createdAt))
-}
+})

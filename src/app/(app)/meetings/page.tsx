@@ -1,4 +1,4 @@
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { Button } from '@/components/ui/button'
 import { listMeetings } from '@/features/meetings/queries'
 import { listApps } from '@/features/apps/queries'
@@ -12,7 +12,7 @@ import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 export default async function MeetingsPage(props: { searchParams: Promise<{ new?: string }> }) {
   const [{ new: newParam }, session, allMeetings, apps, activeUsers] = await Promise.all([
     props.searchParams,
-    auth(),
+    getSession(),
     listMeetings(),
     listApps(),
     listActiveUsers(),

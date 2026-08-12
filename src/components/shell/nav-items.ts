@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { AppWindow, CalendarDays, LayoutDashboard, ShieldCheck, Users } from 'lucide-react'
+import { AppWindow, CalendarDays, History, LayoutDashboard, ShieldCheck, Users } from 'lucide-react'
 
 export type NavItem = {
   href: string
@@ -18,6 +18,7 @@ export const navItems: NavItem[] = [
   { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
   { href: '/people', label: 'People', icon: Users, key: 'P' },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },
+  { href: '/activity', label: 'Activity', icon: History },
 ]
 
 // Admin-only nav, appended after the primary nav. Gated on `isAdmin` the

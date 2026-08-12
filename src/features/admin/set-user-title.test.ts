@@ -12,8 +12,17 @@ const { authMock, writeSpy } = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => ({ auth: authMock }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
+// The activity trail is bookkeeping, not the write under test — stubbed out
+// so these tests keep asserting on exactly one thing: the users update.
+vi.mock('@/features/activity/log', () => ({ logActivity: vi.fn() }))
 vi.mock('@/db', () => ({
   db: {
+    // The action reads the target's name to label its activity row.
+    select: () => ({
+      from: () => ({
+        where: async () => [{ name: 'Target Person' }],
+      }),
+    }),
     update: () => ({
       set: (values: Record<string, unknown>) => ({
         where: async () => {

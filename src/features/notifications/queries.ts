@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { and, count, desc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { notifications, users } from '@/db/schema'
@@ -14,7 +15,25 @@ export type NotificationItem = {
   actorAvatarUrl: string | null
 }
 
-export async function listNotifications(userId: string, limit = 20): Promise<NotificationItem[]> {
+/**
+ * Both wrapped in React `cache` — per-request deduplication, not caching in the
+ * stale-data sense (see lib/session.ts for the same reasoning applied to the
+ * session read). The header bell renders in the (app) layout while the
+ * dashboard renders its own notifications card, so a single dashboard load
+ * asks for this user's unread count twice; with the page split across
+ * `<Suspense>` boundaries the same list can be requested from more than one
+ * streamed section. Memoised, the first caller in a render pays and the rest
+ * are free. Nothing survives the request, so no viewer can be served another's
+ * notifications.
+ *
+ * `limit` is part of the memo key: the bell asks for 20 and the dashboard card
+ * for 8, so those stay two reads — matching them up is a caller-side decision,
+ * not something to fake here.
+ */
+export const listNotifications = cache(async function listNotifications(
+  userId: string,
+  limit = 20,
+): Promise<NotificationItem[]> {
   return db
     .select({
       id: notifications.id,
@@ -32,12 +51,14 @@ export async function listNotifications(userId: string, limit = 20): Promise<Not
     .where(eq(notifications.userId, userId))
     .orderBy(desc(notifications.createdAt))
     .limit(limit)
-}
+})
 
-export async function unreadNotificationCount(userId: string): Promise<number> {
+export const unreadNotificationCount = cache(async function unreadNotificationCount(
+  userId: string,
+): Promise<number> {
   const [row] = await db
     .select({ value: count() })
     .from(notifications)
     .where(and(eq(notifications.userId, userId), eq(notifications.read, false)))
   return row?.value ?? 0
-}
+})

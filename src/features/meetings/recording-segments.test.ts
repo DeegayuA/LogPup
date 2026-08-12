@@ -1,13 +1,50 @@
 import { describe, expect, it } from 'vitest'
 import {
   SEGMENT_BYTE_SOFT_CAP,
+  SEGMENT_HINT_MAX_CHARS,
   SEGMENT_TARGET_MS,
   SEGMENT_UPLOAD_ATTEMPTS,
   concatenateSegments,
+  hintTail,
   isRetriableSegmentError,
   segmentRetryDelayMs,
   shouldCutSegment,
 } from './recording-segments'
+
+describe('hintTail', () => {
+  it('returns a short hint unchanged', () => {
+    expect(hintTail('names: Deeghayu, Kasun', 100)).toBe('names: Deeghayu, Kasun')
+  })
+
+  it('keeps only the tail of an hours-long transcript', () => {
+    const early = 'early words '.repeat(1000)
+    const late = 'late words that cover the current segment'
+    const result = hintTail(early + late, 200)
+    expect(result.length).toBeLessThanOrEqual(200)
+    // The tail must be a literal suffix of the transcript ending in the
+    // newest speech — the part that overlaps the segment being uploaded.
+    expect((early + late).endsWith(result)).toBe(true)
+    expect(result.endsWith(late)).toBe(true)
+  })
+
+  it('never opens mid-word', () => {
+    const result = hintTail('aaaa bbbb cccc dddd', 10) // cuts into "bbbb"
+    expect(result).toBe('cccc dddd')
+  })
+
+  it('keeps an unbroken oversize token rather than returning nothing', () => {
+    expect(hintTail('x'.repeat(50), 10)).toBe('x'.repeat(10))
+  })
+
+  it('has a default ceiling sized for one segment, not one meeting', () => {
+    // ~5 minutes of speech is ~4.5k chars; two hours is ~110k. The default
+    // must sit near the former — if someone "generously" raises it toward
+    // whole-meeting size, the quadratic hint bill this exists to prevent
+    // comes straight back.
+    expect(SEGMENT_HINT_MAX_CHARS).toBeGreaterThanOrEqual(4500)
+    expect(SEGMENT_HINT_MAX_CHARS).toBeLessThanOrEqual(12_000)
+  })
+})
 
 describe('segmentRetryDelayMs', () => {
   it('backs off exponentially from one second', () => {
@@ -50,6 +87,9 @@ describe('isRetriableSegmentError', () => {
       false,
     )
     expect(isRetriableSegmentError('No audio received for segment 2')).toBe(false)
+    // No key means no amount of automatic retrying helps — a human has to
+    // add one. The audio stays parked on-device for when they do.
+    expect(isRetriableSegmentError('No active Gemini API keys — add one in Profile.')).toBe(false)
     // A missing table stays missing until a person applies the migration —
     // this is the failure that originally presented as an endlessly
     // retryable "Upload failed — try again".

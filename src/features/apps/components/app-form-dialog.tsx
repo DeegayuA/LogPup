@@ -162,6 +162,15 @@ export function AppFormDialog({
     () => mergeTagSources(CURATED_TECH_TAGS, workspaceTechTags),
     [workspaceTechTags],
   )
+  // `items` is required on the Lead select: Base UI's <Select.Value> renders
+  // the raw value (a UUID here) unless the Root gets a value → label map.
+  const leadItems = useMemo(
+    () => [
+      { value: NO_LEAD, label: 'No lead' },
+      ...activeUsers.map((user) => ({ value: user.id, label: user.name })),
+    ],
+    [activeUsers],
+  )
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -344,6 +353,7 @@ export function AppFormDialog({
               </Label>
               <Select
                 value={form.leadId}
+                items={leadItems}
                 onValueChange={(value) => setField('leadId', (value as string) ?? NO_LEAD)}
               >
                 <SelectTrigger

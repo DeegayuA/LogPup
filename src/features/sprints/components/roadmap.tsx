@@ -1,4 +1,4 @@
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { RoadmapTimeline } from '@/features/sprints/components/roadmap-timeline'
 import type { Sprint } from '@/features/sprints/queries'
 
@@ -17,7 +17,7 @@ import type { Sprint } from '@/features/sprints/queries'
  * this exactly as it did when the roadmap was a static chart.
  */
 export async function Roadmap({ sprints, slug }: { sprints: Sprint[]; slug: string }) {
-  const session = await auth()
+  const session = await getSession()
   const isAdmin = session?.user?.role === 'admin'
 
   return <RoadmapTimeline sprints={sprints} slug={slug} isAdmin={isAdmin} />

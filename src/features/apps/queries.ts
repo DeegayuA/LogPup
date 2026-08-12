@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { and, asc, count, eq, getTableColumns, gte, isNotNull, lt, max, ne, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
@@ -97,7 +98,7 @@ function latest(...dates: (Date | null | undefined)[]): Date | null {
  * server-side would only be half the job and would then have to be redone in
  * JS anyway.
  */
-export async function listApps(): Promise<AppPortfolioEntry[]> {
+export const listApps = cache(async function listApps(): Promise<AppPortfolioEntry[]> {
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
   const now = new Date()
   // "This week" is the calendar week you are standing in (Mon–Sun), not a
@@ -288,7 +289,7 @@ export async function listApps(): Promise<AppPortfolioEntry[]> {
       ),
     }
   })
-}
+})
 
 /**
  * One app by slug, with its lead resolved. The lead's NAME is the thing the

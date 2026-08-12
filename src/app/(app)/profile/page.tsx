@@ -1,5 +1,5 @@
 import { Briefcase, PawPrint } from 'lucide-react'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { Badge } from '@/components/ui/badge'
 import {
   Card,
@@ -18,7 +18,7 @@ import { listGeminiKeys } from '@/features/gemini/queries'
 export default async function ProfilePage(props: {
   searchParams: Promise<{ firstLogin?: string }>
 }) {
-  const [session, { firstLogin }] = await Promise.all([auth(), props.searchParams])
+  const [session, { firstLogin }] = await Promise.all([getSession(), props.searchParams])
   const user = session?.user
   const role = user?.role ?? 'member'
   const [geminiKeys, phone, avatarUrl, title] = user?.id

@@ -11,6 +11,7 @@ import { RateLimitError } from '@/lib/rate-limit'
 import { normalizePhone } from '@/lib/phone'
 import { revalidatePath } from 'next/cache'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 
 // Sign in an existing password account. Wrong credentials surface as a friendly error;
 // the NEXT_REDIRECT thrown on success must propagate, so only AuthError is swallowed.
@@ -55,6 +56,16 @@ export async function setOwnPhone(phone: string): Promise<ActionResult> {
   if (trimmed !== '' && value === null) return err('That does not look like a phone number')
 
   await db.update(users).set({ phone: value }).where(eq(users.id, session.user.id))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: session.user.id,
+    entityLabel: session.user.name ?? session.user.email,
+    pagePath: '/profile',
+    detail: value === null ? 'clearing their phone number' : 'their phone number',
+    metadata: { phone: { to: value } },
+  })
   revalidatePath('/profile')
   revalidatePath('/people')
   return ok(undefined)
@@ -82,6 +93,17 @@ export async function setOwnPassword(
   await db.update(users)
     .set({ passwordHash, mustChangePassword: false })
     .where(eq(users.id, session.user.id))
+
+  // Deliberately no metadata: nothing password-derived belongs in the trail.
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: session.user.id,
+    entityLabel: session.user.name ?? session.user.email,
+    pagePath: '/profile',
+    detail: 'their password',
+  })
 
   revalidatePath('/profile')
   return ok(undefined)

@@ -35,9 +35,16 @@ const RING_TONE: Record<StatTone, string> = {
   alert: 'ring-destructive/35',
 }
 
-export function PersonStatRow({ stats }: { stats: PersonStat[] }) {
+export function PersonStatRow({
+  stats,
+  className,
+}: {
+  stats: PersonStat[]
+  /** Grid override — the dashboard renders four tiles, not this page's seven. */
+  className?: string
+}) {
   return (
-    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+    <dl className={cn('grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7', className)}>
       {stats.map((stat) => (
         <div
           key={stat.key}

@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
   appHealth,
@@ -63,7 +63,7 @@ export default async function AppDetailPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const [{ slug }, search] = await Promise.all([props.params, props.searchParams])
-  const [app, session] = await Promise.all([getAppBySlug(slug), auth()])
+  const [app, session] = await Promise.all([getAppBySlug(slug), getSession()])
   if (!app) notFound()
 
   const isAdmin = session?.user?.role === 'admin'

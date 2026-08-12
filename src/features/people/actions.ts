@@ -4,9 +4,10 @@ import { z } from 'zod'
 import { and, eq, exists, isNull, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, assignmentHistory, assignments } from '@/db/schema'
+import { apps, assignmentHistory, assignments, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 import { summarizeAllocations } from '@/features/people/allocation'
 import { buildHistoryEntry, type ChangeKind } from '@/features/people/allocation-history'
 
@@ -51,9 +52,17 @@ function isUniqueViolation(error: unknown): boolean {
   return false
 }
 
-async function slugForApp(appId: string): Promise<string | null> {
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, appId))
-  return app?.slug ?? null
+async function slugForApp(appId: string): Promise<{ slug: string; name: string } | null> {
+  const [app] = await db
+    .select({ slug: apps.slug, name: apps.name })
+    .from(apps)
+    .where(eq(apps.id, appId))
+  return app ?? null
+}
+
+async function nameForUser(userId: string): Promise<string | null> {
+  const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId))
+  return user?.name ?? null
 }
 
 async function warningForUser(userId: string): Promise<{ warning?: string }> {
@@ -197,13 +206,14 @@ export async function assignUser(input: unknown): Promise<ActionResult<{ warning
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const at = new Date()
+  let assignmentId: string | undefined
   try {
     // The unique index can reject the insert; batching means the history
     // rows roll back with it rather than recording an assignment that never
     // happened. It also closes the tombstone left by a previous removal, so
     // re-assigning someone reopens their interval cleanly.
-    await db.batch([
-      db.insert(assignments).values(parsed.data),
+    const [inserted] = await db.batch([
+      db.insert(assignments).values(parsed.data).returning({ id: assignments.id }),
       ...historyStatements({
         ...parsed.data,
         changeKind: 'assigned',
@@ -211,13 +221,27 @@ export async function assignUser(input: unknown): Promise<ActionResult<{ warning
         at,
       }),
     ])
+    assignmentId = inserted[0]?.id
   } catch (error) {
     if (isUniqueViolation(error)) return err('Already assigned to this app')
     throw error
   }
 
-  const slug = await slugForApp(parsed.data.appId)
-  revalidateAssignmentPaths(slug, parsed.data.userId)
+  const app = await slugForApp(parsed.data.appId)
+  const personName = await nameForUser(parsed.data.userId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'assigned',
+    entityType: 'assignment',
+    entityId: assignmentId ?? parsed.data.userId,
+    entityLabel: personName ?? 'Unknown user',
+    appId: parsed.data.appId,
+    appName: app?.name ?? null,
+    pagePath: `/people/${parsed.data.userId}`,
+    detail: `to ${app?.name ?? 'an app'} as ${parsed.data.role} at ${parsed.data.allocationPct}%`,
+    metadata: { role: parsed.data.role, allocationPct: parsed.data.allocationPct },
+  })
+  revalidateAssignmentPaths(app?.slug ?? null, parsed.data.userId)
   return ok(await warningForUser(parsed.data.userId))
 }
 
@@ -270,8 +294,30 @@ export async function updateAssignment(
   // written (the guards saw to that), so say so instead of toasting success.
   if (updated.length === 0) return err('Assignment not found')
 
-  const slug = await slugForApp(existing.appId)
-  revalidateAssignmentPaths(slug, existing.userId)
+  const app = await slugForApp(existing.appId)
+  const personName = await nameForUser(existing.userId)
+  const metadata: Record<string, unknown> = {}
+  if (parsed.data.role !== undefined) {
+    metadata.role = { from: existing.role, to: parsed.data.role }
+  }
+  if (parsed.data.allocationPct !== undefined) {
+    metadata.allocationPct = { from: existing.allocationPct, to: parsed.data.allocationPct }
+  }
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'assignment',
+    entityId: assignmentId,
+    entityLabel: personName ?? 'Unknown user',
+    appId: existing.appId,
+    appName: app?.name ?? null,
+    pagePath: `/people/${existing.userId}`,
+    detail: `to ${app?.name ?? 'an app'} as ${parsed.data.role ?? existing.role} at ${
+      parsed.data.allocationPct ?? existing.allocationPct
+    }%`,
+    metadata,
+  })
+  revalidateAssignmentPaths(app?.slug ?? null, existing.userId)
   return ok(await warningForUser(existing.userId))
 }
 
@@ -309,7 +355,20 @@ export async function removeAssignment(assignmentId: string): Promise<ActionResu
 
   if (deleted.length === 0) return err('Assignment not found')
 
-  const slug = await slugForApp(existing.appId)
-  revalidateAssignmentPaths(slug, existing.userId)
+  const app = await slugForApp(existing.appId)
+  const personName = await nameForUser(existing.userId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'unassigned',
+    entityType: 'assignment',
+    entityId: assignmentId,
+    entityLabel: personName ?? 'Unknown user',
+    appId: existing.appId,
+    appName: app?.name ?? null,
+    pagePath: `/people/${existing.userId}`,
+    detail: `from ${app?.name ?? 'an app'} as ${existing.role}`,
+    metadata: { role: existing.role, allocationPct: existing.allocationPct },
+  })
+  revalidateAssignmentPaths(app?.slug ?? null, existing.userId)
   return ok(undefined)
 }

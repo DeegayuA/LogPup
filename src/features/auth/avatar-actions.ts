@@ -7,6 +7,7 @@ import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { users } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 
 // The client resizes to a 512px square WebP before uploading (see
 // avatar-upload.tsx), so anything approaching this cap is either a client that
@@ -46,7 +47,7 @@ export async function uploadOwnAvatar(formData: FormData): Promise<ActionResult<
   if (file.size > MAX_AVATAR_BYTES) return err('Image is too large — keep it under 2MB')
 
   const [current] = await db
-    .select({ avatarUrl: users.avatarUrl })
+    .select({ avatarUrl: users.avatarUrl, name: users.name })
     .from(users)
     .where(eq(users.id, session.user.id))
 
@@ -66,6 +67,15 @@ export async function uploadOwnAvatar(formData: FormData): Promise<ActionResult<
 
   await db.update(users).set({ avatarUrl: url }).where(eq(users.id, session.user.id))
   await deleteUploadedAvatar(current?.avatarUrl ?? null)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: session.user.id,
+    entityLabel: current?.name ?? session.user.name ?? 'Unknown user',
+    pagePath: '/profile',
+    detail: 'avatar',
+  })
 
   revalidatePath('/profile')
   revalidatePath('/people')
@@ -78,12 +88,21 @@ export async function removeOwnAvatar(): Promise<ActionResult> {
   if (!session?.user?.id) return err('Not signed in')
 
   const [current] = await db
-    .select({ avatarUrl: users.avatarUrl })
+    .select({ avatarUrl: users.avatarUrl, name: users.name })
     .from(users)
     .where(eq(users.id, session.user.id))
 
   await db.update(users).set({ avatarUrl: null }).where(eq(users.id, session.user.id))
   await deleteUploadedAvatar(current?.avatarUrl ?? null)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: session.user.id,
+    entityLabel: current?.name ?? session.user.name ?? 'Unknown user',
+    pagePath: '/profile',
+    detail: 'avatar',
+  })
 
   revalidatePath('/profile')
   revalidatePath('/people')
