@@ -296,4 +296,132 @@ describe('matchAgendaTopic — keyword precision (false-positive regressions)', 
     expect(positive.bucket).toBe('Backend & API engineering')
     expect(positive.quote).toEqual(expect.stringMatching(/database schema/i))
   })
+
+  // --- round 2: four disclosed leftovers, confirmed dangerous by live probes -
+
+  it('"customer" — customer feedback/research is not customer support', () => {
+    const negative = matchAgendaTopic(
+      "Let's review customer feedback from the last product survey",
+      ['Support'],
+    )
+    expect(negative.hit).not.toBe('primary')
+    const negative2 = matchAgendaTopic('A customer stopped by the office to drop off a package', [
+      'Support',
+    ])
+    expect(negative2.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('The customer support queue grew significantly this week', [
+      'Support',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Support & customer success')
+    expect(positive.quote).toEqual(expect.stringMatching(/customer support/i))
+  })
+
+  it('"ticket" — a concert ticket is not a support ticket', () => {
+    const negative = matchAgendaTopic('Can someone grab me a concert ticket for Friday night?', [
+      'Support',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('Log this as a new support ticket for the billing team', [
+      'Support',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Support & customer success')
+    expect(positive.quote).toEqual(expect.stringMatching(/support ticket/i))
+  })
+
+  it('"data" — sales data for a board deck is not a Data Engineer\'s data pipeline', () => {
+    const negative = matchAgendaTopic('Please pull the latest sales data for the board deck', [
+      'Data Engineer',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('Review the data pipeline before the demo', ['Data Engineer'])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Data & machine learning')
+    expect(positive.quote).toEqual(expect.stringMatching(/data pipeline/i))
+  })
+
+  it('"migration" — an office/team migration is not a schema migration', () => {
+    const negative = matchAgendaTopic(
+      "We're planning the office migration to the new building next month",
+      ['Backend Developer'],
+    )
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic("The schema migration needs to run before Friday's release", [
+      'Backend Developer',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Backend & API engineering')
+    expect(positive.quote).toEqual(expect.stringMatching(/schema migration/i))
+  })
+})
+
+// --- keyword denylist guard (closes the class, not just the instances) ------
+//
+// A bare, single-token keyword floors a candidate to `required` on ANY
+// sentence containing that word, no matter the domain — round 1 fixed nine of
+// these ("board" fired on "circuit board", "model" on "pricing model", etc.)
+// and round 2 found four more disclosed leftovers plus a wider sweep across
+// all 19 buckets. This denylist is the accumulated list of generic workplace
+// nouns that are NEVER acceptable as a bare (single-token, no internal space)
+// keyword in any bucket — they routinely appear in ordinary business sentences
+// that have nothing to do with the bucket that would use them. They may still
+// appear inside a genuinely qualifying multi-word phrase ("board meeting",
+// "customer support", "data pipeline") — that's what the multi-word keywords
+// added across both review rounds are for.
+//
+// A single-word keyword is only acceptable when the word is genuinely
+// domain-specific and effectively unambiguous outside its bucket's domain —
+// "kubernetes", "postgres", "figma", "onboarding", "payroll", "refactor" are
+// fine; "data" is not. If a future bucket or keyword trips this test, the fix
+// is to qualify it with a phrase and add the bare word here — not to widen
+// the test or delete the failing case.
+const GENERIC_KEYWORD_DENYLIST = [
+  // round 1
+  'data', 'board', 'model', 'support', 'network', 'content', 'schedule',
+  'quality', 'component', 'database',
+  // round 2 — reviewer-disclosed leftovers
+  'customer', 'ticket', 'migration',
+  // round 2 — reviewer's seed list, verified absent or fixed
+  'team', 'project', 'product', 'meeting', 'review', 'plan', 'update',
+  'issue', 'request', 'report',
+  // round 2 — found sweeping all 19 buckets
+  'pipeline', 'security', 'vulnerability', 'metrics', 'milestone', 'timeline',
+  'executive', 'agreement', 'logistics', 'infrastructure', 'incident',
+  'immunity', 'conducted', 'testing', 'interface', 'responsive',
+  'accessibility', 'branding', 'visual', 'illustration', 'deal', 'pitch',
+  'roadmap', 'requirements', 'feature', 'spec', 'interview', 'culture',
+  'compliance', 'strategy', 'budget', 'leadership', 'quarterly',
+  'integration', 'dashboard', 'embedded', 'architecture', 'certification',
+  'campaign', 'prospect', 'contract', 'policy', 'deployment', 'financial',
+  'emissions', 'prototype', 'sign-off', 'retro', 'escalation',
+]
+
+describe('TOPIC_BUCKETS keyword precision (denylist guard)', () => {
+  it('never uses a denylisted generic word as a bare (single-token) keyword', () => {
+    const denylist = new Set(GENERIC_KEYWORD_DENYLIST.map((w) => w.toLowerCase()))
+    const offenders: string[] = []
+    for (const bucket of TOPIC_BUCKETS) {
+      for (const keyword of bucket.keywords) {
+        const isSingleToken = keyword.trim().split(/\s+/).length === 1
+        if (isSingleToken && denylist.has(keyword.trim().toLowerCase())) {
+          offenders.push(`${bucket.name}: "${keyword}"`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('the coverage lint still passes after keyword tightening (no role stranded)', () => {
+    const covered = new Set<string>()
+    for (const bucket of TOPIC_BUCKETS) {
+      for (const role of bucket.primaryRoles) covered.add(role)
+      for (const role of bucket.adjacentRoles) covered.add(role)
+    }
+    expect(JOB_ROLES.filter((role) => !covered.has(role))).toEqual([])
+  })
 })

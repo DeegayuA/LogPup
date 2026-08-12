@@ -39,6 +39,28 @@ export type AgendaTopicMatch = {
   quote?: string
 }
 
+// GENERIC WORKPLACE KEYWORDS ARE BANNED AS BARE ENTRIES — see the denylist
+// guard test in agenda-topics.test.ts ('TOPIC_BUCKETS keyword precision
+// (denylist guard)'). Round 1 of review found nine common English words
+// ("board", "model", "support", "network", "content", "schedule", "quality",
+// "component", "database") firing on completely unrelated everyday usage
+// ("circuit board", "pricing model" …), each replaced below with a qualifying
+// multi-word phrase. Round 2 disclosed three more leftovers ("customer",
+// "ticket", "migration") plus a full sweep of the remaining 19 buckets — 44
+// more bare nouns across every bucket in the table (roadmap/product/feature,
+// budget/strategy/executive, campaign/pitch/deal/prospect, infrastructure/
+// pipeline/security, and so on), which is why nearly every bucket below now
+// favours phrases over bare nouns. A bare single-word keyword only survives
+// when it is genuinely domain-specific (e.g. "kubernetes"-class terms like
+// "devops", "pcb", "kanban", "payroll") — see the guard test's denylist and
+// its comment for the exact rule.
+//
+// One known, deliberate gap: the denylist also bans bare "sign-off" (round
+// 2 — "get legal sign-off on the NDA" is not a QA release sign-off, the same
+// class of bug as bare "support"), qualified below into "qa sign-off"/"test
+// sign-off"/"release sign-off". A sentence that uses "sign-off" with no
+// qualifying word at all (e.g. "Sign-off is pending") therefore does not hit
+// this bucket — that is correct per the denylist's own reasoning, not a bug.
 export const TOPIC_BUCKETS: TopicBucket[] = [
   {
     name: 'Frontend & client engineering',
@@ -46,17 +68,22 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'frontend',
       'front-end',
       'ui',
-      'interface',
-      // Bare "component" is a common English word outside software too
-      // (hardware components, org-chart components) — a primary hit FLOORS
-      // someone to `required` (spec R6), so it needs a qualifying phrase.
+      // Bare "interface"/"responsive"/"accessibility" are routine outside
+      // software: "interface with the vendor", "a responsive supplier",
+      // "building accessibility" (wheelchair access) — none of them are the
+      // frontend sense that should floor a Frontend Developer to required.
+      'user interface',
+      'interface design',
       'ui component',
       'react component',
       'frontend component',
-      'responsive',
+      'responsive design',
+      'responsive layout',
       'browser',
       'client-side',
-      'accessibility',
+      'web accessibility',
+      'accessibility audit',
+      'screen reader',
     ],
     primaryRoles: [
       'Frontend Developer',
@@ -81,16 +108,21 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'api',
       'server',
       'endpoint',
-      'integration',
+      // Bare "integration" is routine HR/onboarding language ("integration
+      // of the new hire"); bare "database"/"migration" fire on any casual
+      // mention ("a database of vendor contacts", "office migration") that
+      // has nothing to do with the schema/engineering sense that should
+      // floor a Backend Developer to required.
+      'api integration',
+      'system integration',
+      'backend integration',
       'microservice',
-      // Bare "database" fires on any casual mention ("a database of vendor
-      // contacts") that has nothing to do with the schema/engineering sense
-      // that should floor a Backend Developer to required.
       'database schema',
       'database migration',
       'database performance',
       'database query',
-      'migration',
+      'data migration',
+      'schema migration',
     ],
     primaryRoles: ['Backend Developer', 'Full-stack Developer', 'Database Administrator'],
     adjacentRoles: [
@@ -109,11 +141,20 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'mockups',
       'wireframe',
       'wireframes',
-      'prototype',
+      // Bare "prototype"/"branding"/"visual"/"illustration" are routine
+      // outside design: a "prototype policy", "employer branding" (HR/
+      // recruiting), "a visual in the report" (any deck), "as an
+      // illustration of the point" (rhetorical, in any conversation).
+      'design prototype',
+      'interactive prototype',
+      'clickable prototype',
       'usability',
-      'branding',
-      'visual',
-      'illustration',
+      'brand design',
+      'visual branding',
+      'brand identity',
+      'visual design',
+      'custom illustration',
+      'illustration work',
     ],
     primaryRoles: [
       'UI/UX Designer',
@@ -129,16 +170,24 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
     name: 'QA & testing',
     keywords: [
       'qa',
-      'testing',
+      // Bare "testing" is routine outside QA ("testing the waters",
+      // "testing a new pricing model" — see the agenda-topics/data-bucket
+      // fix for the "model" half of that exact sentence); bare "quality" is
+      // used loosely about almost anything ("quality craftsmanship"); bare
+      // "sign-off" means approval on literally any document in any
+      // department, not specifically a QA release sign-off.
+      'manual testing',
+      'automated testing',
+      'user testing',
       'regression',
       'bug',
       'defect',
-      // Bare "quality" is used loosely about almost anything ("quality
-      // craftsmanship"); the specific phrases are what actually mean QA.
       'quality assurance',
       'quality control',
       'test case',
-      'sign-off',
+      'qa sign-off',
+      'test sign-off',
+      'release sign-off',
     ],
     primaryRoles: ['QA Engineer', 'Automation QA Engineer'],
     adjacentRoles: ['Software Engineer', 'Test Technician', 'EMC Test Engineer', 'Compliance Engineer'],
@@ -147,13 +196,27 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
     name: 'DevOps, infrastructure & security',
     keywords: [
       'devops',
-      'infrastructure',
-      'deployment',
-      'pipeline',
-      'incident',
+      // Bare "infrastructure"/"deployment"/"pipeline"/"incident"/"security"/
+      // "vulnerability" are routine outside SRE/security ("state
+      // infrastructure funding", "app store deployment", "sales pipeline",
+      // "a diplomatic incident", "job security", "a vulnerability in the
+      // argument") — the qualifying phrase is what actually means the
+      // infra/security sense that should floor a DevOps/SRE/Security/
+      // Network Engineer to required.
+      'cloud infrastructure',
+      'infrastructure review',
+      'production deployment',
+      'deployment pipeline',
+      'build pipeline',
+      'release pipeline',
+      'incident response',
+      'incident review',
+      'production incident',
       'outage',
       'uptime',
-      'security',
+      'security review',
+      'security audit',
+      'security incident',
       // Bare "network" fires on "partner network", "our network of
       // contacts" — none of which is the infra sense that should floor a
       // Network Engineer to required.
@@ -161,7 +224,8 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'network security',
       'network infrastructure',
       'network latency',
-      'vulnerability',
+      'security vulnerability',
+      'vulnerability scan',
     ],
     primaryRoles: [
       'DevOps Engineer',
@@ -175,10 +239,20 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   {
     name: 'Data & machine learning',
     keywords: [
-      'data',
+      // Bare "data"/"dashboard"/"metrics" are routine outside data
+      // engineering ("sales data for the board deck", "an admin dashboard",
+      // "growth metrics in the marketing deck") — the qualifying phrase is
+      // what actually means the data/ML sense that should floor a Data
+      // Engineer/Analyst/Scientist to required.
+      'data pipeline',
+      'data warehouse',
+      'data engineering',
+      'data quality',
+      'data model',
       'analytics',
+      'analytics dashboard',
+      'data dashboard',
       'dataset',
-      'dashboard',
       // Bare "model" fires on "pricing model", "business model" — everyday
       // business language that has nothing to do with an ML model.
       'ml model',
@@ -187,7 +261,8 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'model deployment',
       'machine learning',
       'ml',
-      'metrics',
+      'data metrics',
+      'model metrics',
     ],
     primaryRoles: ['Data Engineer', 'Data Analyst', 'Data Scientist', 'ML Engineer'],
     adjacentRoles: ['Backend Developer', 'Software Engineer'],
@@ -200,7 +275,12 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'circuit',
       'firmware',
       'electronics',
-      'embedded',
+      // Bare "embedded" is routine outside hardware ("an embedded video",
+      // "power embedded in the org chart") — the qualifying phrase is what
+      // actually means the embedded-systems sense.
+      'embedded system',
+      'embedded systems',
+      'embedded software',
       'iot',
       'schematic',
       'enclosure',
@@ -220,12 +300,21 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
     keywords: [
       'emc',
       'rf',
-      'compliance',
-      'certification',
-      'emissions',
-      'immunity',
+      // Bare "compliance"/"certification"/"emissions"/"immunity"/"conducted"
+      // are routine outside EMC/regulatory testing ("in compliance with the
+      // handbook", "a certification course", "carbon emissions", "immune to
+      // criticism", "the interview was conducted virtually") — the
+      // qualifying phrase is what actually means the EMC/compliance-testing
+      // sense.
+      'compliance testing',
+      'regulatory compliance',
+      'product certification',
+      'certification testing',
       'radiated',
-      'conducted',
+      'radiated emissions',
+      'conducted emissions',
+      'radiated immunity',
+      'conducted immunity',
       'ce mark',
       'fcc',
     ],
@@ -235,7 +324,12 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   {
     name: 'Engineering architecture & leadership',
     keywords: [
-      'architecture',
+      // Bare "architecture" is routine outside engineering ("the building's
+      // architecture", "an architecture firm") — the qualifying phrase is
+      // what actually means the software/system sense.
+      'system architecture',
+      'software architecture',
+      'architecture review',
       'technical debt',
       'system design',
       'scalability',
@@ -254,7 +348,26 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   },
   {
     name: 'Product & strategy',
-    keywords: ['roadmap', 'product', 'requirements', 'backlog', 'prioritization', 'feature', 'spec'],
+    keywords: [
+      // Bare "roadmap"/"product"/"requirements"/"feature"/"spec" are routine
+      // outside product management ("a roadmap for recovery", "a cleaning
+      // product", "membership requirements", "a notable feature of the
+      // building", "on spec for delivery") — the qualifying phrase is what
+      // actually means the product-management sense that should floor a
+      // Product Manager to required.
+      'product roadmap',
+      'roadmap planning',
+      'product strategy',
+      'product launch',
+      'product requirements',
+      'business requirements',
+      'backlog',
+      'prioritization',
+      'feature request',
+      'feature spec',
+      'product spec',
+      'technical spec',
+    ],
     primaryRoles: ['Product Manager', 'Product Owner', 'Business Analyst'],
     adjacentRoles: ['CEO', 'CTO', 'Director', 'Consultant'],
   },
@@ -264,11 +377,19 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'sprint',
       'standup',
       'stand-up',
-      'retro',
+      // Bare "retro"/"milestone"/"timeline" are routine outside delivery/PM
+      // ("retro sneakers", "a personal milestone", "the timeline of
+      // events") — the qualifying phrase is what actually means the
+      // delivery-cadence sense.
+      'sprint retro',
+      'team retro',
+      'retro meeting',
       'retrospective',
       'scrum',
-      'milestone',
-      'timeline',
+      'project milestone',
+      'delivery milestone',
+      'project timeline',
+      'delivery timeline',
       // Bare "schedule" fires on "let's schedule a call" — nearly every
       // meeting mentions scheduling something without being ABOUT delivery.
       'project schedule',
@@ -288,9 +409,20 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   {
     name: 'Executive & leadership',
     keywords: [
-      'strategy',
-      'budget',
-      'quarterly',
+      // Bare "strategy"/"budget"/"quarterly"/"executive"/"leadership" are
+      // routine outside the C-suite ("a strategy game", "a tight travel
+      // budget", "quarterly rent", "an executive decision by the toddler",
+      // "leadership qualities on a resume") — the qualifying phrase is what
+      // actually means the governance sense that should floor a CEO/
+      // Director to required.
+      'business strategy',
+      'strategic planning',
+      'strategy session',
+      'budget review',
+      'budget approval',
+      'quarterly review',
+      'quarterly results',
+      'quarterly planning',
       'okr',
       'okrs',
       // Bare "board" fires on "circuit board" — the qualifying phrase is
@@ -298,21 +430,49 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'board meeting',
       'board update',
       'boardroom',
-      'executive',
-      'leadership',
+      'executive team',
+      'executive meeting',
+      'leadership team',
+      'leadership meeting',
     ],
     primaryRoles: ['CEO', 'Chief Operating Officer', 'Director'],
     adjacentRoles: ['CTO', 'Engineering Manager', 'Product Manager'],
   },
   {
     name: 'HR & talent',
-    keywords: ['hiring', 'recruitment', 'onboarding', 'interview', 'culture', 'performance review'],
+    keywords: [
+      'hiring',
+      'recruitment',
+      'onboarding',
+      // Bare "interview"/"culture" are routine outside HR ("press interview",
+      // "company culture" used loosely, "food culture", "pop culture") — the
+      // qualifying phrase is what actually means the HR/talent sense.
+      'job interview',
+      'candidate interview',
+      'company culture',
+      'team culture',
+      'performance review',
+    ],
     primaryRoles: ['HR', 'Talent Acquisition'],
     adjacentRoles: ['Office Administrator', 'Director', 'Intern', 'Trainee'],
   },
   {
     name: 'Finance & accounting',
-    keywords: ['budget', 'invoice', 'expense', 'payroll', 'accounting', 'billing', 'financial'],
+    keywords: [
+      // Bare "budget"/"financial" are routine outside finance ("a tight
+      // travel budget", "financial aid", "personal financial goals") — the
+      // qualifying phrase is what actually means the finance/accounting
+      // sense.
+      'budget review',
+      'budget approval',
+      'invoice',
+      'expense',
+      'payroll',
+      'accounting',
+      'billing',
+      'financial report',
+      'financial planning',
+    ],
     primaryRoles: ['Finance', 'Accountant'],
     adjacentRoles: ['Chief Operating Officer', 'Director'],
   },
@@ -320,7 +480,6 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
     name: 'Marketing & sales',
     keywords: [
       'marketing',
-      'campaign',
       'social media',
       'seo',
       // Bare "content" fires on "response content", "page content" — any
@@ -329,9 +488,18 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'content strategy',
       'marketing content',
       'sales',
-      'pitch',
-      'deal',
-      'prospect',
+      // Bare "campaign"/"pitch"/"deal"/"prospect" are routine outside
+      // marketing/sales ("election campaign", "pitch a tent", "no big
+      // deal", "a promising prospect for the team") — the qualifying
+      // phrase is what actually means the marketing/sales sense.
+      'marketing campaign',
+      'ad campaign',
+      'sales pitch',
+      'investor pitch',
+      'sales deal',
+      'business deal',
+      'sales prospect',
+      'prospect outreach',
     ],
     primaryRoles: ['Marketing', 'Sales', 'Business Development'],
     adjacentRoles: ['Brand Designer', 'CEO', 'Customer Success'],
@@ -345,12 +513,16 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'customer support',
       'support ticket',
       'support team',
+      'support queue',
       'technical support',
-      'ticket',
       'helpdesk',
       'help desk',
-      'escalation',
-      'customer',
+      // Bare "ticket"/"escalation"/"customer" are routine outside support
+      // ("concert ticket", "military escalation", "a customer stopped by
+      // the office", "customer feedback from a survey") — the qualifying
+      // phrase is what actually means the customer-support sense.
+      'customer escalation',
+      'support escalation',
       'client issue',
     ],
     primaryRoles: ['Support', 'Customer Success'],
@@ -358,13 +530,39 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   },
   {
     name: 'Legal & compliance',
-    keywords: ['legal', 'contract', 'agreement', 'nda', 'policy', 'liability'],
+    keywords: [
+      'legal',
+      // Bare "contract"/"agreement"/"policy" are routine outside legal
+      // ("we came to an agreement about lunch", "gym membership policy",
+      // muscle "contract") — the qualifying phrase is what actually means
+      // the legal/compliance sense.
+      'legal contract',
+      'contract review',
+      'contract negotiation',
+      'legal agreement',
+      'settlement agreement',
+      'nda',
+      'policy review',
+      'privacy policy',
+      'liability',
+    ],
     primaryRoles: ['Legal'],
     adjacentRoles: ['Compliance Engineer', 'Finance', 'Director'],
   },
   {
     name: 'Administration & office operations',
-    keywords: ['admin', 'office', 'facilities', 'logistics', 'procurement', 'vendor'],
+    keywords: [
+      'admin',
+      'office',
+      'facilities',
+      // Bare "logistics" is routine outside office operations ("dating
+      // logistics", "the logistics of the trip") — the qualifying phrase is
+      // what actually means the office-operations sense.
+      'office logistics',
+      'logistics coordination',
+      'procurement',
+      'vendor',
+    ],
     primaryRoles: ['Administrator', 'Office Administrator'],
     adjacentRoles: ['HR', 'Finance', 'Contractor'],
   },
