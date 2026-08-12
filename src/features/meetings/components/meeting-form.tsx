@@ -33,6 +33,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { DateTimeWheelField, roundUpToStep } from '@/components/ui/datetime-wheel'
+import { autoMeetingTitle, isAutoMeetingTitle } from '@/features/meetings/auto-title'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -378,6 +379,20 @@ export function MeetingForm({
     }
   }
 
+  // Fills the title in from the app and start time, but only while the title
+  // is still ours to fill: an empty box, or a suggestion we generated earlier
+  // and the user has not replaced. The moment someone types their own title,
+  // every later app or time change leaves it alone.
+  function withAutoTitle(f: FormState, next: { appId?: string; start?: Date }): FormState {
+    const merged = { ...f, ...next }
+    if (merged.title.trim() && !isAutoMeetingTitle(merged.title)) return merged
+    const appName = apps.find((app) => app.id === merged.appId)?.name ?? null
+    const suggested = autoMeetingTitle({ appName, startsAt: merged.start })
+    // An empty suggestion means "no app chosen" — keep whatever is there
+    // rather than blanking a title the user is midway through typing.
+    return suggested ? { ...merged, title: suggested } : merged
+  }
+
   function handleAppChange(appId: string) {
     // The old team suggestion is withdrawn the moment the app changes — not
     // when (or if) the new team arrives. Waiting for the response to do the
@@ -385,7 +400,7 @@ export function MeetingForm({
     // and strands it there for good if the fetch fails (only a toast would
     // say anything). Manually-picked people stay either way; "No app" just
     // ends here with nothing to fetch.
-    setForm((f) => ({ ...f, appId, ...applyTeamPrefill(f, [], []) }))
+    setForm((f) => withAutoTitle({ ...f, appId, ...applyTeamPrefill(f, [], []) }, { appId }))
     if (appId) void prefillTeam(appId)
   }
 
@@ -407,11 +422,12 @@ export function MeetingForm({
   // follows to start+1h. Manual edits to the end field afterward are left
   // alone — this only fires off a start change.
   function handleStartChange(next: Date) {
-    setForm((f) => ({
-      ...f,
-      start: next,
-      end: next >= f.end ? addHours(next, 1) : f.end,
-    }))
+    setForm((f) =>
+      withAutoTitle(
+        { ...f, start: next, end: next >= f.end ? addHours(next, 1) : f.end },
+        { start: next },
+      ),
+    )
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
