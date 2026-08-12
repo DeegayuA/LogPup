@@ -46,7 +46,7 @@ export async function respondToMeeting(
     verb: 'rsvp',
     entityType: 'meeting',
     entityId: meetingId,
-    entityLabel: meeting?.title ?? '',
+    entityLabel: meeting.title,
     pagePath: '/meetings',
     detail: parsed.data,
   })

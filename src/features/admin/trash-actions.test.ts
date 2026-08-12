@@ -247,6 +247,14 @@ describe('restoreTask / restoreSprint', () => {
     )
   })
 
+  it('restoreSprint errs when already live (same guarded-UPDATE shape as restoreTask)', async () => {
+    asAdmin()
+    stateFor(sprints).updateReturning = [[]]
+    const res = await restoreSprint(ID)
+    expect(res.ok).toBe(false)
+    expect(logActivityMock).not.toHaveBeenCalled()
+  })
+
   it('restoreSprint restores and logs with a pagePath', async () => {
     asAdmin()
     stateFor(sprints).updateReturning = [[{ id: ID, name: 'Sprint 9', appId: APP_ID }]]
@@ -494,6 +502,14 @@ describe('purgeTask / purgeSprint / purgeSegment: guarded delete + no-op on conc
     expect(res.ok).toBe(true)
   })
 
+  it('purgeSprint no-ops when the guarded delete matches 0 rows', async () => {
+    asAdmin()
+    stateFor(sprints).deleteReturning = [[]]
+    const res = await purgeSprint(ID, 'delete forever')
+    expect(res.ok).toBe(false)
+    expect(logActivityMock).not.toHaveBeenCalled()
+  })
+
   it('purgeSegment purges a note whose parent meeting still exists', async () => {
     asAdmin()
     stateFor(meetingNoteSegments).select = [[{ meetingId: MEETING_ID, meetingTitle: 'Standup' }]]
@@ -503,5 +519,14 @@ describe('purgeTask / purgeSprint / purgeSegment: guarded delete + no-op on conc
     expect(logActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ entityLabel: noteSegmentDeleteLabel('Standup') }),
     )
+  })
+
+  it('purgeSegment no-ops when the guarded delete matches 0 rows', async () => {
+    asAdmin()
+    stateFor(meetingNoteSegments).select = [[{ meetingId: MEETING_ID, meetingTitle: 'Standup' }]]
+    stateFor(meetingNoteSegments).deleteReturning = [[]]
+    const res = await purgeSegment(ID, 'delete forever')
+    expect(res.ok).toBe(false)
+    expect(logActivityMock).not.toHaveBeenCalled()
   })
 })

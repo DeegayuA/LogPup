@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 import {
   buildAssignmentTrashRow,
   buildKeyframeTrashRow,
@@ -86,6 +87,22 @@ describe('segment/keyframe rows: neutral label, never content', () => {
     expect(row.label).toBe('a screen keyframe in Sprint planning')
     expect(Object.keys(rawSegment)).not.toContain('blobUrl')
     expect(Object.keys(rawSegment)).not.toContain('blobPathname')
+  })
+
+  // Cross-check against the shared module directly, not just a hardcoded
+  // string — this is what actually stops trash-grouping.ts's builders and
+  // note-labels.ts (also used by ai-actions.ts) from silently drifting into
+  // two different neutral labels. Before note-labels.ts existed, both sides
+  // carried their OWN copy of these two functions and nothing caught a
+  // divergence between them.
+  it('a segment row label is exactly noteSegmentDeleteLabel from the shared module', () => {
+    const row = buildSegmentTrashRow(rawSegment)
+    expect(row.label).toBe(noteSegmentDeleteLabel(rawSegment.meetingTitle))
+  })
+
+  it('a keyframe row label is exactly keyframeDeleteLabel from the shared module', () => {
+    const row = buildKeyframeTrashRow({ ...rawSegment, id: 'kf1' })
+    expect(row.label).toBe(keyframeDeleteLabel(rawSegment.meetingTitle))
   })
 
   it('parentTrashed is false when the parent meeting is live', () => {

@@ -62,6 +62,14 @@ import {
 import { concatenateSegments } from '@/features/meetings/recording-segments'
 import { formatCapturedAt, MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
+// Re-exported below (not just imported) — existing callers, including this
+// file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
+// './ai-actions'. The implementation itself lives in note-labels.ts, a
+// dependency-free leaf module shared with src/features/admin/trash-grouping.ts
+// so the two neutral labels can never drift into two different strings.
+import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
+
+export { keyframeDeleteLabel, noteSegmentDeleteLabel }
 
 // Legacy single-shot path (analyzeMeetingAudio, below): the whole recording
 // as one inline-base64 upload. Superseded for live recordings by the
@@ -1329,15 +1337,6 @@ function keyframeProxyUrl(pathname: string): string {
 const MAX_KEYFRAME_BYTES = 1 * 1024 * 1024
 const ALLOWED_KEYFRAME_TYPES = ['image/jpeg']
 
-/**
- * Neutral entityLabel for a keyframe-delete activity row. A screen keyframe
- * can contain whatever was on someone's screen — code, a dashboard, a
- * private doc — so the trail names where it lived, never what was in it.
- * Exported as a named const so a test can assert the output never carries
- * keyframe content.
- */
-export const keyframeDeleteLabel = (meetingTitle: string) => `a screen keyframe in ${meetingTitle}`
-
 export type MeetingScreenshotView = {
   id: string
   url: string
@@ -2279,14 +2278,6 @@ export async function editNoteSegment(segmentId: string, content: string): Promi
   revalidatePath('/meetings')
   return ok(undefined)
 }
-
-/**
- * Neutral entityLabel for a note-segment-delete activity row. A segment can
- * carry a voice transcript or written notes — the trail names where it lived
- * (which meeting), never what was actually said or written. Exported as a
- * named const so a test can assert the output never carries segment content.
- */
-export const noteSegmentDeleteLabel = (meetingTitle: string) => `a note segment in ${meetingTitle}`
 
 /** Deletes a typed or AI segment. Voice (transcript) segments are read-only. */
 export async function deleteNoteSegment(segmentId: string): Promise<ActionResult> {

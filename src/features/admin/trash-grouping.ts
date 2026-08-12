@@ -8,20 +8,18 @@
 // this logic is unit-testable with hand-built fixtures, no mocking required.
 //
 // THE LABEL RULE THIS FILE EXISTS TO ENFORCE: a segment or keyframe's label
-// is ALWAYS the neutral placeholder that src/features/meetings/ai-actions.ts
-// also uses for its own logActivity rows (noteSegmentDeleteLabel /
-// keyframeDeleteLabel), never the segment's text or the keyframe's image.
-// Trash is a retraction — showing what was retracted would defeat the point
-// of having deleted it. trash-grouping.test.ts pins this down directly.
+// is ALWAYS the neutral placeholder from note-labels.ts (also used by
+// src/features/meetings/ai-actions.ts for its own logActivity rows), never
+// the segment's text or the keyframe's image. Trash is a retraction —
+// showing what was retracted would defeat the point of having deleted it.
+// trash-grouping.test.ts pins this down directly.
 //
-// The two builders below are DUPLICATED from ai-actions.ts, not imported —
-// ai-actions.ts pulls in `@/lib/auth` (and, through it, next-auth/next/server)
-// at module load, which is exactly the kind of dependency this file exists to
-// stay free of so it can be unit tested with zero mocks. Each is one line;
-// keep them byte-for-byte identical to ai-actions.ts's noteSegmentDeleteLabel
-// / keyframeDeleteLabel if either ever changes.
-const noteSegmentDeleteLabel = (meetingTitle: string) => `a note segment in ${meetingTitle}`
-const keyframeDeleteLabel = (meetingTitle: string) => `a screen keyframe in ${meetingTitle}`
+// note-labels.ts is imported, not duplicated: it is deliberately a
+// dependency-free leaf (imports nothing), unlike ai-actions.ts, which pulls
+// in `@/lib/auth` — and, through it, next-auth/next/server — at module load.
+// Importing the shared module keeps this file's zero-mock testability intact
+// while removing the drift risk two separate copies would carry.
+import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 
 export const TRASH_KINDS = ['meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'] as const
 export type TrashKind = (typeof TRASH_KINDS)[number]

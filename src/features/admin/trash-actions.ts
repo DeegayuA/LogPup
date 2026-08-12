@@ -25,7 +25,7 @@ import {
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
-import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/ai-actions'
+import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 import { MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
 
 const CONFIRM_PHRASE = 'delete forever'
@@ -350,6 +350,11 @@ export async function restoreAssignment(historyId: string): Promise<ActionResult
     .orderBy(desc(assignmentHistory.effectiveFrom))
     .limit(1)
   const role = predecessor?.role ?? tombstone.role
+  // Defensive fallback only — a 'removed' tombstone always closes a real
+  // predecessor interval by construction (see the comment above), so this
+  // should never actually fire. 5 is the same floor assignInput/
+  // assignmentUpdateInput enforce on allocationPct (.min(5)) in
+  // src/features/people/actions.ts, so a fallback write can never violate it.
   const allocationPct = predecessor?.allocationPct ?? 5
 
   const at = new Date()
