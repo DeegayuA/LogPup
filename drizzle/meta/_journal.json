@@ -169,6 +169,13 @@
       "when": 1786517302115,
       "tag": "0024_meeting_followup_task_link",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786518385468,
+      "tag": "0025_soft_delete",
+      "breakpoints": true
     }
   ]
 }
