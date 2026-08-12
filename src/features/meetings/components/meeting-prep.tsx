@@ -31,11 +31,22 @@ import { MetaChip, SectionHeading, SkeletonBlock } from '@/features/meetings/com
 export function MeetingPrepSection({
   meetingId,
   currentUserId,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   meetingId: string
   currentUserId: string
+  /** Controlled open state, for a caller (the meeting write-up's panel shell)
+   *  that persists this alongside every other panel's collapse preference.
+   *  Omit both this and onOpenChange to keep the original uncontrolled
+   *  behaviour (starts open, manages its own state) — every other caller,
+   *  if one ever exists, is unaffected. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(true)
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(true)
+  const open = controlledOpen ?? uncontrolledOpen
+  const setOpen = onOpenChange ?? setUncontrolledOpen
   const [rows, setRows] = useState<AttendeePrep[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -157,7 +168,11 @@ export function MeetingPrepSection({
             type="button"
             aria-expanded={open}
             aria-controls={bodyId}
-            onClick={() => setOpen((value) => !value)}
+            // Computed from the resolved `open` rather than a functional
+            // updater: `setOpen` may be the caller's onOpenChange, whose
+            // signature is `(open: boolean) => void` — an updater function
+            // would be passed straight through as the new "open" value.
+            onClick={() => setOpen(!open)}
           >
             {open ? 'Hide' : 'Show'}
             <ChevronDown

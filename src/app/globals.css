@@ -47,6 +47,10 @@
   --color-weekend: var(--weekend);
   --color-holiday: var(--holiday);
   --color-mercantile: var(--mercantile);
+  --color-tag-action: var(--tag-action);
+  --color-tag-discussion: var(--tag-discussion);
+  --color-tag-question: var(--tag-question);
+  --color-tag-term: var(--tag-term);
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
   --radius-sm: calc(var(--radius) * 0.6);
@@ -109,6 +113,22 @@
      oklch(0.48 0.17 265) checks at ~6.4:1 against --background and ~6.8:1
      against --card, both well past the WCAG AA 3:1 floor for non-text/UI. */
   --mercantile: oklch(0.48 0.17 265);
+  /* Content-KIND tags for the meeting write-up panels (see
+     docs/superpowers/specs/2026-08-12-meeting-writeup-panels-design.md) — a
+     second axis from the state colours above: "what taxonomy is this" rather
+     than "what condition is this in". Four hues, not five: carried-forward
+     already has a real colour system (the fresh/aging/stale ages above) and
+     doesn't need a second one, so it carries no tag hue of its own. Chosen to
+     avoid every hue zone already claimed above (pine ~149-165, amber
+     ~42-82, red ~15-45, blue ~245-285) and verified by a manual
+     OKLCH->linear-sRGB->WCAG-luminance script rather than eyeballed — all
+     four clear >=5.8:1 against --background/--card/--muted here (floor is
+     3:1 for the icon/border-only, non-text use these get; see the spec for
+     why chart-1..5 were rejected instead of reused). */
+  --tag-action: oklch(0.48 0.09 110);
+  --tag-discussion: oklch(0.48 0.09 220);
+  --tag-question: oklch(0.48 0.09 300);
+  --tag-term: oklch(0.48 0.09 350);
   --border: oklch(0.905 0.008 100);
   --input: oklch(0.905 0.008 100);
   --ring: oklch(0.56 0.08 165);
@@ -159,6 +179,12 @@
   /* Same blue family as light mode, lightened for a dark surface: ~9.4:1
      against --background and ~8.7:1 against --card. */
   --mercantile: oklch(0.78 0.12 268);
+  /* Same four kind hues as :root, lightened for a dark surface — all four
+     clear >=7.8:1 against --background/--card/--muted here. */
+  --tag-action: oklch(0.74 0.1 110);
+  --tag-discussion: oklch(0.74 0.1 220);
+  --tag-question: oklch(0.74 0.1 300);
+  --tag-term: oklch(0.74 0.1 350);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.68 0.08 165);

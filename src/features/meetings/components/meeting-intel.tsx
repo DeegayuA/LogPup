@@ -16,7 +16,6 @@ import {
   Languages,
   ListTodo,
   Loader2,
-  MessageCircleQuestion,
   MessageSquareQuote,
   Mic,
   MonitorSpeaker,
@@ -28,6 +27,7 @@ import {
   Square,
   TriangleAlert,
   UserPlus,
+  Users,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -40,16 +40,30 @@ import { NoteTimeline } from '@/features/meetings/components/note-timeline'
 import {
   bilingualText,
   MetaChip,
-  SectionHeading,
   SkeletonBlock,
 } from '@/features/meetings/components/meeting-chips'
 import { MeetingAiNotes, MeetingNotesEmpty } from '@/features/meetings/components/meeting-notes'
 import { MeetingPrepSection } from '@/features/meetings/components/meeting-prep'
 import {
+  buildActionList,
   followupAge,
   glanceFromIntel,
   type MeetingGlance,
 } from '@/features/meetings/components/meeting-notes-model'
+import {
+  FilterBar,
+  KIND_META,
+  MeetingPanelsProvider,
+  Panel,
+  PanelNav,
+  PANEL_DEFAULT_OPEN,
+  PANEL_FRAME_CLASS,
+  PanelsLayout,
+  usePanels,
+  type PanelId,
+  type PanelNavItem,
+} from '@/features/meetings/components/meeting-panels'
+import type { ContentKind } from '@/features/meetings/components/meeting-panels-model'
 import {
   addFollowup,
   attributeFollowup,
@@ -256,6 +270,29 @@ function storedValue(item: CarriedForwardItem, field: ComposerField): string {
   if (field === 'outcome') return item.resolutionNote ?? ''
   if (field === 'said') return item.responseNote ?? ''
   return item.deferReason ?? ''
+}
+
+/**
+ * "Around the table" keeps its own internal open/closed state everywhere
+ * else it might ever be used — this wrapper is the one caller that lifts it
+ * into the write-up's shared persisted panel mechanism (see
+ * meeting-panels.tsx) so its collapse behaviour matches every other panel
+ * here, without changing a single line of meeting-prep.tsx's own rendering.
+ * Must render inside a MeetingPanelsProvider — see MeetingIntelPanel below.
+ */
+function AroundTheTablePanel({ meetingId, currentUserId }: { meetingId: string; currentUserId: string }) {
+  const { openMap, setPanelOpen } = usePanels()
+  const id: PanelId = 'around-the-table'
+  return (
+    <div id={id} className={PANEL_FRAME_CLASS}>
+      <MeetingPrepSection
+        meetingId={meetingId}
+        currentUserId={currentUserId}
+        open={openMap[id] ?? PANEL_DEFAULT_OPEN[id]}
+        onOpenChange={(value) => setPanelOpen(id, value)}
+      />
+    </div>
+  )
 }
 
 export function MeetingIntelPanel({
@@ -1478,6 +1515,64 @@ export function MeetingIntelPanel({
   // about what "today" is.
   const now = new Date()
 
+  // Unfiltered per-kind totals for the filter bar's kind chips (see
+  // FilterBar's doc comment for why these must ignore the active filters)
+  // and the sticky nav's count badges.
+  const totalActions = notes ? buildActionList(notes, now).length : 0
+  const totalDiscussionPoints = notes
+    ? notes.perPerson.reduce((total, person) => total + person.points.length, 0)
+    : 0
+  const totalQuestions = notes ? notes.questions.reduce((total, entry) => total + entry.questions.length, 0) : 0
+  const totalTerms = notes?.terms.length ?? 0
+  const totalCarried = prep.reduce((total, group) => total + group.items.length, 0)
+  const kindTotals: Record<ContentKind, number> = {
+    action: totalActions,
+    discussion: totalDiscussionPoints,
+    question: totalQuestions,
+    term: totalTerms,
+    'carried-forward': totalCarried,
+  }
+  const panelNavItems: PanelNavItem[] = [
+    ...(notes?.summary ? [{ id: 'summary' as PanelId, label: 'Summary', icon: Sparkles }] : []),
+    ...(totalActions > 0
+      ? [{ id: 'action-items' as PanelId, label: KIND_META.action.label, icon: KIND_META.action.icon, count: totalActions }]
+      : []),
+    ...(totalDiscussionPoints > 0
+      ? [
+          {
+            id: 'discussion' as PanelId,
+            label: KIND_META.discussion.label,
+            icon: KIND_META.discussion.icon,
+            count: totalDiscussionPoints,
+          },
+        ]
+      : []),
+    ...(totalQuestions > 0
+      ? [
+          {
+            id: 'for-next-meeting' as PanelId,
+            label: KIND_META.question.label,
+            icon: KIND_META.question.icon,
+            count: totalQuestions,
+          },
+        ]
+      : []),
+    ...(totalTerms > 0
+      ? [{ id: 'glossary' as PanelId, label: KIND_META.term.label, icon: KIND_META.term.icon, count: totalTerms }]
+      : []),
+    { id: 'around-the-table' as PanelId, label: 'Around the table', icon: Users },
+    ...(unattributed.length > 0
+      ? [{ id: 'needs-attribution' as PanelId, label: 'Needs attribution', icon: UserPlus, count: unattributed.length }]
+      : []),
+    {
+      id: 'carried-forward' as PanelId,
+      label: KIND_META['carried-forward'].label,
+      icon: KIND_META['carried-forward'].icon,
+      count: openCount > 0 ? openCount : undefined,
+    },
+    { id: 'record' as PanelId, label: 'Record', icon: NotebookPen },
+  ]
+
   return (
     <div ref={rootRef} className="flex flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -1794,62 +1889,60 @@ export function MeetingIntelPanel({
               </Button>
             </div>
           ) : (
-            <>
-              {/* The write-up leads: it is what someone opening a past meeting
-                  came for. The full record (transcript, typed notes, the
-                  composer) sits underneath it. */}
-              {notes ? (
-                <MeetingAiNotes notes={notes} now={now} headingId={`${panelId}-summary`} />
-              ) : (
-                <MeetingNotesEmpty canRecord={canRecord}>
-                  <p className="text-xs text-muted-foreground">
-                    Gemini keys live in{' '}
-                    <Link href="/profile#gemini" className="underline hover:text-foreground">
-                      Profile → Gemini API keys
-                    </Link>
-                    .
-                  </p>
-                </MeetingNotesEmpty>
-              )}
+            <MeetingPanelsProvider people={attendees} currentUserId={currentUserId}>
+              <PanelsLayout nav={<PanelNav items={panelNavItems} />}>
+                <FilterBar kindTotals={kindTotals} />
 
-              {/* One meeting covers every project its people work on — the
-                  per-attendee walk-through (their apps, sprint counts, and
-                  check-ins) loads its own board-derived data independently of
-                  the transcript-bearing intel above (see meeting-prep.tsx). */}
-              <MeetingPrepSection meetingId={meetingId} currentUserId={currentUserId} />
+                {/* The write-up leads: it is what someone opening a past meeting
+                    came for. The full record (transcript, typed notes, the
+                    composer) sits underneath it. */}
+                {notes ? (
+                  <MeetingAiNotes notes={notes} now={now} />
+                ) : (
+                  <MeetingNotesEmpty canRecord={canRecord}>
+                    <p className="text-xs text-muted-foreground">
+                      Gemini keys live in{' '}
+                      <Link href="/profile#gemini" className="underline hover:text-foreground">
+                        Profile → Gemini API keys
+                      </Link>
+                      .
+                    </p>
+                  </MeetingNotesEmpty>
+                )}
 
-              {unattributed.length > 0 ? (
-                <section className="flex flex-col gap-2">
-                  <SectionHeading
-                    icon={UserPlus}
-                    title="Needs attribution"
-                    count={unattributed.length}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Heard from someone the notes couldn&rsquo;t match to a person — pick who it&rsquo;s
-                    for and it carries forward normally from here.
-                  </p>
-                  <ul className="flex flex-col gap-1.5">
-                    {unattributed.map((item) => (
-                      <UnattributedRow
-                        key={item.id}
-                        item={item}
-                        people={attributionPeople}
-                        canWrite={canRecord}
-                        busy={busyAttributeId === item.id && attributePending}
-                        onAttribute={(userId) => handleAttribute(item.id, userId)}
-                      />
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
+                {/* One meeting covers every project its people work on — the
+                    per-attendee walk-through (their apps, sprint counts, and
+                    check-ins) loads its own board-derived data independently of
+                    the transcript-bearing intel above (see meeting-prep.tsx). */}
+                <AroundTheTablePanel meetingId={meetingId} currentUserId={currentUserId} />
 
-              <section className="flex flex-col gap-2">
-                <SectionHeading
-                  icon={MessageCircleQuestion}
+                {unattributed.length > 0 ? (
+                  <Panel id="needs-attribution" title="Needs attribution" icon={UserPlus} count={unattributed.length}>
+                    <p className="text-xs text-muted-foreground">
+                      Heard from someone the notes couldn&rsquo;t match to a person — pick who it&rsquo;s
+                      for and it carries forward normally from here.
+                    </p>
+                    <ul className="flex flex-col gap-1.5">
+                      {unattributed.map((item) => (
+                        <UnattributedRow
+                          key={item.id}
+                          item={item}
+                          people={attributionPeople}
+                          canWrite={canRecord}
+                          busy={busyAttributeId === item.id && attributePending}
+                          onAttribute={(userId) => handleAttribute(item.id, userId)}
+                        />
+                      ))}
+                    </ul>
+                  </Panel>
+                ) : null}
+
+                <Panel
+                  id="carried-forward"
                   title="Carried forward"
+                  icon={KIND_META['carried-forward'].icon}
                   count={openCount > 0 ? openCount : undefined}
-                  action={
+                  headerExtra={
                     <Button
                       variant="outline"
                       size="sm"
@@ -1861,96 +1954,97 @@ export function MeetingIntelPanel({
                       Add follow-up
                     </Button>
                   }
-                />
-                {openCount > 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    Anything you don&rsquo;t resolve stays open and carries forward to the next
-                    meeting these people attend.
-                  </p>
-                ) : null}
-                {addingFollowup ? (
-                  <AddFollowupForm
-                    idPrefix={`add-followup-${meetingId}`}
-                    people={people}
-                    upcomingMeetings={upcomingMeetings}
-                    pending={addPending}
-                    onCancel={() => setAddingFollowup(false)}
-                    onSubmit={handleAddFollowup}
-                  />
-                ) : null}
-                {prep.length > 0 ? (
-                  <ul className="flex flex-col gap-3">
-                    {prep.map((group) => (
-                      <li key={group.userId} className="flex flex-col gap-1.5">
-                        <h5 className="text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
-                          {group.person}
-                        </h5>
-                        <ul className="flex flex-col gap-1.5">
-                          {group.items.map((item) => {
-                            const openField =
-                              composer?.id === item.id ? composer.field : null
-                            return (
-                              <FollowupRow
-                                key={item.id}
-                                item={item}
-                                person={group.person}
-                                now={now}
-                                canWrite={canRecord || group.userId === currentUserId}
-                                canEditNotes={canRecord}
-                                busy={busyFollowupId === item.id && followupPending}
-                                keptOpen={keptOpenIds.has(item.id)}
-                                openField={openField}
-                                draft={
-                                  openField ? (drafts[draftKey(openField, item.id)] ?? '') : ''
-                                }
-                                onDraftChange={(value) =>
-                                  openField
-                                    ? setDrafts((prev) => ({
-                                        ...prev,
-                                        [draftKey(openField, item.id)]: value,
-                                      }))
-                                    : undefined
-                                }
-                                onOpenComposer={(field) => openComposer(item, field)}
-                                onCloseComposer={() => setComposer(null)}
-                                onSaveNote={(field) => handleSaveNote(item, field)}
-                                onResolve={() => handleResolve(item.id)}
-                                onReopen={() => handleReopen(item)}
-                                onNotYet={() => handleNotYet(item.id)}
-                                onCopyResponse={() => handleCopyResponse(item)}
-                                onCloseStale={() => handleCloseStale(item.id)}
-                              />
-                            )
-                          })}
-                        </ul>
-                        {group.overflowCount > 0 ? (
-                          <p className="pl-1 text-2xs text-muted-foreground">
-                            +<span className="font-mono tabular-nums">{group.overflowCount}</span>{' '}
-                            more, oldest shown first
-                          </p>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                {openCount === 0 ? (
-                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden />
-                    Nothing open is carried in for this meeting&rsquo;s attendees.
-                  </p>
-                ) : null}
-              </section>
+                >
+                  {openCount > 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Anything you don&rsquo;t resolve stays open and carries forward to the next
+                      meeting these people attend.
+                    </p>
+                  ) : null}
+                  {addingFollowup ? (
+                    <AddFollowupForm
+                      idPrefix={`add-followup-${meetingId}`}
+                      people={people}
+                      upcomingMeetings={upcomingMeetings}
+                      pending={addPending}
+                      onCancel={() => setAddingFollowup(false)}
+                      onSubmit={handleAddFollowup}
+                    />
+                  ) : null}
+                  {prep.length > 0 ? (
+                    <ul className="flex flex-col gap-3">
+                      {prep.map((group) => (
+                        <li key={group.userId} className="flex flex-col gap-1.5">
+                          <h5 className="text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
+                            {group.person}
+                          </h5>
+                          <ul className="flex flex-col gap-1.5">
+                            {group.items.map((item) => {
+                              const openField =
+                                composer?.id === item.id ? composer.field : null
+                              return (
+                                <FollowupRow
+                                  key={item.id}
+                                  item={item}
+                                  person={group.person}
+                                  now={now}
+                                  canWrite={canRecord || group.userId === currentUserId}
+                                  canEditNotes={canRecord}
+                                  busy={busyFollowupId === item.id && followupPending}
+                                  keptOpen={keptOpenIds.has(item.id)}
+                                  openField={openField}
+                                  draft={
+                                    openField ? (drafts[draftKey(openField, item.id)] ?? '') : ''
+                                  }
+                                  onDraftChange={(value) =>
+                                    openField
+                                      ? setDrafts((prev) => ({
+                                          ...prev,
+                                          [draftKey(openField, item.id)]: value,
+                                        }))
+                                      : undefined
+                                  }
+                                  onOpenComposer={(field) => openComposer(item, field)}
+                                  onCloseComposer={() => setComposer(null)}
+                                  onSaveNote={(field) => handleSaveNote(item, field)}
+                                  onResolve={() => handleResolve(item.id)}
+                                  onReopen={() => handleReopen(item)}
+                                  onNotYet={() => handleNotYet(item.id)}
+                                  onCopyResponse={() => handleCopyResponse(item)}
+                                  onCloseStale={() => handleCloseStale(item.id)}
+                                />
+                              )
+                            })}
+                          </ul>
+                          {group.overflowCount > 0 ? (
+                            <p className="pl-1 text-2xs text-muted-foreground">
+                              +<span className="font-mono tabular-nums">{group.overflowCount}</span>{' '}
+                              more, oldest shown first
+                            </p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {openCount === 0 ? (
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden />
+                      Nothing open is carried in for this meeting&rsquo;s attendees.
+                    </p>
+                  ) : null}
+                </Panel>
 
-              {/* The full record last: the transcript, the typed notes and the
-                  composer are the raw material the write-up above was made
-                  from, so they read as the appendix rather than the headline.
-                  The AI summary is passed down so the timeline does not repeat
-                  it — it is already rendered above at full size. */}
-              <section className="flex flex-col gap-2">
-                <SectionHeading
-                  icon={NotebookPen}
+                {/* The full record last: the transcript, the typed notes and the
+                    composer are the raw material the write-up above was made
+                    from, so they read as the appendix rather than the headline —
+                    collapsed by default for exactly that reason (see the spec). The
+                    AI summary is passed down so the timeline does not repeat it —
+                    it is already rendered above at full size. */}
+                <Panel
+                  id="record"
                   title="Record"
-                  action={
+                  icon={NotebookPen}
+                  headerExtra={
                     // Manual-override layer (a): only the meeting's
                     // creator/admin can even see this, same tier as the
                     // record controls above — setMeetingAutoAssignTasks
@@ -1969,26 +2063,27 @@ export function MeetingIntelPanel({
                       </label>
                     ) : undefined
                   }
-                />
-                {canRecord ? (
-                  <p className="text-2xs text-muted-foreground">
-                    {autoAssignTasks
-                      ? 'Confident, clearly-owned action items become real tasks automatically — everything else still needs a click.'
-                      : 'Off — every identified task stays a suggestion card for you to review.'}
-                  </p>
-                ) : null}
-                <NoteTimeline
-                  meetingId={meetingId}
-                  meetingTitle={meetingTitle}
-                  canManage={canRecord}
-                  attendees={attendees}
-                  appId={appId}
-                  mentionUsers={mentionUsers}
-                  shownElsewhere={notes?.summary ?? null}
-                  autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
-                />
-              </section>
-            </>
+                >
+                  {canRecord ? (
+                    <p className="text-2xs text-muted-foreground">
+                      {autoAssignTasks
+                        ? 'Confident, clearly-owned action items become real tasks automatically — everything else still needs a click.'
+                        : 'Off — every identified task stays a suggestion card for you to review.'}
+                    </p>
+                  ) : null}
+                  <NoteTimeline
+                    meetingId={meetingId}
+                    meetingTitle={meetingTitle}
+                    canManage={canRecord}
+                    attendees={attendees}
+                    appId={appId}
+                    mentionUsers={mentionUsers}
+                    shownElsewhere={notes?.summary ?? null}
+                    autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
+                  />
+                </Panel>
+              </PanelsLayout>
+            </MeetingPanelsProvider>
           )}
         </div>
       ) : null}
