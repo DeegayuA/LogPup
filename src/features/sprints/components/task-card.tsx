@@ -233,9 +233,17 @@ export function TaskCard({
       tabIndex={0}
       onClick={() => onOpen(task)}
       onKeyDown={(event) => {
-        // The shared drag kit's KeyboardSensor claims Space to lift the
-        // card, so only Enter opens it now — Space here would race the
-        // sensor's own onKeyDown and either double-fire or fight the lift.
+        // This prop REPLACES the onKeyDown that {...listeners} just spread —
+        // JSX keeps the last value per prop — so the shared drag kit's
+        // KeyboardSensor must be forwarded to by hand or it never hears a
+        // key at all (verified live: Space did nothing before this forward).
+        // The sensor preventDefaults the events it claims (Space to lift,
+        // then Space/Enter to drop, Escape to cancel), which is exactly the
+        // signal to leave them alone here. Enter on an idle card is the one
+        // key the sensor declines — keyboardCodes.start is Space only, per
+        // drag-surface.tsx — and that is what opens the dialog.
+        listeners?.onKeyDown?.(event)
+        if (event.defaultPrevented) return
         if (event.key === 'Enter') {
           event.preventDefault()
           onOpen(task)

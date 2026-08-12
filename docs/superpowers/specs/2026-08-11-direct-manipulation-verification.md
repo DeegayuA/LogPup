@@ -128,3 +128,50 @@ Apply migration `0020_sprint_sort_order` to the dev database (additive:
 `ADD COLUMN IF NOT EXISTS` + a 3-row backfill; reversible with `DROP COLUMN`).
 That alone makes the board, roadmap, inline-edit and touch checks reachable.
 `0019` is not needed for any of them.
+
+## Round 2 — after sort_order was applied to the dev DB (by the coordinator)
+
+`/apps/logpup?tab=board` now renders: sprint switcher, all three columns
+(To do 0 / In progress 0 / Done 1), the "this" task card in Done, the a11y
+hint "Select a card to open it. Press Space to lift a card…", and add-task
+inputs per column. No server error.
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| Board renders after 0020 (was the hard blocker) | **PASS** | full a11y snapshot of the board tab |
+| Click a card opens the dialog | **PASS** | real CDP click on the card → `role="dialog"` titled "Edit task" with assignee/due/priority fields; Esc closed it |
+| `Enter` opens the dialog | **PASS** | focused the card, real `Enter` keypress → same "Edit task" dialog opened; Esc closed it |
+| `Space` lifts the card | **FAIL — real defect, found in browser, fixed** | see below |
+
+#### Defect: Space-to-lift never worked on task cards
+
+Observed: focused card, real CDP `Space` keypress. Event recorder confirmed
+`keydown key=" " code="Space"` arrived **at the card element** — and nothing
+happened. No `DragOverlay`, no announcement, no transform; the page just
+scrolls (the card is a `role="button"` DIV, so Space has no default
+activation to suppress).
+
+Root cause (`task-card.tsx`): `{...listeners}` spreads dnd-kit's `onKeyDown`
+activator onto the card, and the card's own `onKeyDown={...}` prop written
+**after** the spread replaces it — so the KeyboardSensor's Space handler is
+clobbered and only the card's Enter branch survives. The adjacent comment
+("The shared drag kit's KeyboardSensor claims Space to lift the card") shows
+this was believed to work; the board even instructs "Press Space to lift a
+card…". On the roadmap the identical override is deliberate and documented;
+here it was accidental.
+
+Fix: the card's `onKeyDown` now forwards to `listeners.onKeyDown` first and
+only handles Enter when the sensor didn't claim the event
+(`event.defaultPrevented`). This restores the documented behaviour rather
+than changing it. Re-tested live after the fix — results below.
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| `Space` lifts (after fix) | **PASS** | real Space keypress → `DragOverlay` clone appeared (`position:fixed`, z-999), announcement "this is over this." — and the Edit dialog did NOT open |
+| Arrow keys move the lifted card | **PASS** | overlay tracked left 815 → 744 → 669 across three/six presses; announcement changed to "this is over the In progress column." |
+| `Space` drops | **PASS** | announcement "this moved to the In progress column.", counts went Done 1→0, In progress 0→1, overlay unmounted, no dialog, no error toast |
+| `Esc` cancels a lift | **PASS** | lift + 2 arrows + Escape → "Move cancelled. this stays where it was.", counts unchanged |
+| Enter still opens (not stolen by sensor) | **PASS** | `keyboardCodes.start` is Space-only; Enter re-verified opening the dialog after the fix was live |
+| Mouse drag between all three columns | **PASS** | Done→In progress (keyboard), In progress→To do and To do→Done via stepped mousedown/mousemove×10/mouseup. Overlay visible throughout, "over the To do column" mid-drag, counts moved 1→0/0→1 correctly each time, no error toast (server write accepted). Caveat: the MCP `drag` tool itself sends a single large move, which dnd-kit's `distance: 8` activation consumes — delta 0, no-op ("this moved to this."). The stepped sequence drives the identical MouseSensor pipeline; only the OS input layer is synthesized. |
+| **DragOverlay NOT clipped at the scroller edge** (the original bug) | **PASS** | Pinned the board's `overflow-x-auto snap-x` scroller to 420px so it truly clips (its own "In progress" column is visibly cut at the right edge). Held a drag mid-gesture: overlay rect x=48..288 vs scroller visible box x=248..668 — 200px of the drag copy renders **outside** the container, `visibility:visible, opacity:1`, position:fixed z-999 portal. Screenshot taken; the To do column also showed its green drop-target highlight during the drag. Cancelled cleanly, layout restored. |
+| Board layout note (pre-existing, not a defect in this branch) | observation | At narrow viewports the board's snap-x container never internally scrolls — it stays content-width (800px) and the **document** scrolls horizontally instead (`html.scrollWidth` 848 vs viewport 500). The overlay fix is structural (body portal) so it is immune either way. |
