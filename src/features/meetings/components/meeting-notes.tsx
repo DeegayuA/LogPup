@@ -24,6 +24,7 @@ import {
   SectionHeading,
 } from '@/features/meetings/components/meeting-chips'
 import type { ActionRow } from '@/features/meetings/components/meeting-notes-model'
+import { SpeakButton } from '@/features/speech/components/speak-button'
 import {
   EmptyFilterState,
   Panel,
@@ -197,7 +198,17 @@ export function MeetingAiNotes({
   return (
     <div className="flex flex-col gap-3">
       {notes.summary ? (
-        <Panel id="summary" title="Summary" icon={Sparkles}>
+        <Panel
+          id="summary"
+          title="Summary"
+          icon={Sparkles}
+          // Reads exactly what is on screen — the language control below
+          // decides which blocks those are, so switching to Sinhala and
+          // pressing play speaks Sinhala rather than the English original.
+          headerExtra={
+            <SpeakButton getText={() => summaryBlocks.map((block) => block.content).join('\n\n')} />
+          }
+        >
           {hasSinhala ? (
             <SummaryLanguageControl value={summaryLang} onChange={setSummaryLang} hasSinhala={hasSinhala} />
           ) : null}

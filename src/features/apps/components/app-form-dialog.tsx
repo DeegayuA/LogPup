@@ -363,7 +363,11 @@ export function AppFormDialog({
       <DialogTrigger render={trigger ?? <Button />}>
         {isEdit ? 'Edit app' : 'New app'}
       </DialogTrigger>
-      <DialogContent>
+      {/* sm:max-w-lg, matching MeetingForm: the primitive defaults to
+          sm:max-w-sm (384px), which is a sensible floor for a confirm box but
+          far too narrow for this form — the repo row alone is an input plus a
+          Generate button, and the README paste box holds 8,000 characters. */}
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit app' : 'New app'}</DialogTitle>
           <DialogDescription>
@@ -377,13 +381,17 @@ export function AppFormDialog({
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="app-repo-url">Repo URL</Label>
             <div className="flex items-start gap-2">
+              {/* min-w-0 on the input: a flex item defaults to min-width:auto
+                  and refuses to shrink below its own content, so without it the
+                  Generate button beside it pushes the input past the dialog
+                  edge instead of the pair sharing the row. */}
               <Input
                 id="app-repo-url"
                 placeholder="https://github.com/org/repo"
                 value={form.repoUrl}
                 onChange={(e) => setField('repoUrl', e.target.value)}
                 onBlur={handleRepoUrlBlur}
-                className="hover:border-ring/40"
+                className="min-w-0 flex-1 hover:border-ring/40"
                 aria-invalid={Boolean(errors.repoUrl)}
                 aria-describedby={errors.repoUrl ? 'app-repo-url-error' : undefined}
               />

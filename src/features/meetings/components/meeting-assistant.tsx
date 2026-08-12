@@ -1,0 +1,122 @@
+'use client'
+
+import { useRef, useState, useTransition } from 'react'
+import { Loader2Icon, SendIcon, SparklesIcon } from 'lucide-react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+import { bilingualText } from '@/features/meetings/components/meeting-chips'
+import { askMeeting } from '@/features/meetings/assistant-actions'
+import { DictateButton } from '@/features/speech/components/dictate-button'
+import { SpeakButton } from '@/features/speech/components/speak-button'
+import { useSpeech } from '@/features/speech/components/use-speech'
+
+/**
+ * Ask this meeting a question — by typing or by talking — and get a short
+ * answer back, spoken aloud as well as written.
+ *
+ * The spoken half is automatic ONLY for questions asked by voice: someone
+ * who dictated a question has their hands (or eyes) elsewhere, which is why
+ * they spoke it. A typed question gets a written answer and a play button,
+ * because unexpected audio out of a laptop in an open office is a genuinely
+ * bad surprise.
+ */
+export function MeetingAssistant({ meetingId }: { meetingId: string }) {
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState<string | null>(null)
+  const [asking, startAsking] = useTransition()
+  const speech = useSpeech()
+  // Whether the question currently in flight arrived by voice — see the
+  // component doc for why only those answers speak themselves.
+  const spokenQuestionRef = useRef(false)
+
+  function ask(text: string, viaVoice: boolean) {
+    const asked = text.trim()
+    if (!asked) return
+    spokenQuestionRef.current = viaVoice
+    setAnswer(null)
+    startAsking(async () => {
+      try {
+        const res = await askMeeting(meetingId, asked)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setAnswer(res.data.answer)
+        if (spokenQuestionRef.current) void speech.speak(res.data.answer)
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  return (
+    <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5">
+      <h5 className="flex items-center gap-1.5 text-sm font-semibold">
+        <SparklesIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        Ask this meeting
+      </h5>
+      <p className="text-2xs text-muted-foreground">
+        Answers come only from this meeting&rsquo;s own record — transcript, notes, action items and
+        open follow-ups. Ask in Sinhala or English.
+      </p>
+
+      <form
+        className="flex flex-wrap items-center gap-1.5"
+        onSubmit={(event) => {
+          event.preventDefault()
+          ask(question, false)
+        }}
+      >
+        <Input
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="What did we decide about the login flow?"
+          aria-label="Ask a question about this meeting"
+          maxLength={500}
+          disabled={asking}
+          className="min-w-0 flex-1 basis-56"
+        />
+        {/* A dictated question is asked immediately — stopping to press
+            Send after speaking defeats the point of asking out loud. */}
+        <DictateButton
+          onText={(text) => {
+            setQuestion(text)
+            ask(text, true)
+          }}
+          disabled={asking}
+          label="Ask by voice"
+          size="icon-sm"
+        />
+        <Button type="submit" size="icon-sm" disabled={asking || question.trim().length === 0}>
+          {asking ? <Loader2Icon className="animate-spin" aria-hidden /> : <SendIcon aria-hidden />}
+          <span className="sr-only">Ask</span>
+        </Button>
+      </form>
+
+      {asking ? (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+          <Loader2Icon className="size-3 animate-spin" aria-hidden />
+          Reading the meeting…
+        </p>
+      ) : null}
+
+      {answer ? (
+        // The "Reading the meeting…" line above disappears the moment the
+        // answer lands, so without a live region here a screen-reader user
+        // is told the request started and never told it finished.
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-col gap-1 rounded-md border border-dashed border-border bg-muted/30 p-2.5"
+        >
+          <p className={cn(bilingualText, 'text-foreground')}>{answer}</p>
+          <div className="flex justify-end">
+            <SpeakButton getText={() => answer} label="Play answer" />
+          </div>
+        </div>
+      ) : null}
+    </section>
+  )
+}

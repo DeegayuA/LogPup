@@ -78,7 +78,7 @@ export async function validateGeminiKey(apiKey: string): Promise<boolean> {
 // the whole call immediately — trying another key or model won't help.
 type ModelAttemptResult<T> =
   | { ok: true; value: T }
-  | { ok: false; kind: 'auth' | 'quota' | 'overloaded' | 'bad'; message: string }
+  | { ok: false; kind: 'auth' | 'quota' | 'overloaded' | 'missing' | 'bad'; message: string }
 
 /** Raw generateContent response shape — extractors pull what they need out of it. */
 type GenerateContentResponse = {
@@ -169,6 +169,20 @@ async function callModelWithRetry<T>(
     // fails identically every time, so classify immediately as 'auth'.
     if (res.status === 401 || res.status === 403) {
       return { ok: false, kind: 'auth', message: `Key "${keyLabel}" got HTTP ${res.status}` }
+    }
+
+    // 404 means THIS MODEL does not exist for this key's project — a renamed
+    // or retired preview, or a model the project has no access to. That is
+    // precisely what the fallback chain exists for, so it must not fall
+    // through to the 'bad' branch below, which aborts the whole call and
+    // would take every remaining model with it. Preview models (Live, TTS)
+    // get renamed on short notice, so this is the common case, not a corner.
+    if (res.status === 404) {
+      return {
+        ok: false,
+        kind: 'missing',
+        message: `Gemini model "${model}" is unavailable on this key (HTTP 404)`,
+      }
     }
 
     if (shouldRetry(res.status, attempt, maxAttempts)) {
@@ -269,6 +283,10 @@ async function callGeminiCore<T>(
   // different, more actionable message than every model being overloaded.
   let sawAuthFailure = false
   let sawTransientBusy = false
+  // Set when every model in the chain answered 404 — a retired/renamed
+  // preview or one this project has no access to. Retrying that in a minute
+  // will never help, so it must not be reported as "everything is busy".
+  let missingModelMessage: string | null = null
 
   for (const key of keys) {
     let apiKey: string
@@ -334,10 +352,16 @@ async function callGeminiCore<T>(
         break
       }
 
+      if (result.kind === 'missing') {
+        // This model is gone, not busy — try the next model on this key.
+        missingModelMessage = result.message
+        continue
+      }
+
       // result.kind === 'overloaded' — fall through to try the next model
-      // in GEMINI_MODEL_FALLBACK_ORDER (still this key). If this was
-      // already the last model, the loop ends and we roll to the next key
-      // below without touching failCount: the key itself isn't at fault.
+      // in the chain (still this key). If this was already the last model,
+      // the loop ends and we roll to the next key below without touching
+      // failCount: the key itself isn't at fault.
       sawTransientBusy = true
     }
   }
@@ -352,6 +376,15 @@ async function callGeminiCore<T>(
     throw new GeminiError(
       'TRANSIENT_BUSY',
       'All Gemini models are busy right now — your recording is saved, try Analyze again in a minute.',
+    )
+  }
+  if (missingModelMessage) {
+    // Not transient and not the user's key: a model this build asks for no
+    // longer exists. Says so plainly rather than inviting a retry that will
+    // fail identically forever.
+    throw new GeminiError(
+      'BAD_RESPONSE',
+      `${missingModelMessage} — LogPup needs its Gemini model list updated.`,
     )
   }
   throw new GeminiError(

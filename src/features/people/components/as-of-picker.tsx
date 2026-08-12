@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { isoDaysAgo, todayIso } from '@/features/people/as-of-date'
+import { historyHref, type HistoryParams } from '@/features/people/history-params'
 import { cn } from '@/lib/utils'
 
 const PRESETS: { label: string; days: number }[] = [
@@ -26,7 +27,19 @@ const PRESETS: { label: string; days: number }[] = [
  * keyboard- and screen-reader-complete, and on mobile it opens the platform
  * picker.
  */
-export function AsOfPicker({ iso, isToday }: { iso: string; isToday: boolean }) {
+export function AsOfPicker({
+  iso,
+  isToday,
+  params,
+}: {
+  iso: string
+  isToday: boolean
+  /** The rest of the page's URL state, carried through every date change —
+   *  changing the date used to reset the view, comparison window and filter
+   *  back to their defaults, because this control rebuilt the URL from
+   *  scratch with only `at` on it. */
+  params: HistoryParams
+}) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const today = todayIso()
@@ -49,9 +62,10 @@ export function AsOfPicker({ iso, isToday }: { iso: string; isToday: boolean }) 
 
   function go(next: string) {
     startTransition(() => {
-      // Today is the default view, so it drops the param instead of pinning
-      // a date that goes stale at midnight.
-      router.push(next === today ? '/people/history' : `/people/history?at=${next}`)
+      // historyHref carries the rest of the page's state and drops `at` when
+      // it is today, so the default view stays a bare /people/history rather
+      // than pinning a date that goes stale at midnight.
+      router.push(historyHref(params, { at: next }))
     })
   }
 

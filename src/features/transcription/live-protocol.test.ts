@@ -91,7 +91,19 @@ describe('parseServerEvent', () => {
     const event = parseServerEvent({
       serverContent: { inputTranscription: { text: 'ayubowan' } },
     })
-    expect(event).toEqual({ type: 'transcript', text: 'ayubowan' })
+    expect(event).toEqual({ type: 'transcript', text: 'ayubowan', endsTurn: false })
+  })
+
+  it('reports a turn that ends on the same frame as its last words', () => {
+    // The server routinely closes a turn on the frame carrying its final
+    // fragment. Reading that as text-only left the turn in flight forever, so
+    // nothing was ever committed and the durable transcript — which is built
+    // from committed text — stayed empty for the whole meeting.
+    expect(
+      parseServerEvent({
+        serverContent: { inputTranscription: { text: 'ayubowan' }, turnComplete: true },
+      }),
+    ).toEqual({ type: 'transcript', text: 'ayubowan', endsTurn: true })
   })
 
   it('ignores an empty transcription rather than emitting a no-op update', () => {

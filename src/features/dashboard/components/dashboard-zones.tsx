@@ -54,6 +54,37 @@ import { PersonMeetingsCard } from '@/features/people/components/person-meetings
 
 const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
 
+/**
+ * THE TWO-CARD ROW, held to one height.
+ *
+ * These rows pair cards whose lengths are unrelated: capacity is one line per
+ * person, sprints is one per sprint. A twelve-person team running two sprints
+ * put a very tall card beside a very short one, and `items-start` let each
+ * size to its own content — so the row ended in a column of dead space as
+ * tall as the difference. Swap which side is longer and the gap just moves.
+ *
+ * Three rules fix it, and none of them touch the card components themselves —
+ * `PersonTasksCard` and friends are shared with /people/[id], where a natural
+ * height is right and this cap would be wrong:
+ *
+ * - No `items-start`, so the pair stretches to a common height and the row
+ *   reads as a row.
+ * - `max-h` on the card, from `lg` up only — the cap exists to keep a PAIR
+ *   even, and single-column mobile has no pair to keep even.
+ * - The content area scrolls (`min-h-0` is what lets a flex child shrink
+ *   below its own content at all), so capping never hides a person: the
+ *   twelfth teammate is one scroll away rather than clipped.
+ *
+ * 30rem is roughly ten list rows — enough that most teams never scroll, short
+ * enough that no single card owns the fold.
+ */
+const PAIRED_CARDS = [
+  'grid grid-cols-1 gap-6 lg:grid-cols-2',
+  '[&>*]:h-full [&_[data-slot=card]]:h-full',
+  'lg:[&_[data-slot=card]]:max-h-[30rem]',
+  '[&_[data-slot=card-content]]:min-h-0 [&_[data-slot=card-content]]:overflow-y-auto',
+].join(' ')
+
 /* ─────────────────────────── My day ─────────────────────────── */
 
 export async function MyDayZone({ userId, userName }: { userId: string; userName: string }) {
@@ -81,7 +112,7 @@ export async function MyDayZone({ userId, userName }: { userId: string; userName
         stats={myDayStats}
         className="grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4"
       />
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+      <div className={PAIRED_CARDS}>
         <PersonTasksCard
           openTasks={workload.openTasks}
           todayIso={workload.todayIso}
@@ -117,7 +148,7 @@ export function MyDayZoneSkeleton() {
           </Card>
         ))}
       </div>
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2" aria-hidden>
+      <div className={PAIRED_CARDS} aria-hidden>
         {Array.from({ length: 4 }, (_, i) => (
           <CardSkeleton key={i} rows={4} />
         ))}
@@ -141,7 +172,7 @@ export async function TeamZone({ isAdmin }: { isAdmin: boolean }) {
   const nextSprint = activeSprints.length === 0 ? await getNextUpcomingSprint() : null
 
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+    <div className={PAIRED_CARDS}>
       <CapacityHeat capacities={capacities} isAdmin={isAdmin} apps={assignableApps} />
       <ActiveSprints sprints={activeSprints} nextSprint={nextSprint} />
     </div>
@@ -150,7 +181,7 @@ export async function TeamZone({ isAdmin }: { isAdmin: boolean }) {
 
 export function TeamZoneSkeleton() {
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2" aria-hidden>
+    <div className={PAIRED_CARDS} aria-hidden>
       <CardSkeleton rows={5} />
       <CardSkeleton rows={3} />
     </div>
@@ -182,7 +213,7 @@ export async function PortfolioZone({ isAdmin }: { isAdmin: boolean }) {
           })}
         />
       ) : null}
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+      <div className={PAIRED_CARDS}>
         <RecentActivityCard rows={recentActivity} now={now} />
         {isAdmin && pendingUsers.length > 0 ? <PendingApprovalsCard users={pendingUsers} /> : null}
       </div>
@@ -203,7 +234,7 @@ export function PortfolioZoneSkeleton() {
           </Card>
         ))}
       </div>
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2" aria-hidden>
+      <div className={PAIRED_CARDS} aria-hidden>
         <CardSkeleton rows={6} />
       </div>
     </>

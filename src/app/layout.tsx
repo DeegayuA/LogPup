@@ -80,8 +80,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <Analytics />
           <SpeedInsights />
         </ThemeProvider>
-        <Analytics />
-        <SpeedInsights />
       </body>
     </html>
   );

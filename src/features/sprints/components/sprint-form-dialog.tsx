@@ -16,6 +16,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { createSprint } from '@/features/sprints/actions'
+import { suggestSprint } from '@/features/sprints/suggest-actions'
+import { Loader2, Sparkles } from 'lucide-react'
 import { defaultSprintRange, shiftEndDate, sprintDurationLabel } from '@/features/sprints/sprint-date-range'
 
 type FormState = {
@@ -65,6 +67,25 @@ export function SprintFormDialog({ appId }: { appId: string }) {
   // silently overwritten the next time the start date moves, which is the
   // classic calendar-tool bug this dialog is meant to avoid.
   const [endDateTouched, setEndDateTouched] = useState(false)
+  const [suggesting, startSuggesting] = useTransition()
+
+  function handleSuggest() {
+    startSuggesting(async () => {
+      try {
+        const res = await suggestSprint(appId)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        // Overwrites both fields deliberately: the button is the statement
+        // "draft this for me", and a merge that kept half-typed text would
+        // produce a name that is neither the person's nor the model's.
+        setForm((f) => ({ ...f, name: res.data.name, goal: res.data.goal }))
+      } catch {
+        toast.error('Could not draft a sprint right now — try again')
+      }
+    })
+  }
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
@@ -144,7 +165,27 @@ export function SprintFormDialog({ appId }: { appId: string }) {
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="sprint-name">Name</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="sprint-name">Name</Label>
+              {/* Fills name + goal from the app's open tasks, prior sprint
+                  names and recent meeting write-ups (see suggest-actions.ts).
+                  A draft, not a decision: both fields stay editable and
+                  nothing is created until Create sprint. */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={suggesting || isPending}
+                onClick={handleSuggest}
+              >
+                {suggesting ? (
+                  <Loader2 className="animate-spin" aria-hidden />
+                ) : (
+                  <Sparkles aria-hidden />
+                )}
+                {suggesting ? 'Drafting…' : 'Draft with AI'}
+              </Button>
+            </div>
             <Input
               id="sprint-name"
               value={form.name}

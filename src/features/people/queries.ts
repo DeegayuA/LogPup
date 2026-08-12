@@ -20,7 +20,23 @@ import {
   capacityAsOf,
   type HistoryRow,
   type PersonAllocationHistoryView,
+  type TrendPoint,
 } from '@/features/people/allocation-history'
+import {
+  annotateTeamChanges,
+  appLoadRows,
+  churnCounts,
+  compareCapacities,
+  overloadStretches,
+  teamLoadStats,
+  type AppLoadRow,
+  type CapacityDelta,
+  type CapacitySnapshotEntry,
+  type ChurnCounts,
+  type OverloadStretch,
+  type TeamChangeEntry,
+  type TeamLoadStats,
+} from '@/features/people/capacity-compare'
 import {
   activityPeak,
   activityTotal,
@@ -282,6 +298,191 @@ export async function getTeamCapacityAsOf(at: Date): Promise<UserCapacity[]> {
       breakdown: (capacity?.breakdown ?? []).map((entry) => ({ ...entry, assignmentId: null })),
     }
   })
+}
+
+/**
+ * Everything the capacity-history page renders for a window [from, to]:
+ * where the team stood at each end, what moved, what was reshuffled and by
+ * whom, and how the total tracked across the window.
+ *
+ * ONE history read serves all of it. The rows are fetched once (bounded only
+ * by the window's outer edge) and every derivation — both snapshots, the
+ * trend, the overload stretches — is a pure function over that same array,
+ * in capacity-compare.ts / allocation-history.ts. Fetching per derivation
+ * would be four round trips that could disagree with one another.
+ */
+export type CapacityHistoryOverview = {
+  /** The roster, with capacity as it stood at the window's end (`to`). */
+  current: UserCapacity[]
+  /** Per-person movement between `from` and `to`, biggest move first. */
+  deltas: CapacityDelta[]
+  /** Team totals at `to`. */
+  stats: TeamLoadStats
+  /** The same at `from`, so the page can show which way each number moved. */
+  previousStats: TeamLoadStats
+  /** Where the effort went at `to`, heaviest app first. */
+  apps: AppLoadRow[]
+  /** Team-wide total allocation at every instant it changed inside the window. */
+  trend: TrendPoint[]
+  /** Every allocation change inside the window, newest first, with who and why. */
+  changes: TeamChangeEntry[]
+  churn: ChurnCounts
+  /** Stretches spent over 100% inside the window, longest first. */
+  overloads: (OverloadStretch & { name: string })[]
+}
+
+export async function getCapacityHistoryOverview(
+  from: Date,
+  to: Date,
+): Promise<CapacityHistoryOverview> {
+  const changer = alias(users, 'history_changer')
+  const subject = alias(users, 'history_subject')
+
+  const [roster, historyRows, changeRows] = await Promise.all([
+    db
+      .select({
+        id: users.id,
+        name: users.name,
+        title: users.title,
+        phone: users.phone,
+        avatarUrl: users.avatarUrl,
+        role: users.role,
+        orgTags: users.orgTags,
+      })
+      .from(users)
+      .where(and(eq(users.active, true), eq(users.status, 'approved')))
+      .orderBy(asc(users.name)),
+    // Every interval in force at ANY point inside [from, to]. Deliberately
+    // wider than "in force at `to`" — the window's opening snapshot and the
+    // trend both need intervals that have since closed — but bounded on both
+    // sides, because an unbounded read would grow with the company's whole
+    // history to serve a 7-day question.
+    db
+      .select({
+        userId: assignmentHistory.userId,
+        appId: apps.id,
+        appName: apps.name,
+        slug: apps.slug,
+        role: assignmentHistory.role,
+        allocationPct: assignmentHistory.allocationPct,
+        changeKind: assignmentHistory.changeKind,
+        effectiveFrom: assignmentHistory.effectiveFrom,
+        effectiveTo: assignmentHistory.effectiveTo,
+      })
+      .from(assignmentHistory)
+      .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+      .where(
+        and(
+          lte(assignmentHistory.effectiveFrom, to),
+          or(isNull(assignmentHistory.effectiveTo), gt(assignmentHistory.effectiveTo, from)),
+        ),
+      ),
+    // The audit trail for the window itself — who changed what, and the note
+    // they left. Left join on the changer so a since-deleted admin cannot
+    // erase their own changes from the record.
+    db
+      .select({
+        id: assignmentHistory.id,
+        userId: assignmentHistory.userId,
+        userName: subject.name,
+        appId: apps.id,
+        appName: apps.name,
+        slug: apps.slug,
+        role: assignmentHistory.role,
+        allocationPct: assignmentHistory.allocationPct,
+        changeKind: assignmentHistory.changeKind,
+        effectiveFrom: assignmentHistory.effectiveFrom,
+        changedByName: changer.name,
+        note: assignmentHistory.note,
+      })
+      .from(assignmentHistory)
+      .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+      .leftJoin(subject, eq(assignmentHistory.userId, subject.id))
+      .leftJoin(changer, eq(assignmentHistory.changedBy, changer.id))
+      .where(
+        and(gte(assignmentHistory.effectiveFrom, from), lte(assignmentHistory.effectiveFrom, to)),
+      )
+      .orderBy(desc(assignmentHistory.effectiveFrom)),
+  ])
+
+  const nameById = new Map(roster.map((user) => [user.id, user.name]))
+  // EVERY derivation below runs on the same roster-scoped row set. The
+  // snapshots are laid over the roster and so already exclude anyone who has
+  // since left; a trend or an overload list built from the unfiltered rows
+  // would count those people, and the page would contradict its own footnote
+  // (and its own stat tiles) about who is being described.
+  const rows = (historyRows satisfies HistoryRow[]).filter((row) => nameById.has(row.userId))
+
+  // Both ends of the window, laid over the FULL roster so someone with no
+  // history at all is a real 0% row rather than a gap.
+  const snapshotAt = (at: Date): CapacitySnapshotEntry[] => {
+    const byUser = new Map(capacityAsOf(rows, at).map((entry) => [entry.userId, entry]))
+    return roster.map((user) => ({
+      userId: user.id,
+      name: user.name,
+      totalPct: byUser.get(user.id)?.totalPct ?? 0,
+      breakdown: byUser.get(user.id)?.breakdown ?? [],
+    }))
+  }
+
+  const before = snapshotAt(from)
+  const after = snapshotAt(to)
+  const breakdownAt = new Map(
+    capacityAsOf(rows, to).map((entry) => [entry.userId, entry.breakdown]),
+  )
+
+  // `after` is already roster-ordered and roster-complete (snapshotAt maps over
+  // the roster), so the snapshot entry for row i IS user i — no lookup, and no
+  // way for the two lists to fall out of step.
+  const current: UserCapacity[] = roster.map((user, index) => ({
+    user: {
+      id: user.id,
+      name: user.name,
+      title: user.title,
+      phone: user.phone,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+      orgTags: user.orgTags,
+    },
+    totalPct: after[index].totalPct,
+    overallocated: after[index].totalPct > 100,
+    // A past interval is not something the edit actions can target — the same
+    // read-only contract getTeamCapacityAsOf makes.
+    breakdown: (breakdownAt.get(user.id) ?? []).map((row) => ({ ...row, assignmentId: null })),
+  }))
+
+  // The trend is clamped to the window by dropping POINTS outside it — never
+  // by filtering the rows first. Each point's value is recomputed from every
+  // interval in force at that instant, so a row set narrowed to "started
+  // inside the window" would silently omit every allocation that began
+  // earlier and is still running, and draw a team-wide total far below the
+  // real one.
+  const trendSeed: TrendPoint = {
+    at: from,
+    totalPct: before.reduce((sum, entry) => sum + entry.totalPct, 0),
+  }
+  const windowPoints = allocationTotalSeries(rows).filter(
+    (point) => point.at.getTime() > from.getTime() && point.at.getTime() <= to.getTime(),
+  )
+
+  return {
+    current,
+    deltas: compareCapacities(before, after),
+    stats: teamLoadStats(after),
+    previousStats: teamLoadStats(before),
+    apps: appLoadRows(after),
+    // Seeded with where the window STARTED: without it, a window whose first
+    // change lands on day 20 draws a line beginning at day 20, which reads as
+    // "the team carried nothing until then".
+    trend: [trendSeed, ...windowPoints],
+    changes: annotateTeamChanges(changeRows),
+    churn: churnCounts(changeRows),
+    overloads: overloadStretches(rows, from, to).map((stretch) => ({
+      ...stretch,
+      // Non-null by construction — `rows` is filtered to the roster above.
+      name: nameById.get(stretch.userId) ?? 'Unknown',
+    })),
+  }
 }
 
 export type PersonAllocationHistory = PersonAllocationHistoryView

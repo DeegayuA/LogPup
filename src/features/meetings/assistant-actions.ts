@@ -1,0 +1,169 @@
+'use server'
+
+import { z } from 'zod'
+import { format } from 'date-fns'
+import { and, asc, eq } from 'drizzle-orm'
+import { auth } from '@/lib/auth'
+import { db } from '@/db'
+import {
+  meetingAiNotes,
+  meetingFollowups,
+  meetingNoteSegments,
+  meetingTaskSuggestions,
+  meetings,
+  users,
+} from '@/db/schema'
+import { ok, err, type ActionResult } from '@/lib/action-result'
+import { GeminiError, callGemini } from '@/features/gemini/client'
+import { ASSISTANT_MODELS } from '@/features/gemini/models'
+import { canReadMeetingIntel } from '@/features/meetings/ai-actions'
+
+/**
+ * "Ask this meeting a question" — a short, grounded Q&A over one meeting's
+ * own record (summary, transcript, notes, action items, open follow-ups).
+ *
+ * Deliberately NOT a general chatbot: the context is assembled server-side
+ * from exactly the rows the caller is already entitled to read, and the
+ * prompt forbids answering from anything else. That keeps a question like
+ * "what did I promise?" answerable without turning meeting transcripts into
+ * a retrieval corpus that ignores per-meeting permissions.
+ *
+ * The answer is short by construction because it is meant to be SPOKEN back
+ * (see useSpeech on the client) as well as read — a page of text is a bad
+ * answer when it arrives as audio.
+ */
+
+const askInput = z.object({
+  meetingId: z.uuid(),
+  question: z.string().trim().min(3).max(500),
+})
+
+/** How much transcript to include. Roughly 15k tokens — a big but bounded slice. */
+const MAX_TRANSCRIPT_CHARS = 60_000
+const MAX_SEGMENTS = 200
+
+export type MeetingAnswer = {
+  answer: string
+  model: string
+}
+
+export async function askMeeting(
+  meetingId: string,
+  question: string,
+): Promise<ActionResult<MeetingAnswer>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const parsed = askInput.safeParse({ meetingId, question })
+  if (!parsed.success) {
+    return err(
+      parsed.error.issues[0].code === 'too_big'
+        ? 'That question is too long — ask something shorter'
+        : 'Ask a question first',
+    )
+  }
+  const { meetingId: id, question: asked } = parsed.data
+
+  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  if (!meeting) return err('Meeting not found')
+  // Same gate as every other read of transcript-derived content: admin, the
+  // meeting's creator, or someone who was actually there.
+  if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
+
+  const [notes] = await db.select().from(meetingAiNotes).where(eq(meetingAiNotes.meetingId, id))
+
+  const segments = await db
+    .select({
+      source: meetingNoteSegments.source,
+      speakerLabel: meetingNoteSegments.speakerLabel,
+      speakerName: users.name,
+      content: meetingNoteSegments.content,
+    })
+    .from(meetingNoteSegments)
+    .leftJoin(users, eq(meetingNoteSegments.speakerId, users.id))
+    .where(eq(meetingNoteSegments.meetingId, id))
+    .orderBy(asc(meetingNoteSegments.startedAtMs), asc(meetingNoteSegments.createdAt))
+    .limit(MAX_SEGMENTS)
+
+  const actionItems = await db
+    .select({
+      text: meetingTaskSuggestions.text,
+      assignee: users.name,
+      due: meetingTaskSuggestions.suggestedDueDate,
+      status: meetingTaskSuggestions.status,
+    })
+    .from(meetingTaskSuggestions)
+    .leftJoin(users, eq(meetingTaskSuggestions.suggestedUserId, users.id))
+    .where(eq(meetingTaskSuggestions.meetingId, id))
+
+  const openFollowups = await db
+    .select({ person: meetingFollowups.personName, text: meetingFollowups.text })
+    .from(meetingFollowups)
+    .where(and(eq(meetingFollowups.sourceMeetingId, id), eq(meetingFollowups.status, 'open')))
+
+  const transcript = (notes?.transcript ?? '').slice(0, MAX_TRANSCRIPT_CHARS)
+  const spoken = segments
+    .filter((row) => row.source === 'voice')
+    .map((row) => `${row.speakerName ?? row.speakerLabel ?? 'Unknown'}: ${row.content}`)
+    .join('\n')
+    .slice(0, MAX_TRANSCRIPT_CHARS)
+  const typed = segments
+    .filter((row) => row.source !== 'voice')
+    .map((row) => row.content)
+    .join('\n')
+    .slice(0, 10_000)
+
+  // Nothing to ground an answer in — say so rather than let the model
+  // improvise a meeting that never got recorded.
+  if (!transcript && !spoken && !typed && !notes?.summary) {
+    return err('This meeting has no notes or transcript yet — record or analyze it first')
+  }
+
+  const prompt = `You are LogPup's meeting assistant, answering ONE question about a single meeting for
+${session.user.name ?? 'a team member'}.
+
+Meeting: "${meeting.title}" on ${format(meeting.startsAt, 'EEEE, d MMMM yyyy')}${meeting.agenda ? `\nAgenda: ${meeting.agenda}` : ''}
+
+${notes?.summary ? `SUMMARY:\n${notes.summary}\n` : ''}
+${spoken ? `WHAT WAS SAID (speaker: text):\n${spoken}\n` : ''}
+${!spoken && transcript ? `TRANSCRIPT:\n${transcript}\n` : ''}
+${typed ? `TYPED NOTES:\n${typed}\n` : ''}
+${
+  actionItems.length > 0
+    ? `ACTION ITEMS:\n${actionItems
+        .map(
+          (item) =>
+            `- ${item.text} (owner: ${item.assignee ?? 'unassigned'}, due: ${item.due ?? 'none'}, ${item.status})`,
+        )
+        .join('\n')}\n`
+    : ''
+}
+${
+  openFollowups.length > 0
+    ? `OPEN FOLLOW-UPS:\n${openFollowups.map((row) => `- ${row.person}: ${row.text}`).join('\n')}\n`
+    : ''
+}
+QUESTION: ${asked}
+
+Rules:
+- Answer ONLY from the meeting material above. If it does not contain the answer, say so plainly
+  ("That wasn't discussed in this meeting") — never guess, never fill gaps from general knowledge.
+- Your answer will be READ ALOUD as well as displayed. Keep it under 90 words, in plain sentences.
+  No markdown, no bullet characters, no headings.
+- This is a Sri Lankan team that code-switches between Sinhala and English. Answer in the language
+  the QUESTION was asked in. Keep technical/product terms (sprint, deploy, PR, app names) in English
+  either way, and write Sinhala in Sinhala script (සිංහල).
+- Name people as they are named above. Never invent a name, a date, or a commitment.`
+
+  try {
+    const { text, model } = await callGemini(session.user.id, [{ text: prompt }], {
+      models: ASSISTANT_MODELS,
+    })
+    const answer = text.trim()
+    if (!answer) return err('No answer came back — try asking again')
+    return ok({ answer, model })
+  } catch (error) {
+    if (error instanceof GeminiError) return err(error.message)
+    return err('Could not answer that — try again')
+  }
+}

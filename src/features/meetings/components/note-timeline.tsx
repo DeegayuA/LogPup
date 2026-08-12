@@ -26,6 +26,7 @@ import {
   SkeletonBlock,
 } from '@/features/meetings/components/meeting-chips'
 import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
+import { DictateButton } from '@/features/speech/components/dictate-button'
 import type { DeadlineHintSource } from '@/features/meetings/components/note-timeline-model'
 import {
   ActionItemSuggestionsList,
@@ -285,6 +286,12 @@ export function NoteTimeline({
     ),
   )
 
+  // Anyone can turn out to be "Speaker 2" — the invited list is a guess at
+  // who shows up, not a roster of who spoke. Attendees are offered first,
+  // then every other approved user.
+  const attendeeIdSet = new Set(attendees.map((a) => a.id))
+  const otherPeople = (data.approvedUsers ?? []).filter((person) => !attendeeIdSet.has(person.id))
+
   return (
     <div className="flex flex-col gap-3">
       {speakerLabels.length > 0 ? (
@@ -315,7 +322,9 @@ export function NoteTimeline({
                           {(v: string) =>
                             v === NOT_ATTENDEE
                               ? 'Not an attendee'
-                              : (attendees.find((a) => a.id === v)?.name ?? 'Assign…')
+                              : (attendees.find((a) => a.id === v)?.name ??
+                                otherPeople.find((p) => p.id === v)?.name ??
+                                'Assign…')
                           }
                         </SelectValue>
                       </SelectTrigger>
@@ -325,6 +334,16 @@ export function NoteTimeline({
                             {a.name}
                           </SelectItem>
                         ))}
+                        {otherPeople.length > 0 ? (
+                          /* People who spoke without being on the invite list —
+                             the reason this picker exists at all. Kept after the
+                             attendees: the likely answers stay on top. */
+                          otherPeople.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.name}
+                            </SelectItem>
+                          ))
+                        ) : null}
                         <SelectItem value={NOT_ATTENDEE}>Not a listed attendee</SelectItem>
                       </SelectContent>
                     </Select>
@@ -465,7 +484,19 @@ export function NoteTimeline({
               }
             }}
           />
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {/* Typing a note during a meeting is the thing people least have
+                hands free for. Dictation APPENDS to whatever is already in
+                the box (and never posts by itself) so a spoken sentence can
+                still be corrected, @mentioned, or added to before it goes in. */}
+            <DictateButton
+              onText={(text) =>
+                setDraft((current) => (current.trim() ? `${current.trim()} ${text}` : text))
+              }
+              disabled={posting}
+              label="Speak the note"
+              className="mr-auto"
+            />
             <Button
               size="sm"
               type="button"

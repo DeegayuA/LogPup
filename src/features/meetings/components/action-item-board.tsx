@@ -383,13 +383,17 @@ function ActionItemTitle({
         minLength={1}
         maxLength={140}
         aria-label={ariaLabel}
-        className="h-auto min-w-0 flex-1 basis-48 py-0.5 text-sm"
+        // Sized by WIDTH, not flex basis: both call sites mount this inside a
+        // `flex-col` card column, where `basis-48` is read along the column's
+        // main axis — i.e. a 12rem minimum HEIGHT — which is what padded every
+        // action-item card with ~190px of blank space under its title.
+        className="h-auto w-full min-w-0 py-0.5 text-sm"
       />
     )
   }
 
   return (
-    <span className="flex min-w-0 flex-1 basis-48 items-start gap-1">
+    <span className="flex w-full min-w-0 items-start gap-1">
       <span className="min-w-0 flex-1">
         {display ?? <span className={cn(bilingualText, 'text-foreground')}>{value}</span>}
       </span>

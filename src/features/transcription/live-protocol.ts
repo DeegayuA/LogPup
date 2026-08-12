@@ -124,7 +124,15 @@ export function buildAudioMessage(base64Pcm: string, mimeType: string): Record<s
  */
 export type LiveServerEvent =
   | { type: 'setupComplete' }
-  | { type: 'transcript'; text: string }
+  /**
+   * A transcription fragment. `endsTurn` is true when the SAME frame also
+   * carried `turnComplete` — the server routinely closes a turn on the frame
+   * that delivers its last words, and treating that as text-only would leave
+   * the turn permanently in flight: nothing would ever be committed, so the
+   * durable transcript (which reads committed text) would stay empty for the
+   * whole meeting.
+   */
+  | { type: 'transcript'; text: string; endsTurn: boolean }
   | { type: 'turnComplete' }
   /** Server is about to close the socket; `timeLeftMs` may be null if unparseable. */
   | { type: 'goAway'; timeLeftMs: number | null }
@@ -160,12 +168,13 @@ export function parseServerEvent(raw: unknown): LiveServerEvent {
     const content = msg.serverContent as Record<string, unknown> | null
     const transcription = content?.inputTranscription as Record<string, unknown> | null
     const text = transcription?.text
+    const endsTurn = content?.turnComplete === true
     // An empty-string transcript is a real frame but carries no information;
     // treating it as a transcript event would append nothing and churn React.
     if (typeof text === 'string' && text.length > 0) {
-      return { type: 'transcript', text }
+      return { type: 'transcript', text, endsTurn }
     }
-    if (content?.turnComplete === true) return { type: 'turnComplete' }
+    if (endsTurn) return { type: 'turnComplete' }
     return { type: 'unknown' }
   }
 

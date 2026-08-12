@@ -2,31 +2,104 @@ import Link from 'next/link'
 import { format } from 'date-fns'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { getTeamCapacityAsOf } from '@/features/people/queries'
-import { resolveAsOf } from '@/features/people/as-of-date'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { getCapacityHistoryOverview } from '@/features/people/queries'
 import { AsOfPicker } from '@/features/people/components/as-of-picker'
-import { CapacityHeat } from '@/features/dashboard/components/capacity-heat'
+import { AllocationTrend } from '@/features/people/components/allocation-trend'
+import { PersonStatRow } from '@/features/people/components/person-stat-row'
+import { HistoryFilters } from '@/features/people/components/history-filters'
+import {
+  HistoryAppsTable,
+  HistoryChangeLog,
+  HistoryPeopleTable,
+  OverloadCard,
+} from '@/features/people/components/history-views'
+import { hasMovement } from '@/features/people/capacity-compare'
+import {
+  parseHistoryParams,
+  resolveHistoryWindow,
+  type RawHistoryParams,
+} from '@/features/people/history-params'
+import { buildCapacityHistoryStats } from '@/features/people/history-stats'
+
+export const metadata = { title: 'Capacity history' }
 
 /**
- * Team capacity as it stood on a chosen day, rendered by the SAME capacity
- * list the dashboard uses — read-only, because a past interval is not
- * something the edit actions can target (getTeamCapacityAsOf returns a null
- * assignmentId for every entry, and the read-only path never ships the
- * mutation code at all).
+ * How the team's load got to where it is — not just a snapshot of a past day.
+ *
+ * The previous version rendered exactly one thing: the dashboard's capacity
+ * list, re-run at a chosen date, capped at `max-w-2xl`. It could answer "who
+ * was loaded on the 3rd" and nothing else — no movement, no per-app
+ * percentages, no reason, no duration, and no trace of the `changedBy`/`note`
+ * columns the history table has always written.
+ *
+ * This version is built around the four questions someone actually opens a
+ * capacity page to answer:
+ *   1. Where does the team stand, and which way is it moving? (stat strip +
+ *      trend, every figure shown against the same figure a window ago)
+ *   2. Who moved, and what did they pick up or put down? (person view)
+ *   3. Which projects are eating the team? (app view)
+ *   4. Why did any of it change, and who decided? (change log)
+ * Plus the one thing a snapshot structurally cannot say: who has been over
+ * capacity, and for how long.
+ *
+ * All of it is URL state (history-params.ts), so every view is linkable and
+ * the page stays a server component with one query behind it.
  */
 export default async function TeamCapacityHistoryPage(props: {
-  searchParams: Promise<{ at?: string }>
+  searchParams: Promise<RawHistoryParams>
 }) {
-  const { at } = await props.searchParams
-  const asOf = resolveAsOf(at)
-  const capacities = await getTeamCapacityAsOf(asOf.at)
+  const raw = parseHistoryParams(await props.searchParams)
+  const { asOf, from, fromIso } = resolveHistoryWindow(raw)
+  // Links are built from the RESOLVED day, never the raw param: an unreadable
+  // `at` would otherwise be copied into every control's href, so the "that
+  // date couldn't be read" banner could never be cleared by using the page.
+  const params = { ...raw, at: asOf.isToday ? undefined : asOf.iso }
+  const overview = await getCapacityHistoryOverview(from, asOf.at)
 
-  // Formatted from the resolved DAY, not from the instant: `asOf.at` is
+  // Formatted from the resolved DAY, not the instant: `asOf.at` is
   // 23:59:59.999 Asia/Colombo, and date-fns formats in the *server's* zone, so
-  // running anywhere east of Colombo would print the following day right here
-  // while the picker below still read the day the user asked for. Midday keeps
-  // it away from either boundary.
+  // running anywhere east of Colombo would print the following day here while
+  // the picker still read the day the user asked for. Midday avoids either
+  // boundary.
   const stamp = format(new Date(`${asOf.iso}T12:00:00`), 'EEEE, MMMM d, yyyy')
+  const compareLabel = `${params.window} days earlier`
+
+  // One filter expression, applied per view against whatever names that view
+  // actually shows — a person matches on their apps too, so filtering by an
+  // app name answers "who is on this?" from the person view as well.
+  const needle = params.q.toLowerCase()
+  const deltaById = new Map(overview.deltas.map((delta) => [delta.userId, delta]))
+
+  const people = overview.current
+    .filter(
+      (person) =>
+        !needle ||
+        person.user.name.toLowerCase().includes(needle) ||
+        person.breakdown.some((app) => app.appName.toLowerCase().includes(needle)),
+    )
+    .filter((person) => {
+      if (!params.movedOnly) return true
+      const delta = deltaById.get(person.user.id)
+      return delta ? hasMovement(delta) : false
+    })
+
+  const apps = overview.apps.filter(
+    (app) =>
+      !needle ||
+      app.appName.toLowerCase().includes(needle) ||
+      app.people.some((person) => person.name.toLowerCase().includes(needle)),
+  )
+
+  const changes = overview.changes.filter(
+    (change) =>
+      !needle ||
+      (change.userName ?? '').toLowerCase().includes(needle) ||
+      change.appName.toLowerCase().includes(needle),
+  )
+
+  const stats = buildCapacityHistoryStats(overview, params.window)
+  const filteredListLabel = { people: 'people', apps: 'apps', changes: 'changes' }[params.view]
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -36,8 +109,8 @@ export default async function TeamCapacityHistoryPage(props: {
             <h1 className="font-heading text-2xl font-bold tracking-tight">Capacity history</h1>
             <p className="text-sm text-muted-foreground">
               {asOf.isToday
-                ? 'Today’s team load. Pick a past date to see how it looked then.'
-                : `How the team was loaded on ${stamp}.`}
+                ? `Where the team stands today, and how it moved over the last ${params.window} days.`
+                : `How the team was loaded on ${stamp}, against ${fromIso}.`}
             </p>
           </div>
           <Button variant="outline" size="sm" render={<Link href="/people" />}>
@@ -51,22 +124,62 @@ export default async function TeamCapacityHistoryPage(props: {
           </p>
         ) : null}
 
-        <AsOfPicker iso={asOf.iso} isToday={asOf.isToday} />
+        <AsOfPicker iso={asOf.iso} isToday={asOf.isToday} params={params} />
+        <HistoryFilters params={params} />
       </div>
 
-      <div className="max-w-2xl">
-        <CapacityHeat
-          capacities={capacities}
-          title={asOf.isToday ? 'Team capacity — now' : `Team capacity — ${asOf.iso}`}
-          description={
-            asOf.isToday
-              ? 'Live allocations.'
-              : 'Reconstructed from allocation history. People are today’s roster; only the allocations are historical.'
-          }
-          emptyTitle="Nobody in the pack yet."
-          emptyHint="Once people are assigned to apps, their history shows up here."
-        />
+      {/* The strip answers "where does the team stand" in one line, and every
+          tile's meta says which way that number moved — a bare number here
+          would be exactly the snapshot this page used to be. */}
+      <PersonStatRow stats={stats} className="xl:grid-cols-6" />
+
+      {params.q || params.movedOnly ? (
+        // The tiles, the trend and the overload card are always WHOLE-TEAM
+        // figures — a "team average" recomputed over a filtered subset would
+        // be a different statistic wearing the same label. Since the filter
+        // sits directly above them, that has to be said rather than assumed.
+        <p className="-mt-3 text-2xs text-muted-foreground">
+          The figures above and the two cards below cover the whole team; the filter applies to the{' '}
+          {filteredListLabel} list at the bottom.
+        </p>
+      ) : null}
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Total team allocation</CardTitle>
+            <CardDescription>
+              Every allocation across the team, summed, at each point it changed in this window. The
+              dashed line is one person&rsquo;s full capacity.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* The reference line is the TEAM's capacity, not one person's:
+                against a flat 100 every team of two or more sits permanently
+                above the line, painted in the over-capacity colour, which
+                would make the alarm meaningless. */}
+            <AllocationTrend
+              points={overview.trend}
+              now={asOf.at}
+              reference={overview.stats.headcount * 100}
+              referenceLabel="full team"
+            />
+          </CardContent>
+        </Card>
+
+        <OverloadCard overloads={overview.overloads} windowDays={params.window} />
       </div>
+
+      {params.view === 'people' ? (
+        <HistoryPeopleTable people={people} deltas={deltaById} compareLabel={compareLabel} />
+      ) : null}
+      {params.view === 'apps' ? <HistoryAppsTable apps={apps} /> : null}
+      {params.view === 'changes' ? <HistoryChangeLog changes={changes} /> : null}
+
+      <p className="text-2xs text-muted-foreground">
+        People are today&rsquo;s roster; only the allocations are historical. Someone deactivated
+        since is not shown even if they carried work on that date.
+      </p>
     </div>
   )
 }

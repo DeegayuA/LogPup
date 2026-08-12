@@ -50,6 +50,7 @@ import { cn } from '@/lib/utils'
 import type { ActionResult } from '@/lib/action-result'
 import type { MentionUser } from '@/components/mention-textarea'
 import { NoteTimeline } from '@/features/meetings/components/note-timeline'
+import { MeetingAssistant } from '@/features/meetings/components/meeting-assistant'
 import {
   bilingualText,
   MetaChip,
@@ -116,6 +117,12 @@ import {
   parkSegment,
   releaseSegment,
 } from '@/features/meetings/segment-store'
+import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
+import { useLiveTranscription } from '@/features/transcription/components/use-live-transcription'
+import {
+  LiveTranscriptionCostNotice,
+  LiveTranscriptionStatus,
+} from '@/features/transcription/components/live-transcription-status'
 
 // --- Minimal Web Speech API typings ------------------------------------
 // Not part of TypeScript's DOM lib (non-standard, webkit-prefixed). Declared
@@ -432,6 +439,26 @@ export function MeetingIntelPanel({
   const [micOn, setMicOn] = useState(false)
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null)
   const [liveUnavailable, setLiveUnavailable] = useState(false)
+  // Which engine currently feeds the live transcript — the degradation
+  // ladder's current rung. 'gemini' is the Gemini Live socket (true
+  // bilingual, hears the whole capture graph including shared tab audio);
+  // 'webspeech' is the browser recognizer pair below it (mic only);
+  // 'none' means the live pane is off and the segmented pipeline alone
+  // carries transcription. State for render + a ref twin for the
+  // non-React callbacks (recorder/recognizer handlers) that must not read
+  // a stale closure.
+  const [liveEngine, setLiveEngineState] = useState<'gemini' | 'webspeech' | 'none'>('none')
+  const liveEngineRef = useRef<'gemini' | 'webspeech' | 'none'>('none')
+  // Gemini Live session (flag-gated; started inside startRecording). The
+  // hook owns socket/audio lifecycle; this component only routes its text
+  // into the shared live-transcript state and walks the fallback ladder
+  // when it degrades.
+  const geminiLive = useLiveTranscription(meetingId)
+  // How many chars of the Live session's committed text have already been
+  // appended into finalTranscriptRef — the cursor that lets Live output
+  // APPEND (like acceptUtterance does) instead of overwriting, so a user's
+  // mid-meeting corrections in the textarea survive every new utterance.
+  const geminiCommittedRef = useRef(0)
   const [finalText, setFinalText] = useState('')
   const [interimText, setInterimText] = useState('')
   // See RecordingSegment above. One entry per cut segment, from the moment
@@ -770,6 +797,29 @@ export function MeetingIntelPanel({
   function cleanupCapture() {
     recordingRef.current = false
     stopAllRecognition()
+    // Stopping the Live socket here is what ends its metered streaming the
+    // moment the recording ends — the hook's own unmount cleanup only covers
+    // the component going away, not the recording stopping.
+    //
+    // The returned text is merged SYNCHRONOUSLY, before the engine gate is
+    // closed below. The session commits its in-flight turn on the way down,
+    // and those final words only reach React on a later render — by which
+    // time liveEngineRef is 'none' and the delta effect would drop them. This
+    // runs immediately before runFinalize, so whatever was said between the
+    // last turn boundary and pressing Stop still makes it into the saved
+    // transcript and the segment spelling hint.
+    const liveTail = geminiLive.stop()
+    if (liveEngineRef.current === 'gemini') {
+      const delta = liveTail.slice(geminiCommittedRef.current).trim()
+      if (delta) {
+        finalTranscriptRef.current = finalTranscriptRef.current
+          ? `${finalTranscriptRef.current} ${delta}`
+          : delta
+        setFinalText(finalTranscriptRef.current)
+      }
+    }
+    setLiveEngine('none')
+    geminiCommittedRef.current = 0
     clearFlushTimer()
     pendingUtteranceRef.current = null
     engineInterimRef.current = {}
@@ -845,6 +895,59 @@ export function MeetingIntelPanel({
     if (!el) return
     nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   }
+
+  function setLiveEngine(next: 'gemini' | 'webspeech' | 'none') {
+    liveEngineRef.current = next
+    setLiveEngineState(next)
+  }
+
+  // Routes Gemini Live output into the SAME live-transcript state the Web
+  // Speech path writes, as append-only deltas. finalTranscriptRef stays the
+  // single source of truth (it feeds hintTail, the finalize fallback, and
+  // the editable textarea), so Live text has to merge into it the way
+  // acceptUtterance does — never replace it, or user corrections would be
+  // silently undone by the next utterance.
+  useEffect(() => {
+    if (liveEngineRef.current !== 'gemini') return
+    const committed = geminiLive.finalText
+    // A shorter committed string means a fresh session started underneath
+    // us (stop + start resets the hook's buffer) — restart the cursor.
+    if (committed.length < geminiCommittedRef.current) geminiCommittedRef.current = 0
+    const delta = committed.slice(geminiCommittedRef.current).trim()
+    geminiCommittedRef.current = committed.length
+    if (delta) {
+      finalTranscriptRef.current = finalTranscriptRef.current
+        ? `${finalTranscriptRef.current} ${delta}`
+        : delta
+      setFinalText(finalTranscriptRef.current)
+    }
+    setInterimText(geminiLive.interimText)
+    // Everything else this reads is a ref or a stable setter — only the
+    // hook's text should re-run it.
+  }, [geminiLive.finalText, geminiLive.interimText])
+
+  // The hook's documented contract: a non-null notice means the Live path
+  // degraded terminally and the consumer MUST fall back and say why. Next
+  // rung down is Web Speech — browser-local and free, but it listens to the
+  // input DEVICE, so it needs a live microphone; without one the pane goes
+  // quiet honestly instead of pretending ("liveUnavailable").
+  useEffect(() => {
+    if (!geminiLive.notice) return
+    if (liveEngineRef.current !== 'gemini') return
+    setFallbackNotice(geminiLive.notice)
+    if (!recordingRef.current) return
+    if (liveSupported && micStreamRef.current) {
+      setLiveEngine('webspeech')
+      startRecognitionForPreference()
+    } else {
+      setLiveEngine('none')
+      setLiveUnavailable(true)
+    }
+    // Deliberately keyed on the notice alone — it is set exactly once per
+    // terminal degradation (fail or auto-stop), which is exactly when the
+    // ladder should step down.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geminiLive.notice])
 
   // Recomputes which engine's INTERIM text is currently shown, and updates
   // the visible (provisional, muted/italic) interim string. Whichever
@@ -1378,10 +1481,11 @@ export function MeetingIntelPanel({
   async function toggleMic() {
     if (micOn) {
       detachMic()
-      // Live text is a microphone feature — the Web Speech engines listen to
-      // the device directly, not to our capture graph, so leaving them running
-      // with the mic released would just spin producing nothing.
-      stopAllRecognition()
+      // Web Speech listens to the device directly, so with the mic released
+      // it would just spin producing nothing. Gemini Live listens to the
+      // capture graph and keeps transcribing the shared tab audio — leave it
+      // running; that is the whole point of feeding it the mixed stream.
+      if (liveEngineRef.current === 'webspeech') stopAllRecognition()
       setMicOn(false)
       toast.info('Microphone off — still recording shared audio')
       return
@@ -1393,7 +1497,16 @@ export function MeetingIntelPanel({
       return
     }
     setMicOn(true)
-    if (liveSupported) startRecognitionForPreference()
+    // Restarting the recognizers covers two cases: the mic being toggled back
+    // on under Web Speech, AND the ladder having bottomed out earlier BECAUSE
+    // there was no microphone (a screen-only capture whose Live session
+    // failed). Without the second, attaching a mic mid-recording could never
+    // bring live text back — the pane stayed dead for the rest of the meeting.
+    if (liveSupported && (liveEngineRef.current === 'webspeech' || liveEngineRef.current === 'none')) {
+      setLiveEngine('webspeech')
+      setLiveUnavailable(false)
+      startRecognitionForPreference()
+    }
     toast.success('Microphone on')
   }
 
@@ -1522,29 +1635,42 @@ export function MeetingIntelPanel({
       setSeconds(0)
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
 
-      // Live text only exists if a microphone does. Screen-only capture has
-      // nothing for the Web Speech engines to hear — they listen to the input
-      // device, not to our capture graph — so starting them would leave the
-      // pane on "Listening…" forever, which is exactly the silent-failure mode
-      // just fixed in the recognizer error handling.
-      if (liveSupported && micStreamRef.current) {
-        finalTranscriptRef.current = ''
-        setFinalText('')
-        setInterimText('')
-        setInterimLeaderLang(null)
-        setLastWinnerLang(null)
-        setFallbackNotice(null)
-        setLiveUnavailable(false)
-        engineInterimRef.current = {}
-        pendingUtteranceRef.current = null
-        clearFlushTimer()
-        // Seed the conversation-inertia fallback from whichever language
-        // last won an utterance (persisted across sessions) rather than
-        // starting with nothing to lean on for the very first ambiguous
-        // utterance of this recording.
-        previousLangRef.current = lastActiveLangRef.current
+      // Reset the live-transcript surface for the new recording, whichever
+      // engine ends up feeding it.
+      finalTranscriptRef.current = ''
+      setFinalText('')
+      setInterimText('')
+      setInterimLeaderLang(null)
+      setLastWinnerLang(null)
+      setFallbackNotice(null)
+      setLiveUnavailable(false)
+      engineInterimRef.current = {}
+      pendingUtteranceRef.current = null
+      clearFlushTimer()
+      geminiCommittedRef.current = 0
+      // Seed the conversation-inertia fallback from whichever language
+      // last won an utterance (persisted across sessions) rather than
+      // starting with nothing to lean on for the very first ambiguous
+      // utterance of this recording.
+      previousLangRef.current = lastActiveLangRef.current
 
+      // The degradation ladder, top rung first:
+      //  1. Gemini Live — true bilingual code-switched transcription, and it
+      //     listens to the CAPTURE GRAPH's mixed stream, so it hears shared
+      //     tab audio too (screen-only recordings get live text for the
+      //     first time). Failure falls through to rung 2 via the notice
+      //     effect above, never takes the recording with it.
+      //  2. Web Speech — browser recognizers; need a real microphone.
+      //  3. None — the pane stays off; the segmented pipeline still
+      //     transcribes everything in ~5-minute batches.
+      if (isLiveTranscriptionEnabled()) {
+        setLiveEngine('gemini')
+        void geminiLive.start(destination.stream)
+      } else if (liveSupported && micStreamRef.current) {
+        setLiveEngine('webspeech')
         startRecognitionForPreference()
+      } else {
+        setLiveEngine('none')
       }
     } catch {
       cleanupCapture()
@@ -1784,7 +1910,10 @@ export function MeetingIntelPanel({
   // list, so the picker can't stop at `people`.
   const attendeeIds = new Set(people.map((option) => option.id))
   const attributionPeople = [...people, ...approvedUsers.filter((option) => !attendeeIds.has(option.id))]
-  const showLiveText = recording && liveSupported && !liveUnavailable
+  // The live pane exists whenever SOME engine is on the ladder's rungs —
+  // no longer tied to Web Speech support, since Gemini Live works in any
+  // browser with WebSocket + Web Audio.
+  const showLiveText = recording && liveEngine !== 'none' && !liveUnavailable
   // Whichever engine is "currently winning": an in-flight interim result
   // takes priority (it's the freshest signal of which language is being
   // heard right now), falling back to whichever language last won an
@@ -2037,11 +2166,13 @@ export function MeetingIntelPanel({
                 </>
               ) : null}
             </span>
-            {showLiveText ? (
+            {showLiveText && liveEngine === 'webspeech' ? (
               // Subtle, not a status announcement — which engine is currently
               // winning is a nicety to confirm bilingual mode is doing
               // something sensible, not worth interrupting a screen reader
-              // for on every utterance.
+              // for on every utterance. Web Speech only: the Gemini Live rung
+              // transcribes both languages in one engine, and its own status
+              // badge (in the live card) already says so.
               <span className="text-xs text-muted-foreground">
                 {language === 'bilingual'
                   ? `Bilingual${currentLeadLang ? ` · ${ACTIVE_LANGUAGE_LABEL[currentLeadLang]}` : ''}`
@@ -2059,20 +2190,37 @@ export function MeetingIntelPanel({
       </div>
 
       {open && canRecord && !recording && !finalizing ? (
-        <p className="text-xs text-muted-foreground">
-          Audio is processed by Google Gemini using your API key. Make sure attendees consent to
-          recording.
-        </p>
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-muted-foreground">
+            Audio is processed by Google Gemini using your API key. Make sure attendees consent to
+            recording.
+          </p>
+          {/* Now that live streaming is the default rung, its metered cost has
+              to be disclosed BEFORE someone commits to a long recording —
+              this notice was written for exactly that and had no call site
+              while the feature was still opt-in. */}
+          {isLiveTranscriptionEnabled() ? <LiveTranscriptionCostNotice /> : null}
+        </div>
       ) : null}
 
-      {recording && liveSupported && liveUnavailable ? (
-        <p className="text-xs text-muted-foreground">Live text stopped — recording continues normally.</p>
+      {/* The REASON survives even when there is nothing left to fall back to.
+          "Live text stopped" alone says something broke but not whether it is
+          worth acting on — a busy model is worth retrying, a key with no Live
+          access never will be. Previously the reason was set and then hidden
+          by the very branch that fired with it. */}
+      {recording && liveUnavailable ? (
+        <p className="text-xs text-muted-foreground">
+          {fallbackNotice ?? 'Live text stopped'} — recording continues normally.
+        </p>
       ) : null}
-      {recording && liveSupported && !liveUnavailable && fallbackNotice ? (
+      {recording && !liveUnavailable && fallbackNotice ? (
         <p className="text-xs text-muted-foreground">{fallbackNotice}</p>
       ) : null}
-      {recording && !liveSupported ? (
-        <p className="text-xs text-muted-foreground">Live transcript needs Chrome — recording still works.</p>
+      {recording && liveEngine === 'none' && !liveUnavailable ? (
+        <p className="text-xs text-muted-foreground">
+          No live transcript for this capture — recording still works; the write-up comes from the
+          transcribed segments.
+        </p>
       ) : null}
 
       {/* The live transcript is a first-class surface, not console output: its
@@ -2090,6 +2238,20 @@ export function MeetingIntelPanel({
               Click the text to fix a word — corrections feed the AI
             </span>
           </div>
+          {liveEngine === 'gemini' ? (
+            /* Honest engine status for the Live rung — 'Connected' vs
+               'Live · Sinhala + English' is the distinction that keeps a
+               connected-but-silent socket from masquerading as working
+               transcription. The fallback notice renders above the card
+               (shared with the Web Speech path), so it is not repeated here. */
+            <div className="border-b border-border px-3 py-1.5">
+              <LiveTranscriptionStatus
+                status={geminiLive.status}
+                notice={null}
+                elapsedMs={seconds * 1000}
+              />
+            </div>
+          ) : null}
           {/* The committed transcript is a TEXTAREA, not a read-only <p>:
               the words the engines heard are visible the moment they land,
               and a mis-heard name or Sinhala/English mix-up can be corrected
@@ -2448,6 +2610,12 @@ export function MeetingIntelPanel({
                     autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
                     deadlines={notes?.deadlines ?? []}
                   />
+                  {/* Only once there is a record to ask about — an assistant
+                      offered over an empty meeting can only answer "that
+                      wasn't discussed", which reads as broken. */}
+                  {notes || (intel?.suggestions.length ?? 0) > 0 ? (
+                    <MeetingAssistant meetingId={meetingId} />
+                  ) : null}
                 </Panel>
               </PanelsLayout>
             </MeetingPanelsProvider>

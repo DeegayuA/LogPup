@@ -211,7 +211,15 @@ export async function mintLiveToken(
     )
   }
   if (lastBadMessage) {
-    throw new GeminiError('BAD_RESPONSE', lastBadMessage)
+    // The raw upstream body is logged, never shown: it can carry endpoint
+    // paths and project identifiers, and it means nothing to the person in
+    // the meeting. What they need is that the recording is unaffected and
+    // that this is not something retrying will fix.
+    console.error('[live-token] every model rejected the mint:', lastBadMessage)
+    throw new GeminiError(
+      'BAD_RESPONSE',
+      'Gemini Live isn’t available for this key’s project — recording continues without live transcription.',
+    )
   }
   throw new GeminiError(
     'ALL_KEYS_FAILED',

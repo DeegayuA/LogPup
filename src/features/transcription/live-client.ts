@@ -121,6 +121,14 @@ export class LiveTranscriptionSession {
    */
   stop(reasonStatus: LiveStatus = 'stopped'): void {
     this.stopped = true
+    // Commit whatever the last turn had in flight BEFORE tearing down: the
+    // consumer's durable transcript is built from committed text, so the
+    // final sentence of a meeting would otherwise be dropped at the exact
+    // moment someone presses Stop.
+    if (this.transcript.interim.trim().length > 0) {
+      this.transcript = commitTurn(this.transcript)
+      this.opts.callbacks?.onTranscript?.(this.transcript)
+    }
     this.clearTimers()
     this.teardownAudio()
     this.teardownSocket()
@@ -138,7 +146,14 @@ export class LiveTranscriptionSession {
       minted = await this.opts.requestToken()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not get a Live token'
-      this.handleConnectionFailure(message)
+      // Fail STRAIGHT to the caller's fallback rather than through the
+      // reconnect schedule. Minting already retries server-side (mintLiveToken
+      // walks every key and every model, with the project's own backoff), so
+      // an error arriving here has survived that — retrying it four more times
+      // out here just spends a minute of the meeting on dead air before the
+      // Web Speech fallback is allowed to start. Socket-level failures still
+      // reconnect; those are the expected ~10-minute lifetime drops.
+      this.fail(message)
       return
     }
     if (this.stopped) return
@@ -221,6 +236,9 @@ export class LiveTranscriptionSession {
       case 'transcript':
         this.lastTranscriptAt = this.now()
         this.transcript = appendFragment(this.transcript, event.text)
+        // A frame that both delivers text and closes the turn must do both,
+        // or the turn stays in flight forever and nothing is ever committed.
+        if (event.endsTurn) this.transcript = commitTurn(this.transcript)
         this.opts.callbacks?.onTranscript?.(this.transcript)
         this.setStatus('live')
         break

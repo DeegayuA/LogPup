@@ -17,7 +17,23 @@ const VIEW_H = 120
  * Server-safe (pure SVG, no client APIs). `vector-effect="non-scaling-stroke"`
  * keeps the 2px line 2px wide while the viewBox stretches to the container.
  */
-export function AllocationTrend({ points, now = new Date() }: { points: TrendPoint[]; now?: Date }) {
+export function AllocationTrend({
+  points,
+  now = new Date(),
+  reference = 100,
+  referenceLabel = '100% line',
+}: {
+  points: TrendPoint[]
+  now?: Date
+  /**
+   * The "full" line every value is judged against. 100 for one person; for a
+   * TEAM total it must be the team's own capacity (headcount × 100), or a
+   * team of two or more renders permanently above the line in the
+   * over-capacity colour — an alarm that means nothing.
+   */
+  reference?: number
+  referenceLabel?: string
+}) {
   if (points.length === 0) {
     return (
       <p className="py-4 text-center text-xs text-muted-foreground">
@@ -28,7 +44,7 @@ export function AllocationTrend({ points, now = new Date() }: { points: TrendPoi
 
   const current = points[points.length - 1].totalPct
   const peak = Math.max(...points.map((point) => point.totalPct))
-  const yMax = Math.max(100, peak)
+  const yMax = Math.max(reference, peak)
 
   // Extend the last step to "now" so the line reaches the right edge instead
   // of stopping at whenever the last edit happened.
@@ -52,7 +68,8 @@ export function AllocationTrend({ points, now = new Date() }: { points: TrendPoi
   })
   commands.push(`L ${VIEW_W} ${y(current)}`)
 
-  const hundredY = y(100)
+  const referenceY = y(reference)
+  const overReference = current > reference
 
   return (
     <div className="flex flex-col gap-2">
@@ -60,7 +77,7 @@ export function AllocationTrend({ points, now = new Date() }: { points: TrendPoi
         <span className="text-xs text-muted-foreground">
           Now{' '}
           <span
-            className={cn(PCT_CLASS, 'text-sm font-medium', current > 100 && 'text-destructive')}
+            className={cn(PCT_CLASS, 'text-sm font-medium', overReference && 'text-destructive')}
           >
             {formatPct(current)}
           </span>
@@ -74,14 +91,14 @@ export function AllocationTrend({ points, now = new Date() }: { points: TrendPoi
         preserveAspectRatio="none"
         className="h-24 w-full overflow-visible"
         role="img"
-        aria-label={`Total allocation over time: currently ${formatPct(current)}, peak ${formatPct(peak)} across ${points.length} ${points.length === 1 ? 'change' : 'changes'}.`}
+        aria-label={`Total allocation over time: currently ${formatPct(current)}, peak ${formatPct(peak)} against ${referenceLabel} of ${formatPct(reference)}, across ${points.length} ${points.length === 1 ? 'change' : 'changes'}.`}
       >
-        {/* 100% reference line — the thing every value is judged against. */}
+        {/* The reference line — the thing every value is judged against. */}
         <line
           x1="0"
           x2={VIEW_W}
-          y1={hundredY}
-          y2={hundredY}
+          y1={referenceY}
+          y2={referenceY}
           className="stroke-border"
           strokeWidth="1"
           strokeDasharray="4 4"
@@ -90,7 +107,7 @@ export function AllocationTrend({ points, now = new Date() }: { points: TrendPoi
         <path
           d={commands.join(' ')}
           fill="none"
-          className={current > 100 ? 'stroke-destructive' : 'stroke-primary'}
+          className={overReference ? 'stroke-destructive' : 'stroke-primary'}
           strokeWidth="2"
           strokeLinejoin="round"
           vectorEffect="non-scaling-stroke"
@@ -100,7 +117,7 @@ export function AllocationTrend({ points, now = new Date() }: { points: TrendPoi
         <time dateTime={points[0].at.toISOString()} className="font-mono tabular-nums">
           {points[0].at.toISOString().slice(0, 10)}
         </time>
-        <span className="font-mono tabular-nums">100% line</span>
+        <span className="font-mono tabular-nums">{referenceLabel}</span>
         <time dateTime={new Date(endMs).toISOString()} className="font-mono tabular-nums">
           {new Date(endMs).toISOString().slice(0, 10)}
         </time>

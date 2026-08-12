@@ -2597,6 +2597,12 @@ export type NoteTimelineData = {
   speakers: SpeakerRow[]
   suggestions: TaskSuggestionView[]
   attendees: AttendeeRef[]
+  /**
+   * Every approved user, for the "Who's who" speaker picker's second group:
+   * the person behind "Speaker 2" is often someone who joined without being
+   * on the attendee list, so the picker cannot stop at `attendees`.
+   */
+  approvedUsers: AttendeeRef[]
   appId: string | null
 }
 
@@ -2725,12 +2731,14 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
     .where(eq(meetingSpeakers.meetingId, id))
 
   const suggestionRows = await fetchTaskSuggestions(id)
+  const approvedUsers = await fetchApprovedUsers()
 
   return ok({
     segments,
     speakers: speakerMapRows,
     suggestions: suggestionRows,
     attendees,
+    approvedUsers,
     appId: meeting.appId,
   })
 }

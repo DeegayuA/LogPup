@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.158",
+  "current": "v0.0.163",
   "versions": [
     {
       "version": "v0.0.1",
@@ -922,32 +922,62 @@
     {
       "version": "v0.0.154",
       "date": "2026-08-12",
+      "hash": "c030f19",
+      "change": "Install Vercel Speed Insights"
+    },
+    {
+      "version": "v0.0.155",
+      "date": "2026-08-12",
       "hash": "c144150",
       "change": "fix: calendar grid review findings"
     },
     {
-      "version": "v0.0.155",
+      "version": "v0.0.156",
       "date": "2026-08-12",
       "hash": "ae841b8",
       "change": "fix: disarm the roadmap keydown trap; correct the DragOverlay comment"
     },
     {
-      "version": "v0.0.156",
+      "version": "v0.0.157",
       "date": "2026-08-12",
       "hash": "316f124",
       "change": "fix: make 0023_sprint_checkins replay-safe like its neighbours"
     },
     {
-      "version": "v0.0.157",
+      "version": "v0.0.158",
       "date": "2026-08-12",
       "hash": "37f6c36",
       "change": "feat: panelled meeting write-up with tags, filters and language control"
     },
     {
-      "version": "v0.0.158",
+      "version": "v0.0.159",
       "date": "2026-08-12",
       "hash": "660f029",
       "change": "feat: edit assignee, due date and title on meeting action items"
+    },
+    {
+      "version": "v0.0.160",
+      "date": "2026-08-12",
+      "hash": "c55cc35",
+      "change": "refactor: one editable source of truth for meeting action items"
+    },
+    {
+      "version": "v0.0.161",
+      "date": "2026-08-12",
+      "hash": "bc0cd33",
+      "change": "."
+    },
+    {
+      "version": "v0.0.162",
+      "date": "2026-08-12",
+      "hash": "d6c8f0d",
+      "change": "Merge pull request #3 from DeegayuA/vercel/install-vercel-speed-insights-oh410m"
+    },
+    {
+      "version": "v0.0.163",
+      "date": "2026-08-12",
+      "hash": "eb102f1",
+      "change": "docs: attendee recommender implementation plan (A1, 9 tasks)"
     }
   ]
 }

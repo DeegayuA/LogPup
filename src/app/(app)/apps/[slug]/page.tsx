@@ -25,6 +25,8 @@ import { AppComments } from '@/features/apps/components/app-comments'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { TaskSplitBar } from '@/features/apps/components/task-split-bar'
 import { getTeamForApp, listActiveUsers, listAssignableApps } from '@/features/people/queries'
+import { getAppContributions } from '@/features/apps/contribution-queries'
+import { AppContributions } from '@/features/apps/components/app-contributions'
 import { TeamPanel } from '@/features/people/components/team-panel'
 import { getBoard, getSprintsForApp } from '@/features/sprints/queries'
 import { getMeetingsForApp } from '@/features/meetings/queries'
@@ -100,6 +102,7 @@ export default async function AppDetailPage(props: {
     assignableApps,
     workspaceTechTags,
     activity,
+    contributions,
   ] = await Promise.all([
     getSprintsForApp(app.id),
     getTeamForApp(app.id),
@@ -110,6 +113,9 @@ export default async function AppDetailPage(props: {
     tab === 'meetings' ? listAssignableApps() : Promise.resolve([]),
     needsUsers ? listDistinctTechTags() : Promise.resolve([]),
     activityLimit > 0 ? getAppActivity(app.id, activityLimit) : Promise.resolve([]),
+    // Overview is the only tab that renders it; every other tab would pay
+    // three aggregate queries for a panel it never shows.
+    tab === 'overview' ? getAppContributions(app.id) : Promise.resolve([]),
   ])
   const tasks = counts.tasks
 
@@ -248,6 +254,10 @@ export default async function AppDetailPage(props: {
           )}
 
           <TeamPanel appId={app.id} team={team} activeUsers={activeUsers} isAdmin={isAdmin} />
+
+          {/* Directly under Team on purpose: Team is the plan (who is on this,
+              at what allocation), this is the record of what came of it. */}
+          <AppContributions contributions={contributions} />
 
           <section className="flex flex-col gap-3">
             <div className="flex items-baseline justify-between gap-3">

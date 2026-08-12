@@ -22,7 +22,17 @@ export type LiveTranscriptionHandle = {
   /** True only once real transcription has arrived on the current session. */
   isTranscribing: boolean
   start: (stream: MediaStream) => Promise<void>
-  stop: () => void
+  /**
+   * Stops the session and returns everything transcribed, INCLUDING the turn
+   * that was in flight (the session commits it on the way down).
+   *
+   * It returns a value rather than only updating state because the consumer
+   * needs the final text synchronously: by the time React re-renders with it,
+   * the caller has already torn its own recording state down, and a tail
+   * delivered through state would arrive after the gate that would accept it
+   * has closed. Read from the ref, the only always-current copy.
+   */
+  stop: () => string
 }
 
 /**
@@ -42,13 +52,20 @@ export function useLiveTranscription(meetingId: string): LiveTranscriptionHandle
   const transcriptRef = useRef<TranscriptState>(EMPTY_TRANSCRIPT)
 
   const stop = useCallback(() => {
+    // stop() commits the in-flight turn and fires onTranscript synchronously,
+    // so the ref is already up to date when it returns.
     sessionRef.current?.stop()
     sessionRef.current = null
+    return fullText(transcriptRef.current)
   }, [])
 
   // A live socket must never outlive the component that owns it: an unmounted
   // panel with an open session would keep streaming (and billing) invisibly.
-  useEffect(() => stop, [stop])
+  useEffect(() => {
+    return () => {
+      stop()
+    }
+  }, [stop])
 
   const start = useCallback(
     async (stream: MediaStream) => {
