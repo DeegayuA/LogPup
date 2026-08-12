@@ -1,12 +1,10 @@
 'use client'
 
-import { useEffect, useState, useTransition, type ReactNode } from 'react'
-import Link from 'next/link'
-import { format, parseISO } from 'date-fns'
+import { useEffect, useState, useTransition } from 'react'
+import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
   AlertCircleIcon,
-  CheckIcon,
   KeyboardIcon,
   Loader2Icon,
   MicIcon,
@@ -15,68 +13,36 @@ import {
   PlusIcon,
   SparklesIcon,
   Trash2Icon,
-  UndoIcon,
   UsersIcon,
-  XIcon,
 } from 'lucide-react'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import { DateTimeWheelField, roundUpToStep } from '@/components/ui/datetime-wheel'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { MentionText, MentionTextarea, type MentionUser } from '@/components/mention-textarea'
 import { MarkdownLite } from '@/components/markdown-lite'
 import { cn } from '@/lib/utils'
 import {
   bilingualText,
-  MetaChip,
   SectionHeading,
   SkeletonBlock,
 } from '@/features/meetings/components/meeting-chips'
 import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
+import type { DeadlineHintSource } from '@/features/meetings/components/note-timeline-model'
 import {
-  buildSuggestionUpdatePayload,
-  buildTaskUpdatePayload,
-  classifyDueDateInput,
-  findDueDateHint,
-  resolveActionItemEditTarget,
-  type ActionItemEditPatch,
-  type DeadlineHintSource,
-} from '@/features/meetings/components/note-timeline-model'
+  ActionItemSuggestionsList,
+  buildAssigneePool,
+  useActionItemActions,
+} from '@/features/meetings/components/action-item-board'
 import {
-  acceptTaskSuggestion,
   addTypedNoteSegment,
   deleteNoteSegment,
-  dismissTaskSuggestion,
   editNoteSegment,
   getMeetingNoteTimeline,
   setSpeakerMapping,
-  undoAutoAcceptedSuggestion,
-  updateTaskSuggestion,
   type NoteSegmentView,
   type NoteTimelineData,
-  type TaskSuggestionView,
 } from '@/features/meetings/ai-actions'
-import { updateTask } from '@/features/sprints/task-actions'
 
 const NOT_ATTENDEE = '__not_attendee__'
-const UNASSIGNED = '__unassigned__'
-
-const PRIORITY_OPTIONS = [
-  { value: '0', label: 'None' },
-  { value: '1', label: 'Low' },
-  { value: '2', label: 'Medium' },
-  { value: '3', label: 'High' },
-]
 
 const SOURCE_META: Record<
   NoteSegmentView['source'],
@@ -85,334 +51,6 @@ const SOURCE_META: Record<
   typed: { icon: KeyboardIcon, label: 'Typed' },
   voice: { icon: MicIcon, label: 'Voice' },
   ai: { icon: SparklesIcon, label: 'AI' },
-}
-
-type EditForm = { title: string; assigneeId: string; dueDate: string; priority: string }
-
-function toEditForm(suggestion: TaskSuggestionView): EditForm {
-  return {
-    title: suggestion.text,
-    assigneeId: suggestion.suggestedUserId ?? UNASSIGNED,
-    dueDate: suggestion.suggestedDueDate ?? '',
-    priority: '0',
-  }
-}
-
-/**
- * Applies an inline edit's patch to a row's CLIENT-side view immediately,
- * ahead of the server round trip — see handleActionItemEdit. Title lands on
- * `taskTitle` for an already-accepted (auto-assigned) row, since that is
- * what the card actually renders once a task exists; `text` for an open
- * suggestion. `people` resolves an assignee id back to the display name this
- * timeline shows, without waiting on the server to hand it back.
- */
-function applyOptimisticActionItemPatch(
-  suggestion: TaskSuggestionView,
-  patch: ActionItemEditPatch,
-  people: MentionUser[],
-): TaskSuggestionView {
-  const next = { ...suggestion }
-  const isTask = suggestion.status === 'accepted' && suggestion.createdTaskId !== null
-  if (patch.title !== undefined) {
-    if (isTask) next.taskTitle = patch.title
-    else next.text = patch.title
-  }
-  if (patch.assigneeId !== undefined) {
-    next.suggestedUserId = patch.assigneeId
-    next.suggestedUserName = patch.assigneeId ? (people.find((p) => p.id === patch.assigneeId)?.name ?? null) : null
-  }
-  if (patch.dueDate !== undefined) {
-    next.suggestedDueDate = patch.dueDate
-  }
-  return next
-}
-
-/* --- inline editors for a live action-item row (suggestion or task) -----
- *
- * These three are the "can edit people, assign" feature: reassign,
- * reschedule or retitle a row without leaving the write-up. Which record an
- * edit actually writes to (the open suggestion, or the task it already
- * became) is resolveActionItemEditTarget's job — these components only ever
- * emit a patch; NoteTimeline.handleActionItemEdit does the routing. */
-
-/** One person's initial, for the assignee trigger's avatar — no avatarUrl is
- *  threaded down this far (attendees/mentionUsers are both {id, name}), so
- *  this is deliberately initials-only rather than a broken image request. */
-function PersonInitial({ name }: { name: string | null }) {
-  return (
-    <Avatar size="sm" className="size-5">
-      <AvatarFallback className="text-2xs">{name ? name.slice(0, 1).toUpperCase() : '?'}</AvatarFallback>
-    </Avatar>
-  )
-}
-
-/**
- * Click the assigned person to reassign — a Select over the meeting's
- * attendees first, then any other approved active user (see `people` at the
- * call site), with an explicit "Nobody / unassigned" option so clearing an
- * assignment is never a special case. Shows the name (and an initials
- * avatar), never a raw id.
- */
-function ActionItemAssignee({
-  currentId,
-  currentName,
-  people,
-  disabled,
-  onChange,
-  label,
-}: {
-  currentId: string | null
-  currentName: string | null
-  people: MentionUser[]
-  disabled: boolean
-  onChange: (id: string | null) => void
-  label: string
-}) {
-  return (
-    <Select
-      value={currentId ?? UNASSIGNED}
-      onValueChange={(v) => v && onChange(v === UNASSIGNED ? null : v)}
-      disabled={disabled}
-    >
-      <SelectTrigger size="sm" className="h-auto gap-1.5 border-transparent bg-transparent px-1 py-0.5 hover:border-border hover:bg-muted/50" aria-label={label}>
-        <SelectValue>
-          {() => (
-            <span className="inline-flex items-center gap-1.5">
-              <PersonInitial name={currentName} />
-              <span className="text-xs font-medium">{currentName ?? 'Unassigned'}</span>
-            </span>
-          )}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={UNASSIGNED}>Nobody / unassigned</SelectItem>
-        {people.map((person) => (
-          <SelectItem key={person.id} value={person.id}>
-            {person.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-/**
- * Click the due chip to set/change/clear it, via the same DateTimeWheelField
- * every other date+time picker in this codebase uses — no second picker
- * built for this one spot.
- *
- * Three distinct things this can show, and they must never be confused with
- * one another:
- *  - a REAL due date (suggestedDueDate/dueDate actually stored) — the
- *    ordinary chip, dates only, no fabricated urgency.
- *  - an UNRESOLVED HINT — the model wrote a due-date phrase for this same
- *    item elsewhere in its write-up (see findDueDateHint) that never
- *    resolved to a real date ("Today at 4:30 PM, 5:00 PM, or 5:50 PM" is
- *    three candidate times, not a timestamp) — shown as a quoted hint the
- *    user can turn into a real date with one click, never rendered as if it
- *    were itself a deadline.
- *  - a RESOLVED HINT — same idea, but the phrase WAS a real date in a format
- *    normalizeDueDate's strict-ISO rule rejected ("August 20, 2026") — shown
- *    pre-filled so confirming it is one click, not a re-type.
- *  - nothing at all — a plain, clearly-labeled "No due date".
- */
-function ActionItemDueDate({
-  id,
-  currentIso,
-  hint,
-  disabled,
-  onSave,
-  label,
-}: {
-  /** A DOM-id-safe key (the row's suggestion id) — kept separate from
-   *  `label`, which is human-readable text (spaces, quotes) and unsafe to
-   *  use as an element id. */
-  id: string
-  currentIso: string | null
-  hint: string | null
-  disabled: boolean
-  onSave: (iso: string | null) => void
-  label: string
-}) {
-  const [editing, setEditing] = useState(false)
-  const currentDate = currentIso ? parseISO(currentIso) : null
-  const [pending, setPending] = useState<Date>(currentDate ?? roundUpToStep(new Date()))
-
-  function openEditor(seed: Date | null) {
-    setPending(seed ?? currentDate ?? roundUpToStep(new Date()))
-    setEditing(true)
-  }
-
-  function commit() {
-    onSave(format(pending, 'yyyy-MM-dd'))
-    setEditing(false)
-  }
-
-  if (editing) {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-1">
-        <DateTimeWheelField id={`due-${id}`} label="Due date" value={pending} onChange={setPending} className="w-56" />
-        <Button size="icon-sm" type="button" onClick={commit}>
-          <CheckIcon aria-hidden />
-          <span className="sr-only">Save due date</span>
-        </Button>
-        {currentIso ? (
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            type="button"
-            onClick={() => {
-              onSave(null)
-              setEditing(false)
-            }}
-          >
-            <XIcon aria-hidden />
-            <span className="sr-only">Clear due date</span>
-          </Button>
-        ) : null}
-        <Button size="sm" variant="ghost" type="button" onClick={() => setEditing(false)}>
-          Cancel
-        </Button>
-      </span>
-    )
-  }
-
-  const triggerClass =
-    'rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-60'
-
-  if (currentDate) {
-    return (
-      <button type="button" disabled={disabled} onClick={() => openEditor(null)} className={triggerClass} aria-label={`${label} — click to change`}>
-        <MetaChip>
-          Due <span className="font-mono tabular-nums">{format(currentDate, 'MMM d')}</span>
-        </MetaChip>
-      </button>
-    )
-  }
-
-  if (hint) {
-    const classified = classifyDueDateInput(hint)
-    if (classified.kind === 'resolved') {
-      const resolvedDate = parseISO(classified.iso)
-      return (
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => openEditor(resolvedDate)}
-          className={triggerClass}
-          aria-label={`${label} — the write-up said "${hint}", click to confirm ${format(resolvedDate, 'MMM d')}`}
-        >
-          <MetaChip tone="warning">
-            Hint <span className="font-mono tabular-nums">{format(resolvedDate, 'MMM d')}</span>
-          </MetaChip>
-        </button>
-      )
-    }
-    return (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => openEditor(null)}
-        className={triggerClass}
-        aria-label={`${label} — unresolved hint from the write-up: "${classified.raw}", not a real date. Click to set one.`}
-      >
-        <MetaChip tone="warning">Unresolved: &ldquo;{classified.raw}&rdquo;</MetaChip>
-      </button>
-    )
-  }
-
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => openEditor(null)}
-      className={cn(triggerClass, 'text-xs text-muted-foreground italic hover:text-foreground')}
-      aria-label={`${label} — no due date, click to set one`}
-    >
-      No due date
-    </button>
-  )
-}
-
-/**
- * Click the title to edit it — same save-on-blur-or-Enter, revert-on-Escape
- * shape as the admin table's PhoneCell/PersonalEmailCell, adapted to a
- * click-to-reveal control (rather than an always-visible input) so a row of
- * chips doesn't turn into a permanent text box.
- */
-function ActionItemTitle({
-  value,
-  disabled,
-  onSave,
-  ariaLabel,
-  display,
-}: {
-  value: string
-  disabled: boolean
-  onSave: (next: string) => void
-  ariaLabel: string
-  /**
-   * What to show when NOT editing, if it needs to be more than plain text —
-   * the auto-assigned card links its title to the task's board, and that
-   * link has to survive editing being added beside it rather than being
-   * replaced by a bare click-to-edit span (the two affordances would fight
-   * over the same click otherwise). Defaults to plain text.
-   */
-  display?: ReactNode
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-
-  if (editing) {
-    return (
-      <Input
-        autoFocus
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          setEditing(false)
-          const next = draft.trim()
-          if (next && next !== value) onSave(next)
-          else setDraft(value)
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault()
-            event.currentTarget.blur()
-          }
-          if (event.key === 'Escape') {
-            setDraft(value)
-            setEditing(false)
-          }
-        }}
-        minLength={1}
-        maxLength={140}
-        aria-label={ariaLabel}
-        className="h-auto min-w-0 flex-1 basis-48 py-0.5 text-sm"
-      />
-    )
-  }
-
-  return (
-    <span className="flex min-w-0 flex-1 basis-48 items-start gap-1">
-      <span className="min-w-0 flex-1">
-        {display ?? <span className={cn(bilingualText, 'text-foreground')}>{value}</span>}
-      </span>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          setDraft(value)
-          setEditing(true)
-        }}
-      >
-        <PencilIcon aria-hidden />
-        <span className="sr-only">{ariaLabel}</span>
-      </Button>
-    </span>
-  )
 }
 
 export function NoteTimeline({
@@ -476,78 +114,21 @@ export function NoteTimeline({
   const [speakerBusyLabel, setSpeakerBusyLabel] = useState<string | null>(null)
   const [speakerPending, startSpeakerPending] = useTransition()
 
-  const [suggestionBusyId, setSuggestionBusyId] = useState<string | null>(null)
-  const [suggestionPending, startSuggestionPending] = useTransition()
-
-  const [editingSuggestion, setEditingSuggestion] = useState<TaskSuggestionView | null>(null)
-  const [suggestionForm, setSuggestionForm] = useState<EditForm | null>(null)
-
-  const [undoBusyId, setUndoBusyId] = useState<string | null>(null)
-  const [undoPending, startUndoPending] = useTransition()
-
-  // Inline row edits (assignee/due date/title) — a SEPARATE busy/pending pair
-  // from every action above so editing one row never reads as "busy" for
-  // accept/dismiss/undo on another, and so only the row actually saving shows
-  // a pending state (the codebase has an existing complaint about
-  // table-wide pending locks).
-  const [actionEditBusyId, setActionEditBusyId] = useState<string | null>(null)
-  const [actionEditPending, startActionEditPending] = useTransition()
-
   const mentionPool = mentionUsers ?? attendees
-  // Meeting attendees first, then any other approved active user — see
-  // ActionItemAssignee's picker. Deduped so an attendee who is also in the
-  // wider mentionPool (the common case) is not offered twice.
-  const assigneePool: MentionUser[] = [
-    ...attendees,
-    ...mentionPool.filter((person) => !attendees.some((attendee) => attendee.id === person.id)),
-  ]
+  const assigneePool: MentionUser[] = buildAssigneePool(attendees, mentionUsers)
 
-  /**
-   * One inline edit to one action-item row. Routes to the suggestion or the
-   * task it already became (resolveActionItemEditTarget) — never both, and
-   * never bypassing updateTask's own authz for the already-a-task case (see
-   * that function's own comment on why). Optimistic: the row updates
-   * immediately from `patch`, using `people` to resolve an assignee id back
-   * to a display name locally rather than waiting on a round trip; a
-   * failure reverts to the pre-edit snapshot and reports why.
-   */
-  function handleActionItemEdit(suggestion: TaskSuggestionView, patch: ActionItemEditPatch) {
-    const target = resolveActionItemEditTarget(suggestion)
-    if (!target) {
-      toast.error('This item can no longer be edited')
-      return
-    }
-    const snapshot = data
-    setData((prev) =>
-      prev
-        ? {
-            ...prev,
-            suggestions: prev.suggestions.map((row) =>
-              row.id === suggestion.id ? applyOptimisticActionItemPatch(row, patch, assigneePool) : row,
-            ),
-          }
-        : prev,
-    )
-    setActionEditBusyId(suggestion.id)
-    startActionEditPending(async () => {
-      try {
-        const res =
-          target.kind === 'suggestion'
-            ? await updateTaskSuggestion(target.id, buildSuggestionUpdatePayload(patch))
-            : await updateTask(target.id, buildTaskUpdatePayload(patch))
-        if (!res.ok) {
-          toast.error(res.error)
-          setData(snapshot)
-          return
-        }
-      } catch {
-        toast.error('Something went wrong — try again')
-        setData(snapshot)
-      } finally {
-        setActionEditBusyId(null)
-      }
-    })
-  }
+  // Reassign/reschedule/retitle/accept/dismiss/undo — the ONE shared
+  // implementation of "edit this action item" (action-item-board.tsx), fed
+  // this timeline's own `data.suggestions` and a setter that patches just
+  // that field, so an optimistic edit here updates the exact same rows the
+  // Action items panel (meeting-notes.tsx) also renders from a separate
+  // fetch of the same underlying query.
+  const actionItemActions = useActionItemActions(
+    data?.suggestions ?? [],
+    (updater) => setData((prev) => (prev ? { ...prev, suggestions: updater(prev.suggestions) } : prev)),
+    load,
+    assigneePool,
+  )
 
   async function load() {
     setLoading(true)
@@ -661,79 +242,6 @@ export function NoteTimeline({
     })
   }
 
-  function handleAcceptSuggestion(suggestion: TaskSuggestionView, overrides?: EditForm) {
-    setSuggestionBusyId(suggestion.id)
-    startSuggestionPending(async () => {
-      try {
-        const res = await acceptTaskSuggestion(
-          suggestion.id,
-          overrides
-            ? {
-                title: overrides.title.trim() || undefined,
-                assigneeId: overrides.assigneeId === UNASSIGNED ? null : overrides.assigneeId,
-                dueDate: overrides.dueDate || null,
-                priority: Number(overrides.priority),
-              }
-            : undefined,
-        )
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Task created')
-        setEditingSuggestion(null)
-        setSuggestionForm(null)
-        await load()
-      } catch {
-        toast.error('Something went wrong — try again')
-      } finally {
-        setSuggestionBusyId(null)
-      }
-    })
-  }
-
-  // Layer (b) of full-auto's manual override: undo deletes the task the
-  // auto pass created and reverts the card to a plain manual suggestion.
-  // The server re-checks the todo+unmodified constraint (canUndoAutoAssign)
-  // regardless of what this button shows — a failure here just means
-  // someone (or something) changed the task between load and click.
-  function handleUndoAutoAssign(suggestionId: string) {
-    setUndoBusyId(suggestionId)
-    startUndoPending(async () => {
-      try {
-        const res = await undoAutoAcceptedSuggestion(suggestionId)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Undone — back to a suggestion card')
-        await load()
-      } catch {
-        toast.error('Something went wrong — try again')
-      } finally {
-        setUndoBusyId(null)
-      }
-    })
-  }
-
-  function handleDismissSuggestion(suggestionId: string) {
-    setSuggestionBusyId(suggestionId)
-    startSuggestionPending(async () => {
-      try {
-        const res = await dismissTaskSuggestion(suggestionId)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        await load()
-      } catch {
-        toast.error('Something went wrong — try again')
-      } finally {
-        setSuggestionBusyId(null)
-      }
-    })
-  }
-
   if (loading) {
     // Skeleton, not a spinner: this is a stack of bordered note cards and the
     // reader can be told that before the data lands.
@@ -768,14 +276,6 @@ export function NoteTimeline({
   const segments = data.segments.filter(
     (segment) => !(segment.source === 'ai' && isSameNoteText(segment.content, shownElsewhere)),
   )
-
-  // getMeetingNoteTimeline already narrows `suggestions` to open + auto-
-  // accepted (see its query comment) — this just tells the two apart for
-  // rendering. A suggestion a PERSON accepted has already dropped off the
-  // list entirely (same as it always has), so `status === 'accepted'` here
-  // can only mean the auto pass did it.
-  const manualSuggestions = data.suggestions.filter((s) => s.status === 'open')
-  const autoSuggestions = data.suggestions.filter((s) => s.status === 'accepted')
 
   const speakerLabels = Array.from(
     new Set(
@@ -979,367 +479,18 @@ export function NoteTimeline({
         </div>
       ) : null}
 
-      {autoSuggestions.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          <SectionHeading
-            as="h5"
-            icon={SparklesIcon}
-            title="Auto-assigned"
-            count={autoSuggestions.length}
-          />
-          <ul className="flex flex-col gap-2">
-            {autoSuggestions.map((suggestion) => {
-              const busy = undoBusyId === suggestion.id && undoPending
-              const editBusy = actionEditBusyId === suggestion.id && actionEditPending
-              const rowDisabled = busy || editBusy
-              const titleText = suggestion.taskTitle ?? suggestion.text
-              const linkedTitle =
-                suggestion.appSlug && suggestion.createdTaskId ? (
-                  <Link
-                    href={`/apps/${suggestion.appSlug}`}
-                    className={cn(
-                      bilingualText,
-                      'text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
-                    )}
-                  >
-                    {titleText}
-                  </Link>
-                ) : (
-                  <p className={cn(bilingualText, 'text-foreground')}>{titleText}</p>
-                )
-              return (
-                <li
-                  key={suggestion.id}
-                  className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-success/30 bg-success/5 p-2.5"
-                >
-                  <div className="flex min-w-0 flex-1 basis-56 flex-col gap-1">
-                    {canManage ? (
-                      <ActionItemTitle
-                        value={titleText}
-                        display={linkedTitle}
-                        disabled={rowDisabled}
-                        onSave={(next) => handleActionItemEdit(suggestion, { title: next })}
-                        ariaLabel={`Edit title: ${titleText}`}
-                      />
-                    ) : (
-                      linkedTitle
-                    )}
-                    <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                      {/* Sparkles = AI acted; check = the outcome was
-                          committed, not merely proposed — together they say
-                          "done automatically", distinct from the neutral
-                          "Suggested" chip below on a card nobody clicked yet. */}
-                      <MetaChip tone="success">
-                        <SparklesIcon className="size-3.5 shrink-0" aria-hidden />
-                        <CheckIcon className="size-3.5 shrink-0" aria-hidden />
-                        Auto-assigned
-                      </MetaChip>
-                      {canManage ? (
-                        <span className="inline-flex items-center gap-1">
-                          to
-                          <ActionItemAssignee
-                            currentId={suggestion.suggestedUserId}
-                            currentName={suggestion.suggestedUserName}
-                            people={assigneePool}
-                            disabled={rowDisabled}
-                            onChange={(id) => handleActionItemEdit(suggestion, { assigneeId: id })}
-                            label={`Reassign "${titleText}"`}
-                          />
-                        </span>
-                      ) : suggestion.suggestedUserId ? (
-                        <>
-                          to{' '}
-                          <Link
-                            href={`/people/${suggestion.suggestedUserId}`}
-                            className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                          >
-                            {suggestion.suggestedUserName ?? 'Unknown'}
-                          </Link>
-                        </>
-                      ) : null}
-                      {canManage ? (
-                        <ActionItemDueDate
-                          id={suggestion.id}
-                          currentIso={suggestion.suggestedDueDate}
-                          hint={suggestion.suggestedDueDate ? null : findDueDateHint(suggestion.text, deadlines)}
-                          disabled={rowDisabled}
-                          onSave={(iso) => handleActionItemEdit(suggestion, { dueDate: iso })}
-                          label={`Due date for "${titleText}"`}
-                        />
-                      ) : suggestion.suggestedDueDate ? (
-                        <span className="font-mono">
-                          Due {format(parseISO(suggestion.suggestedDueDate), 'MMM d')}
-                        </span>
-                      ) : null}
-                    </p>
-                  </div>
-                  {canManage ? (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        type="button"
-                        disabled={rowDisabled}
-                        onClick={() => handleUndoAutoAssign(suggestion.id)}
-                      >
-                        {busy ? <Loader2Icon className="animate-spin" aria-hidden /> : <UndoIcon aria-hidden />}
-                        Undo
-                      </Button>
-                    </div>
-                  ) : null}
-                </li>
-              )
-            })}
-          </ul>
-        </section>
-      ) : null}
-
-      {manualSuggestions.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          {/* `primary` used to mean four different things at once in this
-              feature — "AI proposed it", "resolved", "outcome", and plain
-              decoration on two icons. A suggestion is a proposal, not a
-              state, so it is a neutral card carrying the word "Suggested". */}
-          <SectionHeading
-            as="h5"
-            icon={SparklesIcon}
-            title="Suggested tasks"
-            count={manualSuggestions.length}
-          />
-          {autoAssignCappedCount > 0 ? (
-            <p className="text-2xs text-muted-foreground">
-              <span className="font-mono">{autoAssignCappedCount}</span>{' '}
-              {autoAssignCappedCount === 1 ? 'more suggestion needs' : 'more suggestions need'} review —
-              this meeting already hit its auto-assign limit.
-            </p>
-          ) : null}
-          <ul className="flex flex-col gap-2">
-            {manualSuggestions.map((suggestion) => {
-              const busy = suggestionBusyId === suggestion.id && suggestionPending
-              const editBusy = actionEditBusyId === suggestion.id && actionEditPending
-              const rowDisabled = busy || editBusy
-              return (
-                <li
-                  key={suggestion.id}
-                  className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed border-border bg-card p-2.5"
-                >
-                  <div className="flex min-w-0 flex-1 basis-56 flex-col gap-1">
-                    {canManage ? (
-                      <ActionItemTitle
-                        value={suggestion.text}
-                        disabled={rowDisabled}
-                        onSave={(next) => handleActionItemEdit(suggestion, { title: next })}
-                        ariaLabel={`Edit title: ${suggestion.text}`}
-                      />
-                    ) : (
-                      <p className={cn(bilingualText, 'text-foreground')}>{suggestion.text}</p>
-                    )}
-                    <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                      <MetaChip>Suggested</MetaChip>
-                      {suggestion.suggestedAppName ? (
-                        // Where this task will actually be filed — the AI's
-                        // routing decision (suggestedAppId, ai-actions.ts).
-                        // Without this label, accepting a routed suggestion
-                        // files it into an app the card never named.
-                        <MetaChip>→ {suggestion.suggestedAppName}</MetaChip>
-                      ) : null}
-                      {canManage ? (
-                        <ActionItemAssignee
-                          currentId={suggestion.suggestedUserId}
-                          currentName={suggestion.suggestedUserName}
-                          people={assigneePool}
-                          disabled={rowDisabled}
-                          onChange={(id) => handleActionItemEdit(suggestion, { assigneeId: id })}
-                          label={`Assignee for "${suggestion.text}"`}
-                        />
-                      ) : (
-                        <span>{suggestion.suggestedUserName ?? 'Unassigned'}</span>
-                      )}
-                      {canManage ? (
-                        <ActionItemDueDate
-                          id={suggestion.id}
-                          currentIso={suggestion.suggestedDueDate}
-                          hint={suggestion.suggestedDueDate ? null : findDueDateHint(suggestion.text, deadlines)}
-                          disabled={rowDisabled}
-                          onSave={(iso) => handleActionItemEdit(suggestion, { dueDate: iso })}
-                          label={`Due date for "${suggestion.text}"`}
-                        />
-                      ) : suggestion.suggestedDueDate ? (
-                        <span className="font-mono">
-                          Due {format(parseISO(suggestion.suggestedDueDate), 'MMM d')}
-                        </span>
-                      ) : null}
-                    </p>
-                  </div>
-                  {canManage ? (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        size="sm"
-                        type="button"
-                        // A suggestion the AI routed to a specific app can be
-                        // accepted even when the MEETING has no app — the
-                        // server files it into suggestion.suggestedAppId
-                        // (acceptTaskSuggestion falls back to meeting.appId
-                        // only when routing was inconclusive). Gating on the
-                        // meeting's app alone made routed suggestions
-                        // unclickable exactly where routing matters most:
-                        // multi-project meetings not pinned to one app.
-                        disabled={busy || editBusy || (!appId && !suggestion.suggestedAppId)}
-                        title={
-                          appId || suggestion.suggestedAppId
-                            ? undefined
-                            : 'Link this meeting to an app first'
-                        }
-                        onClick={() => handleAcceptSuggestion(suggestion)}
-                      >
-                        {busy ? <Loader2Icon className="animate-spin" aria-hidden /> : <CheckIcon aria-hidden />}
-                        Add task
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        type="button"
-                        disabled={busy || editBusy}
-                        onClick={() => {
-                          setEditingSuggestion(suggestion)
-                          setSuggestionForm(toEditForm(suggestion))
-                        }}
-                      >
-                        <PencilIcon aria-hidden /> Edit &amp; add
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        type="button"
-                        disabled={busy || editBusy}
-                        onClick={() => handleDismissSuggestion(suggestion.id)}
-                      >
-                        <XIcon aria-hidden />
-                        <span className="sr-only">Dismiss suggestion</span>
-                      </Button>
-                    </div>
-                  ) : null}
-                </li>
-              )
-            })}
-          </ul>
-        </section>
-      ) : null}
-
-      <Dialog
-        open={editingSuggestion !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setEditingSuggestion(null)
-            setSuggestionForm(null)
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit suggested task</DialogTitle>
-            <DialogDescription>From “{meetingTitle}” — adjust before creating it.</DialogDescription>
-          </DialogHeader>
-          {editingSuggestion && suggestionForm ? (
-            <form
-              className="flex flex-col gap-4"
-              onSubmit={(event) => {
-                event.preventDefault()
-                handleAcceptSuggestion(editingSuggestion, suggestionForm)
-              }}
-            >
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="suggestion-title">Title</Label>
-                <Input
-                  id="suggestion-title"
-                  value={suggestionForm.title}
-                  onChange={(e) =>
-                    setSuggestionForm((f) => (f ? { ...f, title: e.target.value } : f))
-                  }
-                  minLength={1}
-                  maxLength={140}
-                  required
-                />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="suggestion-assignee">Assignee</Label>
-                  <Select
-                    value={suggestionForm.assigneeId}
-                    onValueChange={(v) =>
-                      setSuggestionForm((f) => (f ? { ...f, assigneeId: v ?? UNASSIGNED } : f))
-                    }
-                  >
-                    <SelectTrigger id="suggestion-assignee" className="w-full">
-                      <SelectValue>
-                        {(value: string) =>
-                          value === UNASSIGNED
-                            ? 'Unassigned'
-                            : (attendees.find((a) => a.id === value)?.name ?? 'Unassigned')
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-                      {attendees.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="suggestion-priority">Priority</Label>
-                  <Select
-                    value={suggestionForm.priority}
-                    onValueChange={(v) =>
-                      setSuggestionForm((f) => (f ? { ...f, priority: v ?? '0' } : f))
-                    }
-                  >
-                    <SelectTrigger id="suggestion-priority" className="w-full">
-                      <SelectValue>
-                        {(value: string) =>
-                          PRIORITY_OPTIONS.find((opt) => opt.value === value)?.label ?? 'None'
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRIORITY_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="suggestion-due">Due date</Label>
-                <Input
-                  id="suggestion-due"
-                  type="date"
-                  value={suggestionForm.dueDate}
-                  onChange={(e) =>
-                    setSuggestionForm((f) => (f ? { ...f, dueDate: e.target.value } : f))
-                  }
-                  className="font-mono"
-                />
-              </div>
-              <DialogFooter>
-                <Button
-                  type="submit"
-                  disabled={suggestionBusyId === editingSuggestion.id && suggestionPending}
-                >
-                  {suggestionBusyId === editingSuggestion.id && suggestionPending
-                    ? 'Creating…'
-                    : 'Create task'}
-                </Button>
-              </DialogFooter>
-            </form>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      <ActionItemSuggestionsList
+        suggestions={data.suggestions}
+        attendees={attendees}
+        mentionUsers={mentionUsers}
+        appId={appId}
+        meetingTitle={meetingTitle}
+        deadlines={deadlines}
+        canManage={canManage}
+        compact={false}
+        autoAssignCappedCount={autoAssignCappedCount}
+        actions={actionItemActions}
+      />
     </div>
   )
 }

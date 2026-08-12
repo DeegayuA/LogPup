@@ -1,19 +1,29 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, useTransition, type ReactNode } from 'react'
 import { format } from 'date-fns'
 import {
+  AlertTriangle,
   BookOpen,
   CircleCheck,
   ListChecks,
+  Loader2Icon,
   MessageCircleQuestion,
+  PlusCircle,
   Sparkles,
   Users,
 } from 'lucide-react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
 import { MarkdownLite } from '@/components/markdown-lite'
 import { cn } from '@/lib/utils'
-import { bilingualLead, bilingualText, MetaChip } from '@/features/meetings/components/meeting-chips'
-import { buildActionList, type ActionRow } from '@/features/meetings/components/meeting-notes-model'
+import {
+  bilingualLead,
+  bilingualText,
+  MetaChip,
+  SectionHeading,
+} from '@/features/meetings/components/meeting-chips'
+import type { ActionRow } from '@/features/meetings/components/meeting-notes-model'
 import {
   EmptyFilterState,
   Panel,
@@ -23,7 +33,13 @@ import {
   useSummaryLanguage,
 } from '@/features/meetings/components/meeting-panels'
 import { splitBilingualSummary, type SummaryLanguage } from '@/features/meetings/components/meeting-panels-model'
-import type { MeetingAiNotesView } from '@/features/meetings/ai-actions'
+import {
+  ActionItemSuggestionsList,
+  buildAssigneePool,
+  useActionItemActions,
+} from '@/features/meetings/components/action-item-board'
+import { trackActionItem, type MeetingAiNotesView, type TaskSuggestionView } from '@/features/meetings/ai-actions'
+import type { MentionUser } from '@/components/mention-textarea'
 
 /**
  * What the meeting produced, as independently-collapsible, filterable,
@@ -47,11 +63,46 @@ import type { MeetingAiNotesView } from '@/features/meetings/ai-actions'
  */
 export function MeetingAiNotes({
   notes,
-  now,
+  meetingId,
+  meetingTitle,
+  canManage,
+  attendees,
+  appId,
+  mentionUsers,
+  suggestions,
+  untrackedActions,
+  onSuggestionsChanged,
 }: {
   notes: MeetingAiNotesView
-  /** Passed in so the "overdue" decision is testable and render-pure. */
-  now: Date
+  meetingId: string
+  meetingTitle: string
+  /** Same admin-or-creator tier the rest of the meeting's manage actions use. */
+  canManage: boolean
+  attendees: { id: string; name: string }[]
+  appId: string | null
+  /** Wider mention pool for the assignee picker (falls back to attendees). */
+  mentionUsers?: MentionUser[]
+  /**
+   * Open + auto-accepted meeting_task_suggestions rows — the single source
+   * of truth for this panel's "Action items" content. Editable here with
+   * exactly the same controls the Record timeline uses (see
+   * action-item-board.tsx) because this literally is the same list, fetched
+   * once as part of getMeetingIntel.
+   */
+  suggestions: TaskSuggestionView[]
+  /**
+   * JSONB action items (deadlines[]/perPerson[].actionItems[]) with no
+   * matching suggestion of any status — see reconcileActionItems in
+   * meeting-notes-model.ts and getMeetingIntel. Rendered in a "Not tracked"
+   * group with a one-click "track this" (trackActionItem) rather than
+   * silently dropped now that this panel no longer renders the raw JSONB
+   * list directly.
+   */
+  untrackedActions: ActionRow[]
+  /** Reloads the parent's getMeetingIntel fetch — called after any write
+   *  here (accept/dismiss/undo/edit/track) so `suggestions`/`untrackedActions`
+   *  catch up with what the server actually stored. */
+  onSuggestionsChanged: () => Promise<void>
 }) {
   const { filters, people, clearAllFilters, density } = usePanels()
   const kindIncluded = (kind: 'action' | 'discussion' | 'question' | 'term') =>
@@ -60,11 +111,68 @@ export function MeetingAiNotes({
     ? (people.find((p) => p.id === filters.personId)?.name ?? null)
     : null
 
-  const actions = buildActionList(notes, now)
-  const { visible: visibleActions } = useFilteredRows(actions, (row) => ({
+  // A local override lets an inline edit (assignee/due date/title) show up
+  // immediately without waiting on the parent's full intel reload. Cleared
+  // the moment a fresh `suggestions` prop actually lands (a real reload —
+  // `intel` state only gets a new array reference from a genuine
+  // getMeetingIntel refetch, never from an unrelated re-render), via React's
+  // documented "adjust state during render" pattern (comparing against the
+  // last-seen prop in state) rather than an effect, which would paint one
+  // stale frame with the old override before clearing it a tick later.
+  const [prevSuggestionsProp, setPrevSuggestionsProp] = useState(suggestions)
+  const [suggestionsOverride, setSuggestionsOverride] = useState<TaskSuggestionView[] | null>(null)
+  if (suggestions !== prevSuggestionsProp) {
+    setPrevSuggestionsProp(suggestions)
+    setSuggestionsOverride(null)
+  }
+  const liveSuggestions = suggestionsOverride ?? suggestions
+  const assigneePool = buildAssigneePool(attendees, mentionUsers)
+  const actionItemActions = useActionItemActions(
+    liveSuggestions,
+    (updater) => setSuggestionsOverride(updater(liveSuggestions)),
+    async () => {
+      setSuggestionsOverride(null)
+      await onSuggestionsChanged()
+    },
+    assigneePool,
+  )
+
+  const { visible: visibleSuggestions } = useFilteredRows(liveSuggestions, (s) => ({
+    kind: 'action' as const,
+    personNames: s.suggestedUserName ? [s.suggestedUserName] : [],
+  }))
+
+  const [trackedKeys, setTrackedKeys] = useState<Set<string>>(new Set())
+  const [trackingKey, setTrackingKey] = useState<string | null>(null)
+  const [trackPending, startTrackPending] = useTransition()
+  const liveUntracked = untrackedActions.filter((row) => !trackedKeys.has(row.key))
+  const { visible: visibleUntracked } = useFilteredRows(liveUntracked, (row) => ({
     kind: 'action' as const,
     personNames: row.owner ? [row.owner] : [],
   }))
+
+  function handleTrack(row: ActionRow) {
+    setTrackingKey(row.key)
+    startTrackPending(async () => {
+      try {
+        const res = await trackActionItem({ meetingId, text: row.text, owner: row.owner, due: row.due })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setTrackedKeys((prev) => new Set(prev).add(row.key))
+        toast.success('Tracked — now editable below')
+        await onSuggestionsChanged()
+      } catch {
+        toast.error('Something went wrong — try again')
+      } finally {
+        setTrackingKey(null)
+      }
+    })
+  }
+
+  const totalActionCount = liveSuggestions.length + liveUntracked.length
+  const visibleActionCount = visibleSuggestions.length + visibleUntracked.length
 
   const discussionPeople = notes.perPerson.filter((person) => person.points.length > 0)
   const { visible: visibleDiscussion } = useFilteredRows(discussionPeople, (person) => ({
@@ -108,14 +216,49 @@ export function MeetingAiNotes({
         </Panel>
       ) : null}
 
-      {actions.length > 0 && kindIncluded('action') ? (
-        <Panel id="action-items" title="Action items" icon={ListChecks} kind="action" count={visibleActions.length}>
-          {visibleActions.length > 0 ? (
-            <ul className={cn('flex flex-col divide-y divide-border rounded-lg border', compact && 'text-sm')}>
-              {visibleActions.map((action) => (
-                <ActionItemRow key={action.key} action={action} compact={compact} />
-              ))}
-            </ul>
+      {totalActionCount > 0 && kindIncluded('action') ? (
+        <Panel id="action-items" title="Action items" icon={ListChecks} kind="action" count={visibleActionCount}>
+          {visibleActionCount > 0 ? (
+            <div className="flex flex-col gap-3">
+              <ActionItemSuggestionsList
+                suggestions={visibleSuggestions}
+                attendees={attendees}
+                mentionUsers={mentionUsers}
+                appId={appId}
+                meetingTitle={meetingTitle}
+                deadlines={notes.deadlines}
+                canManage={canManage}
+                compact={compact}
+                autoAssignCappedCount={notes.autoAssignCappedCount}
+                actions={actionItemActions}
+              />
+              {visibleUntracked.length > 0 ? (
+                <section className="flex flex-col gap-2">
+                  <SectionHeading
+                    as="h5"
+                    icon={AlertTriangle}
+                    title="Not tracked"
+                    count={visibleUntracked.length}
+                  />
+                  <p className="text-2xs text-muted-foreground">
+                    The write-up mentions these, but they never became a suggestion card — track one to
+                    make it editable and acceptable like the rest.
+                  </p>
+                  <ul className={cn('flex flex-col divide-y divide-border rounded-lg border', compact && 'text-sm')}>
+                    {visibleUntracked.map((row) => (
+                      <UntrackedActionRow
+                        key={row.key}
+                        action={row}
+                        compact={compact}
+                        canManage={canManage}
+                        pending={trackingKey === row.key && trackPending}
+                        onTrack={() => handleTrack(row)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+            </div>
           ) : (
             <EmptyFilterState
               label={`No action items for ${filteredPersonName ?? 'this filter'} — clear filter`}
@@ -253,16 +396,31 @@ function resolveSummaryBlocks(
 }
 
 /**
- * One commitment: what it is, who owes it, and when it is due — the three
- * things a reader is scanning for, in that order, on one line at every width
- * that fits and wrapped in the same order when it does not.
+ * One JSONB-only commitment the suggestion pipeline never saw (see
+ * reconcileActionItems) — what it is, who owes it, and when it is due, same
+ * read-only layout the merged Action-items list used before this panel
+ * switched to rendering identity-bearing suggestion rows, plus a "Track
+ * this" button that turns it into one (trackActionItem). No inline editing
+ * here — there is no row to edit until it is tracked.
  *
  * Only a date that has actually passed gets the danger colour; a due date the
  * model wrote as a phrase ("next Friday") is shown as those words with no
  * colour at all, because we refused to guess which Friday (see
  * parseSpokenDueDate).
  */
-function ActionItemRow({ action, compact }: { action: ActionRow; compact?: boolean }) {
+function UntrackedActionRow({
+  action,
+  compact,
+  canManage,
+  pending,
+  onTrack,
+}: {
+  action: ActionRow
+  compact?: boolean
+  canManage: boolean
+  pending: boolean
+  onTrack: () => void
+}) {
   const overdue = action.status === 'overdue'
   return (
     <li
@@ -280,6 +438,12 @@ function ActionItemRow({ action, compact }: { action: ActionRow; compact?: boole
           <span className="text-xs text-muted-foreground italic">Unassigned</span>
         )}
         <DueChip action={action} />
+        {canManage ? (
+          <Button variant="outline" size="sm" type="button" disabled={pending} onClick={onTrack}>
+            {pending ? <Loader2Icon className="animate-spin" aria-hidden /> : <PlusCircle aria-hidden />}
+            Track this
+          </Button>
+        ) : null}
       </span>
     </li>
   )

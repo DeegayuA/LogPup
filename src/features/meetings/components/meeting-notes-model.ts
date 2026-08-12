@@ -10,6 +10,7 @@
 // file, a database client, or an auth session into scope.
 
 import { differenceInCalendarDays, isValid, parse } from 'date-fns'
+import { followupTaskSimilarity, FOLLOWUP_TASK_MATCH_THRESHOLD } from '@/features/meetings/followups'
 
 /* --- due dates -------------------------------------------------------- */
 
@@ -217,6 +218,61 @@ export function buildActionList(
     if (a.dueDate && b.dueDate) return a.dueDate.getTime() - b.dueDate.getTime()
     return 0
   })
+}
+
+/* --- JSONB action items <-> suggestion rows ---------------------------- */
+
+/** The only two fields reconcileActionItems needs from a
+ *  `meeting_task_suggestions` row — deliberately narrower than
+ *  TaskSuggestionView so this stays free of ai-actions.ts's server-only types. */
+export type ActionItemSuggestionRef = { id: string; text: string }
+
+export type ActionItemReconciliation = {
+  /** JSONB rows with a same-text suggestion row already on file, of ANY
+   *  status. The write-up defers entirely to the suggestion system for
+   *  these: an open or auto-accepted one renders as an editable row
+   *  elsewhere, and a dismissed or person-accepted one is a decision that
+   *  has already been made and correctly stops showing as a pending item. */
+  tracked: ActionRow[]
+  /** JSONB rows with NO matching suggestion at all — never turned into one,
+   *  typically because they only ever existed in the free-text `deadlines[]`
+   *  field (never fed into the model's separate `actionItems[]`), or came
+   *  from an analysis pass that predates task suggestions existing. These
+   *  are the only rows the panel has to actively backfill or flag, or they
+   *  disappear the moment the panel stops rendering the raw JSONB list. */
+  untracked: ActionRow[]
+}
+
+/**
+ * Splits a meeting's merged JSONB action list (buildActionList's output)
+ * into rows that already have a same-text suggestion row and rows that
+ * don't, so the write-up's Action items panel can render suggestions as the
+ * single source of truth WITHOUT silently dropping a commitment the
+ * suggestion pipeline never saw.
+ *
+ * Matching reuses followupTaskSimilarity — the exact same token-overlap
+ * measure and threshold (FOLLOWUP_TASK_MATCH_THRESHOLD) the follow-up ↔
+ * task-suggestion linking already uses (see findMatchingFollowup in
+ * followups.ts) — rather than a second, differently-tuned fuzzy matcher.
+ * Text-only, deliberately: unlike findMatchingFollowup this does not also
+ * require a matching person, because an ActionRow's `owner` is free text
+ * ("Nadeesha") with no resolved user id to compare against a suggestion's
+ * `suggestedUserId` — requiring an id match that can never be made would
+ * just mark every row untracked.
+ */
+export function reconcileActionItems(
+  rows: ActionRow[],
+  suggestions: ActionItemSuggestionRef[],
+): ActionItemReconciliation {
+  const tracked: ActionRow[] = []
+  const untracked: ActionRow[] = []
+  for (const row of rows) {
+    const hasMatch = suggestions.some(
+      (suggestion) => followupTaskSimilarity(row.text, suggestion.text) >= FOLLOWUP_TASK_MATCH_THRESHOLD,
+    )
+    ;(hasMatch ? tracked : untracked).push(row)
+  }
+  return { tracked, untracked }
 }
 
 /**

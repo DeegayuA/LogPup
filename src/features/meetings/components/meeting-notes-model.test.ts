@@ -6,6 +6,7 @@ import {
   glanceFromIntel,
   isSameNoteText,
   parseSpokenDueDate,
+  reconcileActionItems,
 } from './meeting-notes-model'
 
 const now = new Date('2026-08-12T10:00:00')
@@ -216,6 +217,63 @@ describe('buildActionList', () => {
 
   it('returns nothing for notes with no commitments', () => {
     expect(buildActionList({ deadlines: [], perPerson: [] }, now)).toEqual([])
+  })
+})
+
+describe('reconcileActionItems', () => {
+  const rows = buildActionList(
+    {
+      deadlines: [{ item: 'Send the revised quote to the client', owner: 'Nadeesha', due: '2026-08-20' }],
+      perPerson: [{ name: 'Kasun', points: [], actionItems: ['Book the venue for the launch'] }],
+    },
+    now,
+  )
+
+  it('treats an item with a matching suggestion as tracked, not untracked', () => {
+    const { tracked, untracked } = reconcileActionItems(rows, [
+      { id: 's1', text: 'Send the revised quote to the client' },
+      { id: 's2', text: 'Book the venue for the launch' },
+    ])
+    expect(tracked.map((r) => r.text)).toEqual([
+      'Send the revised quote to the client',
+      'Book the venue for the launch',
+    ])
+    expect(untracked).toEqual([])
+  })
+
+  it('surfaces an item with no matching suggestion as untracked', () => {
+    const { tracked, untracked } = reconcileActionItems(rows, [{ id: 's1', text: 'Completely unrelated thing' }])
+    expect(tracked).toEqual([])
+    expect(untracked.map((r) => r.text)).toEqual([
+      'Send the revised quote to the client',
+      'Book the venue for the launch',
+    ])
+  })
+
+  it('matches reworded near-duplicates via the shared follow-up similarity helper, not exact text', () => {
+    // Same words, reordered and re-punctuated — followupTaskSimilarity (token
+    // overlap) clears FOLLOWUP_TASK_MATCH_THRESHOLD even though the strings
+    // differ character-for-character.
+    const { tracked, untracked } = reconcileActionItems(rows, [
+      { id: 's1', text: 'Send revised quote to the client' },
+      { id: 's2', text: 'Book venue for the launch event' },
+    ])
+    expect(tracked).toHaveLength(2)
+    expect(untracked).toEqual([])
+  })
+
+  it('does not match on a handful of shared filler words alone', () => {
+    const { tracked, untracked } = reconcileActionItems(rows, [
+      { id: 's1', text: 'Send the client an invoice for last month' },
+    ])
+    expect(tracked).toEqual([])
+    expect(untracked).toHaveLength(2)
+  })
+
+  it('is safe with empty rows and empty suggestions', () => {
+    expect(reconcileActionItems([], [])).toEqual({ tracked: [], untracked: [] })
+    expect(reconcileActionItems([], [{ id: 's1', text: 'anything' }])).toEqual({ tracked: [], untracked: [] })
+    expect(reconcileActionItems(rows, [])).toEqual({ tracked: [], untracked: rows })
   })
 })
 

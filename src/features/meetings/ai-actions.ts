@@ -1,6 +1,7 @@
 'use server'
 
 import { z } from 'zod'
+import { format } from 'date-fns'
 import { revalidatePath } from 'next/cache'
 import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
@@ -72,6 +73,12 @@ import { getCheckinsForSprints } from '@/features/sprints/checkin-queries'
 import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { concatenateSegments } from '@/features/meetings/recording-segments'
 import { formatCapturedAt, MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
+import {
+  buildActionList,
+  parseSpokenDueDate,
+  reconcileActionItems,
+  type ActionRow,
+} from '@/features/meetings/components/meeting-notes-model'
 
 // Legacy single-shot path (analyzeMeetingAudio, below): the whole recording
 // as one inline-base64 upload. Superseded for live recordings by the
@@ -207,6 +214,27 @@ export type MeetingIntel = {
   screenshots: MeetingScreenshotView[]
   /** The per-meeting auto-assign toggle (meetings.autoAssignTasks) — see setMeetingAutoAssignTasks. */
   autoAssignTasks: boolean
+  /**
+   * Open + auto-accepted task suggestions — the single source of truth for
+   * "action items" in the write-up. Identical query to getMeetingNoteTimeline's
+   * own suggestions (both call fetchTaskSuggestions), returned here too so the
+   * Action items panel and the Record timeline's cards are built from exactly
+   * the same rows rather than two independently-fetched copies that could
+   * drift apart mid-session.
+   */
+  suggestions: TaskSuggestionView[]
+  /**
+   * JSONB action items (from meetingAiNotes.deadlines[] /
+   * perPerson[].actionItems[]) that have no matching row in `suggestions` OF
+   * ANY STATUS — see reconcileActionItems in meeting-notes-model.ts. The
+   * panel used to render deadlines[]/perPerson[] directly as a read-only
+   * list; now that it renders `suggestions` instead, anything the suggestion
+   * pipeline never saw (an item that only ever existed in the free-text
+   * deadlines[] field, or one from an analysis pass that predates task
+   * suggestions) would silently vanish without this — surfaced here so the
+   * panel can show it in a "Not tracked" group with a one-click "track this".
+   */
+  untrackedActions: ActionRow[]
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -1766,6 +1794,31 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   // the server side of the same computation.
   const now = new Date()
 
+  // Reconcile the JSONB action list against every suggestion row THIS
+  // meeting has ever had (any status — open, auto-accepted, person-accepted,
+  // or dismissed), not just the visible open+auto-accepted subset
+  // fetchTaskSuggestions returns below. A JSONB item whose suggestion was
+  // dismissed or turned into a task already has an answer from the
+  // suggestion system and must NOT be re-offered as "untracked"; only a
+  // JSONB item with NO suggestion at all (never inserted — e.g. it only ever
+  // existed in the free-text deadlines[] field) is a real gap to backfill.
+  const actionRows: ActionRow[] = notesRow
+    ? buildActionList(
+        { perPerson: asArray<PerPersonNote>(notesRow.perPerson), deadlines: asArray<DeadlineNote>(notesRow.deadlines) },
+        now,
+      )
+    : []
+  const untrackedActions =
+    actionRows.length > 0
+      ? reconcileActionItems(
+          actionRows,
+          await db
+            .select({ id: meetingTaskSuggestions.id, text: meetingTaskSuggestions.text })
+            .from(meetingTaskSuggestions)
+            .where(eq(meetingTaskSuggestions.meetingId, id)),
+        ).untracked
+      : []
+
   // Batched lookup of every task a carried item is linked to (see
   // linkFollowupToTask) — one query for the whole set, not one per row, same
   // pattern as revalidateApps in sprints/task-actions.ts.
@@ -1864,6 +1917,8 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
       byteSize: row.byteSize,
     })),
     autoAssignTasks: meeting.autoAssignTasks,
+    suggestions: await fetchTaskSuggestions(id),
+    untrackedActions,
   })
 }
 
@@ -2555,6 +2610,56 @@ const suggestionApps = alias(apps, 'note_suggestion_apps')
 const suggestionTargetApps = alias(apps, 'note_suggestion_target_apps')
 
 /**
+ * Open task suggestions for a meeting, as the UI needs them: open cards AND
+ * auto-accepted ones (status 'accepted' with acceptedBy null) — the latter
+ * is what lets an auto-assigned card keep showing with its "Auto-assigned"
+ * badge and Undo, instead of only ever-manual acceptances staying visible.
+ * A suggestion a PERSON accepted (acceptedBy set) has done its job and drops
+ * off, same as before.
+ *
+ * Factored out of getMeetingNoteTimeline (below) so getMeetingIntel can call
+ * the exact same query — the write-up's Action items panel and the Record
+ * timeline's cards must be built from one list, never two independently
+ * fetched copies that could show different state for the same row.
+ */
+async function fetchTaskSuggestions(meetingId: string): Promise<TaskSuggestionView[]> {
+  return db
+    .select({
+      id: meetingTaskSuggestions.id,
+      segmentId: meetingTaskSuggestions.segmentId,
+      text: meetingTaskSuggestions.text,
+      suggestedUserId: meetingTaskSuggestions.suggestedUserId,
+      suggestedUserName: suggestedUsers.name,
+      suggestedDueDate: meetingTaskSuggestions.suggestedDueDate,
+      suggestedAppId: meetingTaskSuggestions.suggestedAppId,
+      suggestedAppName: suggestionTargetApps.name,
+      status: meetingTaskSuggestions.status,
+      createdTaskId: meetingTaskSuggestions.createdTaskId,
+      acceptedBy: meetingTaskSuggestions.acceptedBy,
+      taskStatus: suggestionTasks.status,
+      taskTitle: suggestionTasks.title,
+      appSlug: suggestionApps.slug,
+    })
+    .from(meetingTaskSuggestions)
+    .leftJoin(suggestedUsers, eq(meetingTaskSuggestions.suggestedUserId, suggestedUsers.id))
+    .leftJoin(suggestionTasks, eq(meetingTaskSuggestions.createdTaskId, suggestionTasks.id))
+    .leftJoin(suggestionApps, eq(suggestionTasks.appId, suggestionApps.id))
+    .leftJoin(
+      suggestionTargetApps,
+      eq(meetingTaskSuggestions.suggestedAppId, suggestionTargetApps.id),
+    )
+    .where(
+      and(
+        eq(meetingTaskSuggestions.meetingId, meetingId),
+        or(
+          eq(meetingTaskSuggestions.status, 'open'),
+          and(eq(meetingTaskSuggestions.status, 'accepted'), isNull(meetingTaskSuggestions.acceptedBy)),
+        ),
+      ),
+    )
+}
+
+/**
  * The unified note timeline for a meeting: typed/voice/ai segments in
  * chronological order, the speaker-label→user mappings set so far, and open
  * task suggestions. Same read gate as getMeetingIntel (admin, creator, or
@@ -2619,45 +2724,7 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
     .leftJoin(users, eq(meetingSpeakers.userId, users.id))
     .where(eq(meetingSpeakers.meetingId, id))
 
-  // Open cards AND auto-accepted ones (status 'accepted' with acceptedBy
-  // null) — the latter is what lets an auto-assigned card keep showing on
-  // the timeline with its "Auto-assigned" badge and Undo, instead of only
-  // ever-manual acceptances staying visible. A suggestion a PERSON accepted
-  // (acceptedBy set) has done its job and drops off, same as before.
-  const suggestionRows = await db
-    .select({
-      id: meetingTaskSuggestions.id,
-      segmentId: meetingTaskSuggestions.segmentId,
-      text: meetingTaskSuggestions.text,
-      suggestedUserId: meetingTaskSuggestions.suggestedUserId,
-      suggestedUserName: suggestedUsers.name,
-      suggestedDueDate: meetingTaskSuggestions.suggestedDueDate,
-      suggestedAppId: meetingTaskSuggestions.suggestedAppId,
-      suggestedAppName: suggestionTargetApps.name,
-      status: meetingTaskSuggestions.status,
-      createdTaskId: meetingTaskSuggestions.createdTaskId,
-      acceptedBy: meetingTaskSuggestions.acceptedBy,
-      taskStatus: suggestionTasks.status,
-      taskTitle: suggestionTasks.title,
-      appSlug: suggestionApps.slug,
-    })
-    .from(meetingTaskSuggestions)
-    .leftJoin(suggestedUsers, eq(meetingTaskSuggestions.suggestedUserId, suggestedUsers.id))
-    .leftJoin(suggestionTasks, eq(meetingTaskSuggestions.createdTaskId, suggestionTasks.id))
-    .leftJoin(suggestionApps, eq(suggestionTasks.appId, suggestionApps.id))
-    .leftJoin(
-      suggestionTargetApps,
-      eq(meetingTaskSuggestions.suggestedAppId, suggestionTargetApps.id),
-    )
-    .where(
-      and(
-        eq(meetingTaskSuggestions.meetingId, id),
-        or(
-          eq(meetingTaskSuggestions.status, 'open'),
-          and(eq(meetingTaskSuggestions.status, 'accepted'), isNull(meetingTaskSuggestions.acceptedBy)),
-        ),
-      ),
-    )
+  const suggestionRows = await fetchTaskSuggestions(id)
 
   return ok({
     segments,
@@ -2860,6 +2927,60 @@ export async function setSpeakerMapping(
 
   revalidatePath('/meetings')
   return ok(undefined)
+}
+
+const trackActionItemInput = z.object({
+  meetingId: z.uuid(),
+  text: z.string().trim().min(1).max(500),
+  owner: z.string().trim().max(200).nullable().optional(),
+  due: z.string().trim().max(200).nullable().optional(),
+})
+
+/**
+ * Promotes a JSONB-only action item (one reconcileActionItems found in
+ * getMeetingIntel's `untrackedActions` — a row from deadlines[]/
+ * perPerson[].actionItems[] with no matching meeting_task_suggestions row of
+ * any status) into a real, identity-bearing suggestion row, on demand from
+ * the write-up's "Not tracked" group.
+ *
+ * This is the backfill half of making meeting_task_suggestions the single
+ * source of truth for action items: rather than the panel silently dropping
+ * whatever the suggestion pipeline never saw (an item that only ever existed
+ * in the free-text deadlines[] field, or one from an analysis pass that
+ * predates task suggestions entirely), a person can turn it into the same
+ * editable row with one click. Lands as a plain 'open' suggestion — same
+ * shape insertAutoNotesAndSuggestions creates for a manual card, minus a
+ * segmentId (this was never tied to one transcript line) — so it is
+ * immediately editable (assignee, due date, title) and acceptable/dismissible
+ * exactly like every other suggestion.
+ *
+ * `owner`/`due` are the free text the model wrote (a first name, a spoken
+ * date phrase) — resolved the same way the rest of this pipeline already
+ * does: matchPersonToAttendee for the owner (unresolvable stays unassigned,
+ * never guessed), parseSpokenDueDate for the date (a phrase like "next
+ * Friday" stays unset rather than inventing a day — never a fabricated
+ * deadline).
+ */
+export async function trackActionItem(input: unknown): Promise<ActionResult<{ id: string }>> {
+  const parsed = trackActionItemInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const { meetingId, text, owner, due } = parsed.data
+
+  const ctx = await canManageMeeting(meetingId)
+  if (!ctx) return err('Only admins or the meeting creator can track action items')
+
+  const attendees = await fetchAttendees(meetingId)
+  const suggestedUserId = owner ? matchPersonToAttendee(owner, attendees) : null
+  const resolvedDue = due ? parseSpokenDueDate(due) : null
+  const suggestedDueDate = resolvedDue ? format(resolvedDue, 'yyyy-MM-dd') : null
+
+  const [row] = await db
+    .insert(meetingTaskSuggestions)
+    .values({ meetingId, text, suggestedUserId, suggestedDueDate, status: 'open' })
+    .returning({ id: meetingTaskSuggestions.id })
+
+  revalidatePath('/meetings')
+  return ok({ id: row.id })
 }
 
 const updateSuggestionInput = z

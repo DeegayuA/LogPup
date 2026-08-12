@@ -45,7 +45,6 @@ import {
 import { MeetingAiNotes, MeetingNotesEmpty } from '@/features/meetings/components/meeting-notes'
 import { MeetingPrepSection } from '@/features/meetings/components/meeting-prep'
 import {
-  buildActionList,
   followupAge,
   glanceFromIntel,
   type MeetingGlance,
@@ -1517,8 +1516,11 @@ export function MeetingIntelPanel({
 
   // Unfiltered per-kind totals for the filter bar's kind chips (see
   // FilterBar's doc comment for why these must ignore the active filters)
-  // and the sticky nav's count badges.
-  const totalActions = notes ? buildActionList(notes, now).length : 0
+  // and the sticky nav's count badges. Action items now count the SAME two
+  // sources the panel itself renders — open/auto-accepted suggestions plus
+  // untracked JSONB items (see MeetingAiNotes) — so this total, the panel's
+  // own badge, and the sticky nav never disagree about how many there are.
+  const totalActions = (intel?.suggestions.length ?? 0) + (intel?.untrackedActions.length ?? 0)
   const totalDiscussionPoints = notes
     ? notes.perPerson.reduce((total, person) => total + person.points.length, 0)
     : 0
@@ -1897,7 +1899,18 @@ export function MeetingIntelPanel({
                     came for. The full record (transcript, typed notes, the
                     composer) sits underneath it. */}
                 {notes ? (
-                  <MeetingAiNotes notes={notes} now={now} />
+                  <MeetingAiNotes
+                    notes={notes}
+                    meetingId={meetingId}
+                    meetingTitle={meetingTitle}
+                    canManage={canRecord}
+                    attendees={attendees}
+                    appId={appId}
+                    mentionUsers={mentionUsers}
+                    suggestions={intel?.suggestions ?? []}
+                    untrackedActions={intel?.untrackedActions ?? []}
+                    onSuggestionsChanged={() => loadIntel('refresh')}
+                  />
                 ) : (
                   <MeetingNotesEmpty canRecord={canRecord}>
                     <p className="text-xs text-muted-foreground">
