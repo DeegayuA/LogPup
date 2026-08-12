@@ -5,9 +5,10 @@ import { and, count, desc, eq, isNull, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveSprints, liveTasks } from '@/db/live'
-import { apps, sprints, tasks } from '@/db/schema'
+import { apps, sprints } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { logActivity } from '@/features/activity/log'
 import { initialSprintStatus } from '@/features/sprints/sprint-date-range'
@@ -204,17 +205,23 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 }
 
 /**
- * Deletes (soft) a sprint. Its tasks are NOT deleted: previously
- * `tasks.sprint_id` being ON DELETE SET NULL made this automatic, but a soft
- * delete never fires that cascade — the sprint row is only marked, never
- * removed — so releasing live tasks back into the app backlog is done here,
- * explicitly, in the same batch as the mark. The count is returned so the UI
- * can say exactly how many landed there rather than leaving the user to
- * wonder where the work went.
+ * Deletes (soft) a sprint. Its tasks are NOT deleted AND NOT re-pointed:
+ * `tasks.sprint_id` is deliberately left exactly as it is, so restoring the
+ * sprint is lossless — every task snaps back into it. The old ON DELETE SET
+ * NULL cascade never fires (nothing is deleted), and nulling sprintId by hand
+ * here would destroy the sprint↔task membership permanently, which no restore
+ * could ever undo.
+ *
+ * The tasks stay visible in the meantime because "backlog" is defined as
+ * "no sprint, OR the sprint isn't live" — see backlogJoinCondition/
+ * sprintOrBacklogCondition in src/features/sprints/backlog.ts, which getBoard
+ * and nextRankFor both apply. The returned count is that visibility, not a
+ * mutation: how many live tasks will show up in the app backlog for as long
+ * as the sprint sits in Trash.
  */
 export async function deleteSprint(
   sprintId: string,
-): Promise<ActionResult<{ releasedTasks: number }>> {
+): Promise<ActionResult<{ backlogTasks: number }>> {
   const session = await requireAdmin()
   if (!session) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
@@ -236,21 +243,15 @@ export async function deleteSprint(
 
   let marked: { id: string }[]
   try {
-    // neon-http has no transactions: db.batch sends both statements in one
-    // atomic-ish round-trip so a sprint never ends up marked deleted with its
-    // tasks still pointing at it (or vice versa). The release only touches
-    // LIVE tasks — an already-trashed task has nothing to release.
-    ;[marked] = await db.batch([
-      db
-        .update(sprints)
-        .set({ deletedAt: new Date(), deletedBy: session.user.id })
-        .where(and(eq(sprints.id, sprintId), isNull(sprints.deletedAt)))
-        .returning({ id: sprints.id }),
-      db
-        .update(tasks)
-        .set({ sprintId: null })
-        .where(and(eq(tasks.sprintId, sprintId), isNull(tasks.deletedAt))),
-    ])
+    // ONE statement, and deliberately so: the tasks table is not written at
+    // all (see the docblock). A single guarded UPDATE also needs no batch/
+    // transaction machinery on neon-http, and the isNull guard makes a
+    // concurrent double-delete a 0-row no-op that touches nothing else.
+    marked = await db
+      .update(sprints)
+      .set({ deletedAt: new Date(), deletedBy: session.user.id })
+      .where(and(eq(sprints.id, sprintId), isNull(sprints.deletedAt)))
+      .returning({ id: sprints.id })
   } catch (error) {
     return unexpected('deleteSprint', error)
   }
@@ -265,11 +266,12 @@ export async function deleteSprint(
     entityLabel: existing.name,
     appId: existing.appId,
     pagePath: slug ? '/apps/' + slug : null,
-    detail: `releasing ${attached?.total ?? 0} tasks to the backlog`,
-    metadata: { releasedTasks: attached?.total ?? 0 },
+    detail: `${attached?.total ?? 0} tasks now show in the backlog`,
+    metadata: { backlogTasks: attached?.total ?? 0 },
   })
   if (slug) revalidatePath('/apps/' + slug)
-  return ok({ releasedTasks: attached?.total ?? 0 })
+  revalidateAdmin()
+  return ok({ backlogTasks: attached?.total ?? 0 })
 }
 
 export type SprintOption = {

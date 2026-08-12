@@ -190,6 +190,14 @@ export function TrashRowActions({
               placeholder={PURGE_CONFIRM_PHRASE}
               aria-label={`Type "${PURGE_CONFIRM_PHRASE}" to confirm`}
               autoComplete="off"
+              // The confirm is an exact, case-sensitive string match. iOS
+              // Safari capitalises the first letter of a text field by
+              // default and both mobile keyboards autocorrect — either one
+              // turns "delete forever" into something that never matches, and
+              // the button below just stays disabled with no explanation.
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               className="font-mono"
             />
             <DialogFooter>
@@ -197,6 +205,13 @@ export function TrashRowActions({
                 variant="destructive"
                 type="button"
                 disabled={!matchesPurgeConfirm(confirmText) || purgePending}
+                // Same reason Restore carries one: a disabled button with no
+                // stated reason reads as broken.
+                title={
+                  matchesPurgeConfirm(confirmText)
+                    ? undefined
+                    : `Type "${PURGE_CONFIRM_PHRASE}" above to enable this`
+                }
                 onClick={handlePurge}
               >
                 {purgePending ? 'Deleting…' : 'Delete forever'}

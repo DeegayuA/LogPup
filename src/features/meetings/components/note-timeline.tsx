@@ -21,6 +21,17 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -492,20 +503,53 @@ export function NoteTimeline({
                         <PencilIcon />
                         <span className="sr-only">Edit note</span>
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        type="button"
-                        disabled={deletingId === segment.id && deletePending}
-                        onClick={() => handleDeleteSegment(segment.id)}
-                      >
-                        {deletingId === segment.id && deletePending ? (
-                          <Loader2Icon className="animate-spin" aria-hidden />
-                        ) : (
-                          <Trash2Icon />
-                        )}
-                        <span className="sr-only">Delete note</span>
-                      </Button>
+                      {/* A note is the most personal thing anyone writes in
+                          here, and deleting one does NOT destroy it — it goes
+                          to Trash where an admin can still read it. Retracting
+                          a note believing it is gone when it is not is the one
+                          mistake this surface must not let someone make, so
+                          this is the one delete affordance that gets a
+                          confirmation even though it is a single icon button:
+                          same AlertDialog pattern as the meeting/task/sprint
+                          deletes, with the sharper retention sentence. */}
+                      <AlertDialog>
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              type="button"
+                              disabled={deletingId === segment.id && deletePending}
+                            />
+                          }
+                        >
+                          {deletingId === segment.id && deletePending ? (
+                            <Loader2Icon className="animate-spin" aria-hidden />
+                          ) : (
+                            <Trash2Icon />
+                          )}
+                          <span className="sr-only">Delete note</span>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete this note?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Moves it to Trash — admins can view and restore it, and the content is
+                              retained until an admin permanently deletes it.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              variant="destructive"
+                              disabled={deletingId === segment.id && deletePending}
+                              onClick={() => handleDeleteSegment(segment.id)}
+                            >
+                              {deletingId === segment.id && deletePending ? 'Deleting…' : 'Delete'}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </span>
                   ) : null}
                 </div>

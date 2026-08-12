@@ -4,10 +4,10 @@ import { sprints, tasks } from '@/db/schema'
 import { liveSprints, liveTasks } from '@/db/live'
 
 // deleteSprint is soft-delete (D3): the sprint row is marked deletedAt/
-// deletedBy, never removed — and because that no longer fires the old
-// ON DELETE SET NULL cascade, its live tasks are released back to the
-// backlog explicitly, in the same db.batch. Same mocked-action idiom as
-// src/features/admin/set-user-title.test.ts.
+// deletedBy, never removed — and its tasks are deliberately left pointing at
+// it, so a restore is lossless. Nothing else is written; the tasks stay
+// visible through the backlog rule in backlog.ts, not through a mutation.
+// Same mocked-action idiom as src/features/admin/set-user-title.test.ts.
 const { authMock, writeSpy, deleteSpy, logActivityMock } = vi.hoisted(() => ({
   authMock: vi.fn(),
   writeSpy: vi.fn(),
@@ -125,7 +125,7 @@ describe('deleteSprint', () => {
     expect(logActivityMock).not.toHaveBeenCalled()
   })
 
-  it('marks the sprint deleted and releases its live tasks to the backlog', async () => {
+  it('marks the sprint deleted and NEVER writes the tasks table', async () => {
     asAdmin()
     sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1' }]]
     taskCountQueue = [[{ total: 3 }]]
@@ -133,16 +133,39 @@ describe('deleteSprint', () => {
 
     const res = await deleteSprint(SPRINT_ID)
 
-    expect(res).toEqual({ ok: true, data: { releasedTasks: 3 } })
+    expect(res).toEqual({ ok: true, data: { backlogTasks: 3 } })
     expect(deleteSpy).not.toHaveBeenCalled()
     expect(writeSpy).toHaveBeenCalledWith(
       sprints,
       expect.objectContaining({ deletedAt: expect.any(Date), deletedBy: 'admin-1' }),
     )
-    expect(writeSpy).toHaveBeenCalledWith(tasks, expect.objectContaining({ sprintId: null }))
+    // THE point of the whole soft delete: sprint↔task membership survives it.
+    // An earlier version nulled tasks.sprintId here "to release them to the
+    // backlog", which destroyed the mapping permanently — restoreSprint could
+    // only ever bring back an empty sprint. Tasks stay visible via the backlog
+    // rule instead (backlog.ts), which needs no write at all, so the tasks
+    // table must not be touched by a sprint delete under any circumstances.
+    expect(writeSpy).not.toHaveBeenCalledWith(tasks, expect.anything())
     expect(logActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ verb: 'deleted', entityType: 'sprint', entityId: SPRINT_ID }),
     )
+  })
+
+  it('a losing concurrent double-delete writes nothing at all', async () => {
+    asAdmin()
+    sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1' }]]
+    taskCountQueue = [[{ total: 3 }]]
+    // isNull(deletedAt) matched nothing — the other caller already trashed it.
+    sprintReturningQueue = [[]]
+
+    const res = await deleteSprint(SPRINT_ID)
+
+    expect(res).toEqual({ ok: false, error: 'Sprint not found' })
+    // The old two-statement db.batch ran BOTH statements before this guard, so
+    // the loser of the race still stripped sprintId off every live task while
+    // telling the caller "Sprint not found". One guarded statement can't.
+    expect(writeSpy).not.toHaveBeenCalledWith(tasks, expect.anything())
+    expect(deleteSpy).not.toHaveBeenCalled()
   })
 })
 

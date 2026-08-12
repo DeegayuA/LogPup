@@ -31,6 +31,7 @@ import {
   type GeminiImageInput,
 } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { updateMeetingNotes } from '@/features/meetings/actions'
 import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
@@ -1470,6 +1471,8 @@ export async function deleteMeetingKeyframe(screenshotId: string): Promise<Actio
   })
 
   revalidatePath('/meetings')
+  // The frame is now a row in the admin Trash card — see revalidateAdmin.
+  revalidateAdmin()
   return ok(undefined)
 }
 
@@ -2309,6 +2312,8 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
   })
 
   revalidatePath('/meetings')
+  // The segment is now a row in the admin Trash card — see revalidateAdmin.
+  revalidateAdmin()
   return ok(undefined)
 }
 

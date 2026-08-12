@@ -113,7 +113,13 @@ test.describe('LogPup smoke', () => {
     await dialog.getByRole('button', { name: 'Add member' }).click()
 
     await expect(dialog).not.toBeVisible()
-    const teamRow = page.getByText('deeghayus', { exact: true }).locator('xpath=../..')
+    // Scoped to <main>: the signed-in user's own name also renders in the
+    // sidebar's account-menu trigger, so a page-wide getByText for it is a
+    // strict-mode violation on every page of the app, not just this one.
+    const teamRow = page
+      .getByRole('main')
+      .getByText('deeghayus', { exact: true })
+      .locator('xpath=../..')
     await expect(teamRow).toBeVisible()
     await expect(teamRow.getByText('50%')).toBeVisible()
   })
@@ -136,7 +142,12 @@ test.describe('LogPup smoke', () => {
     await dialog.getByRole('button', { name: 'Create sprint' }).click()
 
     await expect(page.getByText('Sprint created')).toBeVisible()
-    await expect(page.getByText(SPRINT_NAME)).toBeVisible()
+    // The board's own heading, not a bare getByText: the new sprint's name
+    // renders TWICE on this page (the heading and the sprint selector's
+    // current value), so an untargeted match is a strict-mode violation.
+    // Naming the heading is also the stronger assertion — it proves the board
+    // actually switched to the sprint that was just created.
+    await expect(page.getByRole('heading', { name: SPRINT_NAME })).toBeVisible()
 
     const quickAdd = page.getByLabel('Add task to To do')
     await expect(quickAdd).toBeVisible()
@@ -144,12 +155,18 @@ test.describe('LogPup smoke', () => {
     await quickAdd.press('Enter')
     await expect(quickAdd).toHaveValue('')
 
-    const todoColumn = page.getByLabel('Add task to To do').locator('xpath=..')
-    const inProgressColumn = page.getByLabel('Add task to In progress').locator('xpath=..')
+    // Each board column is a <section aria-labelledby> (board-column.tsx), so
+    // the column IS a named region. Addressing it that way rather than as
+    // "the parent element of the quick-add box" means a wrapper div added for
+    // layout can't silently move the task list out of the locator's subtree.
+    const todoColumn = page.getByRole('region', { name: 'To do' })
+    const inProgressColumn = page.getByRole('region', { name: 'In progress' })
     const task = todoColumn.getByText(TASK_TITLE, { exact: true }).locator('xpath=..')
     await expect(task).toBeVisible()
 
-    const dropTarget = inProgressColumn.getByText('Drop tasks here')
+    // An empty column's placeholder fills its droppable area, so it is the
+    // thing to drop onto (board-column.tsx renders this exact copy).
+    const dropTarget = inProgressColumn.getByText('Nothing here yet', { exact: false })
     await expect(dropTarget).toBeVisible()
     await dragTaskTo(page, task, dropTarget)
 
@@ -159,10 +176,10 @@ test.describe('LogPup smoke', () => {
     // The real assertion: the move persisted server-side, not just optimistically.
     await page.reload()
     await expect(
-      page.getByLabel('Add task to In progress').locator('xpath=..').getByText(TASK_TITLE, { exact: true }),
+      page.getByRole('region', { name: 'In progress' }).getByText(TASK_TITLE, { exact: true }),
     ).toBeVisible()
     await expect(
-      page.getByLabel('Add task to To do').locator('xpath=..').getByText(TASK_TITLE, { exact: true }),
+      page.getByRole('region', { name: 'To do' }).getByText(TASK_TITLE, { exact: true }),
     ).toHaveCount(0)
   })
 

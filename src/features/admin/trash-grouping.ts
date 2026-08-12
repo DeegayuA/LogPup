@@ -125,11 +125,14 @@ export function buildTaskTrashRow(row: RawTaskTrashRow): TrashRow {
     deletedByName: row.deletedByName,
     deletedByAvatarUrl: row.deletedByAvatarUrl,
     deletedAt: row.deletedAt,
-    // A task's sprintId is nulled out by deleteSprint for every LIVE task at
-    // the moment its sprint is trashed (see deleteSprint in
-    // src/features/sprints/actions.ts) — a task can never end up pointing at
-    // a trashed sprint the way a segment/keyframe points at a trashed
-    // meeting, so there is no parent-trashed state to surface here.
+    // A trashed task CAN point at a trashed sprint — deleteSprint deliberately
+    // leaves tasks.sprint_id alone so a sprint restore is lossless (see
+    // src/features/sprints/actions.ts) — but unlike a segment/keyframe under a
+    // trashed meeting, that is not a blocked restore: restoreTask works
+    // regardless, and the task simply lands in the app backlog until its
+    // sprint comes back too (the backlog rule in
+    // src/features/sprints/backlog.ts). So there is genuinely nothing to
+    // disable here, which is what parentTrashed drives.
     parentTrashed: false,
   }
 }

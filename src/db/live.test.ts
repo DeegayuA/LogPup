@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { getTableColumns, getTableName, isTable } from 'drizzle-orm'
@@ -92,13 +92,12 @@ const ALLOWLIST: readonly string[] = [
   // instead of re-implementing the filter itself.
   'src/db/live.ts',
 
-  // why: Task 5's trash-bin listing has to read deletedAt IS NOT NULL rows
+  // why: the trash-bin listing has to read deletedAt IS NOT NULL rows
   // directly — the opposite of what liveMeetings/liveTasks/... expose.
-  // Does not exist yet in this worktree; allowlisted by anticipated path.
   'src/features/admin/trash-queries.ts',
 
-  // why: Task 5/6's restore + permanent-purge actions operate on already-
-  // trashed rows and perform the eventual hard delete. Does not exist yet.
+  // why: the restore + permanent-purge actions operate on already-trashed
+  // rows and perform the eventual hard delete.
   'src/features/admin/trash-actions.ts',
 
   // why: a full DB backup must capture every row, including soft-deleted
@@ -107,25 +106,58 @@ const ALLOWLIST: readonly string[] = [
   'src/features/admin/backup.ts',
 
   // why: houses the getMeetingNoteTimeline legacy `meetings.notes` fallback
-  // probe (currently inline in ai-actions.ts), extracted into its own file
-  // once the rest of ai-actions.ts's reads convert to live tables in Task 4.
-  // Does not exist yet.
+  // probe — a raw EXISTS over meeting_note_segments that must see trashed
+  // rows too, so trashing the last typed segment doesn't resurrect the legacy
+  // notes blob.
   'src/features/meetings/legacy-notes.ts',
-
-  // why: private-blob proxy for keyframe screenshot images — same pattern as
-  // src/app/api/avatar/[...path]/route.ts. Referenced today only as the
-  // KEYFRAME_PROXY_PREFIX string constant in ai-actions.ts; the route itself
-  // is not built yet.
-  'src/app/api/meeting-keyframes/[...path]/route.ts',
 ]
 const allowlistSet = new Set(ALLOWLIST)
 
+// An allowlist entry for a file that does not exist is a standing exemption
+// waiting to be inherited: whoever eventually creates that path gets a free
+// pass they never asked for and no reviewer ever granted. (The keyframe proxy
+// route src/app/api/meeting-keyframes/[...path]/route.ts was listed here for
+// exactly that reason and has now been removed — re-add it in the same commit
+// that actually writes the route, with a why comment that can be reviewed
+// against real code.) Asserting existence keeps the list self-maintaining: a
+// deleted or renamed file fails here instead of quietly widening the net.
+describe('allowlist hygiene', () => {
+  it.each(ALLOWLIST)('%s exists', (relPath) => {
+    expect(existsSync(path.join(REPO_ROOT, relPath))).toBe(true)
+  })
+})
+
+// EVERY pattern below tolerates whitespace after the opening paren. A long
+// drizzle chain is exactly the kind of line a formatter breaks, and
+//
+//   .from(
+//     meetings,
+//   )
+//
+// is the same read as `.from(meetings)` — without the `\s*` these checks
+// simply stopped seeing a call the moment prettier wrapped it, which is a
+// silent hole rather than a failing test. (Verified: a probe file using that
+// spelling turns checks 1, 2 and 3 red.)
 const SOFT_TABLE_NAMES = '(meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots)'
-const RAW_FROM_RE = new RegExp(`\\.from\\(${SOFT_TABLE_NAMES}[),]`)
-const RAW_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(${SOFT_TABLE_NAMES}[),]`)
-const ALIAS_RE = new RegExp(`alias\\(${SOFT_TABLE_NAMES}\\b`)
+const RAW_FROM_RE = new RegExp(`\\.from\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
+const RAW_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
+const ALIAS_RE = new RegExp(`alias\\(\\s*${SOFT_TABLE_NAMES}\\b`)
+
 const CHILD_TABLE_NAMES = '(meetingAttendees|meetingAiNotes|meetingFollowups|meetingSpeakers|meetingTaskSuggestions|meetingRecordingSegments)'
-const CHILD_FROM_RE = new RegExp(`\\.from\\(${CHILD_TABLE_NAMES}[),]`)
+const CHILD_FROM_RE = new RegExp(`\\.from\\(\\s*${CHILD_TABLE_NAMES}\\s*[),]`)
+// Joins and alias() are read forms too. Check 1 has always had a join regex
+// for the soft tables; check 3 had only `.from(`, so
+// `.innerJoin(meetingAttendees, …)` in a file with no liveMeetings — the
+// exact shape sub-project A's co-attendance query will take — went
+// undetected, and `alias(meetingAttendees, 'a')` (how a self-join on a child
+// table has to be written) was invisible to every check in this file.
+const CHILD_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(\\s*${CHILD_TABLE_NAMES}\\s*[),]`)
+const CHILD_ALIAS_RE = new RegExp(`alias\\(\\s*${CHILD_TABLE_NAMES}\\b`)
+
+/** Any read form — .from / *Join / alias — of a meeting child table. */
+function readsChildTable(text: string): boolean {
+  return CHILD_FROM_RE.test(text) || CHILD_JOIN_RE.test(text) || CHILD_ALIAS_RE.test(text)
+}
 
 // Check 1 -------------------------------------------------------------------
 
@@ -159,6 +191,11 @@ describe('check 1: raw .from()/join() reads of a soft-deleted table', () => {
 
 // Check 2 -------------------------------------------------------------------
 
+// alias() of a CHILD table is deliberately NOT banned here: unlike the five
+// soft tables (which always have a live subquery to alias instead), a child
+// table has no deletedAt of its own, so aliasing it is fine as long as the
+// statement names its liveness source. That conditional rule is check 3's,
+// and CHILD_ALIAS_RE is applied there.
 describe('check 2: alias() of a soft-deleted table', () => {
   const offenders = entries.filter((e) => !allowlistSet.has(e.relPath) && ALIAS_RE.test(e.text))
 
@@ -183,9 +220,27 @@ describe('check 2: alias() of a soft-deleted table', () => {
 
 // Check 3 -------------------------------------------------------------------
 
+// KNOWN LIMITATION, stated rather than silently lived with: the liveness
+// test below is FILE-scoped (`!e.text.includes('liveMeetings')`), not
+// statement-scoped. One liveMeetings reference anywhere in a 2600-line file
+// like ai-actions.ts exempts every child-table read in it.
+//
+// Deliberately not tightened: most child reads in that file are gated rather
+// than joined — they sit after a `canManageMeeting(id)` / `canReadMeetingIntel`
+// call which resolves the meeting through liveMeetings and returns null for a
+// trashed one, so the read never runs. A statement-scoped check would flag
+// all of those as offenders, and the only way to quiet them would be a large
+// allowlist, i.e. converting a real check back into convention.
+//
+// What this still catches, which is the case that matters: a NEW file (a
+// sub-project A recommender, a transcript search) that reads a child table
+// without naming any liveness source at all. What it does not catch: a new
+// ungated read added inside an existing file that already mentions
+// liveMeetings. Reviewing new queries in meetings/ai-actions.ts by hand
+// remains necessary.
 describe('check 3: meeting child table read without joining liveMeetings', () => {
   const offenders = entries.filter(
-    (e) => !allowlistSet.has(e.relPath) && CHILD_FROM_RE.test(e.text) && !e.text.includes('liveMeetings'),
+    (e) => !allowlistSet.has(e.relPath) && readsChildTable(e.text) && !e.text.includes('liveMeetings'),
   )
 
   // See check 1's comment: registers one passing test for the empty case so
@@ -198,7 +253,8 @@ describe('check 3: meeting child table read without joining liveMeetings', () =>
   } else {
     it.each(offenders)('$relPath', ({ relPath }) => {
       throw new Error(
-        `${relPath}: reads a meeting child table (${MEETING_CHILD_TABLES.join(', ')}) via .from() without `
+        `${relPath}: reads a meeting child table (${MEETING_CHILD_TABLES.join(', ')}) via .from()/leftJoin()/`
+        + 'innerJoin()/rightJoin()/alias() without '
         + 'also importing/using liveMeetings from \'@/db/live\'. A trashed meeting\'s children are '
         + 'live-iff-the-meeting-is-live (no deletedAt of their own) — join against liveMeetings (e.g. '
         + '.innerJoin(liveMeetings, eq(child.meetingId, liveMeetings.id))) so children of a soft-deleted '
@@ -220,7 +276,8 @@ describe('check 3: meeting child table read without joining liveMeetings', () =>
 const DELETE_RE = /db\s*\.\s*delete\(/g
 
 const DELETE_ALWAYS_ALLOWED_FILES = new Set([
-  // why: Task 5/6 permanent-purge action. Does not exist yet.
+  // why: the permanent-purge actions — the one place a soft-deleted table is
+  // legitimately hard-deleted.
   'src/features/admin/trash-actions.ts',
 ])
 

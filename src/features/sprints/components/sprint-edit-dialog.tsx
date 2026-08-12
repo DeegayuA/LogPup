@@ -157,9 +157,13 @@ export function SprintEditDialog({
           toast.error(res.error)
           return
         }
+        // "showing in the backlog", not "moved to the backlog": nothing was
+        // moved. The tasks still belong to this sprint and come back with it
+        // when an admin restores it — they just surface in the backlog for as
+        // long as the sprint sits in Trash (see deleteSprint / backlog.ts).
         toast.success(
-          res.data.releasedTasks > 0
-            ? `Sprint deleted — ${res.data.releasedTasks} ${res.data.releasedTasks === 1 ? 'task moved' : 'tasks moved'} to the backlog`
+          res.data.backlogTasks > 0
+            ? `Sprint deleted — ${res.data.backlogTasks} ${res.data.backlogTasks === 1 ? 'task is' : 'tasks are'} showing in the backlog until it's restored`
             : 'Sprint deleted',
         )
         onOpenChange(false)

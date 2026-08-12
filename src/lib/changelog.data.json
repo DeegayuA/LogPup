@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.145",
+  "current": "v0.0.153",
   "versions": [
     {
       "version": "v0.0.1",
@@ -862,14 +862,62 @@
     {
       "version": "v0.0.144",
       "date": "2026-08-12",
-      "hash": "21445d6",
-      "change": "."
+      "hash": "4f0579b",
+      "change": "chore: adopt parallel-session WIP as build base (activity log, nav, dashboard)"
     },
     {
       "version": "v0.0.145",
       "date": "2026-08-12",
-      "hash": "99fbe9c",
-      "change": "."
+      "hash": "560cede",
+      "change": "feat: soft-delete columns and live partial indexes (D1)"
+    },
+    {
+      "version": "v0.0.146",
+      "date": "2026-08-12",
+      "hash": "4a9cb71",
+      "change": "fix: declare soft-delete partial indexes in schema (D1 review)"
+    },
+    {
+      "version": "v0.0.147",
+      "date": "2026-08-12",
+      "hash": "cb03930",
+      "change": "feat: live-query subqueries and CI enforcement of soft-delete reads (D2)"
+    },
+    {
+      "version": "v0.0.148",
+      "date": "2026-08-12",
+      "hash": "d49d781",
+      "change": "feat: soft-delete the five delete paths (D3)"
+    },
+    {
+      "version": "v0.0.149",
+      "date": "2026-08-12",
+      "hash": "5159f84",
+      "change": "fix: cover undoAutoAcceptedSuggestion, make enforcement checks reportable (D3 review)"
+    },
+    {
+      "version": "v0.0.150",
+      "date": "2026-08-12",
+      "hash": "18f5114",
+      "change": "feat: route all reads through live subqueries; backlog builder (D4)"
+    },
+    {
+      "version": "v0.0.151",
+      "date": "2026-08-12",
+      "hash": "5e585ce",
+      "change": "feat: admin trash queries, restore and purge actions (D5)"
+    },
+    {
+      "version": "v0.0.152",
+      "date": "2026-08-12",
+      "hash": "084fb5c",
+      "change": "fix: share neutral note labels, close trash test gaps (D5 review)"
+    },
+    {
+      "version": "v0.0.153",
+      "date": "2026-08-12",
+      "hash": "1a4f5c0",
+      "change": "feat: admin trash card with restore and typed-confirm purge (D6)"
     }
   ]
 }

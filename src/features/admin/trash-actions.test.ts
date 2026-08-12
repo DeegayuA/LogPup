@@ -11,6 +11,7 @@ import {
   users,
 } from '@/db/schema'
 import { liveScreenshots } from '@/db/live'
+import { matchesPurgeConfirm, PURGE_CONFIRM_PHRASE } from './components/trash-card-logic'
 
 // Every restore/purge action is admin-gated, returns ActionResult, calls
 // logActivity, and ends in a revalidate helper — same mocked-action idiom as
@@ -399,6 +400,34 @@ describe('restoreAssignment', () => {
   })
 })
 
+describe('purge confirm phrase is single-sourced', () => {
+  // The dialog's enable-the-button check (matchesPurgeConfirm in
+  // components/trash-card-logic.ts) and the server's own check must be the
+  // SAME string, or purge breaks silently in one of two directions: a
+  // stricter server phrase enables a button on text the action then rejects,
+  // and a stricter client phrase leaves the typed confirm gating nothing.
+  // trash-actions.ts imports the constant rather than restating it; this
+  // test proves the server actually honours that exact value end to end.
+  it('every purge accepts exactly PURGE_CONFIRM_PHRASE and nothing adjacent', async () => {
+    asAdmin()
+    // Wrong-but-close spellings are rejected …
+    for (const near of ['delete forever ', 'Delete forever', 'deleteforever']) {
+      expect((await purgeTask(ID, near)).ok).toBe(false)
+    }
+    expect(deleteSpy).not.toHaveBeenCalled()
+
+    // … and the shared constant is accepted.
+    stateFor(tasks).deleteReturning = [[{ id: ID, title: 'Ship it', appId: APP_ID }]]
+    stateFor(apps).select = [[{ slug: 'logpup' }]]
+    expect((await purgeTask(ID, PURGE_CONFIRM_PHRASE)).ok).toBe(true)
+  })
+
+  it("matchesPurgeConfirm agrees with the phrase the server was given", () => {
+    expect(matchesPurgeConfirm(PURGE_CONFIRM_PHRASE)).toBe(true)
+    expect(matchesPurgeConfirm(PURGE_CONFIRM_PHRASE.toUpperCase())).toBe(false)
+  })
+})
+
 describe('purges: confirm string is checked before any delete', () => {
   const cases: [string, (confirm: string) => Promise<{ ok: boolean }>][] = [
     ['purgeMeeting', (c) => purgeMeeting(ID, c)],
@@ -431,8 +460,14 @@ describe('purgeMeeting', () => {
 
     expect(res.ok).toBe(true)
     expect(deleteSpy).toHaveBeenCalledWith(meetings)
-    expect(blobDelMock).toHaveBeenCalledWith('meeting-keyframes/a.jpg')
-    expect(blobDelMock).toHaveBeenCalledWith('meeting-keyframes/b.jpg')
+    // ONE del() carrying every pathname, not one call per frame — a meeting at
+    // the keyframe cap would otherwise make 60 sequential blob round-trips
+    // inside a single server action.
+    expect(blobDelMock).toHaveBeenCalledTimes(1)
+    expect(blobDelMock).toHaveBeenCalledWith([
+      'meeting-keyframes/a.jpg',
+      'meeting-keyframes/b.jpg',
+    ])
     expect(logActivityMock).toHaveBeenCalledWith(expect.objectContaining({ verb: 'purged', entityType: 'meeting' }))
   })
 

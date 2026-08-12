@@ -8,6 +8,7 @@ import { liveSprints, liveTasks } from '@/db/live'
 import { apps, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
 import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
@@ -176,6 +177,12 @@ async function revalidateApps(appIds: readonly string[]) {
   // elsewhere by batching the read.
   const rows = await db.select({ slug: apps.slug }).from(apps).where(inArray(apps.id, unique))
   for (const row of rows) revalidatePath('/apps/' + row.slug)
+  // deleteTask routes through here (via revalidateApp) and a soft delete lands
+  // a new row in the admin Trash card — see revalidateAdmin's own comment. It
+  // is done for every task write rather than only the delete: /admin is
+  // auth-gated and dynamic, so the extra invalidation costs nothing, and a
+  // future delete-shaped path here inherits it for free.
+  revalidateAdmin()
 }
 
 async function revalidateApp(appId: string) {

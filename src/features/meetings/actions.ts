@@ -8,6 +8,7 @@ import { liveMeetings } from '@/db/live'
 import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { format } from 'date-fns'
 import { getTeamForApp } from '@/features/people/queries'
 import {
@@ -126,6 +127,9 @@ async function revalidateMeetingPaths(appId: string | null) {
   if (slug) revalidatePath('/apps/' + slug)
   revalidatePath('/meetings')
   revalidatePath('/')
+  // deleteMeeting is one of the callers, and a soft delete lands a new row in
+  // the admin Trash card — see revalidateAdmin's own comment.
+  revalidateAdmin()
 }
 
 function canManageMeeting(

@@ -27,8 +27,18 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 import { MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
+import { PURGE_CONFIRM_PHRASE } from '@/features/admin/components/trash-card-logic'
 
-const CONFIRM_PHRASE = 'delete forever'
+// ONE phrase, defined in trash-card-logic.ts and imported here — not two
+// literals that happen to match today. Drift between them breaks purge
+// silently in one of two directions: a stricter server phrase means the
+// dialog enables its button on text the action then rejects, and a stricter
+// client phrase means the typed confirm no longer gates anything the server
+// cares about. The import direction is forced: this is a 'use server' module,
+// which may only export async functions, so the constant cannot live here.
+// trash-card-logic.ts is a plain (non-'use client') pure module, so importing
+// from it here is free.
+const CONFIRM_PHRASE = PURGE_CONFIRM_PHRASE
 
 async function requireAdmin() {
   const session = await auth()
@@ -73,16 +83,22 @@ function isUniqueViolation(error: unknown): boolean {
   return false
 }
 
+/**
+ * The two pages EVERY restore/purge changes, no matter what it acted on:
+ * /admin (the Trash card just lost a row) and / (the dashboard's activity
+ * feed just gained a 'restored'/'purged' row — logActivity is called by all
+ * eleven actions in this file). Every other helper below composes this one,
+ * so an action added later cannot forget either of them.
+ */
 function revalidateTrashPaths() {
-  revalidatePath('/admin/trash')
   revalidatePath('/admin')
+  revalidatePath('/')
 }
 
 async function revalidateMeetingTrashPaths(appId: string | null) {
   const slug = await slugForApp(appId)
   if (slug) revalidatePath('/apps/' + slug)
   revalidatePath('/meetings')
-  revalidatePath('/')
   revalidateTrashPaths()
 }
 
@@ -97,7 +113,6 @@ function revalidateAssignmentTrashPaths(slug: string | null, userId: string) {
   revalidatePath('/people')
   revalidatePath('/people/' + userId)
   revalidatePath('/people/history')
-  revalidatePath('/')
   revalidateTrashPaths()
 }
 
@@ -462,11 +477,15 @@ export async function purgeMeeting(meetingId: string, confirm: string): Promise<
   if (deleted.length === 0) return err('Not found, or it was restored — nothing purged')
   const [row] = deleted
 
-  for (const b of blobRows) {
+  // ONE del() for the whole filmstrip, not one per frame: @vercel/blob's del()
+  // takes a string[], and a meeting at the keyframe cap would otherwise pay
+  // MAX_KEYFRAMES_PER_MEETING sequential round-trips inside a single server
+  // action — long enough to hit the function timeout on a slow link.
+  if (blobRows.length > 0) {
     try {
-      await del(b.blobPathname)
+      await del(blobRows.map((b) => b.blobPathname))
     } catch {
-      /* Already gone, or the token lost access — the row is gone either way. */
+      /* Already gone, or the token lost access — the rows are gone either way. */
     }
   }
 
