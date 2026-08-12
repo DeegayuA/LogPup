@@ -416,7 +416,7 @@ function MeetingDetailBody({
               <AlertDialogHeader>
                 <AlertDialogTitle>Delete meeting?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This removes &ldquo;{meeting.title}&rdquo; and cannot be undone.
+                  Moves &ldquo;{meeting.title}&rdquo; to Trash — admins can view and restore it.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

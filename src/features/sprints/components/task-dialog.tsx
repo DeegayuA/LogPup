@@ -412,7 +412,7 @@ export function TaskDialog({
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete this task?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      This permanently removes &ldquo;{task?.title}&rdquo;. This cannot be undone.
+                      Moves &ldquo;{task?.title}&rdquo; to Trash — admins can view and restore it.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>

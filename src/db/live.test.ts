@@ -206,6 +206,17 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
   // chain, which is why the regex above tolerates whitespace/newlines
   // between `db` and `.delete(`).
   'src/features/gemini/actions.ts': 'deleteGeminiKey',
+  // why: `assignments` is deliberately NOT one of the soft-deleted tables
+  // (see SOFT_TABLES in src/db/live.ts / schema.ts) — the design spec keeps
+  // assignments hard-deleted on purpose. assignment_history already records
+  // the removal (a changeKind='removed' row with who/when/role/pct — see the
+  // schema.ts comment on assignment_history), so nothing is lost when the
+  // live `assignments` row goes away. Adding a deletedAt column here would
+  // also break assignments_user_app_idx and cause every capacity query to
+  // over-count, since a still-live index/lookup would keep matching rows
+  // that are only "soft" gone. removeAssignment is the one place that
+  // deletes an assignment row (verified by reading the file).
+  'src/features/people/actions.ts': 'removeAssignment',
 }
 
 /** Byte offsets [start, end) of `function <name>(` ... matching `}`, or null. */

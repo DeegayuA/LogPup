@@ -564,13 +564,19 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
   const existing = await taskById(taskId)
   if (!existing) return err('Task not found')
 
+  let marked: { id: string }[]
   try {
-    await db.delete(tasks).where(eq(tasks.id, taskId))
+    marked = await db
+      .update(tasks)
+      .set({ deletedAt: new Date(), deletedBy: session.user.id })
+      .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)))
+      .returning({ id: tasks.id })
   } catch (error) {
     return unexpected('deleteTask', error)
   }
+  if (marked.length === 0) return err('Task not found')
 
-  // `existing` was read before the delete, so the row can still be named.
+  // `existing` was read before the update, so the row can still be named.
   await logActivity({
     actorId: session.user.id,
     verb: 'deleted',

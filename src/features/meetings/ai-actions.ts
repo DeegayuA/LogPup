@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { and, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
-import { del, put, get as getBlob } from '@vercel/blob'
+import { put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import {
@@ -1310,6 +1310,15 @@ function keyframeProxyUrl(pathname: string): string {
 const MAX_KEYFRAME_BYTES = 1 * 1024 * 1024
 const ALLOWED_KEYFRAME_TYPES = ['image/jpeg']
 
+/**
+ * Neutral entityLabel for a keyframe-delete activity row. A screen keyframe
+ * can contain whatever was on someone's screen — code, a dashboard, a
+ * private doc — so the trail names where it lived, never what was in it.
+ * Exported as a named const so a test can assert the output never carries
+ * keyframe content.
+ */
+export const keyframeDeleteLabel = (meetingTitle: string) => `a screen keyframe in ${meetingTitle}`
+
 export type MeetingScreenshotView = {
   id: string
   url: string
@@ -1356,10 +1365,12 @@ export async function uploadMeetingKeyframe(
   if (!ctx) return err('Only admins or the meeting creator can capture screen keyframes')
   const { session, meeting } = ctx
 
+  // LIVE frames only: a trashed keyframe still has a row (soft-deleted, not
+  // gone) and must not count against the cap for new captures.
   const existing = await db
     .select({ id: meetingScreenshots.id })
     .from(meetingScreenshots)
-    .where(eq(meetingScreenshots.meetingId, id))
+    .where(and(eq(meetingScreenshots.meetingId, id), isNull(meetingScreenshots.deletedAt)))
   if (existing.length >= MAX_KEYFRAMES_PER_MEETING) {
     return err(`Reached the ${MAX_KEYFRAMES_PER_MEETING}-screenshot cap for this meeting`)
   }
@@ -1405,10 +1416,10 @@ export async function uploadMeetingKeyframe(
 
 /**
  * Deletes one keyframe someone doesn't want kept — same canManageMeeting
- * gate as capturing it in the first place. The DB row goes first; the Blob
- * delete is best-effort (same never-block posture as deleteMeeting's Google
- * Calendar cleanup) since a stray object left in Blob storage is cleanup
- * debt, not something that should block the person's actual request.
+ * gate as capturing it in the first place. Soft delete: the row is marked,
+ * not removed, so it stays available to an admin from Trash. The Blob object
+ * itself is intentionally left alone — it's retained until an admin
+ * permanently purges the trash, not swept here.
  */
 export async function deleteMeetingKeyframe(screenshotId: string): Promise<ActionResult> {
   const parsed = idInput.safeParse(screenshotId)
@@ -1423,12 +1434,22 @@ export async function deleteMeetingKeyframe(screenshotId: string): Promise<Actio
   const ctx = await canManageMeeting(row.meetingId)
   if (!ctx) return err('Not allowed')
 
-  await db.delete(meetingScreenshots).where(eq(meetingScreenshots.id, row.id))
-  try {
-    await del(row.blobPathname)
-  } catch {
-    // Ignore — the DB row (and so the filmstrip entry) is already gone.
-  }
+  const marked = await db
+    .update(meetingScreenshots)
+    .set({ deletedAt: new Date(), deletedBy: ctx.session.user.id })
+    .where(and(eq(meetingScreenshots.id, row.id), isNull(meetingScreenshots.deletedAt)))
+    .returning({ id: meetingScreenshots.id })
+  if (marked.length === 0) return err('Not found')
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'deleted',
+    entityType: 'meeting',
+    entityId: row.meetingId,
+    entityLabel: keyframeDeleteLabel(ctx.meeting.title),
+    pagePath: '/meetings',
+    detail: 'a screen keyframe',
+  })
 
   revalidatePath('/meetings')
   return ok(undefined)
@@ -2235,6 +2256,14 @@ export async function editNoteSegment(segmentId: string, content: string): Promi
   return ok(undefined)
 }
 
+/**
+ * Neutral entityLabel for a note-segment-delete activity row. A segment can
+ * carry a voice transcript or written notes — the trail names where it lived
+ * (which meeting), never what was actually said or written. Exported as a
+ * named const so a test can assert the output never carries segment content.
+ */
+export const noteSegmentDeleteLabel = (meetingTitle: string) => `a note segment in ${meetingTitle}`
+
 /** Deletes a typed or AI segment. Voice (transcript) segments are read-only. */
 export async function deleteNoteSegment(segmentId: string): Promise<ActionResult> {
   const parsed = idInput.safeParse(segmentId)
@@ -2247,16 +2276,21 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
   const ctx = await canManageMeeting(segment.meetingId)
   if (!ctx) return err('Not allowed')
 
-  await db.delete(meetingNoteSegments).where(eq(meetingNoteSegments.id, segment.id))
+  const marked = await db
+    .update(meetingNoteSegments)
+    .set({ deletedAt: new Date(), deletedBy: ctx.session.user.id })
+    .where(and(eq(meetingNoteSegments.id, segment.id), isNull(meetingNoteSegments.deletedAt)))
+    .returning({ id: meetingNoteSegments.id })
+  if (marked.length === 0) return err('Not found')
 
   await logActivity({
     actorId: ctx.session.user.id,
-    verb: 'updated',
+    verb: 'deleted',
     entityType: 'meeting',
     entityId: segment.meetingId,
-    entityLabel: ctx.meeting.title,
+    entityLabel: noteSegmentDeleteLabel(ctx.meeting.title),
     pagePath: '/meetings',
-    detail: 'deleted a note',
+    detail: 'a note segment',
   })
 
   revalidatePath('/meetings')
@@ -2487,7 +2521,17 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
     return err('This task has already been changed since it was auto-assigned — edit it directly instead')
   }
 
-  await db.delete(tasks).where(eq(tasks.id, task.id))
+  // Soft delete: `tasks` is one of the soft-deleted tables (see
+  // src/db/live.ts) — the auto-created task is marked, not removed, so an
+  // undone auto-assign still leaves an admin-visible trace in Trash rather
+  // than vanishing outright.
+  const marked = await db
+    .update(tasks)
+    .set({ deletedAt: new Date(), deletedBy: ctx.session.user.id })
+    .where(and(eq(tasks.id, task.id), isNull(tasks.deletedAt)))
+    .returning({ id: tasks.id })
+  if (marked.length === 0) return err('That task no longer exists')
+
   await db
     .update(meetingTaskSuggestions)
     .set({ status: 'open', createdTaskId: null, acceptedBy: null })

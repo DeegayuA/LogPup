@@ -1,11 +1,10 @@
 'use server'
 
 import { z } from 'zod'
-import { eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
-import { del } from '@vercel/blob'
 import { db } from '@/db'
-import { apps, meetingAttendees, meetingScreenshots, meetings, users } from '@/db/schema'
+import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { format } from 'date-fns'
@@ -499,8 +498,12 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
 
   if (existing.googleEventId) {
     // Best-effort: the calendar invite is cleanup, not the source of truth —
-    // the meeting still gets deleted even if Google is unreachable or the
-    // creator's grant has been revoked.
+    // the meeting still gets deleted (soft-deleted, see below) even if
+    // Google is unreachable or the creator's grant has been revoked. This
+    // stays even though the meeting itself is only trashed, not gone: guests
+    // must stop seeing the invite the instant the meeting is deleted, and
+    // googleEventId is left on the row rather than cleared, so a restore
+    // still knows which event it used to own.
     try {
       const [creator] = await db
         .select({ googleRefreshToken: users.googleRefreshToken })
@@ -510,30 +513,21 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
         await deleteCalendarEvent(creator.googleRefreshToken, existing.googleEventId)
       }
     } catch {
-      // Ignore — proceed with the DB delete regardless.
+      // Ignore — proceed with the soft delete regardless.
     }
   }
 
-  // Screen keyframes (meeting_screenshots) live in Blob storage — the
-  // meetingId foreign key cascades and removes the DB rows below, but that
-  // cascade never touches the actual objects in Blob storage, so they'd be
-  // orphaned forever without this. Fetched before the delete since the rows
-  // (and so their pathnames) are gone the instant the cascade fires. Same
-  // best-effort, never-block-the-DB-delete posture as the Google Calendar
-  // cleanup above.
-  try {
-    const screenshotRows = await db
-      .select({ blobPathname: meetingScreenshots.blobPathname })
-      .from(meetingScreenshots)
-      .where(eq(meetingScreenshots.meetingId, meetingId))
-    if (screenshotRows.length > 0) {
-      await del(screenshotRows.map((row) => row.blobPathname))
-    }
-  } catch {
-    // Ignore — proceed with the DB delete regardless.
-  }
-
-  await db.delete(meetings).where(eq(meetings.id, meetingId))
+  // Soft delete: mark the row rather than removing it, so an admin can view
+  // and restore it from Trash. Screen keyframes and every other row that
+  // hangs off meetingId are left exactly where they are — including their
+  // objects in Blob storage, which are retained (not swept here) until an
+  // admin permanently purges the trashed meeting.
+  const marked = await db
+    .update(meetings)
+    .set({ deletedAt: new Date(), deletedBy: session.user.id })
+    .where(and(eq(meetings.id, meetingId), isNull(meetings.deletedAt)))
+    .returning({ id: meetings.id })
+  if (marked.length === 0) return err('Meeting not found')
 
   await logActivity({
     actorId: session.user.id,

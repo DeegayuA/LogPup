@@ -293,8 +293,8 @@ export function SprintEditDialog({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete this sprint?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This permanently removes &ldquo;{sprint?.name}&rdquo;. Its tasks are not
-                    deleted — they move back to this app&apos;s backlog. This cannot be undone.
+                    Moves &ldquo;{sprint?.name}&rdquo; to Trash — admins can view and restore it.
+                    Its tasks are not deleted — they move back to this app&apos;s backlog.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

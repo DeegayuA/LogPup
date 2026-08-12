@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { and, count, desc, eq, ne } from 'drizzle-orm'
+import { and, count, desc, eq, isNull, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { apps, sprints, tasks } from '@/db/schema'
@@ -203,10 +203,13 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 }
 
 /**
- * Deletes a sprint. Its tasks are NOT deleted: `tasks.sprint_id` is
- * ON DELETE SET NULL, so they fall back into the app backlog where they stay
- * findable. The count is returned so the UI can say exactly how many landed
- * there rather than leaving the user to wonder where the work went.
+ * Deletes (soft) a sprint. Its tasks are NOT deleted: previously
+ * `tasks.sprint_id` being ON DELETE SET NULL made this automatic, but a soft
+ * delete never fires that cascade — the sprint row is only marked, never
+ * removed — so releasing live tasks back into the app backlog is done here,
+ * explicitly, in the same batch as the mark. The count is returned so the UI
+ * can say exactly how many landed there rather than leaving the user to
+ * wonder where the work went.
  */
 export async function deleteSprint(
   sprintId: string,
@@ -221,19 +224,36 @@ export async function deleteSprint(
     .where(eq(sprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
-  // COUNT in SQL. The only thing this number is for is a sentence in a
-  // toast, and pulling one row per task across the wire to call `.length` on
-  // it makes a sprint with 300 tasks pay 300 rows for a single integer.
+  // COUNT in SQL, over LIVE tasks only. The only thing this number is for is
+  // a sentence in a toast, and pulling one row per task across the wire to
+  // call `.length` on it makes a sprint with 300 tasks pay 300 rows for a
+  // single integer.
   const [attached] = await db
     .select({ total: count() })
     .from(tasks)
-    .where(eq(tasks.sprintId, sprintId))
+    .where(and(eq(tasks.sprintId, sprintId), isNull(tasks.deletedAt)))
 
+  let marked: { id: string }[]
   try {
-    await db.delete(sprints).where(eq(sprints.id, sprintId))
+    // neon-http has no transactions: db.batch sends both statements in one
+    // atomic-ish round-trip so a sprint never ends up marked deleted with its
+    // tasks still pointing at it (or vice versa). The release only touches
+    // LIVE tasks — an already-trashed task has nothing to release.
+    ;[marked] = await db.batch([
+      db
+        .update(sprints)
+        .set({ deletedAt: new Date(), deletedBy: session.user.id })
+        .where(and(eq(sprints.id, sprintId), isNull(sprints.deletedAt)))
+        .returning({ id: sprints.id }),
+      db
+        .update(tasks)
+        .set({ sprintId: null })
+        .where(and(eq(tasks.sprintId, sprintId), isNull(tasks.deletedAt))),
+    ])
   } catch (error) {
     return unexpected('deleteSprint', error)
   }
+  if (marked.length === 0) return err('Sprint not found')
 
   const slug = await slugForApp(existing.appId)
   await logActivity({
