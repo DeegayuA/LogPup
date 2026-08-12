@@ -103,7 +103,7 @@ export default function SignInPage() {
                 <Button type="submit" size="lg" className="w-full">Continue with Google</Button>
               </form>
               <p className="text-center text-xs text-muted-foreground">
-                Personal accounts need admin approval.
+                Personal accounts need admin approval. App is still in development, so please click unsafe and proceed if you see a warning.
               </p>
             </div>
 
