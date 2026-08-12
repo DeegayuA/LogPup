@@ -60,6 +60,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {children}
           <Toaster />
           <PwaRegister />
+          <Analytics />
+          <SpeedInsights />
         </ThemeProvider>
       </body>
     </html>
