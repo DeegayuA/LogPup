@@ -12,7 +12,9 @@
 // icons go in (see `isCacheableAsset`); documents and RSC payloads are network
 // only, and offline navigation falls back to the static shell below, which is
 // built from a constant in this file and contains no user data.
-const CACHE = 'logpup-v2'
+// v3: purges caches that hold dev-server chunks stored before isStorable
+// learned to reject `no-cache`/`must-revalidate` responses (see below).
+const CACHE = 'logpup-v3'
 
 // No colours declared: `color-scheme` lets the browser supply its own light and
 // dark defaults, so this stays readable in both without hard-coding hex values
@@ -66,10 +68,20 @@ function isCacheableAsset(url) {
 }
 
 // Belt and braces behind the allowlist: never store a response the server
-// explicitly marked as uncacheable or user-private.
+// explicitly marked as uncacheable, revalidate-first, or user-private. The
+// cache read below is cache-FIRST with no revalidation, so anything short of
+// "immutable for a year" must not go in: dev-server chunks in particular are
+// served `no-cache, must-revalidate` under STABLE URLs whose content changes
+// every rebuild, and caching one once made every later rebuild crash with
+// "module factory is not available" until the cache was wiped by hand.
 function isStorable(response) {
   const cacheControl = (response.headers.get('Cache-Control') || '').toLowerCase()
-  return !cacheControl.includes('no-store') && !cacheControl.includes('private')
+  return (
+    !cacheControl.includes('no-store') &&
+    !cacheControl.includes('no-cache') &&
+    !cacheControl.includes('must-revalidate') &&
+    !cacheControl.includes('private')
+  )
 }
 
 self.addEventListener('install', () => self.skipWaiting())
@@ -78,9 +90,9 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      // Bumping CACHE to logpup-v2 is what purges it: installs still holding a
-      // logpup-v1 cache full of authenticated documents drop it here, on the
-      // first activation after this worker ships.
+      // Bumping CACHE is what purges old installs: any browser still holding
+      // an earlier cache (v1's authenticated documents, v2's dev-server
+      // chunks) drops it here, on the first activation after this ships.
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   )

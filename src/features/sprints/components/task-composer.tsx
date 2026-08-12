@@ -13,6 +13,8 @@ import type { GroupPatch } from '@/features/sprints/board-view'
 type ComposerPlan = {
   title: string
   assignee: IntentPerson | null
+  /** Everyone selected — more than one means one task per person on Enter. */
+  assignees: IntentPerson[]
   /** A name that matched several teammates. Blocks Enter until it's narrowed. */
   ambiguousQuery: string | null
   ambiguousNames: string[]
@@ -43,6 +45,7 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
   const verbatim: ComposerPlan = {
     title: text,
     assignee: null,
+    assignees: [],
     ambiguousQuery: null,
     ambiguousNames: [],
     unresolvedQuery: null,
@@ -77,6 +80,7 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
     ...verbatim,
     title,
     assignee: intent.assignee,
+    assignees: intent.assignees,
     due: intent.due,
     dueLabel: intent.dueLabel,
     priority: intent.priority,
@@ -139,25 +143,44 @@ export function TaskComposer({
 
     startTransition(async () => {
       try {
-        const res = await createTask({
-          appId,
-          sprintId,
-          title: plan.title,
-          // A name typed into the field beats the column's implied assignee:
-          // the preview above the input has already said out loud who it
-          // resolved to, so honouring the column instead would contradict
-          // what the user was just shown.
-          assigneeId: plan.assignee?.id ?? patch.assigneeId ?? null,
-          // Same precedence as the assignee: a priority typed into the field
-          // was shown in the preview, so it beats the column patch.
-          priority: plan.priority ?? patch.priority ?? 0,
-          description: plan.description ?? undefined,
-          status: patch.status ?? 'todo',
-          dueDate: plan.due,
-        })
-        if (!res.ok) {
-          toast.error(res.error)
+        // ONE TASK PER SELECTED PERSON — "@shanika @sam fix login" is two
+        // identical tasks with two owners, not one task with a shared owner:
+        // the schema has a single assignee, and shared ownership is how work
+        // falls between chairs anyway. Each person's copy lives its own life
+        // (moved, resolved, reprioritised independently).
+        const targets: (IntentPerson | null)[] =
+          plan.assignees.length > 0 ? plan.assignees : [null]
+        const failed: string[] = []
+        for (const person of targets) {
+          const res = await createTask({
+            appId,
+            sprintId,
+            title: plan.title,
+            // A name typed into the field beats the column's implied assignee:
+            // the preview above the input has already said out loud who it
+            // resolved to, so honouring the column instead would contradict
+            // what the user was just shown.
+            assigneeId: person?.id ?? patch.assigneeId ?? null,
+            // Same precedence as the assignee: a priority typed into the field
+            // was shown in the preview, so it beats the column patch.
+            priority: plan.priority ?? patch.priority ?? 0,
+            description: plan.description ?? undefined,
+            status: patch.status ?? 'todo',
+            dueDate: plan.due,
+          })
+          if (!res.ok) failed.push(person?.name ?? 'unassigned')
+        }
+        if (failed.length > 0) {
+          // Partial success is said out loud — the ones that worked exist.
+          toast.error(`Could not create the task for ${failed.join(', ')}`)
           return
+        }
+        if (targets.length > 1) {
+          toast.success(
+            `${targets.length} tasks created — one each for ${plan.assignees
+              .map((person) => person.name.split(/\s+/)[0])
+              .join(', ')}`,
+          )
         }
         setDraft('')
       } catch {
@@ -198,7 +221,15 @@ export function TaskComposer({
           >
             <p className="truncate text-xs font-medium text-foreground">{plan.title}</p>
             <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-muted-foreground">
-              {plan.assignee ? (
+              {plan.assignees.length > 1 ? (
+                // The fan-out, stated before it happens: same task, one copy
+                // per named person.
+                <span className="inline-flex items-center gap-1 text-foreground">
+                  <UserRound className="size-3 shrink-0" aria-hidden />
+                  {plan.assignees.length} tasks — one each for{' '}
+                  {plan.assignees.map((person) => person.name.split(/\s+/)[0]).join(', ')}
+                </span>
+              ) : plan.assignee ? (
                 <span className="inline-flex items-center gap-1 text-foreground">
                   <UserRound className="size-3 shrink-0" aria-hidden />
                   {plan.assignee.name}

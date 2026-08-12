@@ -155,10 +155,13 @@ export function summarizeMeetings(
   }
 
   // `today` and `live` are both counted across BOTH lists on purpose.
-  // splitByUpcoming divides on startsAt, so every meeting that has already
-  // started today — including one still running — is sitting in `past`. Read
-  // off `upcoming` alone, the header said "0 now" to someone whose meeting was
-  // running, and "Today 0" to someone whose day had been nothing but meetings.
+  // splitByUpcoming now files a meeting as past once it has ENDED, so a
+  // running one sits in `upcoming` — but everything that finished EARLIER
+  // today is in `past`, and both belong in a "Today" count. Read off
+  // `upcoming` alone, the header said "Today 0" to someone whose day had been
+  // nothing but meetings. (`live` can only come from `upcoming` now; it is
+  // still summed over both so the two counters cannot drift apart should the
+  // split rule ever move again.)
   for (const meeting of [...upcoming, ...past]) {
     const timing = meetingTiming(meeting.startsAt, meeting.endsAt, now)
     if (timing.days === 0) today += 1

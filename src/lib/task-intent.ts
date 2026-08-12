@@ -16,7 +16,14 @@ import { fuzzyMatches } from '@/lib/fuzzy'
 export type IntentPerson = { id: string; name: string }
 
 export type TaskIntent = {
+  /** First (or only) resolved person — every single-assignee caller reads this. */
   assignee: IntentPerson | null
+  /**
+   * Every resolved person, in the order typed, deduped — "@shanika @sam fix
+   * login" selects two people, and a caller that supports it creates one task
+   * per person. `[assignee]` in the single case; empty when nobody resolved.
+   */
+  assignees: IntentPerson[]
   /** Set when a name was written but matched nobody, or matched several. */
   assigneeQuery: string | null
   ambiguous: IntentPerson[]
@@ -190,80 +197,77 @@ function extractPriority(text: string): {
 }
 
 /**
- * A recipient written at the END of the phrase: "new task to shanika",
- * "ship the brief for dee", "fix login @sam".
- *
- * The tail is capped at two words so a whole clause can never be read as a
- * name, and the caller only accepts the split when that tail resolves to
- * somebody — "write docs for the API" keeps every word it was given.
+ * Words that may sit BETWEEN two selected names without ending the run:
+ * "shanika and deeghayu", "shanika, deeghayu", "shanika or deeghayu". Either
+ * conjunction selects BOTH people — the parser cannot make the team's choice
+ * for it, and creating for both is the reading the preview can show honestly.
  */
-const TRAILING_ASSIGNEE = new RegExp(
-  String.raw`^([\s\S]*\S)\s+(?:(?:to|for)\s+|@)(${NAME_WORD}(?:\s+${NAME_WORD})?)$`,
-  'iu',
-)
-
-function findPeople(query: string, people: IntentPerson[]): IntentPerson[] {
-  const q = query.toLowerCase()
-  const exact = people.filter((p) => p.name.toLowerCase() === q)
-  if (exact.length > 0) return exact
-  const firstName = people.filter((p) => p.name.toLowerCase().split(/\s+/)[0] === q)
-  if (firstName.length > 0) return firstName
-  const contains = people.filter((p) => p.name.toLowerCase().includes(q))
-  if (contains.length > 0) return contains
-  // Typo fallback ("shanka" → "Shanika"), only when nothing above matched.
-  return fuzzyMatches(query, people, (p) => p.name)
-}
+const NAME_SEPARATOR = /^(?:and|or|&|,)$/i
 
 /**
- * Splits a trailing recipient off the phrase, but ONLY when it names someone
- * real. Refusing the split otherwise is the whole safety property: an
- * unresolved tail stays in the title rather than quietly disappearing into an
- * assignment nobody asked for.
+ * Words that INTRODUCE a trailing recipient list ("fix login to shanika",
+ * "ship it for dee and sam"). Consumed once the run has found at least one
+ * name, then the run ends: they mark where the title stopped.
  */
-function takeTrailingAssignee(
-  text: string,
-  people: IntentPerson[],
-): { rest: string; query: string } | null {
-  const match = TRAILING_ASSIGNEE.exec(text)
-  if (!match) return null
-  const query = match[2].trim()
-  // Ambiguity counts as a match: two Sams must be reported, not left buried in
-  // the title where the user would never learn the name was even read.
-  if (findPeople(query, people).length === 0) return null
-  return { rest: match[1].trim(), query }
-}
+const NAME_TERMINATOR = /^(?:to|for)$/i
 
 /**
- * A bare name at the END of the phrase — "fix login shanika" — the mirror of
- * the bare LEADING name that has always worked.
+ * Greedy run of resolvable names at either end of the phrase — the one
+ * machine behind every bare-name form, single or multi, with or without @:
+ * "shanika deeghayu fix login", "fix login shanika or deeghayu",
+ * "fix login to shanika and deeghayu".
  *
- * Deliberately stricter than every other form: the last words of an ordinary
- * title are usually nouns ("fix login page", "update billing copy"), so this
- * accepts only an exact full-name or exact first-name hit — no substring, no
- * typo fallback. A trailing "to"/"for"/"@" is the user *saying* the next word
- * is a person, and earns the fuzzy tiers; a bare last word proves nothing,
- * and stealing it from the title on a fuzzy guess would be worse than the
- * Unassigned it replaces — the preview shows Unassigned as a nudge, but a
- * wrong assignee reads as success.
+ * Every candidate resolves through findPeople, so every position gets the
+ * full fuzzy tiers ("shanka" → Shanika) — per the workspace's explicit call
+ * that typo tolerance beats the occasional stolen word. The run still stops
+ * at the first word that resolves to nobody and always leaves at least one
+ * word for the title, so an ordinary sentence loses nothing: "fix login
+ * page" ends the run at "page" and keeps every word it was given.
  */
-function takeBareTrailingName(
+function takeNameRun(
   text: string,
   people: IntentPerson[],
-): { rest: string; query: string } | null {
-  const words = text.split(' ')
-  // Two words first, so "… shanika ayasmanthi" binds the full name rather
-  // than leaving "shanika" stranded in the title.
-  for (const take of [2, 1]) {
-    if (words.length <= take) continue // the title must keep at least one word
-    const candidate = words.slice(-take).join(' ')
-    const q = candidate.toLowerCase()
-    const strict = people.filter((p) => {
-      const name = p.name.toLowerCase()
-      return name === q || name.split(/\s+/)[0] === q
-    })
-    if (strict.length > 0) return { rest: words.slice(0, -take).join(' '), query: candidate }
+  from: 'start' | 'end',
+): { rest: string; queries: string[] } {
+  // Commas become their own tokens so "shanika, deeghayu" scans the same as
+  // "shanika and deeghayu".
+  const words = text.replace(/,/g, ' , ').split(/\s+/).filter(Boolean)
+  const queries: string[] = []
+  let rest = [...words]
+
+  while (rest.length > 1) {
+    const edge = from === 'start' ? rest[0] : rest[rest.length - 1]
+    if (queries.length > 0 && NAME_SEPARATOR.test(edge)) {
+      rest = from === 'start' ? rest.slice(1) : rest.slice(0, -1)
+      continue
+    }
+    if (from === 'end' && queries.length > 0 && NAME_TERMINATOR.test(edge)) {
+      rest = rest.slice(0, -1)
+      break
+    }
+    let matched = false
+    // Two words first, so a full name binds before its first name alone.
+    for (const take of [2, 1]) {
+      if (rest.length - take < 1) continue
+      const slice = from === 'start' ? rest.slice(0, take) : rest.slice(-take)
+      if (slice.some((word) => NAME_SEPARATOR.test(word) || NAME_TERMINATOR.test(word))) continue
+      const candidate = slice.join(' ')
+      if (findPeople(candidate, people).length > 0) {
+        if (from === 'start') {
+          queries.push(candidate)
+          rest = rest.slice(take)
+        } else {
+          queries.unshift(candidate)
+          rest = rest.slice(0, -take)
+        }
+        matched = true
+        break
+      }
+    }
+    if (!matched) break
   }
-  return null
+
+  return { rest: rest.filter((word) => word !== ',').join(' '), queries }
 }
 
 /**
@@ -288,18 +292,28 @@ export function parseTaskIntent(
   let body = text
 
   // 1. "@sam …" wherever the @ sits — explicit, wins outright.
-  const at = AT_ANYWHERE.exec(text)
+  // EVERY @token, not just the first: "@shanika @sam fix login" is two
+  // selections, and each strip re-runs the regex on the shortened body so
+  // adjacent mentions cannot hide each other.
+  const atQueries: string[] = []
+  {
+    let match = AT_ANYWHERE.exec(body)
+    while (match) {
+      atQueries.push(match[2])
+      body = (body.slice(0, match.index) + ' ' + body.slice(match.index + match[0].length))
+        .replace(/\s+/g, ' ')
+        .trim()
+      match = AT_ANYWHERE.exec(body)
+    }
+  }
   // 2. "assign <title> to <name>" / "task <title> for <name>"
   const command =
     /^(?:assign|create\s+task|add\s+task|task)\s+([\s\S]+?)\s+(?:to|for)\s+([\s\S]+)$/i.exec(text)
   // 3. "sam: ship the thing"
   const colon = /^([\w][\w .'-]{0,40}?)\s*:\s+([\s\S]+)$/.exec(text)
 
-  if (at) {
-    nameQuery = at[2]
-    body = (text.slice(0, at.index) + ' ' + text.slice(at.index + at[0].length))
-      .replace(/\s+/g, ' ')
-      .trim()
+  if (atQueries.length > 0) {
+    nameQuery = atQueries[0]
   } else if (command) {
     body = command[1]
     nameQuery = command[2]
@@ -370,15 +384,35 @@ export function parseTaskIntent(
     }
   }
 
-  const matches = nameQuery ? findPeople(nameQuery, people) : []
+  // Resolve every selected name; the single-name forms funnel through as a
+  // one-element list. ALL names must resolve cleanly before anything is
+  // assigned — "@shanika @bob fix login" with an unknown bob reports bob
+  // rather than quietly creating for shanika alone, because the preview can
+  // only warn about what the parse surfaces.
+  const queries = atQueries.length > 0 ? atQueries : nameQuery ? [nameQuery] : []
+  const resolved: IntentPerson[] = []
+  let ambiguousMatches: IntentPerson[] = []
+  let failedQuery: string | null = null
+  for (const query of queries) {
+    const found = findPeople(query, people)
+    if (found.length === 1) {
+      if (!resolved.some((person) => person.id === found[0].id)) resolved.push(found[0])
+    } else if (failedQuery === null) {
+      failedQuery = query
+      if (found.length > 1) ambiguousMatches = found
+    }
+  }
+  const clean = queries.length > 0 && failedQuery === null && resolved.length > 0
+
   const title = rest.replace(LEADING_FILLER, '').trim()
 
   if (!title) return null
 
   return {
-    assignee: matches.length === 1 ? matches[0] : null,
-    assigneeQuery: nameQuery && matches.length !== 1 ? nameQuery : null,
-    ambiguous: matches.length > 1 ? matches : [],
+    assignee: clean ? resolved[0] : null,
+    assignees: clean ? resolved : [],
+    assigneeQuery: failedQuery,
+    ambiguous: ambiguousMatches,
     title,
     due: withoutDue.due,
     dueLabel: withoutDue.label,

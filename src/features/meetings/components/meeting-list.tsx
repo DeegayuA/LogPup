@@ -431,6 +431,9 @@ function MeetingRow({
           meetingId={meeting.id}
           meetingTitle={meeting.title}
           canRecord={canManage}
+          // `canDelete` IS "is this viewer an admin" (see MeetingList) — the
+          // panel uses it to unlock the follow-up Remove/Edit-text controls.
+          isAdmin={canDelete}
           currentUserId={currentUserId}
           attendees={meeting.attendees}
           appId={meeting.appId}

@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, meetingAttendees, meetings, users } from '@/db/schema'
@@ -93,17 +94,23 @@ export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]
   return attachAttendees(rows)
 }
 
-/** One meeting with its attendees — the PDF export page's header data. */
-export async function getMeetingById(meetingId: string): Promise<MeetingSummary | null> {
-  const rows = await db
-    .select(meetingColumns)
-    .from(meetings)
-    .leftJoin(apps, eq(meetings.appId, apps.id))
-    .where(eq(meetings.id, meetingId))
+/**
+ * One meeting with its attendees — the PDF export page's header data.
+ * cache()-wrapped because the print route needs it twice per request
+ * (generateMetadata for the PDF filename, then the page itself).
+ */
+export const getMeetingById = cache(
+  async function getMeetingById(meetingId: string): Promise<MeetingSummary | null> {
+    const rows = await db
+      .select(meetingColumns)
+      .from(meetings)
+      .leftJoin(apps, eq(meetings.appId, apps.id))
+      .where(eq(meetings.id, meetingId))
 
-  const [meeting] = await attachAttendees(rows)
-  return meeting ?? null
-}
+    const [meeting] = await attachAttendees(rows)
+    return meeting ?? null
+  },
+)
 
 export async function getUpcomingMeetingsForUser(
   userId: string,

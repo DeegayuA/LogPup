@@ -6,11 +6,27 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
 // Registers the service worker so the app is installable. Renders nothing.
+//
+// Production only. In dev the worker is actively harmful: Turbopack serves
+// chunks under STABLE /_next/static URLs whose content changes on every
+// rebuild, and the worker's cache-first read then hands the browser a chunk
+// from an older module graph — the recurring "module factory is not
+// available" crash. Dev doesn't just skip registration, it unregisters and
+// wipes: a worker installed by an earlier visit (or a local prod build)
+// stays in control of localhost until told to go.
 export function PwaRegister() {
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {})
+    if (!('serviceWorker' in navigator)) return
+    if (process.env.NODE_ENV !== 'production') {
+      void navigator.serviceWorker.getRegistrations().then((registrations) => {
+        for (const registration of registrations) void registration.unregister()
+      })
+      if ('caches' in window) {
+        void caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+      }
+      return
     }
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
   }, [])
   return null
 }

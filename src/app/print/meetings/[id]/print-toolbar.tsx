@@ -22,7 +22,12 @@ export function PrintToolbar({ meetingId, full }: { meetingId: string; full: boo
     }`
 
   return (
-    <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-zinc-200 bg-white/95 px-4 py-2.5 backdrop-blur print:hidden">
+    // Opaque, not `bg-white/95 backdrop-blur`. A translucent bar over a white
+    // sheet let the document's own heading show THROUGH it while scrolling —
+    // two overlapping lines of text ("MEETING MINUTES" behind the tab labels)
+    // that read as a rendering fault rather than a sticky toolbar. z-20 keeps
+    // it above the sheet, which carries a shadow of its own.
+    <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-zinc-200 bg-white px-4 py-2.5 shadow-sm print:hidden">
       <nav aria-label="Export detail level" className="flex items-center gap-1 rounded-lg border border-zinc-200 p-0.5">
         <Link href={`/print/meetings/${meetingId}`} className={tab(!full)} aria-current={!full ? 'page' : undefined}>
           Summary

@@ -27,6 +27,7 @@ import {
   MicOff,
   Square,
   Trash2,
+  ArrowRight,
   TriangleAlert,
   UserPlus,
   Users,
@@ -79,6 +80,11 @@ import {
   type PanelNavItem,
 } from '@/features/meetings/components/meeting-panels'
 import type { ContentKind } from '@/features/meetings/components/meeting-panels-model'
+import {
+  deleteFollowup,
+  editFollowupText,
+  moveFollowupsToNextMeeting,
+} from '@/features/meetings/followup-move-actions'
 import {
   addFollowup,
   attributeFollowup,
@@ -293,12 +299,13 @@ type RecordingSegment = {
   recovered?: boolean
 }
 
-// The three separate things that can be written about one follow-up. They
-// are never the same sentence: 'outcome' is what came of it (resolved
-// items), 'said' is what the person told us, 'why' is why it isn't done.
+// The separate things that can be written about one follow-up. They are
+// never the same sentence: 'outcome' is what came of it (resolved items),
+// 'said' is what the person told us, 'why' is why it isn't done, and 'text'
+// is the admin-only rewrite of the item itself (see editFollowupText).
 // Only one composer is open per row at a time — writing is a small aside,
 // not a form to fill in.
-type ComposerField = 'outcome' | 'said' | 'why'
+type ComposerField = 'outcome' | 'said' | 'why' | 'text'
 type OpenComposer = { id: string; field: ComposerField } | null
 
 const COMPOSER_COPY: Record<
@@ -316,6 +323,12 @@ const COMPOSER_COPY: Record<
     placeholder: 'e.g. still waiting on the client to confirm the date',
     hint: 'It stays open and still carries forward.',
     save: 'Save what they said',
+  },
+  text: {
+    label: () => 'Rewrite this follow-up',
+    placeholder: 'What was actually asked or owed',
+    hint: 'Admin edit — the before/after is kept in the activity trail.',
+    save: 'Save follow-up',
   },
   why: {
     label: () => 'Why isn’t this done yet?',
@@ -336,6 +349,7 @@ function draftKey(field: ComposerField, followupId: string): string {
 function storedValue(item: CarriedForwardItem, field: ComposerField): string {
   if (field === 'outcome') return item.resolutionNote ?? ''
   if (field === 'said') return item.responseNote ?? ''
+  if (field === 'text') return item.text
   return item.deferReason ?? ''
 }
 
@@ -372,6 +386,7 @@ export function MeetingIntelPanel({
   appId = null,
   mentionUsers,
   onGlanceChange,
+  isAdmin = false,
 }: {
   meetingId: string
   meetingTitle: string
@@ -392,6 +407,11 @@ export function MeetingIntelPanel({
    * apart from "hasn't answered yet", or it shimmers a skeleton forever.
    */
   onGlanceChange?: (glance: MeetingGlance | null) => void
+  /**
+   * Unlocks the destructive/record-rewriting follow-up controls (Remove, and
+   * the full-text Edit): stricter than `canRecord`, which any organiser has.
+   */
+  isAdmin?: boolean
   /**
    * Open this panel on arrival, and scroll it into view.
    *
@@ -1848,6 +1868,58 @@ export function MeetingIntelPanel({
     )
   }
 
+  const [movingAll, startMovingAll] = useTransition()
+  function handleMoveAll() {
+    startMovingAll(async () => {
+      try {
+        // Read at click time from the loaded intel — `prep` itself is
+        // declared later in the body, alongside the other intel-derived
+        // views, and the ids are only meaningful at the moment of the click.
+        const openCarriedIds = (intel?.prep ?? []).flatMap((group) =>
+          group.items.filter((item) => item.status === 'open').map((item) => item.id),
+        )
+        if (openCarriedIds.length === 0) {
+          toast.error('Nothing open to move')
+          return
+        }
+        const res = await moveFollowupsToNextMeeting(openCarriedIds)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        const where = res.data.targetTitle ? ` to “${res.data.targetTitle}”` : ' to their next meetings'
+        toast.success(
+          res.data.skipped.length > 0
+            ? `${res.data.moved} moved${where} — no upcoming meeting for ${res.data.skipped.join(', ')}`
+            : `${res.data.moved} moved${where}`,
+        )
+      } catch {
+        toast.error('Something went wrong — try again')
+      } finally {
+        await loadIntel('refresh')
+      }
+    })
+  }
+
+  /** Admin: remove the item outright — it stops carrying because it stops existing. */
+  function handleDeleteFollowup(followupId: string) {
+    runFollowupWrite(followupId, () => deleteFollowup(followupId), 'Follow-up removed')
+  }
+
+  /** Park one item at its person's next meeting — see followup-move-actions. */
+  function handleMoveNext(followupId: string) {
+    runFollowupWrite(
+      followupId,
+      async () => {
+        const res = await moveFollowupsToNextMeeting([followupId])
+        return res.ok
+          ? { ok: true as const, data: undefined }
+          : res
+      },
+      'Moved to their next meeting',
+    )
+  }
+
   // Distinct from handleResolve: the outcome note it writes says HOW this
   // was closed (no answer ever came) rather than claiming the item was
   // actually addressed — see closeFollowupAsStale's own comment.
@@ -1896,6 +1968,17 @@ export function MeetingIntelPanel({
         item.id,
         () => resolveFollowup(item.id, value, meetingId),
         value ? 'Outcome saved' : 'Outcome cleared',
+      )
+      return
+    }
+    if (field === 'text') {
+      // An empty rewrite is a delete, and Delete exists for that.
+      if (!value) return
+      patchFollowup(item.id, { text: value })
+      runFollowupWrite(
+        item.id,
+        () => editFollowupText({ followupId: item.id, text: value }),
+        'Follow-up updated',
       )
       return
     }
@@ -2677,16 +2760,34 @@ export function MeetingIntelPanel({
                   icon={KIND_META['carried-forward'].icon}
                   count={openCount > 0 ? openCount : undefined}
                   headerExtra={
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      type="button"
-                      aria-expanded={addingFollowup}
-                      onClick={() => setAddingFollowup((value) => !value)}
-                    >
-                      <Plus aria-hidden />
-                      Add follow-up
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                      {openCount > 0 && canRecord ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          disabled={movingAll}
+                          onClick={handleMoveAll}
+                        >
+                          {movingAll ? (
+                            <Loader2 className="animate-spin" aria-hidden />
+                          ) : (
+                            <ArrowRight aria-hidden />
+                          )}
+                          Move all to next
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        aria-expanded={addingFollowup}
+                        onClick={() => setAddingFollowup((value) => !value)}
+                      >
+                        <Plus aria-hidden />
+                        Add follow-up
+                      </Button>
+                    </div>
                   }
                 >
                   {openCount > 0 ? (
@@ -2744,6 +2845,15 @@ export function MeetingIntelPanel({
                                   onResolve={() => handleResolve(item.id)}
                                   onReopen={() => handleReopen(item)}
                                   onNotYet={() => handleNotYet(item.id)}
+                                  onMoveNext={
+                                    canRecord || group.userId === currentUserId
+                                      ? () => handleMoveNext(item.id)
+                                      : undefined
+                                  }
+                                  onDelete={
+                                    isAdmin ? () => handleDeleteFollowup(item.id) : undefined
+                                  }
+                                  canEditText={isAdmin}
                                   onCopyResponse={() => handleCopyResponse(item)}
                                   onCloseStale={() => handleCloseStale(item.id)}
                                 />
@@ -3009,6 +3119,9 @@ function FollowupRow({
   onResolve,
   onReopen,
   onNotYet,
+  onMoveNext,
+  onDelete,
+  canEditText = false,
   onCopyResponse,
   onCloseStale,
 }: {
@@ -3028,6 +3141,12 @@ function FollowupRow({
   onResolve: () => void
   onReopen: () => void
   onNotYet: () => void
+  /** Pin this item to its person's next meeting. Absent → button hidden. */
+  onMoveNext?: () => void
+  /** Admin-only: remove the item outright. Absent → button hidden. */
+  onDelete?: () => void
+  /** Admin-only: whether the full-text Edit composer may open. */
+  canEditText?: boolean
   onCopyResponse: () => void
   onCloseStale: () => void
 }) {
@@ -3156,6 +3275,18 @@ function FollowupRow({
                 >
                   Not yet
                 </Button>
+                {onMoveNext ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    onClick={onMoveNext}
+                  >
+                    <ArrowRight aria-hidden />
+                    Next meeting
+                  </Button>
+                ) : null}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -3178,6 +3309,48 @@ function FollowupRow({
                   <MessageSquareQuote aria-hidden />
                   {item.responseNote ? 'Edit what they said' : 'What they said'}
                 </Button>
+                {/* Admin-only pair: rewrite the record, or remove it outright.
+                    Remove confirms first — it is the one control on this row
+                    that cannot be undone by clicking something else. */}
+                {canEditText ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    aria-expanded={openField === 'text'}
+                    onClick={() => onOpenComposer('text')}
+                  >
+                    <Pencil aria-hidden />
+                    Edit
+                  </Button>
+                ) : null}
+                {onDelete ? (
+                  <AlertDialog>
+                    <AlertDialogTrigger
+                      render={<Button variant="ghost" size="sm" type="button" disabled={busy} />}
+                    >
+                      <Trash2 aria-hidden />
+                      Remove
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Remove this follow-up?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          It stops carrying forward because it stops existing — unlike Resolve,
+                          nothing in the meeting record says it was addressed. The removal itself
+                          is logged.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction variant="destructive" onClick={onDelete}>
+                          Remove
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                ) : null}
                 {stale ? (
                   <Button
                     variant="ghost"

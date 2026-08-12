@@ -6,10 +6,12 @@ import {
   AlertTriangle,
   BookOpen,
   CircleCheck,
+  FileDown,
   ListChecks,
   Loader2Icon,
   MessageCircleQuestion,
   PlusCircle,
+  ScrollText,
   Sparkles,
   Users,
 } from 'lucide-react'
@@ -206,7 +208,34 @@ export function MeetingAiNotes({
           // decides which blocks those are, so switching to Sinhala and
           // pressing play speaks Sinhala rather than the English original.
           headerExtra={
-            <SpeakButton getText={() => summaryBlocks.map((block) => block.content).join('\n\n')} />
+            <span className="flex items-center gap-1">
+              <SpeakButton
+                getText={() => summaryBlocks.map((block) => block.content).join('\n\n')}
+              />
+              {/* Both open the print-clean A4 view (browser's Save as PDF is
+                  the export path — see src/app/print/meetings/[id]/page.tsx).
+                  "Full record" is the every-small-thing version: complete
+                  transcript and the whole note timeline, straight from the
+                  record with no AI pass. */}
+              <Button
+                variant="outline"
+                size="sm"
+                render={<a href={`/print/meetings/${meetingId}`} target="_blank" rel="noreferrer" />}
+              >
+                <FileDown aria-hidden />
+                PDF
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                render={
+                  <a href={`/print/meetings/${meetingId}?full=1`} target="_blank" rel="noreferrer" />
+                }
+              >
+                <ScrollText aria-hidden />
+                Full record
+              </Button>
+            </span>
           }
         >
           {hasSinhala ? (

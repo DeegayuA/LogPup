@@ -121,6 +121,32 @@ describe('parseTaskIntent', () => {
     expect(intent?.due).toBeNull()
   })
 
+  it('selects several people with several @mentions, in typed order', () => {
+    const intent = parseTaskIntent('@shanika @deeghayu fix login today', PEOPLE, TODAY)
+    expect(intent?.assignees.map((p) => p.id)).toEqual(['u1', 'u2'])
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('fix login')
+    expect(intent?.due).toBe('2026-08-11')
+  })
+
+  it('dedupes the same person mentioned twice', () => {
+    const intent = parseTaskIntent('@shanika ship it @shanika', PEOPLE, TODAY)
+    expect(intent?.assignees.map((p) => p.id)).toEqual(['u1'])
+    expect(intent?.title).toBe('ship it')
+  })
+
+  it('one unknown name blocks the whole multi-select rather than partially assigning', () => {
+    const intent = parseTaskIntent('@shanika @nobody fix login', PEOPLE, TODAY)
+    expect(intent?.assignees).toEqual([])
+    expect(intent?.assignee).toBeNull()
+    expect(intent?.assigneeQuery).toBe('nobody')
+  })
+
+  it('single-assignee forms still fill assignees with one entry', () => {
+    const intent = parseTaskIntent('fix login shanika', PEOPLE, TODAY)
+    expect(intent?.assignees.map((p) => p.id)).toEqual(['u1'])
+  })
+
   it('never lets a bare name swallow the whole phrase', () => {
     // One word left after the split is required — a phrase that is ONLY a
     // name has no task in it.
