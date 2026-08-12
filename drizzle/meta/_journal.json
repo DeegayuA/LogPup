@@ -171,17 +171,17 @@
       "breakpoints": true
     },
     {
-      "idx": 25,
+      "idx": 27,
       "version": "7",
-      "when": 1786518385468,
-      "tag": "0025_soft_delete",
+      "when": 1786559502693,
+      "tag": "0027_soft_delete",
       "breakpoints": true
     },
     {
-      "idx": 26,
+      "idx": 28,
       "version": "7",
-      "when": 1786540839930,
-      "tag": "0026_attendee_recommendations",
+      "when": 1786559503693,
+      "tag": "0028_attendee_recommendations",
       "breakpoints": true
     }
   ]
