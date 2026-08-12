@@ -30,6 +30,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import type { ActionResult } from '@/lib/action-result'
 import type { MentionUser } from '@/components/mention-textarea'
@@ -55,6 +56,7 @@ import {
   noteFollowup,
   reopenFollowup,
   resolveFollowup,
+  setMeetingAutoAssignTasks,
   transcribeSegment,
   type CarriedForwardItem,
   type FollowupPersonOption,
@@ -69,6 +71,7 @@ import {
   type UtteranceCandidate,
 } from '@/features/meetings/language-switch'
 import {
+  hintTail,
   isRetriableSegmentError,
   segmentRetryDelayMs,
   shouldCutSegment,
@@ -338,6 +341,14 @@ export function MeetingIntelPanel({
   const [addingFollowup, setAddingFollowup] = useState(false)
   const [addPending, startAddFollowup] = useTransition()
 
+  // The per-meeting "Auto-assign tasks" toggle — manual-override layer (a):
+  // default ON (see meetings.autoAssignTasks), only creator/admin can flip
+  // it (setMeetingAutoAssignTasks re-checks that server-side; `canRecord`
+  // gates who even sees the switch, same tier as the record controls).
+  // Written optimistically so the switch itself is the confirmation, with a
+  // revert-on-failure like every other write in this panel.
+  const [autoAssignPending, startAutoAssignPending] = useTransition()
+
   const router = useRouter()
   const panelId = useId()
 
@@ -407,7 +418,7 @@ export function MeetingIntelPanel({
   const engineModeRef = useRef<'dual' | 'single'>('single')
   const recordingRef = useRef(false)
   const finalTranscriptRef = useRef('')
-  const transcriptPanelRef = useRef<HTMLDivElement | null>(null)
+  const transcriptPanelRef = useRef<HTMLTextAreaElement | null>(null)
   const nearBottomRef = useRef(true)
   // Mirrors `language` state for use inside the recognition event handlers
   // below — those close over refs, not state, since a handler set on
@@ -652,10 +663,13 @@ export function MeetingIntelPanel({
 
   // Auto-scroll the live panel to the newest line, but only when the user
   // was already near the bottom — don't fight someone scrolling up to
-  // reread something.
+  // reread something. Also never while the textarea has focus: focus means
+  // someone is mid-correction, and yanking the scroll position under their
+  // caret on every appended utterance would make editing impossible.
   useEffect(() => {
     const el = transcriptPanelRef.current
-    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight
+    if (!el || document.activeElement === el) return
+    if (nearBottomRef.current) el.scrollTop = el.scrollHeight
   }, [finalText, interimText])
 
   function handleTranscriptScroll() {
@@ -921,8 +935,12 @@ export function MeetingIntelPanel({
       try {
         const formData = new FormData()
         formData.append('audio', new File([blob], `segment-${index}`, { type: blob.type }))
-        const hint = finalTranscriptRef.current
-        if (hint.trim()) formData.append('liveTranscriptHint', hint)
+        // Only the TAIL of the live transcript rides along, not the whole
+        // meeting so far — the hint helps spell names/terms heard in THIS
+        // ~5-minute segment, and sending everything made hint cost grow
+        // quadratically over an hours-long meeting (see hintTail's comment).
+        const hint = hintTail(finalTranscriptRef.current)
+        if (hint) formData.append('liveTranscriptHint', hint)
         const res = await transcribeSegment(meetingId, index, formData)
         if (res.ok) {
           upsertSegment({ index, status: 'done', blob, recovered })
@@ -1049,11 +1067,21 @@ export function MeetingIntelPanel({
         // gone for good the moment this succeeds.
         segmentsRef.current = segmentsRef.current.filter((s) => s.status !== 'done')
         publishSegments()
-        toast.success(
-          segmentsRef.current.length > 0
-            ? 'Meeting analyzed — one or more segments still need a retry (see below)'
-            : 'Meeting analyzed — notes are ready',
-        )
+        // Say which of the two outcomes this actually was. The limited
+        // (no-Gemini) outcome is a success — the meeting has real notes —
+        // but pretending it was the full write-up would hide that adding a
+        // key and re-running would produce something better.
+        if (res.data.mode === 'live-transcript') {
+          toast.success(
+            'Notes saved from the live transcript (no Gemini analysis). Add a Gemini key in Profile and retry the saved segments for full AI notes.',
+          )
+        } else {
+          toast.success(
+            segmentsRef.current.length > 0
+              ? 'Meeting analyzed — one or more segments still need a retry (see below)'
+              : 'Meeting analyzed — notes are ready',
+          )
+        }
         // 'refresh', not the deduping path: the notes that exist now are the
         // ones this analysis just wrote, so piggybacking on an older in-flight
         // request would show the panel the meeting as it was before it ran.
@@ -1350,11 +1378,35 @@ export function MeetingIntelPanel({
     })
   }
 
+  // Optimistic flip + revert-on-failure, same shape as runFollowupWrite —
+  // the switch's own position is the confirmation, so it has to move the
+  // instant it's clicked, and move back if the server refuses it.
+  function handleToggleAutoAssign(next: boolean) {
+    setIntel((prev) => (prev ? { ...prev, autoAssignTasks: next } : prev))
+    startAutoAssignPending(async () => {
+      try {
+        const res = await setMeetingAutoAssignTasks(meetingId, next)
+        if (!res.ok) {
+          setIntel((prev) => (prev ? { ...prev, autoAssignTasks: !next } : prev))
+          toast.error(res.error)
+          return
+        }
+        toast.success(next ? 'Auto-assign is on for this meeting' : 'Auto-assign is off — every item needs review')
+      } catch {
+        setIntel((prev) => (prev ? { ...prev, autoAssignTasks: !next } : prev))
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
   const doneSegmentCount = segments.filter((s) => s.status === 'done').length
   const failedSegments = segments.filter((s) => s.status === 'failed')
   const uploadingSegmentCount = segments.filter((s) => s.status === 'uploading').length
 
   const notes = intel?.notes ?? null
+  // Default true before intel has loaded — matches meetings.autoAssignTasks'
+  // own DB default, so the switch never has to render "unknown".
+  const autoAssignTasks = intel?.autoAssignTasks ?? true
   const prep = intel?.prep ?? []
   const people = intel?.people ?? []
   const upcomingMeetings = intel?.upcomingMeetings ?? []
@@ -1528,28 +1580,55 @@ export function MeetingIntelPanel({
               Live transcript
             </span>
             <span className="text-2xs text-muted-foreground">
-              Italic text is still provisional
+              Click the text to fix a word — corrections feed the AI
             </span>
           </div>
-          <div
+          {/* The committed transcript is a TEXTAREA, not a read-only <p>:
+              the words the engines heard are visible the moment they land,
+              and a mis-heard name or Sinhala/English mix-up can be corrected
+              right there, mid-meeting, by typing. Corrections matter twice —
+              this text is the spelling hint each audio segment carries to
+              Gemini (hintTail), and when no Gemini key exists it IS the
+              meeting's saved transcript (the finalize fallback) — so a fix
+              made here propagates everywhere downstream. New utterances
+              APPEND to whatever the user has typed (acceptUtterance reads
+              finalTranscriptRef, which onChange keeps in sync), and an
+              append never moves the caret: the browser keeps a controlled
+              textarea's selection stable when text is inserted after it. */}
+          <textarea
             ref={transcriptPanelRef}
             onScroll={handleTranscriptScroll}
-            className="max-h-56 overflow-y-auto px-3 py-2.5 text-sm"
-            role="log"
-            aria-label="Live transcript"
-          >
-            {finalText || interimText ? (
-              <p className={cn(bilingualText, 'whitespace-pre-wrap')}>
-                {finalText}
-                {finalText && interimText ? ' ' : ''}
-                {interimText ? (
-                  <span className="text-muted-foreground italic">{interimText}</span>
-                ) : null}
-              </p>
-            ) : (
-              <p className="text-sm text-muted-foreground italic">Listening…</p>
+            value={finalText}
+            onChange={(event) => {
+              finalTranscriptRef.current = event.target.value
+              setFinalText(event.target.value)
+            }}
+            placeholder="Listening…"
+            aria-label="Live transcript — editable; corrections improve the AI notes"
+            spellCheck={false}
+            className={cn(
+              bilingualText,
+              'max-h-56 min-h-20 w-full resize-none whitespace-pre-wrap bg-transparent px-3 py-2.5 text-sm outline-none placeholder:italic placeholder:text-muted-foreground focus-visible:bg-muted/30',
             )}
-          </div>
+          />
+          {interimText ? (
+            /* Provisional words stay OUTSIDE the editable text — they may
+               still be revised or discarded by the engine, so letting them
+               into the textarea would put words in the user's mouth that
+               were never committed (and make edits race the recognizer).
+               aria-live="off": this updates on every partial result, far too
+               chatty for a screen reader; the committed text above is the
+               readable record. */
+            <p
+              aria-live="off"
+              className={cn(
+                bilingualText,
+                'border-t border-dashed border-border px-3 py-1.5 text-sm text-muted-foreground italic',
+              )}
+            >
+              {interimText}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -1605,9 +1684,12 @@ export function MeetingIntelPanel({
                   >
                     <span className="flex min-w-0 flex-1 basis-56 flex-col gap-0.5">
                       <span className="text-sm font-medium">
+                        {/* No fixed "after N tries" claim: a permanent failure
+                            (no Gemini key, oversized segment) stops after ONE
+                            attempt by design — isRetriableSegmentError — so a
+                            hardcoded count would simply be false there. */}
                         Segment <span className="font-mono">{segment.index + 1}</span> didn&rsquo;t
-                        transcribe after <span className="font-mono">{SEGMENT_UPLOAD_ATTEMPTS}</span>{' '}
-                        tries
+                        transcribe
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {segment.error ? `${segment.error}. ` : ''}Its audio (
@@ -1769,7 +1851,36 @@ export function MeetingIntelPanel({
                   The AI summary is passed down so the timeline does not repeat
                   it — it is already rendered above at full size. */}
               <section className="flex flex-col gap-2">
-                <SectionHeading icon={NotebookPen} title="Record" />
+                <SectionHeading
+                  icon={NotebookPen}
+                  title="Record"
+                  action={
+                    // Manual-override layer (a): only the meeting's
+                    // creator/admin can even see this, same tier as the
+                    // record controls above — setMeetingAutoAssignTasks
+                    // re-checks it server-side regardless.
+                    canRecord ? (
+                      <label className="flex min-h-11 items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <Sparkles className="size-3.5 shrink-0" aria-hidden />
+                        Auto-assign tasks
+                        <Switch
+                          size="sm"
+                          checked={autoAssignTasks}
+                          disabled={autoAssignPending || !intel}
+                          aria-label="Auto-assign tasks identified in this meeting"
+                          onCheckedChange={handleToggleAutoAssign}
+                        />
+                      </label>
+                    ) : undefined
+                  }
+                />
+                {canRecord ? (
+                  <p className="text-2xs text-muted-foreground">
+                    {autoAssignTasks
+                      ? 'Confident, clearly-owned action items become real tasks automatically — everything else still needs a click.'
+                      : 'Off — every identified task stays a suggestion card for you to review.'}
+                  </p>
+                ) : null}
                 <NoteTimeline
                   meetingId={meetingId}
                   meetingTitle={meetingTitle}
@@ -1778,6 +1889,7 @@ export function MeetingIntelPanel({
                   appId={appId}
                   mentionUsers={mentionUsers}
                   shownElsewhere={notes?.summary ?? null}
+                  autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
                 />
               </section>
             </>

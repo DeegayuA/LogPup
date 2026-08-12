@@ -197,6 +197,15 @@ export const meetings = pgTable('meetings', {
   googleEventId: text('google_event_id'),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  // Per-meeting override for the auto-assign pipeline (see notes.ts
+  // shouldAutoAssign / MAX_AUTO_TASKS_PER_MEETING and the auto-accept pass
+  // in ai-actions.ts persistMeetingAnalysis). Default ON, so full-auto is
+  // the out-of-the-box behaviour; only the meeting's creator or an admin can
+  // flip it (setMeetingAutoAssignTasks). Lives on `meetings` rather than
+  // `meetingAiNotes` because it is meeting-level configuration a person can
+  // set before any analysis has ever run — `meetingAiNotes` only gets a row
+  // once the first analysis completes.
+  autoAssignTasks: boolean('auto_assign_tasks').notNull().default(true),
 })
 
 export const meetingAttendees = pgTable('meeting_attendees', {
@@ -242,6 +251,14 @@ export const meetingAiNotes = pgTable('meeting_ai_notes', {
   model: text('model').notNull(),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  // How many of THIS analysis pass's action items qualified for auto-assign
+  // (see notes.ts shouldAutoAssign) but were left as manual suggestion cards
+  // anyway because the meeting had already hit MAX_AUTO_TASKS_PER_MEETING.
+  // Recomputed on every analysis run (upserted alongside everything else
+  // above) — what the "N more suggestions need review" note on the note
+  // timeline reads. 0 means either nothing was capped or auto-assign never
+  // ran (e.g. the meeting has no linked app).
+  autoAssignCappedCount: integer('auto_assign_capped_count').notNull().default(0),
 })
 
 // Person-linked follow-ups derived from a meeting's AI analysis: an open
@@ -401,6 +418,25 @@ export const meetingTaskSuggestions = pgTable('meeting_task_suggestions', {
   suggestedDueDate: date('suggested_due_date'),
   status: suggestionStatus('status').notNull().default('open'),
   createdTaskId: uuid('created_task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  // Who ACCEPTED this suggestion — set only while status is 'accepted'.
+  // NULL there means the auto-assign pass accepted it (see notes.ts
+  // shouldAutoAssign / ai-actions.ts persistMeetingAnalysis); a real user id
+  // means a person clicked "Add task" (or edited-then-accepted) themselves
+  // (acceptTaskSuggestion). Meaningless while status is 'open'/'dismissed' —
+  // stays null there, same as `createdTaskId`.
+  //
+  // CHOICE — nullable column vs. adding an 'auto_accepted' value to
+  // suggestionStatus: a new enum value would mean every reader that
+  // branches on status (getMeetingNoteTimeline's WHERE, the UI's
+  // open/accepted/dismissed switch) has to learn a fourth case, and Postgres
+  // enum additions can't run inside the same transaction as anything that
+  // uses the new value — riskier on a database where migrations are already
+  // applied by hand (see the file-level note on drizzle bookkeeping). A
+  // plain nullable uuid needs no enum surgery, keeps 'accepted' meaning
+  // exactly what it always has ("a real task exists"), and answers a
+  // strictly narrower question ("who accepted it") that only the timeline's
+  // badge/undo affordance ever needs to ask.
+  acceptedBy: uuid('accepted_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 

@@ -4,7 +4,15 @@ import {
   normalizeDueDate,
   suggestionToTaskPayload,
   orderNoteSegments,
+  shouldAutoAssign,
+  partitionAutoAssign,
+  canUndoAutoAssign,
+  buildAutoAssignNotification,
+  AUTO_ASSIGN_CONFIDENCE,
+  MAX_AUTO_TASKS_PER_MEETING,
   type OrderableSegment,
+  type AutoAssignCandidate,
+  type AutoAssignedTaskFields,
 } from './notes'
 
 describe('resolveSpeakerUserId', () => {
@@ -208,5 +216,159 @@ describe('orderNoteSegments', () => {
 
   it('returns an empty array given no segments', () => {
     expect(orderNoteSegments([])).toEqual([])
+  })
+})
+
+describe('shouldAutoAssign', () => {
+  const eligible: AutoAssignCandidate = {
+    confidence: 0.95,
+    resolvedUserId: 'u1',
+    hasApp: true,
+  }
+
+  it('auto-assigns when confidence, assignee, and app all hold', () => {
+    expect(shouldAutoAssign(eligible)).toBe(true)
+  })
+
+  it('accepts confidence exactly at the threshold', () => {
+    expect(shouldAutoAssign({ ...eligible, confidence: AUTO_ASSIGN_CONFIDENCE })).toBe(true)
+  })
+
+  it('rejects confidence just below the threshold', () => {
+    expect(shouldAutoAssign({ ...eligible, confidence: AUTO_ASSIGN_CONFIDENCE - 0.01 })).toBe(false)
+  })
+
+  it('rejects a null confidence — silence is not confidence', () => {
+    expect(shouldAutoAssign({ ...eligible, confidence: null })).toBe(false)
+  })
+
+  it('rejects a non-finite confidence', () => {
+    expect(shouldAutoAssign({ ...eligible, confidence: NaN })).toBe(false)
+    expect(shouldAutoAssign({ ...eligible, confidence: Infinity })).toBe(false)
+  })
+
+  it('rejects an unresolved assignee', () => {
+    expect(shouldAutoAssign({ ...eligible, resolvedUserId: null })).toBe(false)
+  })
+
+  it('rejects a meeting with no linked app', () => {
+    expect(shouldAutoAssign({ ...eligible, hasApp: false })).toBe(false)
+  })
+
+  it('rejects when every condition fails at once', () => {
+    expect(shouldAutoAssign({ confidence: 0.1, resolvedUserId: null, hasApp: false })).toBe(false)
+  })
+})
+
+describe('partitionAutoAssign', () => {
+  function eligible(): AutoAssignCandidate {
+    return { confidence: 0.9, resolvedUserId: 'u1', hasApp: true }
+  }
+
+  it('auto-accepts every eligible candidate under the cap', () => {
+    const candidates = [eligible(), eligible(), eligible()]
+    const decisions = partitionAutoAssign(candidates, 10)
+    expect(decisions).toEqual([
+      { autoAccept: true, capped: false },
+      { autoAccept: true, capped: false },
+      { autoAccept: true, capped: false },
+    ])
+  })
+
+  it('11 eligible candidates against the default cap of 10 auto-accepts 10 and caps 1', () => {
+    const candidates = Array.from({ length: 11 }, eligible)
+    const decisions = partitionAutoAssign(candidates)
+    expect(decisions.length).toBe(11)
+    expect(decisions.filter((d) => d.autoAccept)).toHaveLength(MAX_AUTO_TASKS_PER_MEETING)
+    expect(decisions.filter((d) => d.capped)).toHaveLength(1)
+    // The cap applies in order — the LAST one is the one held back.
+    expect(decisions.slice(0, 10).every((d) => d.autoAccept)).toBe(true)
+    expect(decisions[10]).toEqual({ autoAccept: false, capped: true })
+  })
+
+  it('an ineligible candidate is neither auto-accepted nor counted as capped', () => {
+    const candidates = [
+      eligible(),
+      { confidence: 0.1, resolvedUserId: null, hasApp: true } as AutoAssignCandidate,
+    ]
+    const decisions = partitionAutoAssign(candidates, 10)
+    expect(decisions[1]).toEqual({ autoAccept: false, capped: false })
+  })
+
+  it('a custom cap of 0 caps every eligible candidate', () => {
+    const decisions = partitionAutoAssign([eligible(), eligible()], 0)
+    expect(decisions).toEqual([
+      { autoAccept: false, capped: true },
+      { autoAccept: false, capped: true },
+    ])
+  })
+
+  it('returns an empty array given no candidates', () => {
+    expect(partitionAutoAssign([])).toEqual([])
+  })
+})
+
+describe('canUndoAutoAssign', () => {
+  const original: AutoAssignedTaskFields = {
+    status: 'todo',
+    title: 'Ship the roadmap',
+    assigneeId: 'u1',
+    dueDate: '2026-08-20',
+  }
+
+  it('allows undo when the task is still todo and unmodified', () => {
+    expect(canUndoAutoAssign(original, original)).toBe(true)
+  })
+
+  it('refuses undo once the task has moved past todo', () => {
+    expect(canUndoAutoAssign({ ...original, status: 'in_progress' }, original)).toBe(false)
+    expect(canUndoAutoAssign({ ...original, status: 'done' }, original)).toBe(false)
+  })
+
+  it('refuses undo once the title was edited', () => {
+    expect(canUndoAutoAssign({ ...original, title: 'Ship the Q3 roadmap' }, original)).toBe(false)
+  })
+
+  it('refuses undo once it was reassigned', () => {
+    expect(canUndoAutoAssign({ ...original, assigneeId: 'u2' }, original)).toBe(false)
+    expect(canUndoAutoAssign({ ...original, assigneeId: null }, original)).toBe(false)
+  })
+
+  it('refuses undo once the due date was changed', () => {
+    expect(canUndoAutoAssign({ ...original, dueDate: '2026-09-01' }, original)).toBe(false)
+    expect(canUndoAutoAssign({ ...original, dueDate: null }, original)).toBe(false)
+  })
+})
+
+describe('buildAutoAssignNotification', () => {
+  const base = {
+    assigneeId: 'u2',
+    recorderId: 'u1',
+    recorderName: 'Nadeesha Perera',
+    taskTitle: 'Ship the roadmap',
+    meetingId: 'm1',
+    meetingTitle: 'Weekly sync',
+  }
+
+  it('builds a mention-shaped notification for the assignee', () => {
+    const payload = buildAutoAssignNotification(base)
+    expect(payload).toEqual({
+      userId: 'u2',
+      actorId: 'u1',
+      type: 'mention',
+      title: 'Nadeesha Perera assigned you a task',
+      body: '“Ship the roadmap” — from “Weekly sync”',
+      link: '/meetings',
+      meetingId: 'm1',
+    })
+  })
+
+  it('returns null when the assignee is the recorder — no self-notification', () => {
+    expect(buildAutoAssignNotification({ ...base, assigneeId: 'u1' })).toBeNull()
+  })
+
+  it('falls back to "Someone" when the recorder has no name', () => {
+    const payload = buildAutoAssignNotification({ ...base, recorderName: null })
+    expect(payload?.title).toBe('Someone assigned you a task')
   })
 })

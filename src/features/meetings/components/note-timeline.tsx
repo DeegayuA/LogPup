@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useTransition } from 'react'
+import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import {
@@ -14,6 +15,7 @@ import {
   PlusIcon,
   SparklesIcon,
   Trash2Icon,
+  UndoIcon,
   UsersIcon,
   XIcon,
 } from 'lucide-react'
@@ -47,6 +49,7 @@ import {
   editNoteSegment,
   getMeetingNoteTimeline,
   setSpeakerMapping,
+  undoAutoAcceptedSuggestion,
   type NoteSegmentView,
   type NoteTimelineData,
   type TaskSuggestionView,
@@ -90,6 +93,7 @@ export function NoteTimeline({
   appId,
   mentionUsers,
   shownElsewhere = null,
+  autoAssignCappedCount = 0,
 }: {
   meetingId: string
   meetingTitle: string
@@ -106,6 +110,14 @@ export function NoteTimeline({
    * twice on one screen; see isSameNoteText for why this compares content.
    */
   shownElsewhere?: string | null
+  /**
+   * How many of the LATEST analysis pass's action items qualified for
+   * auto-assign but were held back by MAX_AUTO_TASKS_PER_MEETING (see
+   * meetingAiNotes.autoAssignCappedCount) — shown as a note next to the
+   * manual "Suggested tasks" heading, since those held-back items are
+   * exactly the ones that landed there instead.
+   */
+  autoAssignCappedCount?: number
 }) {
   const [data, setData] = useState<NoteTimelineData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -130,6 +142,9 @@ export function NoteTimeline({
 
   const [editingSuggestion, setEditingSuggestion] = useState<TaskSuggestionView | null>(null)
   const [suggestionForm, setSuggestionForm] = useState<EditForm | null>(null)
+
+  const [undoBusyId, setUndoBusyId] = useState<string | null>(null)
+  const [undoPending, startUndoPending] = useTransition()
 
   const mentionPool = mentionUsers ?? attendees
 
@@ -276,6 +291,30 @@ export function NoteTimeline({
     })
   }
 
+  // Layer (b) of full-auto's manual override: undo deletes the task the
+  // auto pass created and reverts the card to a plain manual suggestion.
+  // The server re-checks the todo+unmodified constraint (canUndoAutoAssign)
+  // regardless of what this button shows — a failure here just means
+  // someone (or something) changed the task between load and click.
+  function handleUndoAutoAssign(suggestionId: string) {
+    setUndoBusyId(suggestionId)
+    startUndoPending(async () => {
+      try {
+        const res = await undoAutoAcceptedSuggestion(suggestionId)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Undone — back to a suggestion card')
+        await load()
+      } catch {
+        toast.error('Something went wrong — try again')
+      } finally {
+        setUndoBusyId(null)
+      }
+    })
+  }
+
   function handleDismissSuggestion(suggestionId: string) {
     setSuggestionBusyId(suggestionId)
     startSuggestionPending(async () => {
@@ -328,6 +367,14 @@ export function NoteTimeline({
   const segments = data.segments.filter(
     (segment) => !(segment.source === 'ai' && isSameNoteText(segment.content, shownElsewhere)),
   )
+
+  // getMeetingNoteTimeline already narrows `suggestions` to open + auto-
+  // accepted (see its query comment) — this just tells the two apart for
+  // rendering. A suggestion a PERSON accepted has already dropped off the
+  // list entirely (same as it always has), so `status === 'accepted'` here
+  // can only mean the auto pass did it.
+  const manualSuggestions = data.suggestions.filter((s) => s.status === 'open')
+  const autoSuggestions = data.suggestions.filter((s) => s.status === 'accepted')
 
   const speakerLabels = Array.from(
     new Set(
@@ -531,7 +578,88 @@ export function NoteTimeline({
         </div>
       ) : null}
 
-      {data.suggestions.length > 0 ? (
+      {autoSuggestions.length > 0 ? (
+        <section className="flex flex-col gap-2">
+          <SectionHeading
+            as="h5"
+            icon={SparklesIcon}
+            title="Auto-assigned"
+            count={autoSuggestions.length}
+          />
+          <ul className="flex flex-col gap-2">
+            {autoSuggestions.map((suggestion) => {
+              const busy = undoBusyId === suggestion.id && undoPending
+              return (
+                <li
+                  key={suggestion.id}
+                  className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-success/30 bg-success/5 p-2.5"
+                >
+                  <div className="flex min-w-0 flex-1 basis-56 flex-col gap-1">
+                    {suggestion.appSlug && suggestion.createdTaskId ? (
+                      <Link
+                        href={`/apps/${suggestion.appSlug}`}
+                        className={cn(
+                          bilingualText,
+                          'text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                        )}
+                      >
+                        {suggestion.taskTitle ?? suggestion.text}
+                      </Link>
+                    ) : (
+                      <p className={cn(bilingualText, 'text-foreground')}>
+                        {suggestion.taskTitle ?? suggestion.text}
+                      </p>
+                    )}
+                    <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                      {/* Sparkles = AI acted; check = the outcome was
+                          committed, not merely proposed — together they say
+                          "done automatically", distinct from the neutral
+                          "Suggested" chip below on a card nobody clicked yet. */}
+                      <MetaChip tone="success">
+                        <SparklesIcon className="size-3.5 shrink-0" aria-hidden />
+                        <CheckIcon className="size-3.5 shrink-0" aria-hidden />
+                        Auto-assigned
+                      </MetaChip>
+                      {suggestion.suggestedUserId ? (
+                        <>
+                          to{' '}
+                          <Link
+                            href={`/people/${suggestion.suggestedUserId}`}
+                            className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                          >
+                            {suggestion.suggestedUserName ?? 'Unknown'}
+                          </Link>
+                        </>
+                      ) : null}
+                      {suggestion.suggestedDueDate ? (
+                        <span className="font-mono">
+                          Due {format(parseISO(suggestion.suggestedDueDate), 'MMM d')}
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+                  {canManage ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleUndoAutoAssign(suggestion.id)}
+                      >
+                        {busy ? <Loader2Icon className="animate-spin" aria-hidden /> : <UndoIcon aria-hidden />}
+                        Undo
+                      </Button>
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      ) : null}
+
+      {manualSuggestions.length > 0 ? (
         <section className="flex flex-col gap-2">
           {/* `primary` used to mean four different things at once in this
               feature — "AI proposed it", "resolved", "outcome", and plain
@@ -541,10 +669,17 @@ export function NoteTimeline({
             as="h5"
             icon={SparklesIcon}
             title="Suggested tasks"
-            count={data.suggestions.length}
+            count={manualSuggestions.length}
           />
+          {autoAssignCappedCount > 0 ? (
+            <p className="text-2xs text-muted-foreground">
+              <span className="font-mono">{autoAssignCappedCount}</span>{' '}
+              {autoAssignCappedCount === 1 ? 'more suggestion needs' : 'more suggestions need'} review —
+              this meeting already hit its auto-assign limit.
+            </p>
+          ) : null}
           <ul className="flex flex-col gap-2">
-            {data.suggestions.map((suggestion) => {
+            {manualSuggestions.map((suggestion) => {
               const busy = suggestionBusyId === suggestion.id && suggestionPending
               return (
                 <li

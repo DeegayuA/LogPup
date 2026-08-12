@@ -8,6 +8,7 @@ import { del, put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import {
+  apps,
   meetingAiNotes,
   meetingAttendees,
   meetingFollowups,
@@ -17,6 +18,7 @@ import {
   meetingSpeakers,
   meetingTaskSuggestions,
   meetings,
+  tasks,
   users,
 } from '@/db/schema'
 import {
@@ -29,6 +31,7 @@ import {
 } from '@/features/gemini/client'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { updateMeetingNotes } from '@/features/meetings/actions'
+import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { createTask } from '@/features/sprints/task-actions'
 import {
@@ -46,8 +49,14 @@ import {
   normalizeDueDate,
   suggestionToTaskPayload,
   orderNoteSegments,
+  shouldAutoAssign,
+  partitionAutoAssign,
+  canUndoAutoAssign,
+  buildAutoAssignNotification,
   type NoteSource,
   type SpeakerMapping,
+  type AutoAssignCandidate,
+  type AutoAssignNotificationPayload,
 } from '@/features/meetings/notes'
 import { concatenateSegments } from '@/features/meetings/recording-segments'
 import { formatCapturedAt, MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
@@ -100,6 +109,8 @@ export type MeetingAiNotesView = {
   questions: QuestionNote[]
   model: string
   createdAt: Date
+  /** How many auto-eligible action items from THIS analysis pass were held back by MAX_AUTO_TASKS_PER_MEETING. */
+  autoAssignCappedCount: number
 }
 
 export type FollowupStatus = 'open' | 'resolved'
@@ -157,6 +168,8 @@ export type MeetingIntel = {
   upcomingMeetings: FollowupTargetOption[]
   /** Change-detected screen keyframes captured during recording, oldest first. */
   screenshots: MeetingScreenshotView[]
+  /** The per-meeting auto-assign toggle (meetings.autoAssignTasks) — see setMeetingAutoAssignTasks. */
+  autoAssignTasks: boolean
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -168,6 +181,8 @@ type ActionItemOut = {
   text: string
   suggestedAssigneeLabel: string | null
   suggestedDueDate: string | null
+  /** The model's own 0–1 estimate for this item, or null if it gave none — see shouldAutoAssign. */
+  confidence: number | null
 }
 
 /** Defensive parse of the model's speakerSegments — drops anything without real text. */
@@ -192,6 +207,13 @@ function asActionItems(value: unknown): ActionItemOut[] {
       suggestedDueDate: normalizeDueDate(
         typeof row.suggestedDueDate === 'string' ? row.suggestedDueDate : null,
       ),
+      // The model returns its own 0–1 self-estimate per the prompt below.
+      // Anything else (missing, a string, out of range, non-finite) becomes
+      // null — shouldAutoAssign treats null the same as "not confident".
+      confidence:
+        typeof row.confidence === 'number' && Number.isFinite(row.confidence)
+          ? row.confidence
+          : null,
     }))
     .filter((row): row is ActionItemOut => row.text.length > 0)
 }
@@ -201,18 +223,29 @@ function asActionItems(value: unknown): ActionItemOut[] {
  * unified note timeline (one 'ai' segment) and the diarized transcript as
  * 'voice' segments — one per speaker turn — instead of leaving them in a
  * separate panel the user has to go find. Also files the model's actionable
- * proposals as open task suggestion cards. Best-effort: called from inside a
- * try/catch at the call site so a failure here never undoes the analysis
+ * proposals as task suggestions — and, for every one that clears
+ * shouldAutoAssign (confident, an assignee resolved deterministically, the
+ * meeting has an app), an app to file into, an approved assignee, and the
+ * meeting's auto-assign toggle still on), creates the real task immediately
+ * instead of waiting for a click. Best-effort as a whole: called from inside
+ * a try/catch at the call site so a failure here never undoes the analysis
  * that already succeeded.
+ *
+ * Returns how many otherwise-eligible items were held back by
+ * MAX_AUTO_TASKS_PER_MEETING — persisted onto meetingAiNotes so the timeline
+ * can say "N more suggestions need review".
  */
 async function insertAutoNotesAndSuggestions(
-  meetingId: string,
-  createdBy: string,
+  meeting: { id: string; appId: string | null; title: string; autoAssignTasks: boolean },
+  recorder: { id: string; name: string | null },
   summary: string | null,
   speakerSegments: SpeakerSegmentOut[],
   actionItems: ActionItemOut[],
   attendees: AttendeeRef[],
-): Promise<void> {
+): Promise<{ cappedCount: number }> {
+  const meetingId = meeting.id
+  const createdBy = recorder.id
+
   const mappingRows: SpeakerMapping[] = await db
     .select({ label: meetingSpeakers.label, userId: meetingSpeakers.userId })
     .from(meetingSpeakers)
@@ -239,17 +272,117 @@ async function insertAutoNotesAndSuggestions(
   })
   if (segmentRows.length > 0) await db.insert(meetingNoteSegments).values(segmentRows)
 
-  if (actionItems.length > 0) {
-    await db.insert(meetingTaskSuggestions).values(
-      actionItems.map((item) => ({
-        meetingId,
-        text: item.text,
-        suggestedUserId: resolveSpeakerUserId(item.suggestedAssigneeLabel, mappingRows, attendees),
-        suggestedDueDate: item.suggestedDueDate,
-        status: 'open' as const,
-      })),
-    )
+  if (actionItems.length === 0) return { cappedCount: 0 }
+
+  const resolvedItems = actionItems.map((item) => ({
+    item,
+    resolvedUserId: resolveSpeakerUserId(item.suggestedAssigneeLabel, mappingRows, attendees),
+  }))
+
+  // SAFETY: never auto-assign to someone who isn't an approved user. One
+  // batched query for every distinct candidate rather than one per item —
+  // an unapproved candidate is nulled out BEFORE shouldAutoAssign ever sees
+  // it, so the pure decision function stays a plain 3-field question and
+  // this DB-backed check stays exactly here, the one place it belongs.
+  const candidateIds = [
+    ...new Set(resolvedItems.map((r) => r.resolvedUserId).filter((id): id is string => id !== null)),
+  ]
+  const approvedIds =
+    candidateIds.length > 0
+      ? new Set(
+          (
+            await db
+              .select({ id: users.id })
+              .from(users)
+              .where(and(inArray(users.id, candidateIds), eq(users.status, 'approved')))
+          ).map((row) => row.id),
+        )
+      : new Set<string>()
+
+  const candidates: AutoAssignCandidate[] = resolvedItems.map(({ resolvedUserId }) => ({
+    confidence: null, // placeholder — replaced below once zipped with its item
+    resolvedUserId: resolvedUserId && approvedIds.has(resolvedUserId) ? resolvedUserId : null,
+    hasApp: meeting.appId !== null,
+  }))
+  resolvedItems.forEach(({ item }, index) => {
+    candidates[index].confidence = item.confidence
+  })
+
+  // The whole auto pass is a no-op — every candidate falls through to a
+  // manual card — when the meeting's own toggle is off, without needing a
+  // second code path: partitionAutoAssign never marks anything autoAccept
+  // for candidates that were never evaluated for it.
+  const decisions = meeting.autoAssignTasks
+    ? partitionAutoAssign(candidates)
+    : candidates.map(() => ({ autoAccept: false, capped: false }))
+
+  let cappedCount = 0
+  const pendingNotifications: AutoAssignNotificationPayload[] = []
+
+  for (let index = 0; index < resolvedItems.length; index += 1) {
+    const { item, resolvedUserId } = resolvedItems[index]
+    const decision = decisions[index]
+    if (decision.capped) cappedCount += 1
+
+    if (decision.autoAccept) {
+      // Guaranteed non-null: shouldAutoAssign requires it, and
+      // partitionAutoAssign only marks autoAccept for candidates that
+      // passed shouldAutoAssign.
+      const assigneeId = candidates[index].resolvedUserId as string
+      try {
+        const payload = suggestionToTaskPayload(
+          { text: item.text, suggestedUserId: assigneeId, suggestedDueDate: item.suggestedDueDate },
+          { appId: meeting.appId as string, sprintId: null },
+        )
+        const created = await createTask(payload)
+        if (!created.ok) throw new Error(created.error)
+
+        await db.insert(meetingTaskSuggestions).values({
+          meetingId,
+          text: item.text,
+          suggestedUserId: assigneeId,
+          suggestedDueDate: item.suggestedDueDate,
+          status: 'accepted',
+          createdTaskId: created.data.taskId,
+          acceptedBy: null, // null = auto-accepted, see schema.ts's comment on this column
+        })
+
+        const notification = buildAutoAssignNotification({
+          assigneeId,
+          recorderId: recorder.id,
+          recorderName: recorder.name,
+          taskTitle: payload.title,
+          meetingId,
+          meetingTitle: meeting.title,
+        })
+        if (notification) pendingNotifications.push(notification)
+        continue
+      } catch (error) {
+        // SAFETY: one failed task creation falls back to a manual card
+        // rather than aborting the rest of the analysis — falls through to
+        // the manual insert below exactly like an ineligible item would.
+        console.error(`[meeting-auto-assign] auto task creation failed for meeting ${meetingId}:`, error)
+      }
+    }
+
+    await db.insert(meetingTaskSuggestions).values({
+      meetingId,
+      text: item.text,
+      suggestedUserId: resolvedUserId,
+      suggestedDueDate: item.suggestedDueDate,
+      status: 'open',
+    })
   }
+
+  if (pendingNotifications.length > 0) {
+    try {
+      await createNotifications(pendingNotifications)
+    } catch (error) {
+      console.error(`[meeting-auto-assign] notify assignees failed for meeting ${meetingId}:`, error)
+    }
+  }
+
+  return { cappedCount }
 }
 
 /**
@@ -664,8 +797,8 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
  */
 async function persistMeetingAnalysis(
   id: string,
-  meeting: { title: string; startsAt: Date },
-  author: { id: string; role?: string | null },
+  meeting: { title: string; startsAt: Date; appId: string | null; autoAssignTasks: boolean },
+  author: { id: string; name?: string | null; role?: string | null },
   attendees: AttendeeRef[],
   raw: string,
   modelUsed: string,
@@ -685,6 +818,29 @@ async function persistMeetingAnalysis(
   const speakerSegments = asSpeakerSegments(parsed.speakerSegments)
   const actionItems = asActionItems(parsed.actionItems)
 
+  // "Intelligence auto add notes": drop the summary and diarized transcript
+  // straight into the unified note timeline, and file the model's
+  // actionable proposals as suggestions — auto-creating the real task for
+  // every one that clears shouldAutoAssign. Best-effort, same reasoning as
+  // the carry-forward pass below — a failure here must not undo the
+  // analysis that already succeeded, and NOT stop the ai_notes row below
+  // from being written (it just reports 0 capped rather than the real
+  // count). Run BEFORE the ai_notes upsert so autoAssignCappedCount can be
+  // written in the same insert instead of a second round-trip.
+  let cappedCount = 0
+  try {
+    ;({ cappedCount } = await insertAutoNotesAndSuggestions(
+      { id, appId: meeting.appId, title: meeting.title, autoAssignTasks: meeting.autoAssignTasks },
+      { id: createdBy, name: author.name ?? null },
+      summary,
+      speakerSegments,
+      actionItems,
+      attendees,
+    ))
+  } catch (error) {
+    console.error('[meeting-notes] auto note/suggestion insert failed:', error)
+  }
+
   const values = {
     meetingId: id,
     // Free-text, not a DB enum — the model returns "en" | "si" | "bilingual"
@@ -703,6 +859,7 @@ async function persistMeetingAnalysis(
     model: modelUsed,
     createdBy,
     createdAt: new Date(),
+    autoAssignCappedCount: cappedCount,
   }
 
   await db
@@ -711,17 +868,6 @@ async function persistMeetingAnalysis(
     .onConflictDoUpdate({ target: meetingAiNotes.meetingId, set: values })
 
   await deriveAndInsertFollowups(id, attendees, perPerson, questions)
-
-  // "Intelligence auto add notes": drop the summary and diarized transcript
-  // straight into the unified note timeline, and file the model's
-  // actionable proposals as suggestion cards. Best-effort, same reasoning
-  // as the carry-forward pass below — a failure here must not undo the
-  // analysis that already succeeded.
-  try {
-    await insertAutoNotesAndSuggestions(id, createdBy, summary, speakerSegments, actionItems, attendees)
-  } catch (error) {
-    console.error('[meeting-notes] auto note/suggestion insert failed:', error)
-  }
 
   // "Intelligently think" about carry-forward: check whether any follow-up
   // items owed by this meeting's attendees (from earlier meetings) were
@@ -924,6 +1070,15 @@ across segments; a later pass reconciles identity across the whole meeting.`
 const finalizeRecordingInput = z.object({ meetingId: z.uuid() })
 
 /**
+ * Which of the two outcomes finalize produced, so the client can say so
+ * honestly: 'full' is the normal Gemini write-up; 'live-transcript' means no
+ * segment was ever transcribed (typically: no Gemini key) and the meeting's
+ * notes are the browser's live transcript — real, but limited, and upgraded
+ * in place the next time analysis runs with a working key.
+ */
+export type FinalizeRecordingResult = { mode: 'full' | 'live-transcript' }
+
+/**
  * Runs once, when the user stops recording: a single TEXT-ONLY Gemini pass
  * over every segment transcribed so far (concatenateSegments — ordered by
  * index, any gap reported inline rather than silently skipped), producing
@@ -944,7 +1099,7 @@ const finalizeRecordingInput = z.object({ meetingId: z.uuid() })
 export async function finalizeMeetingRecording(
   meetingId: string,
   liveTranscriptHint?: string,
-): Promise<ActionResult> {
+): Promise<ActionResult<FinalizeRecordingResult>> {
   try {
     return await finalizeMeetingRecordingInner(meetingId, liveTranscriptHint)
   } catch (error) {
@@ -955,7 +1110,7 @@ export async function finalizeMeetingRecording(
 async function finalizeMeetingRecordingInner(
   meetingId: string,
   liveTranscriptHint?: string,
-): Promise<ActionResult> {
+): Promise<ActionResult<FinalizeRecordingResult>> {
   const parsed = finalizeRecordingInput.safeParse({ meetingId })
   if (!parsed.success) return err(parsed.error.issues[0].message)
   const id = parsed.data.meetingId
@@ -969,7 +1124,38 @@ async function finalizeMeetingRecordingInner(
     .from(meetingRecordingSegments)
     .where(eq(meetingRecordingSegments.meetingId, id))
 
-  if (segmentRows.length === 0) return err('No transcribed audio yet — record something first')
+  const hintParsed = liveTranscriptInput.safeParse(
+    typeof liveTranscriptHint === 'string' && liveTranscriptHint.trim().length > 0 ? liveTranscriptHint : '',
+  )
+  const hint = hintParsed.success ? hintParsed.data || null : null
+
+  const attendees = await fetchAttendees(id)
+
+  // No-Gemini path. Zero transcribed segments means every per-segment Gemini
+  // call failed or never ran — no key saved, quota exhausted for the day,
+  // whatever. The browser's live transcript (user-correctable in the UI
+  // while recording) still exists, and limited notes beat no notes: persist
+  // it as the meeting transcript, clearly labelled, through the SAME
+  // persistMeetingAnalysis tail as a real analysis. Because that tail
+  // upserts on meetingId, running "Analyze again" later — once a key exists
+  // and the parked segments have been retried — replaces this fallback with
+  // the full AI write-up. Nothing about the failure is hidden: the model
+  // column says 'live-transcript', and the client tells the user which of
+  // the two outcomes they got.
+  if (segmentRows.length === 0) {
+    if (!hint) return err('No transcribed audio yet — record something first')
+    const fallback = JSON.stringify({ transcript: hint, language: 'bilingual' })
+    const persisted = await persistMeetingAnalysis(
+      id,
+      meeting,
+      session.user,
+      attendees,
+      fallback,
+      'live-transcript',
+    )
+    if (!persisted.ok) return persisted
+    return ok({ mode: 'live-transcript' as const })
+  }
 
   const { text: combinedTranscript, missingIndices } = concatenateSegments(segmentRows)
   if (missingIndices.length > 0) {
@@ -978,12 +1164,6 @@ async function finalizeMeetingRecordingInner(
     )
   }
 
-  const hintParsed = liveTranscriptInput.safeParse(
-    typeof liveTranscriptHint === 'string' && liveTranscriptHint.trim().length > 0 ? liveTranscriptHint : '',
-  )
-  const hint = hintParsed.success ? hintParsed.data || null : null
-
-  const attendees = await fetchAttendees(id)
   const attendeeNames = attendees.map((a) => a.name)
 
   // Change-detected screen keyframes captured alongside the audio (see
@@ -1088,11 +1268,20 @@ suggestedDueDate must be a real ISO date or null.`
         ? await callGeminiWithImages(session.user.id, [{ text: prompt }], images, { responseJson: true })
         : await callGemini(session.user.id, [{ text: prompt }], { responseJson: true }))
   } catch (error) {
+    // Deliberately NOT falling back to transcript-only notes here (unlike
+    // the zero-segments branch above): the segment transcripts are already
+    // durable in meeting_recording_segments, the client keeps its "Retry
+    // analysis" affordance on error, and a retry once Gemini recovers yields
+    // the full write-up. A fallback here would report success, dismiss that
+    // affordance, and quietly leave the meeting with worse notes than a
+    // retry would have produced.
     if (error instanceof GeminiError) return err(error.message)
     return err('Gemini request failed — try again')
   }
 
-  return persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
+  const persisted = await persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
+  if (!persisted.ok) return persisted
+  return ok({ mode: 'full' as const })
 }
 
 // --- Screen keyframes: change-detected screenshots captured alongside a
@@ -1343,6 +1532,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
           questions: asArray<QuestionNote>(notesRow.questions),
           model: notesRow.model,
           createdAt: notesRow.createdAt,
+          autoAssignCappedCount: notesRow.autoAssignCappedCount,
         }
       : null,
     prep,
@@ -1359,7 +1549,37 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
       height: row.height,
       byteSize: row.byteSize,
     })),
+    autoAssignTasks: meeting.autoAssignTasks,
   })
+}
+
+const setAutoAssignInput = z.object({ meetingId: z.uuid(), enabled: z.boolean() })
+
+/**
+ * Flips the per-meeting "Auto-assign tasks" toggle (layer (a) of full-auto's
+ * manual override — see notes.ts shouldAutoAssign for what it gates). Same
+ * canManageMeeting gate as recording itself: only the meeting's creator or
+ * an admin decides whether THIS meeting's future analyses run full-auto or
+ * leave everything as manual suggestion cards. Takes effect on the NEXT
+ * analysis — it does not retroactively touch suggestions already accepted.
+ */
+export async function setMeetingAutoAssignTasks(
+  meetingId: string,
+  enabled: boolean,
+): Promise<ActionResult> {
+  const parsed = setAutoAssignInput.safeParse({ meetingId, enabled })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  await db
+    .update(meetings)
+    .set({ autoAssignTasks: parsed.data.enabled })
+    .where(eq(meetings.id, parsed.data.meetingId))
+
+  revalidatePath('/meetings')
+  return ok(undefined)
 }
 
 const resolveFollowupInput = z.object({
@@ -1464,6 +1684,18 @@ export async function resolveFollowup(
       resolutionNote,
     })
     .where(eq(meetingFollowups.id, row.id))
+
+  await logActivity({
+    actorId: user.id,
+    verb: 'resolved',
+    entityType: 'followup',
+    entityId: row.id,
+    entityLabel: row.text.slice(0, 80),
+    pagePath: '/meetings',
+    detail: resolutionNote ? `— ${resolutionNote}` : null,
+    metadata: { status: { from: row.status, to: 'resolved' } },
+  })
+
   revalidatePath('/meetings')
 
   return ok(undefined)
@@ -1481,7 +1713,7 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
 
   const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'reopen')
   if (!authorized.ok) return authorized
-  const { row } = authorized.data
+  const { user, row } = authorized.data
 
   if (row.status !== 'open') {
     await db
@@ -1493,6 +1725,17 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
         resolutionNote: null,
       })
       .where(eq(meetingFollowups.id, row.id))
+
+    await logActivity({
+      actorId: user.id,
+      verb: 'reopened',
+      entityType: 'followup',
+      entityId: row.id,
+      entityLabel: row.text.slice(0, 80),
+      pagePath: '/meetings',
+      metadata: { status: { from: row.status, to: 'open' } },
+    })
+
     revalidatePath('/meetings')
   }
 
@@ -1635,15 +1878,29 @@ export async function addFollowup(input: {
     targetMeetingId = target.id
   }
 
-  await db.insert(meetingFollowups).values({
-    sourceMeetingId: meeting.id,
-    userId: person.id,
-    personName: person.name,
-    text: parsed.data.text,
-    kind: parsed.data.kind,
-    status: 'open',
-    createdBy: session.user.id,
-    targetMeetingId,
+  const [createdFollowup] = await db
+    .insert(meetingFollowups)
+    .values({
+      sourceMeetingId: meeting.id,
+      userId: person.id,
+      personName: person.name,
+      text: parsed.data.text,
+      kind: parsed.data.kind,
+      status: 'open',
+      createdBy: session.user.id,
+      targetMeetingId,
+    })
+    .returning({ id: meetingFollowups.id })
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'created',
+    entityType: 'followup',
+    entityId: createdFollowup.id,
+    entityLabel: parsed.data.text.slice(0, 80),
+    appId: meeting.appId,
+    pagePath: '/meetings',
+    detail: `for ${person.name}`,
   })
 
   revalidatePath('/meetings')
@@ -1720,6 +1977,19 @@ export type TaskSuggestionView = {
   suggestedDueDate: string | null
   status: 'open' | 'accepted' | 'dismissed'
   createdTaskId: string | null
+  /**
+   * Who ACCEPTED this suggestion — only meaningful while status is
+   * 'accepted'. Null there means the auto-assign pass accepted it; a real
+   * user id means a person clicked "Add task" themselves. See schema.ts's
+   * comment on meetingTaskSuggestions.acceptedBy for why this is a nullable
+   * column rather than a fourth status value.
+   */
+  acceptedBy: string | null
+  /** Live snapshot of the created task — null unless createdTaskId is set. */
+  taskStatus: 'todo' | 'in_progress' | 'done' | null
+  taskTitle: string | null
+  /** The task's app slug, for linking straight to its board. */
+  appSlug: string | null
 }
 
 export type NoteTimelineData = {
@@ -1733,6 +2003,8 @@ export type NoteTimelineData = {
 const speakerUsers = alias(users, 'note_speaker_users')
 const authorUsers = alias(users, 'note_author_users')
 const suggestedUsers = alias(users, 'note_suggested_users')
+const suggestionTasks = alias(tasks, 'note_suggestion_tasks')
+const suggestionApps = alias(apps, 'note_suggestion_apps')
 
 /**
  * The unified note timeline for a meeting: typed/voice/ai segments in
@@ -1799,6 +2071,11 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
     .leftJoin(users, eq(meetingSpeakers.userId, users.id))
     .where(eq(meetingSpeakers.meetingId, id))
 
+  // Open cards AND auto-accepted ones (status 'accepted' with acceptedBy
+  // null) — the latter is what lets an auto-assigned card keep showing on
+  // the timeline with its "Auto-assigned" badge and Undo, instead of only
+  // ever-manual acceptances staying visible. A suggestion a PERSON accepted
+  // (acceptedBy set) has done its job and drops off, same as before.
   const suggestionRows = await db
     .select({
       id: meetingTaskSuggestions.id,
@@ -1809,10 +2086,24 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
       suggestedDueDate: meetingTaskSuggestions.suggestedDueDate,
       status: meetingTaskSuggestions.status,
       createdTaskId: meetingTaskSuggestions.createdTaskId,
+      acceptedBy: meetingTaskSuggestions.acceptedBy,
+      taskStatus: suggestionTasks.status,
+      taskTitle: suggestionTasks.title,
+      appSlug: suggestionApps.slug,
     })
     .from(meetingTaskSuggestions)
     .leftJoin(suggestedUsers, eq(meetingTaskSuggestions.suggestedUserId, suggestedUsers.id))
-    .where(and(eq(meetingTaskSuggestions.meetingId, id), eq(meetingTaskSuggestions.status, 'open')))
+    .leftJoin(suggestionTasks, eq(meetingTaskSuggestions.createdTaskId, suggestionTasks.id))
+    .leftJoin(suggestionApps, eq(suggestionTasks.appId, suggestionApps.id))
+    .where(
+      and(
+        eq(meetingTaskSuggestions.meetingId, id),
+        or(
+          eq(meetingTaskSuggestions.status, 'open'),
+          and(eq(meetingTaskSuggestions.status, 'accepted'), isNull(meetingTaskSuggestions.acceptedBy)),
+        ),
+      ),
+    )
 
   return ok({
     segments,
@@ -1866,6 +2157,17 @@ export async function addTypedNoteSegment(meetingId: string, content: string): P
     createdBy: session.user.id,
   })
 
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: meeting.id,
+    entityLabel: meeting.title,
+    appId: meeting.appId,
+    pagePath: '/meetings',
+    detail: 'meeting notes',
+  })
+
   // Notify anyone @mentioned in the new segment (except the author) — same
   // convention as the legacy updateMeetingNotes. Best-effort.
   try {
@@ -1911,11 +2213,23 @@ export async function editNoteSegment(segmentId: string, content: string): Promi
 
   const ctx = await canManageMeeting(segment.meetingId)
   if (!ctx) return err('Not allowed')
+  const { session, meeting } = ctx
 
   await db
     .update(meetingNoteSegments)
     .set({ content: parsed.data.content })
     .where(eq(meetingNoteSegments.id, segment.id))
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: meeting.id,
+    entityLabel: meeting.title,
+    appId: meeting.appId,
+    pagePath: '/meetings',
+    detail: 'meeting notes',
+  })
 
   revalidatePath('/meetings')
   return ok(undefined)
@@ -1934,6 +2248,16 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
   if (!ctx) return err('Not allowed')
 
   await db.delete(meetingNoteSegments).where(eq(meetingNoteSegments.id, segment.id))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: segment.meetingId,
+    entityLabel: ctx.meeting.title,
+    pagePath: '/meetings',
+    detail: 'deleted a note',
+  })
 
   revalidatePath('/meetings')
   return ok(undefined)
@@ -2014,7 +2338,7 @@ export async function acceptTaskSuggestion(
 
   const ctx = await canManageMeeting(suggestion.meetingId)
   if (!ctx) return err('Not allowed')
-  const { meeting } = ctx
+  const { session, meeting } = ctx
   if (!meeting.appId) return err('Link this meeting to an app before creating tasks from it')
 
   const payload = suggestionToTaskPayload(
@@ -2037,8 +2361,27 @@ export async function acceptTaskSuggestion(
 
   await db
     .update(meetingTaskSuggestions)
-    .set({ status: 'accepted', createdTaskId: result.data.taskId })
+    // acceptedBy: a real user id — this is a PERSON accepting, never the
+    // auto-assign pass (that writes acceptedBy: null itself, in
+    // insertAutoNotesAndSuggestions). Distinguishes a manual accept from an
+    // auto one on an otherwise-identical 'accepted' row.
+    .set({ status: 'accepted', createdTaskId: result.data.taskId, acceptedBy: session.user.id })
     .where(eq(meetingTaskSuggestions.id, suggestion.id))
+
+  // createTask above already wrote the "created task" trail row — this one
+  // records the DISTINCT event (the suggestion being accepted), not a second
+  // copy of the same creation.
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'accepted',
+    entityType: 'suggestion',
+    entityId: suggestion.id,
+    entityLabel: suggestion.text.slice(0, 80),
+    appId: meeting.appId,
+    pagePath: '/meetings',
+    detail: `as task “${payload.title}”`,
+    metadata: { taskId: result.data.taskId, meetingId: meeting.id },
+  })
 
   revalidatePath('/meetings')
   return ok({ taskId: result.data.taskId })
@@ -2063,8 +2406,109 @@ export async function dismissTaskSuggestion(suggestionId: string): Promise<Actio
       .update(meetingTaskSuggestions)
       .set({ status: 'dismissed' })
       .where(eq(meetingTaskSuggestions.id, suggestion.id))
+
+    await logActivity({
+      actorId: ctx.session.user.id,
+      verb: 'rejected',
+      entityType: 'suggestion',
+      entityId: suggestion.id,
+      entityLabel: suggestion.text.slice(0, 80),
+      appId: ctx.meeting.appId,
+      pagePath: '/meetings',
+    })
+
     revalidatePath('/meetings')
   }
 
+  return ok(undefined)
+}
+
+/**
+ * Undo for an auto-accepted suggestion — layer (b) of full-auto's manual
+ * override. Deletes the task the auto-assign pass created and reverts the
+ * suggestion to 'open' (a plain manual card again), so a wrong auto-assign
+ * costs one click to take back.
+ *
+ * Deliberately NOT the same authz as deleteTask (admins only) — the
+ * recorder who ran the analysis may not be an admin, and they are exactly
+ * who should be able to take back what full-auto just did on their own
+ * meeting. Scoped instead to canManageMeeting (creator or admin), same tier
+ * as accepting the suggestion in the first place would have needed.
+ *
+ * CONSTRAINT, enforced here rather than only documented: only while the
+ * task is still 'todo' and unmodified from what the auto pass created (see
+ * notes.ts canUndoAutoAssign) — reconstructed from the suggestion row
+ * itself via suggestionToTaskPayload, since the auto path never applies
+ * overrides. Once a person has retitled it, reassigned it, rescheduled it,
+ * or moved it off 'todo', Undo refuses rather than deleting their change out
+ * from under them — the suggestion stays 'accepted' and the card shows the
+ * task as-is instead.
+ */
+export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<ActionResult> {
+  const parsed = idInput.safeParse(suggestionId)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [suggestion] = await db
+    .select()
+    .from(meetingTaskSuggestions)
+    .where(eq(meetingTaskSuggestions.id, parsed.data))
+  if (!suggestion) return err('Not found')
+  if (suggestion.status !== 'accepted' || suggestion.acceptedBy !== null) {
+    return err('Only an auto-assigned suggestion can be undone this way')
+  }
+  if (!suggestion.createdTaskId) return err('No task to undo')
+
+  const ctx = await canManageMeeting(suggestion.meetingId)
+  if (!ctx) return err('Not allowed')
+  const { meeting } = ctx
+  if (!meeting.appId) return err('Not allowed')
+
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, suggestion.createdTaskId))
+  if (!task) return err('That task no longer exists')
+
+  const original = suggestionToTaskPayload(
+    {
+      text: suggestion.text,
+      suggestedUserId: suggestion.suggestedUserId,
+      suggestedDueDate: suggestion.suggestedDueDate,
+    },
+    { appId: meeting.appId, sprintId: null },
+  )
+  const eligible = canUndoAutoAssign(
+    { status: task.status, title: task.title, assigneeId: task.assigneeId, dueDate: task.dueDate },
+    {
+      status: 'todo',
+      title: original.title,
+      assigneeId: original.assigneeId,
+      dueDate: original.dueDate,
+    },
+  )
+  if (!eligible) {
+    return err('This task has already been changed since it was auto-assigned — edit it directly instead')
+  }
+
+  await db.delete(tasks).where(eq(tasks.id, task.id))
+  await db
+    .update(meetingTaskSuggestions)
+    .set({ status: 'open', createdTaskId: null, acceptedBy: null })
+    .where(eq(meetingTaskSuggestions.id, suggestion.id))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'reopened',
+    entityType: 'suggestion',
+    entityId: suggestion.id,
+    entityLabel: suggestion.text.slice(0, 80),
+    appId: meeting.appId,
+    pagePath: '/meetings',
+    detail: `undid auto-created task “${task.title}”`,
+    metadata: { taskId: task.id },
+  })
+
+  // Same board-revalidation as deleteTask (task-actions.ts) — the task just
+  // vanished from wherever it was filed, not only from this meeting's panel.
+  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, meeting.appId))
+  if (app) revalidatePath('/apps/' + app.slug)
+  revalidatePath('/meetings')
   return ok(undefined)
 }
