@@ -66,6 +66,21 @@ const ZOOM_STORAGE_KEY = 'logpup:meetings-calendar-px-per-hour'
  *  nobody. Matches Tailwind's `md`. */
 const WIDE_SCREEN_QUERY = '(min-width: 768px)'
 
+/**
+ * How a toolbar control says "not available right now" WITHOUT leaving the
+ * focus order.
+ *
+ * `disabled` on Today, Shorter hours and Taller hours meant the button became
+ * disabled while the user's focus was still on it — pressing Today made Today
+ * unavailable — and a focused element that turns disabled is dropped by the
+ * browser onto `<body>`, so the next Tab restarted from the top of the page
+ * and a screen reader announced nothing at all. `aria-disabled` says the same
+ * thing to assistive tech, keeps the button focusable, and each `onClick`
+ * guards itself (the zoom's `changeZoom` already no-ops at the clamp).
+ * `pointer-events-none` keeps the pointer behaviour identical to `disabled`.
+ */
+const UNAVAILABLE = 'aria-disabled:pointer-events-none aria-disabled:opacity-50'
+
 const VIEW_OPTIONS = [
   { id: 'day', icon: SquareIcon },
   { id: 'week', icon: Columns3Icon },
@@ -192,6 +207,13 @@ export function MeetingsCalendar({
   const stepUnit = VIEW_STEP_UNIT[drawnView]
   const showStepper = drawnView !== 'month'
   const showZoom = isTimeGridView(drawnView)
+  /* The month grid renders its own h2 of the same month name, its own date
+     subtitle and its own Today pill, so this toolbar stands the heading down
+     there for the same reason it stands the stepper down — two h2 siblings
+     reading "August 2026" are a duplicate control to a sighted reader and a
+     broken heading outline to a screen reader. The meeting count stays: it is
+     the one thing on this line the month grid does not also say. */
+  const showHeading = drawnView !== 'month'
 
   return (
     <div className="flex flex-col gap-4">
@@ -199,9 +221,11 @@ export function MeetingsCalendar({
         <div className="flex min-w-0 flex-col">
           {/* h2 — /meetings owns the h1 and the list view's "Upcoming" is an
               h2, so this must sit at the same level. */}
-          <h2 className="font-heading text-lg leading-tight font-semibold">
-            {rangeHeading(drawnView, focusedDate, range.start, range.end)}
-          </h2>
+          {showHeading ? (
+            <h2 className="font-heading text-lg leading-tight font-semibold">
+              {rangeHeading(drawnView, focusedDate, range.start, range.end)}
+            </h2>
+          ) : null}
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {inRange.length === 0
               ? 'No meetings in view'
@@ -221,17 +245,18 @@ export function MeetingsCalendar({
                 size="icon-sm"
                 type="button"
                 aria-label="Shorter hours"
-                disabled={pxPerHour <= MIN_PX_PER_HOUR}
+                aria-disabled={pxPerHour <= MIN_PX_PER_HOUR}
+                className={UNAVAILABLE}
                 onClick={() => changeZoom(-PX_PER_HOUR_STEP)}
               >
                 <MinusIcon />
               </Button>
               {/* The number itself, not a bare pair of buttons: zoom is one
                   value with a named range, and showing it is what makes the
-                  Ctrl/Cmd-scroll shortcut discoverable as the same control. */}
+                  Alt-scroll shortcut discoverable as the same control. */}
               <span
                 className="min-w-10 text-center font-mono text-2xs tabular-nums text-muted-foreground"
-                title={`${pxPerHour}px per hour — hold Ctrl or ⌘ and scroll to zoom`}
+                title={`${pxPerHour}px per hour — hold Alt (⌥) and scroll to zoom`}
               >
                 {pxPerHour}px
               </span>
@@ -240,7 +265,8 @@ export function MeetingsCalendar({
                 size="icon-sm"
                 type="button"
                 aria-label="Taller hours"
-                disabled={pxPerHour >= MAX_PX_PER_HOUR}
+                aria-disabled={pxPerHour >= MAX_PX_PER_HOUR}
+                className={UNAVAILABLE}
                 onClick={() => changeZoom(PX_PER_HOUR_STEP)}
               >
                 <PlusIcon />
@@ -263,9 +289,12 @@ export function MeetingsCalendar({
                 variant="ghost"
                 size="sm"
                 type="button"
-                className="h-7 px-2.5"
-                disabled={focusedDate === todayIso}
-                onClick={() => onFocusedDateChange(todayIso)}
+                className={`h-7 px-2.5 ${UNAVAILABLE}`}
+                aria-disabled={focusedDate === todayIso}
+                onClick={() => {
+                  if (focusedDate === todayIso) return
+                  onFocusedDateChange(todayIso)
+                }}
               >
                 Today
               </Button>
@@ -360,8 +389,9 @@ export function MeetingsCalendar({
           />
           <p className="text-xs text-muted-foreground">
             All 24 hours are shown; 08:00–18:00 is emphasised. Select a meeting for its details,
-            attendees and notes. Hold Ctrl or <span className="font-mono">⌘</span> while scrolling to
-            zoom.
+            attendees and notes. Hold Alt (<span className="font-mono">⌥</span>) while scrolling to
+            zoom, or use the hour-height buttons above — Ctrl and{' '}
+            <span className="font-mono">⌘</span> are left to the browser&rsquo;s own page zoom.
           </p>
         </>
       )}

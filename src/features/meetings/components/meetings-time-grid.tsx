@@ -557,6 +557,10 @@ const HourCells = memo(function HourCells({
           key={hour}
           className={cn(
             'border-b border-border/60',
+            // Named rather than `last:`: the blocks and the now line are
+            // siblings of these cells, so which element is `:last-child`
+            // depended on whether the day happened to have any meetings on it.
+            hour === GRID_END_HOUR - 1 && 'border-b-0',
             // Off-hours are dimmed, never hidden — the 06:30 standup is
             // still there, it just isn't where the eye lands first.
             isWorkingHour(hour) ? 'bg-transparent' : 'bg-muted/40',

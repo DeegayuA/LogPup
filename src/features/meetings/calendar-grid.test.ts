@@ -13,6 +13,7 @@ import {
   hourLabel,
   isAllDayMeeting,
   isWorkingHour,
+  minEventMinutes,
   minutesIntoDay,
   zonedDayStartMs,
 } from './calendar-grid'
@@ -218,6 +219,36 @@ describe('eventGeometry', () => {
 
   it('never returns a negative height for an inverted segment', () => {
     expect(eventGeometry(600, 480, 60).height).toBe(MIN_EVENT_HEIGHT_PX)
+  })
+})
+
+describe('minEventHeight', () => {
+  it('clears the 24px floor of WCAG 2.5.8 before any hit-slop is added', () => {
+    expect(MIN_EVENT_HEIGHT_PX).toBeGreaterThanOrEqual(24)
+  })
+})
+
+describe('minEventMinutes', () => {
+  it('is the duration the minimum block height actually covers', () => {
+    // One pixel per minute, so the floor is exactly MIN_EVENT_HEIGHT_PX minutes.
+    expect(minEventMinutes(60)).toBe(MIN_EVENT_HEIGHT_PX)
+  })
+
+  it('grows as the grid is zoomed out, because the floor eats more of the day', () => {
+    expect(minEventMinutes(MIN_PX_PER_HOUR)).toBeGreaterThan(minEventMinutes(DEFAULT_PX_PER_HOUR))
+  })
+
+  it('makes two back-to-back 15-minute meetings collide at the default zoom', () => {
+    // The whole reason this exists: at 56px/hour the first standup is drawn
+    // over the start of the second, so the packer has to be told they overlap
+    // or the second one's opaque fill erases the first.
+    const floor = minEventMinutes(DEFAULT_PX_PER_HOUR)
+    expect(9 * 60 + floor).toBeGreaterThan(9 * 60 + 15)
+  })
+
+  it('is a no-op on a nonsensical zoom rather than Infinity', () => {
+    expect(minEventMinutes(0)).toBe(0)
+    expect(minEventMinutes(Number.NaN)).toBe(0)
   })
 })
 
