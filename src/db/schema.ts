@@ -185,7 +185,7 @@ export const tasks = pgTable('tasks', {
 }, (t) => [
   // Covers the board's only read: filter (app_id, sprint_id), order by rank.
   // `tasks` had no index at all, so every board render was a full scan + sort.
-  index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder),
+  index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder).where(sql`${t.deletedAt} is null`),
 ])
 
 export const meetings = pgTable('meetings', {
@@ -215,7 +215,9 @@ export const meetings = pgTable('meetings', {
   // (derived, no columns).
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   deletedBy: uuid('deleted_by').references(() => users.id),
-})
+}, (t) => [
+  index('meetings_starts_live_idx').on(t.startsAt).where(sql`${t.deletedAt} is null`),
+])
 
 export const meetingAttendees = pgTable('meeting_attendees', {
   meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
