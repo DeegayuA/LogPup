@@ -17,37 +17,41 @@ import {
   type AutoAssignedTaskFields,
 } from './notes'
 
+// No attendee fixture here on purpose: resolution no longer consults the
+// attendee list at all. "Kasun Silva" below is a name that IS a real attendee
+// in this file's other fixtures — that is exactly the point of the guard.
 describe('resolveSpeakerUserId', () => {
-  const attendees = [
-    { id: 'u1', name: 'Nadeesha Perera' },
-    { id: 'u2', name: 'Kasun Silva' },
-  ]
-
   it('returns null for a null/empty label', () => {
-    expect(resolveSpeakerUserId(null, [], attendees)).toBeNull()
-    expect(resolveSpeakerUserId('', [], attendees)).toBeNull()
+    expect(resolveSpeakerUserId(null, [])).toBeNull()
+    expect(resolveSpeakerUserId('', [])).toBeNull()
   })
 
   it('uses an explicit mapping when one exists', () => {
     const mappings = [{ label: 'Speaker 1', userId: 'u2' }]
-    expect(resolveSpeakerUserId('Speaker 1', mappings, attendees)).toBe('u2')
+    expect(resolveSpeakerUserId('Speaker 1', mappings)).toBe('u2')
   })
 
   it('honors an explicit "not a listed attendee" mapping (null) without falling back to name-matching', () => {
     const mappings = [{ label: 'Nadeesha Perera', userId: null }]
-    expect(resolveSpeakerUserId('Nadeesha Perera', mappings, attendees)).toBeNull()
+    expect(resolveSpeakerUserId('Nadeesha Perera', mappings)).toBeNull()
   })
 
-  it('falls back to matching the label as a name when no mapping exists', () => {
-    expect(resolveSpeakerUserId('Kasun Silva', [], attendees)).toBe('u2')
+  // REGRESSION GUARD. The model frequently emits, as a diarization label, a
+  // name it heard *mentioned* rather than the name of whoever was speaking.
+  // Auto-matching that label against the attendee list attributed notes to
+  // people who were talked ABOUT — and, via suggestedAssigneeLabel, pre-
+  // assigned real tasks to them. An exact attendee-name match is the most
+  // tempting case and must STILL resolve to null without a confirmed mapping.
+  it('returns null for an unmapped label that exactly matches an attendee name', () => {
+    expect(resolveSpeakerUserId('Kasun Silva', [])).toBeNull()
   })
 
-  it('falls back to matching an unambiguous first name', () => {
-    expect(resolveSpeakerUserId('Kasun', [], attendees)).toBe('u2')
+  it('returns null for an unmapped first name that would previously have matched', () => {
+    expect(resolveSpeakerUserId('Kasun', [])).toBeNull()
   })
 
   it('returns null for a generic "Speaker N" label with no mapping and no name match', () => {
-    expect(resolveSpeakerUserId('Speaker 2', [], attendees)).toBeNull()
+    expect(resolveSpeakerUserId('Speaker 2', [])).toBeNull()
   })
 
   it('prefers the mapping for one label over a same-meeting mapping for a different label', () => {
@@ -55,7 +59,7 @@ describe('resolveSpeakerUserId', () => {
       { label: 'Speaker 1', userId: 'u1' },
       { label: 'Speaker 2', userId: 'u2' },
     ]
-    expect(resolveSpeakerUserId('Speaker 2', mappings, attendees)).toBe('u2')
+    expect(resolveSpeakerUserId('Speaker 2', mappings)).toBe('u2')
   })
 })
 
