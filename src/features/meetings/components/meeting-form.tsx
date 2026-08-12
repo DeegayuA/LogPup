@@ -49,6 +49,7 @@ import { createMeeting, teamForApp } from '@/features/meetings/actions'
 import { icsHref } from '@/features/meetings/components/add-to-calendar'
 import { MEETING_URL_ERROR, isValidMeetingUrl } from '@/features/meetings/meeting-url'
 import type { ActiveUser } from '@/features/people/queries'
+import { matchApp } from '@/lib/app-match'
 import { parseMeetingIntent, type MeetingIntent } from '@/lib/meeting-intent'
 
 const NO_APP = '__none__'
@@ -82,14 +83,6 @@ function emptyState(defaultAppId?: string): FormState {
 type AppOption = { id: string; name: string }
 /** A parsed phrase with the app hint resolved against *this* dialog's apps. */
 type QuickAddPreview = MeetingIntent & { appId: string | null }
-
-function matchApp(query: string, apps: AppOption[]): AppOption | null {
-  const q = query.toLowerCase()
-  const exact = apps.filter((app) => app.name.toLowerCase() === q)
-  const matches = exact.length > 0 ? exact : apps.filter((app) => app.name.toLowerCase().includes(q))
-  // Two candidates is no better than none — the app select stays untouched.
-  return matches.length === 1 ? matches[0] : null
-}
 
 /**
  * The parser reports a trailing "on <app>" as a query and leaves the name to
