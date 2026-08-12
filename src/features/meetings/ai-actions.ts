@@ -2,13 +2,14 @@
 
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
-import { and, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { del, put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import {
   apps,
+  assignments,
   meetingAiNotes,
   meetingAttendees,
   meetingFollowups,
@@ -18,6 +19,7 @@ import {
   meetingSpeakers,
   meetingTaskSuggestions,
   meetings,
+  sprints,
   tasks,
   users,
 } from '@/db/schema'
@@ -1838,7 +1840,7 @@ export async function resolveFollowup(
 
   const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'resolve')
   if (!authorized.ok) return authorized
-  const { user, row } = authorized.data
+  const { user, row, sourceMeeting } = authorized.data
 
   // An all-whitespace note is no note — store null so "resolved with no
   // explanation" has one representation, not two.
@@ -1879,9 +1881,15 @@ export async function resolveFollowup(
     verb: 'resolved',
     entityType: 'followup',
     entityId: row.id,
-    entityLabel: row.text.slice(0, 80),
+    // NEVER row.text, and never the resolution note. Both are derived from
+    // the meeting transcript and readable only behind canReadMeetingIntel;
+    // activity_log has no such gate. The meeting title is already team-wide
+    // (every member sees it on /meetings), so it names the event safely —
+    // anyone entitled to the content follows the link to read it.
+    entityLabel: sourceMeeting.title,
+    appId: sourceMeeting.appId,
     pagePath: '/meetings',
-    detail: resolutionNote ? `— ${resolutionNote}` : null,
+    detail: 'a follow-up',
     metadata: { status: { from: row.status, to: 'resolved' } },
   })
 
@@ -1902,7 +1910,7 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
 
   const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'reopen')
   if (!authorized.ok) return authorized
-  const { user, row } = authorized.data
+  const { user, row, sourceMeeting } = authorized.data
 
   if (row.status !== 'open') {
     await db
@@ -1920,8 +1928,11 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
       verb: 'reopened',
       entityType: 'followup',
       entityId: row.id,
-      entityLabel: row.text.slice(0, 80),
+      // Meeting title, not row.text — see the resolve site above.
+      entityLabel: sourceMeeting.title,
+      appId: sourceMeeting.appId,
       pagePath: '/meetings',
+      detail: 'a follow-up',
       metadata: { status: { from: row.status, to: 'open' } },
     })
 
@@ -1948,7 +1959,7 @@ export async function closeFollowupAsStale(followupId: string): Promise<ActionRe
 
   const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'close as stale')
   if (!authorized.ok) return authorized
-  const { user, row } = authorized.data
+  const { user, row, sourceMeeting } = authorized.data
   if (row.status === 'resolved') return ok(undefined)
 
   const ageDays = Math.max(
@@ -1967,9 +1978,11 @@ export async function closeFollowupAsStale(followupId: string): Promise<ActionRe
     verb: 'resolved',
     entityType: 'followup',
     entityId: row.id,
-    entityLabel: row.text.slice(0, 80),
+    // Meeting title, not row.text — see resolveFollowup.
+    entityLabel: sourceMeeting.title,
+    appId: sourceMeeting.appId,
     pagePath: '/meetings',
-    detail: '— closed as stale',
+    detail: 'a follow-up, closed as stale',
     metadata: { status: { from: row.status, to: 'resolved' }, reason: 'stale' },
   })
 
@@ -2017,9 +2030,11 @@ export async function attributeFollowup(followupId: string, userId: string): Pro
     verb: 'updated',
     entityType: 'followup',
     entityId: row.id,
-    entityLabel: row.text.slice(0, 80),
+    // Meeting title, not row.text — see resolveFollowup.
+    entityLabel: sourceMeeting.title,
+    appId: sourceMeeting.appId,
     pagePath: '/meetings',
-    detail: `attributed to ${person.name}`,
+    detail: `a follow-up, attributed to ${person.name}`,
   })
 
   revalidatePath('/meetings')
@@ -2050,7 +2065,7 @@ async function writeOpenFollowupNote(
 
   const authorized = await authorizeFollowupWrite(parsed.data.followupId, verb)
   if (!authorized.ok) return authorized
-  const { row } = authorized.data
+  const { row, sourceMeeting } = authorized.data
 
   const value = parsed.data.note ? parsed.data.note : null
   await db
@@ -2181,10 +2196,13 @@ export async function addFollowup(input: {
     verb: 'created',
     entityType: 'followup',
     entityId: createdFollowup.id,
-    entityLabel: parsed.data.text.slice(0, 80),
+    // Meeting title, not the follow-up text — see resolveFollowup. Typed by
+    // hand rather than transcribed, but it lives on the same intel-gated
+    // panel and is read back by the same people, so it gets the same rule.
+    entityLabel: meeting.title,
     appId: meeting.appId,
     pagePath: '/meetings',
-    detail: `for ${person.name}`,
+    detail: `a follow-up for ${person.name}`,
   })
 
   revalidatePath('/meetings')
@@ -2671,10 +2689,13 @@ export async function acceptTaskSuggestion(
     verb: 'accepted',
     entityType: 'suggestion',
     entityId: suggestion.id,
-    entityLabel: suggestion.text.slice(0, 80),
+    // NOT suggestion.text — the model derived it from the transcript, so it
+    // carries the same intel gating the trail does not have. The created
+    // task's title is safe by contrast: tasks are team-wide on the boards.
+    entityLabel: meeting.title,
     appId: meeting.appId,
     pagePath: '/meetings',
-    detail: `as task “${payload.title}”`,
+    detail: `a task suggestion as “${payload.title}”`,
     metadata: { taskId: result.data.taskId, meetingId: meeting.id },
   })
 
@@ -2707,9 +2728,11 @@ export async function dismissTaskSuggestion(suggestionId: string): Promise<Actio
       verb: 'rejected',
       entityType: 'suggestion',
       entityId: suggestion.id,
-      entityLabel: suggestion.text.slice(0, 80),
+      // Meeting title, not suggestion.text — see acceptTaskSuggestion.
+      entityLabel: ctx.meeting.title,
       appId: ctx.meeting.appId,
       pagePath: '/meetings',
+      detail: 'a task suggestion',
     })
 
     revalidatePath('/meetings')
@@ -2793,10 +2816,11 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
     verb: 'reopened',
     entityType: 'suggestion',
     entityId: suggestion.id,
-    entityLabel: suggestion.text.slice(0, 80),
+    // Meeting title, not suggestion.text — see acceptTaskSuggestion.
+    entityLabel: meeting.title,
     appId: meeting.appId,
     pagePath: '/meetings',
-    detail: `undid auto-created task “${task.title}”`,
+    detail: `a task suggestion, undoing auto-created “${task.title}”`,
     metadata: { taskId: task.id },
   })
 

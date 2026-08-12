@@ -51,6 +51,31 @@ export function applyTeamPrefill(
 }
 
 /**
+ * What the attendee list becomes when a quick-add phrase lands. `named` are
+ * the people the phrase resolved; they join (or are promoted to) MANUAL —
+ * writing someone's name is the clearest human decision about them there is.
+ * `appChanged` is true when the phrase re-pointed the form at a different
+ * app: the previous app's team suggestion is then withdrawn exactly as if
+ * the Select had moved — leaving it would ride the old team onto the new
+ * app, the clobbering applyTeamPrefill exists to prevent. The new app's team
+ * is deliberately NOT offered here (the caller never fetches it): in a
+ * phrase, the names ARE the attendee decision, and fetching mid-typing would
+ * fire a request per settled parse.
+ */
+export function applyQuickAddAttendees(
+  selection: AttendeeSelection,
+  named: string[],
+  appChanged: boolean,
+): AttendeeSelection {
+  const base = appChanged ? applyTeamPrefill(selection, [], []) : selection
+  const namedSet = new Set(named)
+  return {
+    attendeeIds: [...new Set([...base.attendeeIds, ...named])],
+    prefilledIds: base.prefilledIds.filter((id) => !namedSet.has(id)),
+  }
+}
+
+/**
  * "Add everyone active": the whole roster joins as MANUAL picks, not as a
  * prefill — a click on this button is a person's decision, so a later app
  * selection must not swap these people out from under it. Existing entries

@@ -1,10 +1,17 @@
 // Pure, unit-testable pieces of the unified note timeline: speaker-label
-// resolution, suggestion-to-task payload mapping, and segment ordering. Kept
-// free of DB/network calls on purpose, same as followups.ts — the server
-// actions in ai-actions.ts fetch rows and call these functions to decide
-// what to do with them.
+// resolution, suggestion-to-task payload mapping, segment ordering, app
+// routing for AI task suggestions, and the "Around the table" meeting-prep
+// assembly. Kept free of DB/network calls on purpose, same as followups.ts —
+// the server actions in ai-actions.ts fetch rows and call these functions to
+// decide what to do with them.
 
 import { matchPersonToAttendee, type AttendeeRef } from '@/features/meetings/followups'
+import {
+  checkinGap,
+  computeTaskProgress,
+  type CheckinGap,
+} from '@/features/sprints/checkins'
+import { isOverdue, type TaskStatus } from '@/features/sprints/board-view'
 
 export type NoteSource = 'typed' | 'voice' | 'ai'
 
@@ -282,6 +289,276 @@ export function buildAutoAssignNotification(
     link: '/meetings',
     meetingId: input.meetingId,
   }
+}
+
+// --- App routing: which app an AI-proposed action item should be filed
+// into. The model is shown each attendee's app list (names) and asked to
+// return "suggestedApp" as an app NAME or null; this resolver is the only
+// thing that turns that name back into an id. Same posture as
+// matchPersonToAttendee/resolveSpeakerUserId: deterministic, and it gives up
+// (null) rather than guess — a task filed into the wrong app is worse than a
+// suggestion card that falls back to the meeting's own app.
+
+export type AppOption = { id: string; name: string }
+
+/**
+ * Resolves a model-suggested app NAME to an app id. Exact (trimmed) match
+ * first, then a case-insensitive match — but only when either is unambiguous.
+ *
+ * Ambiguity is judged over DISTINCT ids, not raw rows: the caller's list is a
+ * union across attendees, so the same app legitimately appears once per
+ * person who works on it, and that repetition must not read as "two apps
+ * claimed this name". Two DIFFERENT apps sharing a name (even by case) is
+ * real ambiguity and resolves to null. Unknown names resolve to null too —
+ * the model inventing an app must never route a task anywhere.
+ */
+export function resolveSuggestedAppId(
+  name: string | null | undefined,
+  apps: AppOption[],
+): string | null {
+  if (!name) return null
+  const needle = name.trim()
+  if (!needle) return null
+
+  const distinctIds = (matches: AppOption[]) => [...new Set(matches.map((app) => app.id))]
+
+  const exact = distinctIds(apps.filter((app) => app.name.trim() === needle))
+  if (exact.length === 1) return exact[0]
+  if (exact.length > 1) return null
+
+  const lower = needle.toLowerCase()
+  const loose = distinctIds(apps.filter((app) => app.name.trim().toLowerCase() === lower))
+  return loose.length === 1 ? loose[0] : null
+}
+
+// --- "Around the table" meeting prep: one row per attendee — their apps,
+// what the current sprint's board says about each, and their latest sprint
+// check-in against what the board computes. Pure assembly over rows the
+// server action (getMeetingPrep in ai-actions.ts) fetches; every branchy
+// decision (which sprint is "current", which check-in is "latest", what
+// counts as overdue) lives here where the tests can pin it down.
+
+export type PrepAttendee = { id: string; name: string }
+
+/** One (user, app) pairing from the live `assignments` table. */
+export type PrepAssignmentRow = {
+  userId: string
+  appId: string
+  appName: string
+  appSlug: string
+}
+
+/** A sprint running now (active, or planned with today inside its range). */
+export type PrepSprintRow = {
+  sprintId: string
+  sprintName: string
+  appId: string
+  appName: string
+  appSlug: string
+  /** Plain yyyy-mm-dd, compared lexicographically — never parsed to a Date. */
+  startDate: string
+}
+
+/** One task inside a running sprint — the inputs the counts need, nothing more. */
+export type PrepTaskRow = {
+  sprintId: string | null
+  assigneeId: string | null
+  status: TaskStatus
+  dueDate: string | null
+}
+
+export type PrepCheckinRow = {
+  sprintId: string
+  userId: string
+  percent: number
+  note: string | null
+  updatedAt: Date
+}
+
+export type AttendeeAppPrep = {
+  appId: string
+  appName: string
+  appSlug: string
+  /** Null when the app has no sprint running right now. */
+  sprintId: string | null
+  sprintName: string | null
+  /** This attendee's not-done tasks in the current sprint. */
+  openCount: number
+  /** Of openCount, strictly past due (isOverdue — due today is not overdue). */
+  overdueCount: number
+}
+
+export type AttendeeCheckinPrep = {
+  sprintId: string
+  sprintName: string
+  appName: string
+  percent: number
+  note: string | null
+  updatedAt: Date
+  /** What the same sprint's board computes for them — null = no tasks there. */
+  computedPercent: number | null
+  gap: CheckinGap
+}
+
+/** Where an inline check-in made from this row should land. */
+export type CheckinTarget = {
+  sprintId: string
+  sprintName: string
+  appName: string
+  /** Board-computed percent for this (sprint, user) — lets the client show
+   *  and re-derive the gap optimistically without a second fetch. */
+  computedPercent: number | null
+}
+
+export type AttendeePrep = {
+  userId: string
+  name: string
+  /** Sorted by app name; empty when nothing links this person to any app. */
+  apps: AttendeeAppPrep[]
+  /** Their most recent check-in across their apps' running sprints. */
+  checkin: AttendeeCheckinPrep | null
+  /** Null when none of their apps has a running sprint to report against. */
+  checkinTarget: CheckinTarget | null
+}
+
+/**
+ * Builds the per-attendee prep rows. Decisions made here, on purpose:
+ *
+ * - An attendee's apps are the union of their live `assignments` rows and
+ *   any app where a running sprint holds a task assigned to them — someone
+ *   mid-handover (tasks but no assignment row) still shows up under the app
+ *   the meeting will actually ask them about.
+ * - "The current sprint" of an app with several running at once is the one
+ *   that started most recently: that is the one a standup talks about, and
+ *   summing counts across overlapping sprints would double-count a person's
+ *   plate. Lexicographic max on yyyy-mm-dd; ties keep the first seen so the
+ *   answer is stable across calls.
+ * - "Latest check-in" is by updatedAt across their apps' current sprints
+ *   only — a check-in on some unrelated sprint is not this meeting's signal.
+ * - The check-in target is the sprint their latest check-in is already on
+ *   (updating beats scattering), else the current sprint of their first app
+ *   alphabetically — deterministic, not clever.
+ */
+export function assembleMeetingPrep(input: {
+  attendees: PrepAttendee[]
+  assignments: PrepAssignmentRow[]
+  sprints: PrepSprintRow[]
+  tasks: PrepTaskRow[]
+  checkins: PrepCheckinRow[]
+  /** Plain yyyy-mm-dd in the team's calendar — see isOverdue. */
+  todayIso: string
+}): AttendeePrep[] {
+  const currentSprintByApp = new Map<string, PrepSprintRow>()
+  for (const sprint of input.sprints) {
+    const existing = currentSprintByApp.get(sprint.appId)
+    if (!existing || sprint.startDate > existing.startDate) {
+      currentSprintByApp.set(sprint.appId, sprint)
+    }
+  }
+
+  const sprintById = new Map(input.sprints.map((sprint) => [sprint.sprintId, sprint]))
+
+  const tasksBySprint = new Map<string, PrepTaskRow[]>()
+  for (const task of input.tasks) {
+    if (!task.sprintId) continue
+    const group = tasksBySprint.get(task.sprintId)
+    if (group) group.push(task)
+    else tasksBySprint.set(task.sprintId, [task])
+  }
+
+  const checkinsByUser = new Map<string, PrepCheckinRow[]>()
+  for (const row of input.checkins) {
+    const group = checkinsByUser.get(row.userId)
+    if (group) group.push(row)
+    else checkinsByUser.set(row.userId, [row])
+  }
+
+  return input.attendees.map((attendee) => {
+    // Union of assignment apps and task-discovered apps, deduped by id.
+    const appsById = new Map<string, { appId: string; appName: string; appSlug: string }>()
+    for (const row of input.assignments) {
+      if (row.userId !== attendee.id) continue
+      appsById.set(row.appId, { appId: row.appId, appName: row.appName, appSlug: row.appSlug })
+    }
+    for (const task of input.tasks) {
+      if (task.assigneeId !== attendee.id || !task.sprintId) continue
+      const sprint = sprintById.get(task.sprintId)
+      if (!sprint || appsById.has(sprint.appId)) continue
+      appsById.set(sprint.appId, {
+        appId: sprint.appId,
+        appName: sprint.appName,
+        appSlug: sprint.appSlug,
+      })
+    }
+
+    const apps: AttendeeAppPrep[] = [...appsById.values()]
+      .sort((a, b) => a.appName.localeCompare(b.appName))
+      .map((app) => {
+        const sprint = currentSprintByApp.get(app.appId) ?? null
+        const sprintTasks = sprint ? (tasksBySprint.get(sprint.sprintId) ?? []) : []
+        const mine = sprintTasks.filter((task) => task.assigneeId === attendee.id)
+        const open = mine.filter((task) => task.status !== 'done')
+        return {
+          ...app,
+          sprintId: sprint?.sprintId ?? null,
+          sprintName: sprint?.sprintName ?? null,
+          openCount: open.length,
+          overdueCount: open.filter((task) => isOverdue(task, input.todayIso)).length,
+        }
+      })
+
+    // Latest check-in — restricted to this person's apps' CURRENT sprints so
+    // a stale report on last month's sprint can't masquerade as fresh signal.
+    const currentSprintIds = new Set(
+      apps.map((app) => app.sprintId).filter((id): id is string => id !== null),
+    )
+    let latest: PrepCheckinRow | null = null
+    for (const row of checkinsByUser.get(attendee.id) ?? []) {
+      if (!currentSprintIds.has(row.sprintId)) continue
+      if (!latest || row.updatedAt.getTime() > latest.updatedAt.getTime()) latest = row
+    }
+
+    const computedFor = (sprintId: string) =>
+      computeTaskProgress(tasksBySprint.get(sprintId) ?? [], attendee.id).percent
+
+    let checkin: AttendeeCheckinPrep | null = null
+    if (latest) {
+      const sprint = sprintById.get(latest.sprintId)
+      const computedPercent = computedFor(latest.sprintId)
+      checkin = {
+        sprintId: latest.sprintId,
+        sprintName: sprint?.sprintName ?? '',
+        appName: sprint?.appName ?? '',
+        percent: latest.percent,
+        note: latest.note,
+        updatedAt: latest.updatedAt,
+        computedPercent,
+        gap: checkinGap(latest.percent, { percent: computedPercent }),
+      }
+    }
+
+    let checkinTarget: CheckinTarget | null = null
+    if (checkin) {
+      checkinTarget = {
+        sprintId: checkin.sprintId,
+        sprintName: checkin.sprintName,
+        appName: checkin.appName,
+        computedPercent: checkin.computedPercent,
+      }
+    } else {
+      const firstWithSprint = apps.find((app) => app.sprintId !== null)
+      if (firstWithSprint) {
+        checkinTarget = {
+          sprintId: firstWithSprint.sprintId as string,
+          sprintName: firstWithSprint.sprintName ?? '',
+          appName: firstWithSprint.appName,
+          computedPercent: computedFor(firstWithSprint.sprintId as string),
+        }
+      }
+    }
+
+    return { userId: attendee.id, name: attendee.name, apps, checkin, checkinTarget }
+  })
 }
 
 export type OrderableSegment = {

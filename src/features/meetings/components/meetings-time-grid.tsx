@@ -122,6 +122,7 @@ export function MeetingsTimeGrid({
   // The now line, on a timer that is always cleared. Seeded immediately so the
   // line appears on the first paint after hydration rather than a minute later.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the clock is an external system, and the first read can only happen after mount: reading it during render would put a time in the server HTML that the browser then hydrates against a different one.
     setNowMs(Date.now())
     const timer = setInterval(() => setNowMs(Date.now()), NOW_TICK_MS)
     return () => clearInterval(timer)

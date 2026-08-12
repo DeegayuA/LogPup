@@ -86,8 +86,9 @@ export function useIsWideScreen(): boolean | null {
 
   useEffect(() => {
     const query = window.matchMedia(WIDE_SCREEN_QUERY)
+    // The viewport is an external system: read it once on mount, then let it
+    // push changes in. There is no other moment it can first be known.
     const sync = () => setIsWide(query.matches)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- viewport width is only knowable after mount
     sync()
     query.addEventListener('change', sync)
     return () => query.removeEventListener('change', sync)

@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.146",
+  "current": "v0.0.148",
   "versions": [
     {
       "version": "v0.0.1",
@@ -875,6 +875,18 @@
       "version": "v0.0.146",
       "date": "2026-08-12",
       "hash": "4c74b95",
+      "change": "."
+    },
+    {
+      "version": "v0.0.147",
+      "date": "2026-08-12",
+      "hash": "040457c",
+      "change": "chore: reconcile drizzle migration ledger with live schema"
+    },
+    {
+      "version": "v0.0.148",
+      "date": "2026-08-12",
+      "hash": "67547e3",
       "change": "."
     }
   ]

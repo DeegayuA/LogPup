@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addEveryone, applyTeamPrefill } from './attendee-prefill'
+import { addEveryone, applyQuickAddAttendees, applyTeamPrefill } from './attendee-prefill'
 
 const roster = ['ana', 'ben', 'cho', 'dev', 'eli']
 
@@ -72,6 +72,63 @@ describe('applyTeamPrefill', () => {
       roster,
     )
     expect(next.attendeeIds).toEqual(['eli', 'dev', 'ben', 'ana'])
+  })
+})
+
+describe('applyQuickAddAttendees', () => {
+  it('adds named people as manual picks', () => {
+    const next = applyQuickAddAttendees({ attendeeIds: [], prefilledIds: [] }, ['ana'], false)
+    expect(next).toEqual({ attendeeIds: ['ana'], prefilledIds: [] })
+  })
+
+  it('promotes a named person out of the prefill', () => {
+    // ana arrived by prefill; the phrase then names her. She must become
+    // manual, or the next app change would swap away someone the user
+    // explicitly asked for.
+    const next = applyQuickAddAttendees(
+      { attendeeIds: ['ana', 'ben'], prefilledIds: ['ana', 'ben'] },
+      ['ana'],
+      false,
+    )
+    expect(next).toEqual({ attendeeIds: ['ana', 'ben'], prefilledIds: ['ben'] })
+  })
+
+  it('withdraws the old app team when the phrase re-points the app', () => {
+    // App A's team (ana+ben) was prefilled, dev added by hand; the phrase
+    // says "on <app B>" and names cho. A's team must not ride onto B.
+    const next = applyQuickAddAttendees(
+      { attendeeIds: ['ana', 'ben', 'dev'], prefilledIds: ['ana', 'ben'] },
+      ['cho'],
+      true,
+    )
+    expect(next).toEqual({ attendeeIds: ['dev', 'cho'], prefilledIds: [] })
+  })
+
+  it('retracts the prefill on an app change even when no one is named', () => {
+    const next = applyQuickAddAttendees(
+      { attendeeIds: ['ana', 'dev'], prefilledIds: ['ana'] },
+      [],
+      true,
+    )
+    expect(next).toEqual({ attendeeIds: ['dev'], prefilledIds: [] })
+  })
+
+  it('leaves the prefill alone when the app did not change', () => {
+    const next = applyQuickAddAttendees(
+      { attendeeIds: ['ana'], prefilledIds: ['ana'] },
+      ['dev'],
+      false,
+    )
+    expect(next).toEqual({ attendeeIds: ['ana', 'dev'], prefilledIds: ['ana'] })
+  })
+
+  it('does not duplicate an already-selected named person', () => {
+    const next = applyQuickAddAttendees(
+      { attendeeIds: ['dev'], prefilledIds: [] },
+      ['dev'],
+      false,
+    )
+    expect(next.attendeeIds).toEqual(['dev'])
   })
 })
 

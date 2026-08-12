@@ -52,7 +52,12 @@ export const config = {
   // `.*\.` exclusion skips the guard for ANY path containing a dot, so a request
   // like /apps/foo.bar would reach a page unauthenticated. The (app) layout also
   // redirects on a missing session as defense in depth.
+  // home/privacy/terms are the public pages under src/app/(public): they hold
+  // no workspace data, and Google's OAuth review team fetches all three with no
+  // session before it will approve the sensitive calendar.events scope. Put
+  // them back behind the guard and verification fails with a redirect, which
+  // nothing else in the app would surface.
   matcher: [
-    '/((?!api/auth|api/cron|api/meetings|_next/static|_next/image|sign-in|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
+    '/((?!api/auth|api/cron|api/meetings|_next/static|_next/image|sign-in|home|privacy|terms|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
   ],
 }

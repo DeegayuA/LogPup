@@ -8,6 +8,8 @@ import {
   partitionAutoAssign,
   canUndoAutoAssign,
   buildAutoAssignNotification,
+  resolveSuggestedAppId,
+  assembleMeetingPrep,
   AUTO_ASSIGN_CONFIDENCE,
   MAX_AUTO_TASKS_PER_MEETING,
   type OrderableSegment,
@@ -370,5 +372,199 @@ describe('buildAutoAssignNotification', () => {
   it('falls back to "Someone" when the recorder has no name', () => {
     const payload = buildAutoAssignNotification({ ...base, recorderName: null })
     expect(payload?.title).toBe('Someone assigned you a task')
+  })
+})
+
+describe('resolveSuggestedAppId', () => {
+  const apps = [
+    { id: 'a1', name: 'LogPup' },
+    { id: 'a2', name: 'Fleet Tracker' },
+  ]
+
+  it('returns null for null/undefined/empty/whitespace names', () => {
+    expect(resolveSuggestedAppId(null, apps)).toBeNull()
+    expect(resolveSuggestedAppId(undefined, apps)).toBeNull()
+    expect(resolveSuggestedAppId('', apps)).toBeNull()
+    expect(resolveSuggestedAppId('   ', apps)).toBeNull()
+  })
+
+  it('resolves an exact name match', () => {
+    expect(resolveSuggestedAppId('LogPup', apps)).toBe('a1')
+    expect(resolveSuggestedAppId('  Fleet Tracker  ', apps)).toBe('a2')
+  })
+
+  it('prefers the exact-case match when a differently-cased sibling also exists', () => {
+    const cased = [...apps, { id: 'a3', name: 'logpup' }]
+    expect(resolveSuggestedAppId('LogPup', cased)).toBe('a1')
+    expect(resolveSuggestedAppId('logpup', cased)).toBe('a3')
+  })
+
+  it('falls back to an unambiguous case-insensitive match', () => {
+    expect(resolveSuggestedAppId('logpup', apps)).toBe('a1')
+    expect(resolveSuggestedAppId('FLEET TRACKER', apps)).toBe('a2')
+  })
+
+  it('returns null when case-insensitive matching is ambiguous', () => {
+    const cased = [...apps, { id: 'a3', name: 'logpup' }]
+    // 'LOGPUP' matches neither exactly; two DISTINCT apps match loosely.
+    expect(resolveSuggestedAppId('LOGPUP', cased)).toBeNull()
+  })
+
+  it('returns null when two different apps share the exact same name', () => {
+    const dupes = [...apps, { id: 'a9', name: 'LogPup' }]
+    expect(resolveSuggestedAppId('LogPup', dupes)).toBeNull()
+  })
+
+  it('does not treat the SAME app listed twice (union across attendees) as ambiguous', () => {
+    const union = [...apps, { id: 'a1', name: 'LogPup' }]
+    expect(resolveSuggestedAppId('LogPup', union)).toBe('a1')
+  })
+
+  it('returns null for a name the model invented', () => {
+    expect(resolveSuggestedAppId('Payroll', apps)).toBeNull()
+  })
+})
+
+describe('assembleMeetingPrep', () => {
+  const attendees = [
+    { id: 'u1', name: 'Nadeesha Perera' },
+    { id: 'u2', name: 'Kasun Silva' },
+  ]
+  const assignments = [
+    { userId: 'u1', appId: 'a1', appName: 'LogPup', appSlug: 'logpup' },
+    { userId: 'u1', appId: 'a2', appName: 'Fleet Tracker', appSlug: 'fleet' },
+  ]
+  const sprints = [
+    {
+      sprintId: 's1',
+      sprintName: 'Sprint 4',
+      appId: 'a1',
+      appName: 'LogPup',
+      appSlug: 'logpup',
+      startDate: '2026-08-03',
+    },
+    {
+      sprintId: 's2',
+      sprintName: 'Sprint 9',
+      appId: 'a2',
+      appName: 'Fleet Tracker',
+      appSlug: 'fleet',
+      startDate: '2026-08-01',
+    },
+  ]
+  const today = '2026-08-12'
+
+  const base = { attendees, assignments, sprints, tasks: [], checkins: [], todayIso: today }
+
+  it('returns empty apps, no check-in, no target for an attendee linked to nothing', () => {
+    const [, kasun] = assembleMeetingPrep(base)
+    expect(kasun.userId).toBe('u2')
+    expect(kasun.apps).toEqual([])
+    expect(kasun.checkin).toBeNull()
+    expect(kasun.checkinTarget).toBeNull()
+  })
+
+  it('counts open and overdue tasks in the current sprint — done excluded, due-today not overdue', () => {
+    const tasks = [
+      { sprintId: 's1', assigneeId: 'u1', status: 'todo' as const, dueDate: '2026-08-10' },
+      { sprintId: 's1', assigneeId: 'u1', status: 'in_progress' as const, dueDate: today },
+      { sprintId: 's1', assigneeId: 'u1', status: 'done' as const, dueDate: '2026-08-01' },
+      // Someone else's task never lands in u1's counts.
+      { sprintId: 's1', assigneeId: 'u2', status: 'todo' as const, dueDate: '2026-08-01' },
+    ]
+    const [nadeesha] = assembleMeetingPrep({ ...base, tasks })
+    const logpup = nadeesha.apps.find((app) => app.appId === 'a1')
+    expect(logpup).toMatchObject({ sprintId: 's1', openCount: 2, overdueCount: 1 })
+  })
+
+  it('discovers an app from current-sprint tasks even without an assignment row', () => {
+    const tasks = [{ sprintId: 's1', assigneeId: 'u2', status: 'todo' as const, dueDate: null }]
+    const [, kasun] = assembleMeetingPrep({ ...base, tasks })
+    expect(kasun.apps.map((app) => app.appId)).toEqual(['a1'])
+  })
+
+  it('sorts apps by name and reports null sprint (zero counts) for an app with nothing running', () => {
+    const noFleetSprint = sprints.filter((sprint) => sprint.appId !== 'a2')
+    const [nadeesha] = assembleMeetingPrep({ ...base, sprints: noFleetSprint })
+    expect(nadeesha.apps.map((app) => app.appName)).toEqual(['Fleet Tracker', 'LogPup'])
+    expect(nadeesha.apps[0]).toMatchObject({ sprintId: null, openCount: 0, overdueCount: 0 })
+  })
+
+  it('treats the most recently started sprint as THE current sprint when two overlap', () => {
+    const overlapping = [
+      ...sprints,
+      {
+        sprintId: 's3',
+        sprintName: 'Sprint 5',
+        appId: 'a1',
+        appName: 'LogPup',
+        appSlug: 'logpup',
+        startDate: '2026-08-10',
+      },
+    ]
+    const [nadeesha] = assembleMeetingPrep({ ...base, sprints: overlapping })
+    expect(nadeesha.apps.find((app) => app.appId === 'a1')?.sprintId).toBe('s3')
+  })
+
+  it('picks the latest check-in by updatedAt and derives the gap against that sprint', () => {
+    const tasks = [
+      { sprintId: 's1', assigneeId: 'u1', status: 'done' as const, dueDate: null },
+      { sprintId: 's1', assigneeId: 'u1', status: 'todo' as const, dueDate: null },
+    ]
+    const checkins = [
+      {
+        sprintId: 's2',
+        userId: 'u1',
+        percent: 20,
+        note: null,
+        updatedAt: new Date('2026-08-10T09:00:00Z'),
+      },
+      {
+        sprintId: 's1',
+        userId: 'u1',
+        percent: 90,
+        note: 'nearly there',
+        updatedAt: new Date('2026-08-11T09:00:00Z'),
+      },
+    ]
+    const [nadeesha] = assembleMeetingPrep({ ...base, tasks, checkins })
+    // Board says 50 (1 of 2 done); saying 90 is more than 15 points ahead.
+    expect(nadeesha.checkin).toMatchObject({
+      sprintId: 's1',
+      percent: 90,
+      note: 'nearly there',
+      computedPercent: 50,
+      gap: 'ahead',
+    })
+    // The target follows the existing check-in — update, don't scatter.
+    expect(nadeesha.checkinTarget).toMatchObject({ sprintId: 's1', computedPercent: 50 })
+  })
+
+  it('reports gap "unknown" when the board has no tasks for the person', () => {
+    const checkins = [
+      { sprintId: 's1', userId: 'u1', percent: 40, note: null, updatedAt: new Date() },
+    ]
+    const [nadeesha] = assembleMeetingPrep({ ...base, checkins })
+    expect(nadeesha.checkin).toMatchObject({ computedPercent: null, gap: 'unknown' })
+  })
+
+  it('ignores a check-in on a sprint that is not one of their apps’ current sprints', () => {
+    const checkins = [
+      { sprintId: 's-old', userId: 'u1', percent: 100, note: null, updatedAt: new Date() },
+    ]
+    const [nadeesha] = assembleMeetingPrep({ ...base, checkins })
+    expect(nadeesha.checkin).toBeNull()
+  })
+
+  it('falls back to the first app (alphabetically) with a running sprint as the check-in target', () => {
+    const [nadeesha] = assembleMeetingPrep(base)
+    // Fleet Tracker sorts before LogPup; its sprint s2 becomes the target.
+    expect(nadeesha.checkinTarget).toMatchObject({
+      sprintId: 's2',
+      sprintName: 'Sprint 9',
+      appName: 'Fleet Tracker',
+      computedPercent: null,
+    })
+    expect(nadeesha.checkin).toBeNull()
   })
 })

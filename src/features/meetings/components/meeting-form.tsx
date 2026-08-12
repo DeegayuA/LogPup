@@ -46,7 +46,11 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { createMeeting, teamForApp } from '@/features/meetings/actions'
-import { addEveryone, applyTeamPrefill } from '@/features/meetings/attendee-prefill'
+import {
+  addEveryone,
+  applyQuickAddAttendees,
+  applyTeamPrefill,
+} from '@/features/meetings/attendee-prefill'
 import { icsHref } from '@/features/meetings/components/add-to-calendar'
 import { MEETING_URL_ERROR, isValidMeetingUrl } from '@/features/meetings/meeting-url'
 import type { ActiveUser } from '@/features/people/queries'
@@ -202,7 +206,6 @@ export function MeetingForm({
   // the next change to the quick-add text re-parses.
   useEffect(() => {
     if (!preview) return
-    const named = new Set(preview.attendees.map((a) => a.id))
     setForm((f) => ({
       ...f,
       title: preview.title.slice(0, 120),
@@ -210,13 +213,15 @@ export function MeetingForm({
       start: preview.startsAt ?? f.start,
       end: preview.endsAt ?? f.end,
       meetingUrl: preview.meetingUrl ?? f.meetingUrl,
-      attendeeIds:
-        named.size > 0
-          ? Array.from(new Set([...f.attendeeIds, ...named]))
-          : f.attendeeIds,
-      // Naming someone in the phrase is a human decision about them — promote
-      // them out of the prefill so a later app change can't swap them away.
-      prefilledIds: f.prefilledIds.filter((id) => !named.has(id)),
+      // Named people join (or are promoted to) manual; a phrase that
+      // re-points the app also withdraws the previous app's team prefill —
+      // otherwise the old team rides along onto the new app and gets
+      // submitted with it. See applyQuickAddAttendees for both rules.
+      ...applyQuickAddAttendees(
+        f,
+        preview.attendees.map((a) => a.id),
+        preview.appId !== null && preview.appId !== f.appId,
+      ),
     }))
   }, [preview])
 

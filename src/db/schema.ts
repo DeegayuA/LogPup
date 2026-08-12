@@ -427,6 +427,14 @@ export const meetingTaskSuggestions = pgTable('meeting_task_suggestions', {
   text: text('text').notNull(),
   suggestedUserId: uuid('suggested_user_id').references(() => users.id, { onDelete: 'set null' }),
   suggestedDueDate: date('suggested_due_date'),
+  // Which app the AI routed this item into — resolved server-side from the
+  // model's suggestedApp NAME (the prompt shows it each attendee's app list)
+  // via resolveSuggestedAppId in notes.ts: exact match, then unambiguous
+  // case-insensitive, never a guess. NULL means "no confident app", and
+  // every reader falls back to the meeting's own appId — exactly the
+  // behaviour this column predates. ON DELETE set null so deleting an app
+  // degrades its suggestions to that fallback instead of orphaning them.
+  suggestedAppId: uuid('suggested_app_id').references(() => apps.id, { onDelete: 'set null' }),
   status: suggestionStatus('status').notNull().default('open'),
   createdTaskId: uuid('created_task_id').references(() => tasks.id, { onDelete: 'set null' }),
   // Who ACCEPTED this suggestion — set only while status is 'accepted'.
