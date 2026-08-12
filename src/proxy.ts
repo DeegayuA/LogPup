@@ -4,6 +4,17 @@ import { canAccessApp } from '@/lib/access-gate'
 
 export default auth((req) => {
   if (!req.auth) {
+    // The bare domain serves the public home page rather than bouncing to
+    // /sign-in. Google's OAuth review opens the origin itself, and a login
+    // screen there fails the "your home page does not explain the purpose of
+    // your app" check — which is exactly how the first submission was rejected.
+    //
+    // rewrite, not redirect: the reviewer has to see the explanation AT the URL
+    // registered on the consent screen. A redirect would move them to /home and
+    // leave the registered URL itself still answering with a bounce.
+    if (req.nextUrl.pathname === '/') {
+      return NextResponse.rewrite(new URL('/home', req.nextUrl))
+    }
     return NextResponse.redirect(new URL('/sign-in', req.nextUrl))
   }
   const { pathname } = req.nextUrl

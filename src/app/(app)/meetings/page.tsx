@@ -93,6 +93,7 @@ export default async function MeetingsPage(props: {
         currentUserId={currentUserId}
         isAdmin={isAdmin}
         users={activeUsers}
+        apps={appOptions}
         initialView={initialView}
         initialDate={initialDate}
         todayIso={todayIso}

@@ -16,8 +16,16 @@
  *  - A meeting that crosses midnight is drawn on BOTH days, cut at the
  *    boundary, rather than hanging off the bottom of one of them.
  *
- * WHAT IT DELIBERATELY DOES NOT DO (YET): drag to move, drag to resize. See
- * the seam comment on `TimeGridEvent`.
+ *  - DRAG TO MOVE. A block can be dragged to another time, another day, or
+ *    both; it snaps to the quarter hour and keeps its length. The pixel->time
+ *    arithmetic lives in features/meetings/time-drag.ts, where it is unit
+ *    tested without a DOM.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO (YET): drag to RESIZE. Moving and resizing
+ * are separate gestures with separate failure modes — a resize needs its own
+ * handle, must be suppressed on a midnight-cut edge, and can invert a
+ * meeting's start and end, none of which a move has to think about. See the
+ * seam comment on `TimeGridEvent`.
  *
  * ── THE Z-TIER LADDER ─────────────────────────────────────────────────────
  * Written out once, here, because every layer in this file is either sticky or
@@ -48,13 +56,34 @@
  * are pure and tested. This file positions divs.
  */
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+} from 'react'
+import {
+  DndContext,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { PlusIcon } from 'lucide-react'
 import { format } from 'date-fns'
+import { toast } from 'sonner'
 import {
   HolidayIcons,
   holidayCategoryLabel,
   holidayToneClass,
 } from '@/components/shared/holiday-icon'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { getLkHoliday, isLkSunday } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
 import {
@@ -75,6 +104,8 @@ import {
 import { laneFraction, overlapMap } from '@/features/meetings/calendar-overlap'
 import { isoDayInstant, isoToDisplayDate } from '@/features/meetings/calendar-view'
 import { chipTone } from '@/features/meetings/components/meetings-month-calendar'
+import { rescheduleMeeting } from '@/features/meetings/actions'
+import { draggedMinutes, isRealMove, moveMeetingByDrag } from '@/features/meetings/time-drag'
 import { durationLabel, meetingTiming } from '@/features/meetings/components/meeting-glance'
 import { formatBusinessTime } from '@/features/people/format-instant'
 import type { MeetingSummary } from '@/features/meetings/queries'
@@ -94,6 +125,10 @@ const NOW_TICK_MS = 60_000
 /** Below roughly two lines there is no room for a second line of text, so the
  *  time joins the title on one row instead of being clipped out of existence. */
 const COMPACT_BLOCK_PX = 40
+/** Matches the month grid and the sprint board: a plain click must still open
+ *  the meeting, so a drag only starts once the pointer has actually
+ *  travelled. */
+const DRAG_ACTIVATION_DISTANCE = 8
 
 /** One meeting's slice of one day, with everything that does NOT depend on the
  *  zoom or the clock resolved once: the midnight clipping, and the labels. */
@@ -137,12 +172,55 @@ type DayShape = {
 
 type DayColumn = DayShape & { blocks: TimedBlock[] }
 
+/**
+ * A day column as a drop target.
+ *
+ * Its own component because `useDroppable` is a hook and the columns are
+ * rendered from a `.map`. It renders no box of its own — `setNodeRef` goes
+ * onto the column element the grid was already drawing, so the drop target
+ * and the visible column are the same rectangle and cannot drift apart.
+ */
+function DayDropColumn({
+  iso,
+  dayLabel,
+  height,
+  children,
+}: {
+  iso: string
+  dayLabel: string
+  height: number
+  children: React.ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: iso })
+  return (
+    <div
+      ref={setNodeRef}
+      /* The one programmatic tie between a column and the day it draws:
+         the header above it is a sibling grid item, so it cannot label
+         this by proximity alone. */
+      role="group"
+      aria-label={dayLabel}
+      /* `isolate` is load-bearing — see the z-tier ladder at the top. */
+      className={cn(
+        'relative isolate border-r border-border last:border-r-0',
+        // Only while something is actually over it. A permanent hover tint
+        // would read as a state the column is in.
+        isOver && 'bg-accent/30',
+      )}
+      style={{ height }}
+    >
+      {children}
+    </div>
+  )
+}
+
 export function MeetingsTimeGrid({
   days,
   meetings,
   pxPerHour,
   todayIso,
   onOpenMeeting,
+  onCreateAt,
   onZoomBy,
 }: {
   /** The ISO days on screen, in order — one for Day view, seven for Week. */
@@ -152,6 +230,8 @@ export function MeetingsTimeGrid({
   pxPerHour: number
   todayIso: string
   onOpenMeeting: (meetingId: string) => void
+  /** Clicking an empty hour asks the caller to open a create dialog at that instant. */
+  onCreateAt?: (start: Date) => void
   /** Alt + wheel hands a signed pixel delta back to the toolbar, which owns
    *  the clamping and the stored preference. */
   onZoomBy: (deltaPx: number) => void
@@ -160,6 +240,80 @@ export function MeetingsTimeGrid({
   /** Null until mounted: the now line must not be part of the server HTML, or
    *  it hydrates against a different clock. */
   const [nowMs, setNowMs] = useState<number | null>(null)
+  const [, startTransition] = useTransition()
+
+  /* Optimistic moves, same contract as the month grid: the dropped block
+     repaints at its new time immediately, and React reverts it by itself if
+     the action rejects or throws once the transition settles. Keyed off the
+     `meetings` prop, so a server refresh replaces this rather than fighting
+     it. */
+  const [visibleMeetings, applyOptimisticMove] = useOptimistic(
+    meetings,
+    (state: MeetingSummary[], patch: { meetingId: string; startsAt: Date; endsAt: Date }) =>
+      state.map((m) =>
+        m.id === patch.meetingId ? { ...m, startsAt: patch.startsAt, endsAt: patch.endsAt } : m,
+      ),
+  )
+
+  /* Same activation distance as the month grid and the sprint board: a plain
+     click must still open the meeting, so a drag only begins once the
+     pointer has actually travelled. */
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
+  )
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const sourceIso = event.active.data.current?.sourceIso as string | undefined
+      const meetingId = event.active.data.current?.meetingId as string | undefined
+      if (!sourceIso || !meetingId) return
+
+      // No drop target means the block was released outside every column —
+      // over the gutter, the header, or off the grid. Treat that as a
+      // cancel, not as "keep the day and take the time".
+      const targetIso = event.over ? String(event.over.id) : null
+      if (!targetIso) return
+
+      const dayDelta = days.indexOf(targetIso) - days.indexOf(sourceIso)
+      const minuteDelta = draggedMinutes(event.delta.y, pxPerHour)
+      if (!isRealMove(dayDelta, minuteDelta)) return
+
+      const meeting = visibleMeetings.find((m) => m.id === meetingId)
+      if (!meeting) return
+
+      const next = moveMeetingByDrag({
+        startsAt: meeting.startsAt,
+        endsAt: meeting.endsAt,
+        dayDelta,
+        minuteDelta,
+        gridStartHour: GRID_START_HOUR,
+        gridEndHour: GRID_END_HOUR,
+      })
+
+      startTransition(async () => {
+        // Inside the transition, so React ties the optimistic state to this
+        // action's lifetime and rolls it back on failure.
+        applyOptimisticMove({ meetingId, ...next })
+        try {
+          const res = await rescheduleMeeting(
+            meetingId,
+            next.startsAt.toISOString(),
+            next.endsAt.toISOString(),
+          )
+          if (!res.ok) {
+            toast.error(res.error)
+            return
+          }
+          // The action reports a Google Calendar failure as a warning while
+          // still having moved the meeting — surfaced, not swallowed.
+          if (res.data?.calendarWarning) toast.warning(res.data.calendarWarning)
+        } catch {
+          toast.error('Could not move that meeting — try again')
+        }
+      })
+    },
+    [days, pxPerHour, visibleMeetings, applyOptimisticMove],
+  )
 
   /* Two passes, deliberately. The day window, the midnight clipping and every
      label depend on the DAYS and the MEETINGS; only the lane packing and the
@@ -167,7 +321,10 @@ export function MeetingsTimeGrid({
      notch re-derived seven day windows (~5 Intl lookups each) and re-clipped
      and re-formatted every meeting, sixty times a second while the wheel was
      turning. */
-  const shapes = useMemo(() => days.map((iso) => buildShape(iso, meetings)), [days, meetings])
+  const shapes = useMemo(
+    () => days.map((iso) => buildShape(iso, visibleMeetings)),
+    [days, visibleMeetings],
+  )
   const columns = useMemo<DayColumn[]>(
     () => shapes.map((shape) => ({ ...shape, blocks: packBlocks(shape, pxPerHour) })),
     [shapes, pxPerHour],
@@ -296,6 +453,11 @@ export function MeetingsTimeGrid({
   }
 
   return (
+    /* One DndContext for the whole grid. Wrapping the SCROLLER rather than
+       each column means a drag that crosses columns is a single gesture, and
+       dnd-kit measures against the same scroll offset the blocks are
+       positioned in. */
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
     <div
       ref={scrollRef}
       /* Focusable and named, so arrow keys, Page Up/Down and Home/End scroll it
@@ -365,18 +527,18 @@ export function MeetingsTimeGrid({
 
         {/* ── day columns ───────────────────────────────────────────── */}
         {columns.map((column) => (
-          <div
+          <DayDropColumn
             key={column.iso}
-            /* The one programmatic tie between a column and the day it draws:
-               the header above it is a sibling grid item, so it cannot label
-               this by proximity alone. */
-            role="group"
-            aria-label={column.dayLabel}
-            /* `isolate` is load-bearing — see the z-tier ladder at the top. */
-            className="relative isolate border-r border-border last:border-r-0"
-            style={{ height: bodyHeight }}
+            iso={column.iso}
+            dayLabel={column.dayLabel}
+            height={bodyHeight}
           >
-            <HourCells hours={hours} pxPerHour={pxPerHour} />
+            <HourCells
+              hours={hours}
+              pxPerHour={pxPerHour}
+              iso={column.iso}
+              onCreateAt={onCreateAt}
+            />
 
             {column.iso === todayIso ? (
               <NowLine nowMs={nowMs} window={column.window} pxPerHour={pxPerHour} />
@@ -393,6 +555,7 @@ export function MeetingsTimeGrid({
                   key={block.slice.meeting.id}
                   block={block}
                   dayPrefix={column.dayPrefix}
+                  dayIso={column.iso}
                   isLive={state === 'live'}
                   isPast={state === 'past'}
                   scrollMarginTop={eventScrollMarginTop}
@@ -400,10 +563,11 @@ export function MeetingsTimeGrid({
                 />
               )
             })}
-          </div>
+          </DayDropColumn>
         ))}
       </div>
     </div>
+    </DndContext>
   )
 }
 
@@ -546,9 +710,14 @@ const HourGutter = memo(function HourGutter({
 const HourCells = memo(function HourCells({
   hours,
   pxPerHour,
+  iso,
+  onCreateAt,
 }: {
   hours: number[]
   pxPerHour: number
+  /** The day these cells belong to — half of the instant a `+` resolves to. */
+  iso: string
+  onCreateAt?: (start: Date) => void
 }) {
   return (
     <>
@@ -556,7 +725,7 @@ const HourCells = memo(function HourCells({
         <div
           key={hour}
           className={cn(
-            'border-b border-border/60',
+            'group/cell relative border-b border-border/60',
             // Named rather than `last:`: the blocks and the now line are
             // siblings of these cells, so which element is `:last-child`
             // depended on whether the day happened to have any meetings on it.
@@ -566,11 +735,56 @@ const HourCells = memo(function HourCells({
             isWorkingHour(hour) ? 'bg-transparent' : 'bg-muted/40',
           )}
           style={{ height: pxPerHour }}
-        />
+        >
+          {onCreateAt ? <CreateSlotButton iso={iso} hour={hour} onCreateAt={onCreateAt} /> : null}
+        </div>
       ))}
     </>
   )
 })
+
+/**
+ * The "schedule something here" affordance: an empty hour is the most direct
+ * statement anyone can make about when they want a meeting, and until now the
+ * only way to act on it was to open a dialog elsewhere and retype the day and
+ * time the grid was already showing.
+ *
+ * Hidden until the cell is hovered, so a week of empty hours is not 168 plus
+ * signs — but `focus-visible:opacity-100` keeps it reachable by keyboard,
+ * where there is no hover to depend on. `opacity`, not conditional rendering:
+ * a button that only exists on hover cannot be tabbed to at all.
+ */
+function CreateSlotButton({
+  iso,
+  hour,
+  onCreateAt,
+}: {
+  iso: string
+  hour: number
+  onCreateAt: (start: Date) => void
+}) {
+  function handleClick() {
+    // `isoDayInstant` hands back Colombo MIDDAY of this ISO day (see
+    // DayHeader), so midday minus twelve hours is Colombo midnight exactly —
+    // Sri Lanka has no DST, so that arithmetic holds year-round and, unlike
+    // `setHours`, gives the same instant whatever timezone the browser is in.
+    const dayStart = isoDayInstant(iso).getTime() - 12 * 60 * 60 * 1000
+    onCreateAt(new Date(dayStart + hour * 60 * 60 * 1000))
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      aria-label={`New meeting at ${String(hour).padStart(2, '0')}:00 on ${iso}`}
+      className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-100 outline-none group-hover/cell:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none"
+    >
+      <span className="flex size-5 items-center justify-center rounded-md bg-muted text-muted-foreground ring-1 ring-border group-focus-within/cell:ring-ring hover:bg-accent hover:text-foreground">
+        <PlusIcon className="size-3.5" aria-hidden />
+      </span>
+    </button>
+  )
+}
 
 /** Memoised on two primitives, so the minute tick that moves the now line no
  *  longer rebuilds seven headers — and with them 28 timezone lookups. */
@@ -655,6 +869,7 @@ const DayHeader = memo(function DayHeader({ iso, isToday }: { iso: string; isTod
 const TimeGridEvent = memo(function TimeGridEvent({
   block,
   dayPrefix,
+  dayIso,
   isLive,
   isPast,
   scrollMarginTop,
@@ -664,6 +879,8 @@ const TimeGridEvent = memo(function TimeGridEvent({
   /** `Wed 12 Aug` — the column's day, so a block announced on its own says
    *  which day it belongs to. */
   dayPrefix: string
+  /** The column this block is drawn in — the drag origin. */
+  dayIso: string
   isLive: boolean
   isPast: boolean
   scrollMarginTop: number
@@ -673,15 +890,38 @@ const TimeGridEvent = memo(function TimeGridEvent({
   const { meeting, continuesBefore, continuesAfter } = slice
   const isCompact = block.height < COMPACT_BLOCK_PX
 
+  /* The id carries the DAY as well as the meeting: a meeting crossing
+     midnight is drawn as two blocks, and dnd-kit ids must be unique or the
+     second one silently never becomes draggable. `sourceIso` is also what
+     the drop handler diffs against to get the day delta. */
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: `${meeting.id}::${dayIso}`,
+    data: { meetingId: meeting.id, sourceIso: dayIso },
+  })
+
   return (
     <button
+      ref={setNodeRef}
       type="button"
       onClick={() => onOpen(meeting.id)}
+      {...listeners}
+      {...attributes}
       style={{
         top: block.top,
         height: block.height,
         left: `calc(${block.leftPct}% + 2px)`,
         width: `calc(${block.widthPct}% - 4px)`,
+        /* Translated, never re-laid-out, while dragging: `top` is the
+           committed time and must not move until the write lands, or a
+           failed reschedule would leave the block at the dropped position
+           with the database still holding the old one. */
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+        /* Above every other block, so the dragged one is never posted behind
+           a neighbour it is passing over. */
+        zIndex: isDragging ? 30 : undefined,
+        /* Dragging is a pointer gesture; without this the browser claims the
+           vertical drag for scrolling on touch and the block never moves. */
+        touchAction: 'none',
         /* Focus scrolls a block into view flush with the scrollport edge —
            which is exactly where the sticky header, the all-day strip and the
            hour gutter sit, so a tabbed-to block landed behind them with its
@@ -705,7 +945,7 @@ const TimeGridEvent = memo(function TimeGridEvent({
         'transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none',
         'hover:brightness-95 hover:shadow-sm',
         'focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        chipTone(isPast, isLive),
+        chipTone(isPast, isLive, meeting.appId),
         // A cut edge is square and runs flush into the grid boundary; a real
         // edge is rounded and sits inside it. That contrast is the whole
         // visible signal that a meeting continues onto the next day — the
@@ -721,6 +961,11 @@ const TimeGridEvent = memo(function TimeGridEvent({
           slice.timeRange,
           slice.duration,
           meeting.appName,
+          // The faces below are decorative to a screen reader; this is where
+          // the same information is actually said.
+          meeting.attendees.length > 0
+            ? `${meeting.attendees.length} ${meeting.attendees.length === 1 ? 'attendee' : 'attendees'}`
+            : null,
           isLive ? 'happening now' : isPast ? 'past' : null,
           continuesBefore ? 'continued from the previous day' : null,
           continuesAfter ? 'continues on the next day' : null,
@@ -729,8 +974,13 @@ const TimeGridEvent = memo(function TimeGridEvent({
           .join(', ')}
       </span>
       <span aria-hidden className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <span className={cn('flex min-w-0 gap-1', isCompact ? 'items-baseline' : 'flex-col')}>
-          <span className="min-w-0 truncate text-xs font-medium">{meeting.title}</span>
+        {/* Title and time share a row at every size. They used to stack on
+            anything taller than COMPACT_BLOCK_PX, which cost a third line the
+            block had no room for: a one-hour block fits two lines, so the app
+            name got rendered and then sliced through the middle of its glyphs.
+            Two rows always beats three rows clipped. */}
+        <span className="flex min-w-0 items-baseline gap-1">
+          <span className="min-w-0 flex-1 truncate text-xs font-medium">{meeting.title}</span>
           {/* 12px, not 11px: the month chip moved these same two fields off
               11px deliberately ("below the practical floor for muted text"),
               and this view is one click away from it. */}
@@ -738,13 +988,65 @@ const TimeGridEvent = memo(function TimeGridEvent({
             {slice.startLabel}
           </span>
         </span>
-        {!isCompact && meeting.appName ? (
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{meeting.appName}</span>
+        {!isCompact && (meeting.appName || meeting.attendees.length > 0) ? (
+          <span className="mt-auto flex min-w-0 items-end justify-between gap-1.5">
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {meeting.appName}
+            </span>
+            <AttendeeAvatars attendees={meeting.attendees} />
+          </span>
         ) : null}
       </span>
     </button>
   )
 })
+
+/** How many faces fit before a block starts looking like a contact sheet. */
+const MAX_VISIBLE_ATTENDEES = 3
+
+/**
+ * Who is in the meeting, as faces.
+ *
+ * Sized down to 16px from the Avatar default of 32: a block is two lines tall
+ * at one hour, and anything larger would own the chip instead of annotating it.
+ * The overlap is -space-x-1 rather than AvatarGroup's -space-x-2, which at this
+ * size hid half of every face behind the next one.
+ *
+ * aria-hidden by inheritance — this whole subtree sits inside the block's
+ * `aria-hidden` wrapper, and the attendee count is spoken by the sr-only label
+ * above instead. Faces are recognised, names are read; the two audiences want
+ * different things.
+ */
+function AttendeeAvatars({ attendees }: { attendees: MeetingSummary['attendees'] }) {
+  if (attendees.length === 0) return null
+  const visible = attendees.slice(0, MAX_VISIBLE_ATTENDEES)
+  const overflow = attendees.length - visible.length
+
+  return (
+    <span className="flex shrink-0 items-center -space-x-1">
+      {visible.map((attendee) => (
+        <Avatar
+          key={attendee.id}
+          className="size-4 ring-1 ring-card"
+          // Not a tooltip: the whole block is one button, and a nested
+          // interactive tooltip trigger would break that. `title` still gives
+          // the name on hover without adding a second control.
+          title={attendee.name}
+        >
+          {attendee.avatarUrl ? <AvatarImage src={attendee.avatarUrl} alt="" /> : null}
+          <AvatarFallback className="text-[8px] font-medium">
+            {attendee.name.slice(0, 1).toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+      ))}
+      {overflow > 0 ? (
+        <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[8px] font-medium text-muted-foreground ring-1 ring-card">
+          {overflow > 9 ? '9+' : `+${overflow}`}
+        </span>
+      ) : null}
+    </span>
+  )
+}
 
 /** A meeting that owns the whole day — see `isAllDayMeeting` for the rule. */
 function AllDayEvent({

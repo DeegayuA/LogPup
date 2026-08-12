@@ -40,6 +40,14 @@ export async function clearTestData(
   }
 
   // Delete children before parents to respect foreign keys; users are preserved.
+  //
+  // activity_log is preserved TOO, and that is a decision rather than an
+  // oversight: it is an audit trail, and a wipe is precisely the event it
+  // most needs to have recorded (the row written below). Its entries carry
+  // denormalized names — task titles, meeting titles — so those outlive the
+  // rows they described, which is the whole reason they are denormalized.
+  // If a wipe ever has to be total, the trail must be truncated explicitly
+  // and visibly, not swept along by a list of business tables.
   await db.delete(meetingAttendees)
   await db.delete(meetings)
   await db.delete(tasks)

@@ -103,6 +103,19 @@ describe('parseMeetingIntent', () => {
     expect(parseMeetingIntent('planning next week 10am', PEOPLE, NOW)?.startsAt).toEqual(aug(18, 10))
   })
 
+  // Regression: "tommorow" was left in the title and the meeting silently
+  // landed on today, which reads as a broken scheduler rather than a typo.
+  it.each(['tommorow', 'tommorrow', 'tomorow', 'tmrw', 'tmr'])(
+    'reads "%s" as tomorrow',
+    (spelling) => {
+      const intent = parseMeetingIntent(`standup ${spelling} 10am`, PEOPLE, NOW)
+      expect(intent?.startsAt).toEqual(aug(12, 10))
+      // The date word must also be stripped from the title, or the meeting ends
+      // up named after the day it is on.
+      expect(intent?.title).toBe('standup')
+    },
+  )
+
   it('falls back to a 9am start when a day is given without a time', () => {
     const intent = parseMeetingIntent('standup tomorrow', PEOPLE, NOW)
     expect(intent?.title).toBe('standup')

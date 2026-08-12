@@ -2,7 +2,6 @@
 
 import { useId, useState, useTransition, type FormEvent, type ReactNode } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
@@ -11,6 +10,7 @@ import {
   ClipboardListIcon,
   FileTextIcon,
   ListIcon,
+  PencilIcon,
   Trash2Icon,
   UsersIcon,
 } from 'lucide-react'
@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/dialog'
 import { deleteMeeting, rescheduleMeeting } from '@/features/meetings/actions'
 import { AddToCalendarMenu } from '@/features/meetings/components/add-to-calendar'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MetaChip } from '@/features/meetings/components/meeting-chips'
 import {
   durationLabel,
@@ -102,6 +103,8 @@ export function MeetingDetailDialog({
   isAdmin,
   onOpenChange,
   onOpenInList,
+  users = [],
+  apps = [],
 }: {
   /** The open meeting, or null when the panel is closed. */
   meeting: MeetingSummary | null
@@ -110,6 +113,14 @@ export function MeetingDetailDialog({
   onOpenChange: (open: boolean) => void
   /** Jumps to the list view for this meeting (notes timeline, follow-ups, AI). */
   onOpenInList?: (meeting: MeetingSummary) => void
+  /**
+   * Attendee pool and app list for the edit dialog. Both optional and both
+   * defaulting to empty, because a caller that has neither should still get a
+   * working panel — the edit form simply offers fewer choices, rather than the
+   * panel refusing to render.
+   */
+  users?: { id: string; name: string }[]
+  apps?: { id: string; name: string }[]
 }) {
   // Held so the panel still has content (and a DialogTitle) while it plays its
   // closing animation, after the parent has already cleared the selection.
@@ -126,6 +137,8 @@ export function MeetingDetailDialog({
             // Same rule as every meeting write on the server: an admin, or the
             // person who created it.
             canManage={isAdmin || shown.createdBy === currentUserId}
+            users={users}
+            apps={apps}
             onOpenChange={onOpenChange}
             onOpenInList={onOpenInList}
           />
@@ -138,15 +151,18 @@ export function MeetingDetailDialog({
 function MeetingDetailBody({
   meeting,
   canManage,
+  users,
+  apps,
   onOpenChange,
   onOpenInList,
 }: {
   meeting: MeetingSummary
   canManage: boolean
+  users: { id: string; name: string }[]
+  apps: { id: string; name: string }[]
   onOpenChange: (open: boolean) => void
   onOpenInList?: (meeting: MeetingSummary) => void
 }) {
-  const router = useRouter()
   const fieldId = useId()
   const [isPending, startTransition] = useTransition()
   const [start, setStart] = useState(meeting.startsAt)
@@ -192,7 +208,6 @@ function MeetingDetailBody({
         }
         if (res.data.calendarWarning) toast.warning(res.data.calendarWarning)
         else toast.success('Meeting moved')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -209,7 +224,6 @@ function MeetingDetailBody({
         }
         toast.success('Meeting deleted')
         onOpenChange(false)
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -407,6 +421,31 @@ function MeetingDetailBody({
       ) : null}
 
       <DialogFooter className="sm:justify-between">
+        {/* The reschedule form above moves a meeting in time; this changes
+            everything else about it — title, app, agenda, link, attendees.
+            Both are behind the same `canManage` gate, so an admin or the
+            organiser gets the full set rather than "move it or delete it". */}
+        {canManage ? (
+          <MeetingForm
+            apps={apps}
+            activeUsers={users}
+            editing={{
+              id: meeting.id,
+              appId: meeting.appId,
+              title: meeting.title,
+              startsAt: meeting.startsAt,
+              endsAt: meeting.endsAt,
+              agenda: meeting.agenda,
+              meetingUrl: meeting.meetingUrl,
+              attendeeIds: meeting.attendees.map((attendee) => attendee.id),
+            }}
+            trigger={
+              <Button type="button" variant="outline" size="sm">
+                <PencilIcon /> Edit
+              </Button>
+            }
+          />
+        ) : null}
         {canManage ? (
           <AlertDialog>
             <AlertDialogTrigger render={<Button type="button" variant="destructive" size="sm" />}>

@@ -6,9 +6,12 @@ import { Button } from '@/components/ui/button'
 import { ActivityFeed } from '@/features/activity/components/activity-feed'
 import { ActivityFilterBar } from '@/features/activity/components/activity-filter-bar'
 import { decodeActivityCursor, encodeActivityCursor } from '@/features/activity/filters'
-import { listActivity } from '@/features/activity/queries'
+import {
+  listActivity,
+  listActivityActors,
+  listActivityApps,
+} from '@/features/activity/queries'
 import { ACTIVITY_ENTITY_TYPES, type ActivityFilters } from '@/features/activity/types'
-import { listActiveUsers, listAssignableApps } from '@/features/people/queries'
 
 export const metadata: Metadata = {
   title: 'Activity',
@@ -68,8 +71,11 @@ export default async function ActivityPage(props: {
 
   const [{ rows, hasMore }, people, apps] = await Promise.all([
     listActivity({ limit: PAGE_SIZE, filters, cursor }),
-    listActiveUsers(),
-    listAssignableApps(),
+    // From the trail, not from the live roster — see the queries' note: a
+    // deactivated teammate or an archived app still owns rows here, and
+    // those are the rows a filter is most often reached for.
+    listActivityActors(),
+    listActivityApps(),
   ])
 
   const now = new Date()

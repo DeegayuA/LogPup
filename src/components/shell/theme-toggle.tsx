@@ -1,7 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useTheme } from 'next-themes'
+import { useTheme } from '@/components/shell/theme-provider'
 import { Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -10,13 +9,12 @@ import { Button } from '@/components/ui/button'
    light/dark/system commands for anyone who wants system back. */
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
 
-  // resolvedTheme is undefined on the server; render a stable button until
-  // hydration so the icon never flashes the wrong state.
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard next-themes mounted guard
-  useEffect(() => setMounted(true), [])
-  const isDark = mounted && resolvedTheme === 'dark'
+  // `resolvedTheme` is null on the server and until the provider has read
+  // localStorage, which is exactly the "not yet known" signal this needs — so
+  // there is no separate `mounted` flag to keep in step. Until it resolves the
+  // button renders its stable light-icon state, matching the server HTML.
+  const isDark = resolvedTheme === 'dark'
 
   return (
     <Button

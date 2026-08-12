@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { HolidayLegend } from '@/components/shared/holiday-icon'
 import { UpcomingMeetingsFiltered } from '@/features/meetings/components/upcoming-filter'
 import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingsCalendar, useIsWideScreen } from '@/features/meetings/components/meetings-calendar'
 import {
   calendarUrlPatch,
@@ -31,6 +32,7 @@ export function MeetingsViews({
   currentUserId,
   isAdmin,
   users,
+  apps = [],
   initialView,
   initialDate,
   todayIso,
@@ -40,6 +42,8 @@ export function MeetingsViews({
   currentUserId: string
   isAdmin: boolean
   users: MentionUser[]
+  /** Apps the row-level edit dialog can move a meeting to. */
+  apps?: { id: string; name: string }[]
   /** Parsed from the page's awaited `searchParams`, so the first server paint
    *  is already the view the URL asked for rather than a default that flips
    *  after hydration. */
@@ -88,6 +92,40 @@ export function MeetingsViews({
   // Day selection lives here, not in UpcomingMeetingsFiltered, so a calendar
   // chip can hand its day to the list view on the way over.
   const [day, setDay] = useState<Date | undefined>(undefined)
+
+  /**
+   * The meeting whose write-up should already be open when the list view
+   * paints — set only by the calendar dialog's "Open the write-up, transcript
+   * and follow-ups" button, and cleared whenever the day filter is cleared.
+   *
+   * Without this, that button switched the view and set the day filter and
+   * did nothing else, so it delivered you to a list with the write-up it had
+   * just named still collapsed somewhere down the page. It kept its implicit
+   * promise (get me to the meeting) and broke the one in its label.
+   */
+  const [openMeetingId, setOpenMeetingId] = useState<string | undefined>(undefined)
+
+  function openMeetingInList(meeting: MeetingSummary) {
+    setDay(meeting.startsAt)
+    setOpenMeetingId(meeting.id)
+    writeUrl('list', focusedDate)
+  }
+
+  /**
+   * The empty slot somebody clicked in the grid, or `undefined` for "no create
+   * dialog open".
+   *
+   * ONE form for the whole calendar, opened from here — not one per cell. A
+   * week view is 7 days × 17 hours of empty slots, and mounting a dialog
+   * behind each of them would be ~119 `MeetingForm` instances (each with its
+   * own attendee picker and quick-add parser) to serve the one a person might
+   * eventually click.
+   *
+   * The `key` matters: `MeetingForm` seeds its state once per mount, so
+   * without it, clicking 3 PM after 2 PM would reopen the dialog still holding
+   * 2 PM. Keying on the instant makes each slot a fresh form.
+   */
+  const [createAt, setCreateAt] = useState<Date | undefined>(undefined)
 
   // The day filter has to reach BOTH halves of the list view. It used to reach
   // only the upcoming half, so the calendar dialog's "Open the write-up,
@@ -166,6 +204,9 @@ export function MeetingsViews({
               currentUserId={currentUserId}
               isAdmin={isAdmin}
               users={users}
+              apps={apps}
+
+              openMeetingId={openMeetingId}
               selectedDay={day}
               onSelectedDayChange={setDay}
             />
@@ -175,8 +216,14 @@ export function MeetingsViews({
             currentUserId={currentUserId}
             isAdmin={isAdmin}
             users={users}
+            apps={apps}
+
+            openMeetingId={openMeetingId}
             selectedDay={day}
-            onClearDay={() => setDay(undefined)}
+            onClearDay={() => {
+              setDay(undefined)
+              setOpenMeetingId(undefined)
+            }}
           />
         </div>
       ) : (
@@ -189,14 +236,34 @@ export function MeetingsViews({
           currentUserId={currentUserId}
           isAdmin={isAdmin}
           users={users}
+          apps={apps}
+          openMeetingId={openMeetingId}
           onViewChange={(next) => writeUrl(next, focusedDate)}
           onFocusedDateChange={(next) => writeUrl(view, next)}
           onSelectDay={(selected) => {
             setDay(selected)
             writeUrl('list', focusedDate)
           }}
+          onOpenMeetingInList={openMeetingInList}
+          onCreateAt={setCreateAt}
         />
       )}
+
+      {/* Opened by a `+` on an empty calendar slot. Keyed on the instant so
+          each slot mounts a form seeded with its own time (see createAt). */}
+      {createAt ? (
+        <MeetingForm
+          key={createAt.toISOString()}
+          apps={apps}
+          activeUsers={users}
+          defaultStart={createAt}
+          defaultOpen
+          onOpenChange={(next) => {
+            if (!next) setCreateAt(undefined)
+          }}
+          trigger={<span className="hidden" />}
+        />
+      ) : null}
     </div>
   )
 }

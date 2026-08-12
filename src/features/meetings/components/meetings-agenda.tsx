@@ -31,6 +31,8 @@ export function MeetingsAgenda({
   currentUserId,
   isAdmin,
   users,
+  apps = [],
+  openMeetingId,
   todayIso,
 }: {
   /** Every ISO day in the focused month, in order. */
@@ -40,6 +42,8 @@ export function MeetingsAgenda({
   currentUserId: string
   isAdmin: boolean
   users: MentionUser[]
+  apps?: { id: string; name: string }[]
+  openMeetingId?: string
   todayIso: string
 }) {
   // Grouped by the meeting's Colombo START day, so a 22:00 call that runs past
@@ -119,6 +123,9 @@ export function MeetingsAgenda({
               currentUserId={currentUserId}
               isAdmin={isAdmin}
               users={users}
+              apps={apps}
+
+              openMeetingId={openMeetingId}
             />
           </section>
         )

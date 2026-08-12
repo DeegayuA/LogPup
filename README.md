@@ -44,6 +44,7 @@ npm run dev
 | `NOTION_TOKEN` / `NOTION_PARENT_PAGE_ID` | Optional one-way sprint export to Notion |
 | `CRON_SECRET` / `BACKUP_ENCRYPTION_KEY` / `BLOB_READ_WRITE_TOKEN` | Nightly encrypted DB backup cron (`/api/cron/backup`) |
 | `ENABLE_DB_CLEAR` | Set to enable the admin danger-zone database clear |
+| `GITHUB_TOKEN` | Optional. Lets the app form's **Generate** button read private repos when drafting a description; public repos work without it |
 
 ### Scripts
 

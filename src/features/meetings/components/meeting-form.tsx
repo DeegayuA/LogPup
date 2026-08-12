@@ -9,7 +9,6 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from 'react'
-import { useRouter } from 'next/navigation'
 import { addHours, format } from 'date-fns'
 import { toast } from 'sonner'
 import { Loader2, PlusIcon, UsersIcon, XIcon } from 'lucide-react'
@@ -45,7 +44,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { createMeeting, teamForApp } from '@/features/meetings/actions'
+import { createMeeting, teamForApp, updateMeeting } from '@/features/meetings/actions'
 import {
   addEveryone,
   applyQuickAddAttendees,
@@ -77,8 +76,10 @@ type FormState = {
   prefilledIds: string[]
 }
 
-function emptyState(defaultAppId?: string): FormState {
-  const start = roundUpToStep(new Date())
+function emptyState(defaultAppId?: string, startAt?: Date): FormState {
+  // A slot the person clicked is already an exact time — round only the
+  // "right now" default, which is never on a step boundary.
+  const start = startAt ?? roundUpToStep(new Date())
   return {
     appId: defaultAppId ?? '',
     title: '',
@@ -167,24 +168,72 @@ function quickAddProblems(preview: QuickAddPreview): string[] {
   return problems
 }
 
+/**
+ * An existing meeting to edit instead of creating a new one. Passing this
+ * turns the whole dialog into an edit dialog: it opens seeded with what the
+ * meeting already is, and submits to `updateMeeting` rather than
+ * `createMeeting`.
+ *
+ * One form for both, deliberately. Editing a meeting asks exactly the same
+ * questions as scheduling one, and the alternative — a second, thinner "edit"
+ * dialog — is how you end up with a field that can be set at creation and
+ * never changed again, which is the bug this whole change exists to fix.
+ */
+export type EditableMeeting = {
+  id: string
+  appId: string | null
+  title: string
+  startsAt: Date
+  endsAt: Date
+  agenda: string | null
+  meetingUrl: string | null
+  attendeeIds: string[]
+}
+
+function stateFromMeeting(meeting: EditableMeeting): FormState {
+  return {
+    appId: meeting.appId ?? '',
+    title: meeting.title,
+    start: meeting.startsAt,
+    end: meeting.endsAt,
+    agenda: meeting.agenda ?? '',
+    meetingUrl: meeting.meetingUrl ?? '',
+    attendeeIds: meeting.attendeeIds,
+    // Nothing here came from the app-team prefill — these are attendees a
+    // person actually committed to. Marking them prefilled would let a later
+    // app switch silently swap them out (see attendee-prefill.ts).
+    prefilledIds: [],
+  }
+}
+
 export function MeetingForm({
   apps,
   activeUsers,
   defaultAppId,
   trigger,
   defaultOpen,
+  defaultStart,
+  onOpenChange: onOpenChangeProp,
+  editing,
 }: {
   apps: { id: string; name: string }[]
   activeUsers: ActiveUser[]
   defaultAppId?: string
   trigger: ReactElement
   defaultOpen?: boolean
+  /** Pre-fill the start time — set when a calendar slot is what opened this. */
+  defaultStart?: Date
+  /** Told whenever the dialog opens or closes, so a caller holding the slot that
+   *  opened it can drop that slot again on close. */
+  onOpenChange?: (open: boolean) => void
+  editing?: EditableMeeting
 }) {
-  const router = useRouter()
   const [open, setOpen] = useState(defaultOpen ?? false)
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
-  const [form, setForm] = useState<FormState>(() => emptyState(defaultAppId))
+  const [form, setForm] = useState<FormState>(() =>
+    editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart),
+  )
   // Which app's teamForApp call is in flight — drives the loading line in
   // the attendees block. Rendered only while it matches form.appId, so a
   // stale fetch (the user already moved to another app or "No app") never
@@ -232,14 +281,21 @@ export function MeetingForm({
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
+    onOpenChangeProp?.(next)
     if (next) {
-      setForm(emptyState(defaultAppId))
+      // Re-opening always starts from the truth again: a blank form when
+      // creating, and the meeting as it currently stands when editing — so
+      // abandoning an edit and reopening never resurrects the half-typed
+      // version that was walked away from.
+      setForm(editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart))
       setQuickAdd('')
       setSettled('')
       // Opened from an app page (defaultAppId set): the meeting is linked to
       // that app from the first paint, so its team is offered without a
-      // manual re-select of the same app.
-      if (defaultAppId) void prefillTeam(defaultAppId)
+      // manual re-select of the same app. Never on an edit — the attendees
+      // are already whatever this meeting actually has, and prefilling would
+      // add the whole app team to a meeting deliberately scoped smaller.
+      if (defaultAppId && !editing) void prefillTeam(defaultAppId)
     }
   }
 
@@ -379,7 +435,7 @@ export function MeetingForm({
     }
     startTransition(async () => {
       try {
-        const res = await createMeeting({
+        const fields = {
           appId: form.appId || null,
           title: form.title,
           startsAt: form.start.toISOString(),
@@ -387,7 +443,10 @@ export function MeetingForm({
           agenda: form.agenda || undefined,
           meetingUrl: form.meetingUrl,
           attendeeIds: form.attendeeIds,
-        })
+        }
+        const res = editing
+          ? await updateMeeting({ meetingId: editing.id, ...fields })
+          : await createMeeting(fields)
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -404,9 +463,8 @@ export function MeetingForm({
             },
             duration: 12_000,
           })
-        } else toast.success('Meeting created')
+        } else toast.success(editing ? 'Meeting updated' : 'Meeting created')
         handleOpenChange(false)
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -430,8 +488,12 @@ export function MeetingForm({
       <DialogTrigger render={trigger} />
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>New meeting</DialogTitle>
-          <DialogDescription>Schedule a meeting and invite the team.</DialogDescription>
+          <DialogTitle>{editing ? 'Edit meeting' : 'New meeting'}</DialogTitle>
+          <DialogDescription>
+            {editing
+              ? 'Change the details, the time, or who is invited.'
+              : 'Schedule a meeting and invite the team.'}
+          </DialogDescription>
         </DialogHeader>
         {/* Deliberately outside the <form>: this only ever fills the fields
             below, so it must never be able to submit them. */}
@@ -663,7 +725,13 @@ export function MeetingForm({
             </DialogClose>
             <Button type="submit" disabled={isPending}>
               {isPending ? <Loader2 aria-hidden className="animate-spin" /> : null}
-              {isPending ? 'Creating…' : 'Create meeting'}
+              {editing
+                ? isPending
+                  ? 'Saving…'
+                  : 'Save changes'
+                : isPending
+                  ? 'Creating…'
+                  : 'Create meeting'}
             </Button>
           </DialogFooter>
         </form>

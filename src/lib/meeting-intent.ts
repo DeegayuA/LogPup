@@ -96,7 +96,13 @@ function resolvePeople(
 function extractDay(text: string, now: Date): { rest: string; day: Date | null } {
   const patterns: { re: RegExp; resolve: (m: RegExpMatchArray) => Date }[] = [
     { re: /\b(today|tdy)\b/i, resolve: () => now },
-    { re: /\b(tomorrow|tmr|tmrw)\b/i, resolve: () => addDays(now, 1) },
+    // `tom+or+ow` tolerates the misspellings people actually type — tommorow,
+    // tommorrow, tomorow — alongside the correct spelling and the shorthands.
+    // Worth the ugly regex: an unrecognised date word is not reported, it is
+    // silently left in the title and the meeting quietly lands on today. That
+    // reads as a scheduling bug rather than a typo, and it is only noticed
+    // after the meeting has been missed.
+    { re: /\b(tom+or+ow|tmrw?)\b/i, resolve: () => addDays(now, 1) },
     { re: /\bnext\s+week\b/i, resolve: () => addDays(now, 7) },
     {
       re: new RegExp(`\\b(?:by\\s+|on\\s+|due\\s+)?(next\\s+)?(${WEEKDAYS.join('|')})\\b`, 'i'),

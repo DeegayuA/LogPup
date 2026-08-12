@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
@@ -9,12 +8,14 @@ import {
   CalendarDaysIcon,
   ListChecksIcon,
   MessageCircleQuestionIcon,
+  PencilIcon,
   SparklesIcon,
   Trash2Icon,
   TriangleAlertIcon,
   UserCheckIcon,
 } from 'lucide-react'
 import { MeetingRsvp } from '@/features/meetings/components/meeting-rsvp'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +57,8 @@ export function MeetingList({
   isAdmin,
   showAppBadge = true,
   users = [],
+  apps = [],
+  openMeetingId,
 }: {
   meetings: MeetingSummary[]
   currentUserId: string
@@ -63,6 +66,14 @@ export function MeetingList({
   showAppBadge?: boolean
   /** Mention pool for the notes editor. Empty just means no suggestions pop up. */
   users?: MentionUser[]
+  /**
+   * Apps the edit dialog can move a meeting to. Optional so the surfaces that
+   * render a list without one keep working — an empty list simply leaves
+   * "No app" as the only choice, it does not disable editing.
+   */
+  apps?: { id: string; name: string }[]
+  /** Meeting whose write-up panel should open on arrival (see MeetingIntelPanel.autoOpen). */
+  openMeetingId?: string
 }) {
   // One clock read for the whole list rather than one per row, so every row's
   // "Tomorrow" / "3 days ago" is measured against the same instant and cannot
@@ -90,6 +101,8 @@ export function MeetingList({
           currentUserId={currentUserId}
           showAppBadge={showAppBadge}
           users={users}
+          apps={apps}
+          autoOpen={openMeetingId === meeting.id}
         />
       ))}
     </ul>
@@ -194,6 +207,8 @@ function MeetingRow({
   currentUserId,
   showAppBadge,
   users,
+  apps,
+  autoOpen,
 }: {
   meeting: MeetingSummary
   now: Date
@@ -201,8 +216,9 @@ function MeetingRow({
   currentUserId: string
   showAppBadge: boolean
   users: MentionUser[]
+  apps: { id: string; name: string }[]
+  autoOpen: boolean
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   // Handed up by the panel each time it (re)loads this meeting's intel, so the
   // collapsed row can say what the meeting produced without being opened.
@@ -222,7 +238,6 @@ function MeetingRow({
           return
         }
         toast.success('Meeting deleted')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -349,6 +364,33 @@ function MeetingRow({
                 add-to-calendar links need no Google connection, so this is the
                 one calendar affordance that is never a dead end. */}
             <AddToCalendarMenu meeting={meeting} canManage={canManage} />
+            {/* Edit sits immediately before Delete, and behind the same
+                `canManage` gate — the organiser or any admin. Until now this
+                block offered destruction as the only way to correct a meeting:
+                a typo in a title or a wrong app could be fixed only by
+                deleting the meeting and rebuilding it, losing its notes, its
+                actions and its calendar event with it. */}
+            {canManage ? (
+              <MeetingForm
+                apps={apps}
+                activeUsers={users}
+                editing={{
+                  id: meeting.id,
+                  appId: meeting.appId,
+                  title: meeting.title,
+                  startsAt: meeting.startsAt,
+                  endsAt: meeting.endsAt,
+                  agenda: meeting.agenda,
+                  meetingUrl: meeting.meetingUrl,
+                  attendeeIds: meeting.attendees.map((attendee) => attendee.id),
+                }}
+                trigger={
+                  <Button variant="ghost" size="icon-sm" aria-label={`Edit ${meeting.title}`}>
+                    <PencilIcon />
+                  </Button>
+                }
+              />
+            ) : null}
             {canManage ? (
               <AlertDialog>
                 <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
@@ -390,6 +432,7 @@ function MeetingRow({
           appId={meeting.appId}
           mentionUsers={users}
           onGlanceChange={setGlance}
+          autoOpen={autoOpen}
         />
       </article>
     </li>

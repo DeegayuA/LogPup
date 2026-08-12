@@ -76,9 +76,42 @@ export async function validateGeminiKey(apiKey: string): Promise<boolean> {
 // fallback model (same key) before rotating keys"; 'bad' is a non-retriable,
 // non-key-specific failure (malformed request, empty response) that stops
 // the whole call immediately — trying another key or model won't help.
-type ModelAttemptResult =
-  | { ok: true; text: string }
+type ModelAttemptResult<T> =
+  | { ok: true; value: T }
   | { ok: false; kind: 'auth' | 'quota' | 'overloaded' | 'bad'; message: string }
+
+/** Raw generateContent response shape — extractors pull what they need out of it. */
+type GenerateContentResponse = {
+  candidates?: {
+    content?: { parts?: { text?: string; inlineData?: { mimeType?: string; data?: string } }[] }
+  }[]
+}
+
+/**
+ * Pulls the caller's payload out of a 200 response. Returning null means
+ * "well-formed HTTP but nothing usable in it" — mapped to the same
+ * non-retriable 'bad' failure an empty text response has always been.
+ */
+type ResponseExtractor<T> = (json: GenerateContentResponse) => T | null
+
+/** The original behaviour: concatenate every text part of the first candidate. */
+const extractText: ResponseExtractor<string> = (json) => {
+  const text = json.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('')
+  return text ? text : null
+}
+
+export type GeminiSpeechAudio = { audioBase64: string; mimeType: string }
+
+/** For TTS calls: the first inline audio blob of the first candidate. */
+const extractInlineAudio: ResponseExtractor<GeminiSpeechAudio> = (json) => {
+  for (const part of json.candidates?.[0]?.content?.parts ?? []) {
+    const data = part.inlineData?.data
+    if (typeof data === 'string' && data.length > 0) {
+      return { audioBase64: data, mimeType: part.inlineData?.mimeType || 'audio/pcm' }
+    }
+  }
+  return null
+}
 
 /**
  * Calls generateContent for one (key, model) pair, retrying in-place on
@@ -87,14 +120,15 @@ type ModelAttemptResult =
  * fallback pass in callGemini passes 1 for a single last-resort attempt
  * rather than a whole second retry cycle (see call site).
  */
-async function callModelWithRetry(
+async function callModelWithRetry<T>(
   apiKey: string,
   model: string,
   parts: GeminiPart[],
-  responseJson: boolean | undefined,
+  generationConfig: Record<string, unknown> | undefined,
+  extract: ResponseExtractor<T>,
   keyLabel: string,
   maxAttempts: number = MAX_ATTEMPTS,
-): Promise<ModelAttemptResult> {
+): Promise<ModelAttemptResult<T>> {
   let attempt = 0
   let retryAfter: string | null = null
 
@@ -108,7 +142,7 @@ async function callModelWithRetry(
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{ parts }],
-          ...(responseJson ? { generationConfig: { responseMimeType: 'application/json' } } : {}),
+          ...(generationConfig ? { generationConfig } : {}),
         }),
       })
     } catch (networkError) {
@@ -121,16 +155,12 @@ async function callModelWithRetry(
     }
 
     if (res.ok) {
-      const json = (await res.json()) as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[]
-      }
-      const text = json.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? '')
-        .join('')
-      if (!text) {
+      const json = (await res.json()) as GenerateContentResponse
+      const value = extract(json)
+      if (value === null) {
         return { ok: false, kind: 'bad', message: 'Gemini returned an empty response' }
       }
-      return { ok: true, text }
+      return { ok: true, value }
     }
 
     retryAfter = res.headers.get('retry-after')
@@ -185,9 +215,45 @@ async function callModelWithRetry(
 export async function callGemini(
   userId: string,
   partsInput: GeminiPartsInput,
-  opts?: { model?: string; responseJson?: boolean },
+  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean },
 ): Promise<{ text: string; model: string }> {
-  const models = opts?.model ? [opts.model] : GEMINI_MODEL_FALLBACK_ORDER
+  const { value: text, model } = await callGeminiCore(
+    userId,
+    partsInput,
+    resolveModelChain(opts),
+    opts?.responseJson ? { responseMimeType: 'application/json' } : undefined,
+    extractText,
+  )
+  return { text, model }
+}
+
+/**
+ * The model chain one call walks: an explicit `models` chain wins, a pinned
+ * `model` disables fallback entirely (unchanged semantics), and the default
+ * stays GEMINI_MODEL_FALLBACK_ORDER. Task-specific chains live in models.ts —
+ * this is just the resolution rule.
+ */
+function resolveModelChain(opts?: { model?: string; models?: readonly string[] }): readonly string[] {
+  if (opts?.models && opts.models.length > 0) return opts.models
+  if (opts?.model) return [opts.model]
+  return GEMINI_MODEL_FALLBACK_ORDER
+}
+
+/**
+ * Generic core of every non-streaming Gemini call: key rotation, per-model
+ * retry, model fallback, and failCount/lastUsedAt bookkeeping — with the
+ * response payload abstracted behind `extract` so text calls (callGemini)
+ * and audio-out TTS calls (callGeminiSpeech) share one reliability path
+ * instead of growing a third copy of this loop (live-token.ts already has
+ * the second, constrained by a different endpoint).
+ */
+async function callGeminiCore<T>(
+  userId: string,
+  partsInput: GeminiPartsInput,
+  models: readonly string[],
+  generationConfig: Record<string, unknown> | undefined,
+  extract: ResponseExtractor<T>,
+): Promise<{ value: T; model: string }> {
   const keys = await db
     .select()
     .from(geminiKeys)
@@ -237,7 +303,8 @@ export async function callGemini(
         apiKey,
         model,
         parts,
-        opts?.responseJson,
+        generationConfig,
+        extract,
         key.label,
         maxAttempts,
       )
@@ -247,7 +314,7 @@ export async function callGemini(
           .update(geminiKeys)
           .set({ lastUsedAt: new Date(), failCount: 0 })
           .where(eq(geminiKeys.id, key.id))
-        return { text: result.text, model }
+        return { value: result.value, model }
       }
 
       if (result.kind === 'bad') {
@@ -291,6 +358,35 @@ export async function callGemini(
     'ALL_KEYS_FAILED',
     'Could not reach Gemini with any saved key — check Profile → Gemini API keys or try again shortly.',
   )
+}
+
+/**
+ * Text-to-speech: generateContent with AUDIO response modality against the
+ * TTS model chain. Returns base64 PCM (Gemini TTS emits 24kHz mono 16-bit —
+ * see speech/wav.ts for the playable-WAV wrapping) plus the mimeType Gemini
+ * declared. Same keys, same rotation, same failure taxonomy as callGemini —
+ * a TTS-capable model chain is the only difference, so pass one from
+ * models.ts (TTS_MODEL_FALLBACK_ORDER); there is no sensible default chain
+ * here because DEFAULT_GEMINI_MODEL cannot speak.
+ */
+export async function callGeminiSpeech(
+  userId: string,
+  text: string,
+  opts: { models: readonly string[]; voiceName?: string },
+): Promise<GeminiSpeechAudio & { model: string }> {
+  const { value, model } = await callGeminiCore(
+    userId,
+    [{ text }],
+    opts.models,
+    {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: opts.voiceName ?? 'Kore' } },
+      },
+    },
+    extractInlineAudio,
+  )
+  return { ...value, model }
 }
 
 const FILES_API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
@@ -412,7 +508,7 @@ export async function callGeminiWithAudio(
   textParts: { text: string }[],
   audioBytes: Buffer,
   mimeType: string,
-  opts?: { model?: string; responseJson?: boolean },
+  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean },
 ): Promise<{ text: string; model: string }> {
   return callGemini(
     userId,
@@ -442,7 +538,7 @@ export async function callGeminiWithImages(
   userId: string,
   textParts: { text: string }[],
   images: GeminiImageInput[],
-  opts?: { model?: string; responseJson?: boolean },
+  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean },
 ): Promise<{ text: string; model: string }> {
   return callGemini(
     userId,

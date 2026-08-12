@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { del } from '@vercel/blob'
 import { db } from '@/db'
@@ -24,20 +24,34 @@ import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
 
-const meetingInput = z
-  .object({
-    appId: z.uuid().nullable(),
-    title: z.string().min(2).max(120),
-    startsAt: z.iso.datetime(),
-    endsAt: z.iso.datetime(),
-    agenda: z.string().max(2000).optional(),
-    meetingUrl: meetingUrlSchema.optional(),
-    attendeeIds: z.array(z.uuid()).min(1),
-  })
-  .refine((data) => new Date(data.endsAt) > new Date(data.startsAt), {
-    message: 'End time must be after the start time',
-    path: ['endsAt'],
-  })
+/**
+ * The editable shape of a meeting, shared by create and update so the two can
+ * never drift into accepting different things — an edit form that allowed a
+ * title the create form rejected would be a bug nobody notices until someone
+ * hits it.
+ */
+const meetingFields = {
+  appId: z.uuid().nullable(),
+  title: z.string().min(2).max(120),
+  startsAt: z.iso.datetime(),
+  endsAt: z.iso.datetime(),
+  agenda: z.string().max(2000).optional(),
+  meetingUrl: meetingUrlSchema.optional(),
+  attendeeIds: z.array(z.uuid()).min(1),
+}
+
+const endsAfterStart = (data: { startsAt: string; endsAt: string }) =>
+  new Date(data.endsAt) > new Date(data.startsAt)
+const endsAfterStartError = {
+  message: 'End time must be after the start time',
+  path: ['endsAt'],
+}
+
+const meetingInput = z.object(meetingFields).refine(endsAfterStart, endsAfterStartError)
+
+const meetingUpdateInput = z
+  .object({ meetingId: z.uuid(), ...meetingFields })
+  .refine(endsAfterStart, endsAfterStartError)
 
 const rescheduleInput = z
   .object({
@@ -447,6 +461,173 @@ export async function rescheduleMeeting(
 
   await revalidateMeetingPaths(existing.appId)
   return ok({ calendarWarning })
+}
+
+/**
+ * Edit a meeting in full — title, app, agenda, link, time and attendee list.
+ *
+ * `rescheduleMeeting` above only ever moved a meeting in time, which left the
+ * rest of it permanently frozen at whatever was typed into the create form:
+ * a typo in a title, a meeting filed under the wrong app, or an attendee who
+ * should never have been on it could only be fixed by deleting the meeting and
+ * rebuilding it, losing its notes, its actions and its calendar event.
+ *
+ * Permission is `canManageMeeting` — the organiser, or any admin. That is the
+ * same gate `rescheduleMeeting` and `deleteMeeting` already use, so an admin
+ * who could already delete this meeting outright can now do the far less
+ * destructive thing instead.
+ *
+ * Attendees are reconciled rather than replaced wholesale: only the genuinely
+ * added and removed rows are written, so an untouched attendee keeps the RSVP
+ * they already gave. A delete-then-reinsert would silently reset everyone to
+ * 'pending' on every save.
+ */
+export async function updateMeeting(
+  input: unknown,
+): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
+
+  const parsed = meetingUpdateInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const existing = await meetingById(parsed.data.meetingId)
+  if (!existing) return err('Meeting not found')
+  if (!canManageMeeting(session, existing)) return err('Not allowed')
+
+  const { meetingId, appId, title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
+  // Same dedup as createMeeting: the picker can hand back the same id twice,
+  // and a duplicate would violate the meetingAttendees composite primary key.
+  const nextAttendeeIds = [...new Set(parsed.data.attendeeIds)]
+  const nextStart = new Date(startsAt)
+  const nextEnd = new Date(endsAt)
+
+  const currentRows = await db
+    .select({ userId: meetingAttendees.userId })
+    .from(meetingAttendees)
+    .where(eq(meetingAttendees.meetingId, meetingId))
+  const currentIds = new Set(currentRows.map((row) => row.userId))
+  const added = nextAttendeeIds.filter((id) => !currentIds.has(id))
+  const removed = [...currentIds].filter((id) => !nextAttendeeIds.includes(id))
+
+  // One atomic round trip. neon-http has no transactions, so `db.batch` is
+  // what keeps the meeting row and its attendee rows from landing apart. It
+  // takes a non-empty tuple, hence the always-present update first and the
+  // conditional attendee writes spread in after it.
+  type BatchWrite = Parameters<typeof db.batch>[0][number]
+  const attendeeWrites: BatchWrite[] = []
+  if (removed.length > 0) {
+    attendeeWrites.push(
+      db
+        .delete(meetingAttendees)
+        .where(
+          and(
+            eq(meetingAttendees.meetingId, meetingId),
+            inArray(meetingAttendees.userId, removed),
+          ),
+        ),
+    )
+  }
+  if (added.length > 0) {
+    attendeeWrites.push(
+      db.insert(meetingAttendees).values(added.map((userId) => ({ meetingId, userId }))),
+    )
+  }
+
+  try {
+    await db.batch([
+      db
+        .update(meetings)
+        .set({
+          appId,
+          title,
+          startsAt: nextStart,
+          endsAt: nextEnd,
+          agenda: agenda || null,
+          meetingUrl: meetingUrl ?? null,
+        })
+        .where(eq(meetings.id, meetingId)),
+      ...attendeeWrites,
+    ])
+  } catch (error) {
+    if (isForeignKeyViolation(error)) return err('Invalid app or attendee')
+    throw error
+  }
+
+  const moved =
+    nextStart.getTime() !== existing.startsAt.getTime() ||
+    nextEnd.getTime() !== existing.endsAt.getTime()
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: meetingId,
+    entityLabel: title,
+    appId,
+    appName: await appNameById(appId),
+    pagePath: '/meetings',
+    // Business timezone — this string is persisted into the trail, so a UTC
+    // server would bake the wrong clock time in forever (same reason as
+    // createMeeting).
+    detail: moved
+      ? `moved to ${formatBusinessWeekdayDayMonth(nextStart)} · ${formatBusinessTime(nextStart)}`
+      : undefined,
+    metadata: {
+      startsAt: { from: existing.startsAt.toISOString(), to: nextStart.toISOString() },
+      endsAt: { from: existing.endsAt.toISOString(), to: nextEnd.toISOString() },
+      titleChanged: existing.title !== title,
+      attendeesAdded: added.length,
+      attendeesRemoved: removed.length,
+    },
+  })
+
+  // Only the time is pushed to Google: `updateCalendarEventTime` is the one
+  // calendar mutation this app implements, and a title-only edit has nothing
+  // to send it.
+  const calendarWarning =
+    existing.googleEventId && moved
+      ? await syncCalendarTime(existing.createdBy, existing.googleEventId, nextStart, nextEnd)
+      : undefined
+
+  // Best-effort, exactly as in createMeeting and rescheduleMeeting: the edit
+  // is already written, and a notification failure must not undo it. Newly
+  // added attendees hear that they were added; everyone else hears about it
+  // only if the meeting actually moved, because "X updated the agenda" is not
+  // worth a notification to twelve people.
+  try {
+    const notified = new Map<string, string>()
+    for (const userId of added) {
+      notified.set(userId, `${session.user.name ?? 'Someone'} added you to “${title}”`)
+    }
+    if (moved) {
+      for (const userId of nextAttendeeIds) {
+        if (notified.has(userId)) continue
+        notified.set(userId, `${session.user.name ?? 'Someone'} moved “${title}”`)
+      }
+    }
+    await createNotifications(
+      [...notified]
+        .filter(([userId]) => userId !== session.user.id)
+        .map(([userId, notificationTitle]) => ({
+          userId,
+          actorId: session.user.id,
+          type: 'meeting' as const,
+          title: notificationTitle,
+          body: format(nextStart, 'EEE, MMM d · h:mm a'),
+          link: '/meetings',
+          meetingId,
+        })),
+    )
+  } catch (error) {
+    console.error('[notifications] meeting update failed:', error)
+  }
+
+  // Both apps: the meeting may have been moved from one app to another, and
+  // the app it left needs re-rendering just as much as the one it joined.
+  await revalidateMeetingPaths(existing.appId)
+  if (appId !== existing.appId) await revalidateMeetingPaths(appId)
+  return ok({ meetingId, calendarWarning })
 }
 
 export async function updateMeetingNotes(meetingId: string, notes: string): Promise<ActionResult> {

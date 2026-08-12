@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { useTheme } from 'next-themes'
+import { useTheme, type Theme } from '@/components/shell/theme-provider'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
@@ -81,6 +81,14 @@ const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints:
 const SEARCH_TTL_MS = 30_000
 const searchDeduper = createDeduper<SearchResults>({ ttlMs: SEARCH_TTL_MS })
 const intentDeduper = createDeduper<TaskIntentPreview | null>({ ttlMs: SEARCH_TTL_MS })
+
+/* Typed once, at module scope: `setTheme` takes the three-value `Theme`
+   union, and an inline array literal would widen `value` to `string`. */
+const THEME_ACTIONS: { label: string; value: Theme; icon: typeof Sun }[] = [
+  { label: 'Theme: light', value: 'light', icon: Sun },
+  { label: 'Theme: dark', value: 'dark', icon: Moon },
+  { label: 'Theme: system', value: 'system', icon: Monitor },
+]
 
 const CommandCenterContext = React.createContext<{ setOpen: (open: boolean) => void } | null>(null)
 
@@ -369,11 +377,7 @@ export function CommandCenterProvider({
       : []),
   ].filter((page) => !q || page.label.toLowerCase().includes(q))
 
-  const themeActions = [
-    { label: 'Theme: light', value: 'light', icon: Sun },
-    { label: 'Theme: dark', value: 'dark', icon: Moon },
-    { label: 'Theme: system', value: 'system', icon: Monitor },
-  ].filter((action) => !q || action.label.toLowerCase().includes(q) || 'theme'.includes(q))
+  const themeActions = THEME_ACTIONS.filter((action) => !q || action.label.toLowerCase().includes(q) || 'theme'.includes(q))
 
   const createActions = [
     { label: 'New app', href: '/apps?new=1', adminOnly: true },

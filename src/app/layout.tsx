@@ -2,8 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
+import Script from "next/script";
 import { Toaster } from "@/components/ui/sonner";
-import { ThemeProvider } from "@/components/shell/theme-provider";
+import { ThemeProvider, themeInitScript } from "@/components/shell/theme-provider";
 import { PwaRegister } from "@/features/pwa/pwa";
 import { Analytics } from "@vercel/analytics/next"
 import { SpeedInsights } from "@vercel/speed-insights/next"
@@ -54,9 +55,25 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className={`${satoshi.variable} ${cabinet.variable} ${geistMono.variable} h-full antialiased`}
     >
-      
+      <head>
+        {/* Sets the theme class on <html> BEFORE first paint, so the page
+            never renders light and then flips to dark.
+
+            next/script with beforeInteractive: Next serialises this into the
+            initial HTML and never re-renders a raw <script> through React on
+            the client — which is what React 19's "script tag while rendering"
+            console error fires on. A bare <script dangerouslySetInnerHTML>
+            here (and the type-toggling InlineScript before it) still hit that
+            warning whenever the RSC tree re-rendered in dev.
+
+            The key it reads is the same constant the provider writes; see
+            THEME_STORAGE_KEY in components/shell/theme-provider.tsx. */}
+        <Script id="logpup-theme-init" strategy="beforeInteractive">
+          {themeInitScript}
+        </Script>
+      </head>
       <body className="min-h-full flex flex-col">
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ThemeProvider>
           {children}
           <Toaster />
           <PwaRegister />

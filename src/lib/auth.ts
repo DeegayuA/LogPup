@@ -8,6 +8,7 @@ import { users } from '@/db/schema'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { verifyPassword } from '@/lib/password'
+import { verifyGoogleIdToken } from '@/features/auth/google-one-tap'
 import { loginRateLimiter, RateLimitError, LOCKOUT_MESSAGE } from '@/lib/rate-limit'
 
 const MAX_PASSWORD_LENGTH = 200
@@ -50,6 +51,62 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           access_type: 'offline',
           prompt: 'consent',
         },
+      },
+    }),
+    // Google One Tap. The browser gets an ID token from Google without leaving
+    // the page (see features/auth/components/google-one-tap.tsx) and posts it
+    // here. Modelled as a Credentials provider because there is no OAuth round
+    // trip left to run — the token is already signed and in hand.
+    //
+    // Provisioning happens here in authorize(), not in the signIn callback as
+    // it does for the Google provider: the callback receives no `profile` for a
+    // credentials sign-in, so a row created there would be named after the
+    // email address instead of the person. Doing it here keeps the name and
+    // avatar the ID token actually carries.
+    //
+    // A user provisioned this way has NO googleRefreshToken, so Calendar writes
+    // fail for them until they sign in once through "Continue with Google" —
+    // google-calendar.ts already reports that as "consent was given, but not
+    // for Calendar", which is precisely what happened.
+    Credentials({
+      id: 'google-one-tap',
+      name: 'Google One Tap',
+      credentials: { credential: {} },
+      async authorize(creds) {
+        const identity = await verifyGoogleIdToken(String(creds?.credential ?? ''))
+        if (!identity) return null
+
+        const [existing] = await db.select().from(users).where(eq(users.email, identity.email))
+        if (existing) {
+          // The same two refusals the Google branch of the signIn callback
+          // makes. 'pending' still signs in on purpose: they need a session to
+          // reach /pending at all.
+          if (!existing.active || existing.status === 'rejected') {
+            console.warn(`[auth] one-tap denied: ${identity.email} is deactivated or rejected`)
+            return null
+          }
+          // Never clobber an uploaded avatar (those are /api/avatar/ URLs) —
+          // same rule as the Google branch.
+          const isUploaded = existing.avatarUrl?.startsWith('/api/avatar/') ?? false
+          if (identity.picture && !isUploaded && identity.picture !== existing.avatarUrl) {
+            await db.update(users).set({ avatarUrl: identity.picture }).where(eq(users.id, existing.id))
+          }
+          return { id: existing.id, email: existing.email, name: existing.name }
+        }
+
+        const derivedOrg = orgForEmail(identity.email)
+        const [created] = await db.insert(users)
+          .values({
+            email: identity.email,
+            name: identity.name,
+            avatarUrl: identity.picture,
+            orgTags: derivedOrg ? [derivedOrg] : [],
+            status: 'pending',
+            role: 'member',
+            active: true,
+          })
+          .returning()
+        return { id: created.id, email: created.email, name: created.name }
       },
     }),
     // Username (email) + password login. Always available. Passwords are scrypt-hashed;
@@ -133,8 +190,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async signIn({ profile, account, user }) {
       const provider = account?.provider
 
-      // The password provider already fully validated in authorize(); allow it through.
-      if (provider === 'password' || provider === 'credentials') return true
+      // These providers fully validated in authorize() — including, for
+      // google-one-tap, the ID token signature, audience, verified-email claim,
+      // and the active/rejected refusals — so there is nothing left to check
+      // here. Falling through would be wrong as well as redundant: a
+      // credentials sign-in carries no `profile`, so the Google branch below
+      // would re-provision against an empty one.
+      if (provider === 'password' || provider === 'credentials' || provider === 'google-one-tap') {
+        return true
+      }
 
       // Reject Google accounts whose email isn't verified by the IdP.
       if (provider === 'google' && (profile as { email_verified?: boolean } | undefined)?.email_verified === false) {

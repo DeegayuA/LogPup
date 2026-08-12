@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -57,7 +56,6 @@ function identifyField(message: string): keyof FieldErrors | null {
 }
 
 export function SprintFormDialog({ appId }: { appId: string }) {
-  const router = useRouter()
   const [open, setOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(initialFormState)
@@ -124,7 +122,6 @@ export function SprintFormDialog({ appId }: { appId: string }) {
         }
         toast.success('Sprint created')
         handleOpenChange(false)
-        router.refresh()
       } catch {
         // A server action can REJECT as well as resolve with `{ ok: false }`.
         // Unhandled, that leaves the dialog open, the Create button un-stuck

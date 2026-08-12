@@ -121,9 +121,13 @@ export function MeetingsCalendar({
   currentUserId,
   isAdmin,
   users,
+  apps = [],
   onViewChange,
   onFocusedDateChange,
   onSelectDay,
+  onOpenMeetingInList,
+  openMeetingId,
+  onCreateAt,
 }: {
   /** Never 'list' — the list view is rendered by MeetingsViews, untouched. */
   view: Exclude<CalendarView, 'list'>
@@ -135,10 +139,17 @@ export function MeetingsCalendar({
   currentUserId: string
   isAdmin: boolean
   users: MentionUser[]
+  /** Apps the edit dialog can move a meeting to. */
+  apps?: { id: string; name: string }[]
   onViewChange: (view: CalendarView) => void
   onFocusedDateChange: (iso: string) => void
   /** Hands a day back to the list view (its notes, transcript and follow-ups). */
   onSelectDay?: (date: Date) => void
+  /** Jump to the list view AND open this meeting's write-up there. */
+  onOpenMeetingInList?: (meeting: MeetingSummary) => void
+  openMeetingId?: string
+  /** An empty calendar slot was clicked — open a create dialog at that instant. */
+  onCreateAt?: (start: Date) => void
 }) {
   const isWide = useIsWideScreen()
   const [openId, setOpenId] = useState<string | null>(null)
@@ -362,7 +373,10 @@ export function MeetingsCalendar({
           past={past}
           currentUserId={currentUserId}
           isAdmin={isAdmin}
+          users={users}
+          apps={apps}
           onSelectDay={onSelectDay}
+          onOpenMeetingInList={onOpenMeetingInList}
           month={isoToDisplayDate(focusedDate)}
           onMonthChange={(next) => onFocusedDateChange(format(next, 'yyyy-MM-dd'))}
         />
@@ -375,6 +389,8 @@ export function MeetingsCalendar({
           currentUserId={currentUserId}
           isAdmin={isAdmin}
           users={users}
+          apps={apps}
+          openMeetingId={openMeetingId}
           todayIso={todayIso}
         />
       ) : (
@@ -385,6 +401,7 @@ export function MeetingsCalendar({
             pxPerHour={pxPerHour}
             todayIso={todayIso}
             onOpenMeeting={setOpenId}
+            onCreateAt={onCreateAt}
             onZoomBy={changeZoom}
           />
           <p className="text-xs text-muted-foreground">
@@ -400,10 +417,12 @@ export function MeetingsCalendar({
         meeting={open}
         currentUserId={currentUserId}
         isAdmin={isAdmin}
+        users={users}
+        apps={apps}
         onOpenChange={(next) => {
           if (!next) setOpenId(null)
         }}
-        onOpenInList={onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined}
+        onOpenInList={onOpenMeetingInList ?? (onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined)}
       />
     </div>
   )

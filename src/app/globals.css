@@ -23,6 +23,14 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+  --color-event-1: var(--event-1);
+  --color-event-2: var(--event-2);
+  --color-event-3: var(--event-3);
+  --color-event-4: var(--event-4);
+  --color-event-5: var(--event-5);
+  --color-event-6: var(--event-6);
+  --color-event-7: var(--event-7);
+  --color-event-8: var(--event-8);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -137,6 +145,33 @@
   --chart-3: oklch(0.44 0.09 165);
   --chart-4: oklch(0.68 0.1 70);
   --chart-5: oklch(0.35 0.06 165);
+
+  /* CALENDAR EVENT PALETTE — identity, not status.
+     Eight hues so a week grid reads as a set of distinct products at a
+     glance instead of one wall of cards. Assigned per APP, deterministically
+     (see features/meetings/event-color.ts), so the same app is the same
+     colour on every screen and every day; a meeting with no app stays
+     neutral rather than being given a hue that means nothing.
+     WHY A SEPARATE RAMP, not chart-1..5: those are the data-viz ramp and
+     carry meaning already (chart-1 is the ember reserved for attention).
+     Reusing them would make "amber block" ambiguous between "at risk" and
+     "this app happens to be fourth in the list". State still wins over
+     identity where the two meet: chipTone paints live and past meetings
+     from --primary/--muted and never reaches for these.
+     Evenly spaced around the wheel at one lightness/chroma so no single app
+     shouts louder than another; the same L/C discipline as --tag-* above.
+     Used at low alpha for fills and full strength for the 2px left rule and
+     the title, so the contrast that carries the box is the border, not the
+     tint (WCAG 1.4.11, same reasoning as the block border in
+     meetings-time-grid.tsx). */
+  --event-1: oklch(0.5 0.12 250); /* blue */
+  --event-2: oklch(0.5 0.12 160); /* pine */
+  --event-3: oklch(0.5 0.12 300); /* violet */
+  --event-4: oklch(0.5 0.12 25); /* red */
+  --event-5: oklch(0.5 0.12 70); /* amber */
+  --event-6: oklch(0.5 0.12 340); /* magenta */
+  --event-7: oklch(0.5 0.12 205); /* cyan */
+  --event-8: oklch(0.5 0.12 120); /* moss */
   --radius: 0.625rem;
   --sidebar: oklch(0.955 0.006 100);
   --sidebar-foreground: oklch(0.28 0.015 155);
@@ -202,6 +237,18 @@
   --chart-3: oklch(0.78 0.1 165);
   --chart-4: oklch(0.68 0.11 70);
   --chart-5: oklch(0.55 0.07 165);
+
+  /* Event palette, lifted for a dark ground — same hues, same spacing, so an
+     app keeps its identity across themes; only the lightness flips. See the
+     light-mode block for why this ramp exists at all. */
+  --event-1: oklch(0.74 0.12 250);
+  --event-2: oklch(0.74 0.12 160);
+  --event-3: oklch(0.74 0.12 300);
+  --event-4: oklch(0.74 0.12 25);
+  --event-5: oklch(0.74 0.12 70);
+  --event-6: oklch(0.74 0.12 340);
+  --event-7: oklch(0.74 0.12 205);
+  --event-8: oklch(0.74 0.12 120);
   --sidebar: oklch(0.155 0.01 165);
   --sidebar-foreground: oklch(0.9 0.008 130);
   --sidebar-primary: oklch(0.78 0.1 165);
@@ -290,5 +337,38 @@
       height: max(100%, 44px);
       transform: translate(-50%, -50%);
     }
+  }
+}
+/* Sign-in backdrop motion. The contour rings breathe rather than rotate:
+   these are concentric ellipses, so rotation reads as a spinning loader —
+   exactly the wrong signal on a page where nothing is loading. A slow scale
+   pulse, staggered per ring, makes the terrain feel watched over instead.
+
+   Kept here rather than as an inline `style` animation so the reduced-motion
+   opt-out is enforced in one place; an inline shorthand cannot be overridden
+   by a media query without !important. Transform only — no opacity flicker,
+   no filter, nothing that would force a repaint of the whole panel. */
+@keyframes logpup-ring-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.045);
+  }
+}
+
+.ring-breathe {
+  /* fill-box so `center` means the ellipse's own middle, not the SVG viewBox
+     middle — without it every ring would swing around the canvas center. */
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: logpup-ring-breathe var(--ring-duration, 14s) ease-in-out infinite;
+  animation-delay: var(--ring-delay, 0s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-breathe {
+    animation: none;
   }
 }

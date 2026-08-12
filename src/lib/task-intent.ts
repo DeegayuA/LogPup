@@ -70,7 +70,10 @@ function extractDue(
     label: (m: RegExpMatchArray) => string
   }[] = [
     { re: /\b(today|tdy)\b/i, resolve: () => today, label: () => 'today' },
-    { re: /\b(tomorrow|tmr|tmrw)\b/i, resolve: () => addDays(today, 1), label: () => 'tomorrow' },
+    // Misspellings tolerated, matching meeting-intent.ts — these two parsers
+    // are documented as sharing their relative-day math, and a phrase that
+    // schedules a meeting for tomorrow should date a task for tomorrow too.
+    { re: /\b(tom+or+ow|tmrw?)\b/i, resolve: () => addDays(today, 1), label: () => 'tomorrow' },
     {
       re: /\bin\s+(\d{1,2})\s+days?\b/i,
       resolve: (m) => addDays(today, Number(m[1])),

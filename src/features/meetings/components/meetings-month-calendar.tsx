@@ -35,31 +35,44 @@ import { meetingTiming } from '@/features/meetings/components/meeting-glance'
 import { MeetingDetailDialog } from '@/features/meetings/components/meeting-detail-dialog'
 import { dayKeyToDate, moveMeetingToDay } from '@/features/meetings/reschedule'
 import type { MeetingSummary } from '@/features/meetings/queries'
+import { eventColorClasses } from '@/features/meetings/event-color'
 
 /*
- * Chip colour encodes STATE, not identity.
+ * Chip colour encodes STATE FIRST, then identity.
  *
- * Chips used to be tinted by hashing the app name across chart-1..5. That hue
- * carried no information a reader could use: two apps collide as soon as
- * their char codes agree mod 5, the ramp is the data-viz ramp (borrowed, and
- * needed elsewhere), and the code's own comment conceded the app name had to
- * be repeated as text anyway because colour could not name it. Meanwhile the
- * things that DO mean something — is it running right now, has it already
- * happened — were carried by a dashed border and nothing else.
+ * App tinting was here once, was removed, and is now back in a different
+ * form. That history is worth keeping, because the objections that killed it
+ * were right and this version has to answer them:
  *
- * So: one neutral chip, one accent for "happening now", one recessive
- * treatment for "already over". The app name stays where it always was, in
- * words.
+ *   - "two apps collide as soon as their char codes agree mod 5" — the old
+ *     version hashed the app NAME over five slots. This one hashes the app
+ *     ID (stable across renames) with FNV-1a over eight, and its tests pin
+ *     the distribution. Collisions still happen; they are now a grouping
+ *     nuisance rather than the norm.
+ *   - "the ramp is the data-viz ramp, borrowed and needed elsewhere" — this
+ *     one has its own tokens (--event-1..8), so chart-1 stays the ember that
+ *     means attention and nothing else.
+ *   - "colour cannot name the app, so the name is repeated as text anyway" —
+ *     still true, and still the design: the name is always rendered. Colour
+ *     is not the label, it is what makes a week of eight meetings across
+ *     three products scannable without reading eight labels.
  *
- * Exported so the Day/Week time grid paints those same three states the same
- * three ways. Two colour languages for "happening now" on one page — one in
- * the month grid, one in the week grid, a single click apart — would be worse
- * than either of them alone.
+ * What has NOT changed is the ordering: running-right-now and already-over
+ * are states you must be able to read instantly, so they keep their accent
+ * and their recessive treatment and override the app hue entirely. Identity
+ * paints only what is left, which is the merely-scheduled majority.
+ *
+ * Exported so the Day/Week time grid paints all of this the same way. Two
+ * colour languages on one page, a single click apart, would be worse than
+ * either alone.
+ *
+ * `appId` is optional so a caller with no app in scope keeps the neutral
+ * chip rather than being forced to invent one.
  */
-export function chipTone(isPast: boolean, isLive: boolean): string {
+export function chipTone(isPast: boolean, isLive: boolean, appId?: string | null): string {
   if (isLive) return 'border-l-primary bg-primary/10 text-foreground'
   if (isPast) return 'border-l-border bg-muted/50 text-muted-foreground'
-  return 'border-l-muted-foreground/40 bg-card text-foreground'
+  return eventColorClasses(appId) ?? 'border-l-muted-foreground/40 bg-card text-foreground'
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -99,7 +112,10 @@ export function MeetingsMonthCalendar({
   past,
   currentUserId,
   isAdmin,
+  users = [],
+  apps = [],
   onSelectDay,
+  onOpenMeetingInList,
   month,
   onMonthChange,
 }: {
@@ -107,8 +123,11 @@ export function MeetingsMonthCalendar({
   past: MeetingSummary[]
   currentUserId: string
   isAdmin: boolean
+  users?: { id: string; name: string }[]
+  apps?: { id: string; name: string }[]
   /** Hands a day back to the parent so a chip can drop into the filtered list. */
   onSelectDay?: (date: Date) => void
+  onOpenMeetingInList?: (meeting: MeetingSummary) => void
   /** Month on show. Pass it (with `onMonthChange`) to drive the grid from
    *  outside — the calendar surface does, so the month the URL names and the
    *  month this grid draws cannot disagree. Omit both and the grid keeps its
@@ -399,10 +418,12 @@ export function MeetingsMonthCalendar({
         meeting={open}
         currentUserId={currentUserId}
         isAdmin={isAdmin}
+        users={users}
+        apps={apps}
         onOpenChange={(next) => {
           if (!next) setOpenId(null)
         }}
-        onOpenInList={onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined}
+        onOpenInList={onOpenMeetingInList ?? (onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined)}
       />
     </div>
   )
@@ -502,7 +523,7 @@ function ChipFace({ entry, isLive = false }: { entry: Entry; isLive?: boolean })
     <div
       className={cn(
         'flex min-w-0 flex-col rounded-sm border-l-2 px-1.5 py-1 text-left',
-        chipTone(isPast, isLive),
+        chipTone(isPast, isLive, meeting.appId),
       )}
     >
       <span className="min-w-0 truncate text-xs font-medium">{meeting.title}</span>
@@ -575,7 +596,7 @@ function MeetingChip({
         'flex min-w-0 flex-col rounded-sm border-l-2 px-1.5 py-1 text-left',
         'transition-colors duration-150 hover:brightness-95 motion-reduce:transition-none',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        chipTone(isPast, isLive),
+        chipTone(isPast, isLive, meeting.appId),
         draggable && 'cursor-grab active:cursor-grabbing',
         // The chip stays in place as a ghost while its overlay copy follows
         // the pointer, so the day's layout doesn't jump mid-drag.

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition, type FormEvent, type ReactElement } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -39,7 +38,6 @@ export function AssignDialog({
 }) {
   const isEdit = Boolean(assignment)
   const submitLabel = isEdit ? 'Save changes' : 'Add member'
-  const router = useRouter()
   const [open, setOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [userId, setUserId] = useState(assignment?.userId ?? '')
@@ -59,9 +57,11 @@ export function AssignDialog({
     // Resync from the latest props on every open change — never only on
     // close. The `useState` initializers above run once at mount and this
     // instance is keyed by a stable `assignmentId`, so resetting on close
-    // would rewrite state from the pre-`router.refresh()` closure: reopening
-    // would show the values from before the last save, and saving again
-    // would silently revert it (see AppFormDialog.handleOpenChange).
+    // would rewrite state from a closure that predates the server re-render
+    // the save already triggered (the action revalidates, and Next ships the
+    // fresh payload back in the action's own response): reopening would show
+    // the values from before the last save, and saving again would silently
+    // revert it (see AppFormDialog.handleOpenChange).
     resetForm()
   }
 
@@ -84,7 +84,6 @@ export function AssignDialog({
           toast.success(isEdit ? 'Assignment updated' : 'Member added')
         }
         handleOpenChange(false)
-        router.refresh()
       } catch {
         // A thrown error (e.g. DB outage) is not `{ ok: false }` — without
         // this catch it's an unhandled rejection and Save silently does

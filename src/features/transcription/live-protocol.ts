@@ -20,6 +20,25 @@ export const DEFAULT_LIVE_MODEL =
   process.env.NEXT_PUBLIC_GEMINI_LIVE_MODEL || FALLBACK_LIVE_MODEL
 
 /**
+ * Second-choice Live model: the 2.5-family native-audio Live preview. Older
+ * generation, but it has been available to free-tier keys longer than the
+ * 3.1 preview and supports the same transcription-only setup — the "API key
+ * failed, use another system" rung between the primary Live model and the
+ * Web Speech fallback.
+ */
+export const SECONDARY_LIVE_MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025'
+
+/**
+ * Live model chain, best first, deduped in case NEXT_PUBLIC_GEMINI_LIVE_MODEL
+ * is set to the secondary model itself. mintLiveToken walks this per key:
+ * a model the key's project cannot mint for falls through to the next model
+ * before the next key is tried.
+ */
+export const LIVE_MODEL_FALLBACK_ORDER: readonly string[] = [
+  ...new Set([DEFAULT_LIVE_MODEL, SECONDARY_LIVE_MODEL]),
+]
+
+/**
  * Ephemeral-token WebSocket endpoint. Note this differs from the API-key
  * endpoint in three ways that are all easy to get wrong: it is **v1alpha**, the
  * service method is **BidiGenerateContentConstrained** (not BidiGenerateContent),

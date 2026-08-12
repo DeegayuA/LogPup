@@ -24,6 +24,8 @@ export function UpcomingMeetingsFiltered({
   currentUserId,
   isAdmin,
   users = [],
+  apps = [],
+  openMeetingId,
   selectedDay,
   onSelectedDayChange,
 }: {
@@ -31,6 +33,8 @@ export function UpcomingMeetingsFiltered({
   currentUserId: string
   isAdmin: boolean
   users?: MentionUser[]
+  apps?: { id: string; name: string }[]
+  openMeetingId?: string
   /** Controlled day filter — omit both to keep the selection internal. */
   selectedDay?: Date
   onSelectedDayChange?: (date: Date | undefined) => void
@@ -135,6 +139,9 @@ export function UpcomingMeetingsFiltered({
           currentUserId={currentUserId}
           isAdmin={isAdmin}
           users={users}
+          apps={apps}
+
+          openMeetingId={openMeetingId}
         />
       )}
     </div>

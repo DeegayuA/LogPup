@@ -1,7 +1,6 @@
 'use client'
 
 import { useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   ArrowUpRightIcon,
@@ -54,7 +53,6 @@ export function AddToCalendarMenu({
   canManage: boolean
   size?: 'xs' | 'sm'
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
   const linkInput = {
@@ -86,7 +84,6 @@ export function AddToCalendarMenu({
           return
         }
         toast.success('Google Calendar invite sent')
-        router.refresh()
       } catch {
         toast.error('Google Calendar could not be reached', {
           action: { label: 'Download invite', onClick: downloadIcs },

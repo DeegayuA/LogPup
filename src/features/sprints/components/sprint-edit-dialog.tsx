@@ -2,7 +2,6 @@
 
 import { useState, useTransition, type FormEvent } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -89,7 +88,6 @@ export function SprintEditDialog({
   slug: string
   onOpenChange: (open: boolean) => void
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(() => (sprint ? toFormState(sprint) : EMPTY))
   const [rangeError, setRangeError] = useState<string | null>(null)
@@ -135,13 +133,11 @@ export function SprintEditDialog({
             // dialog and the timeline behind it show what is actually stored,
             // instead of leaving the status select reading like a change that
             // took while the fields it sits beside have quietly moved on.
-            router.refresh()
             return
           }
         }
         toast.success('Sprint updated')
         onOpenChange(false)
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -163,7 +159,6 @@ export function SprintEditDialog({
             : 'Sprint deleted',
         )
         onOpenChange(false)
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }

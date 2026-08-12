@@ -19,8 +19,21 @@ const RINGS = Array.from({ length: 11 }, (_, index) => {
     // Fades outward so the panel edge stays calm and the text sits on the
     // quietest part of the drawing.
     opacity: 0.5 - step * 0.34,
+    // Outer rings breathe slower and start later, so the pulse reads as one
+    // wave travelling outward rather than eleven ellipses throbbing in unison.
+    // Periods are deliberately non-harmonic (13s, 14.1s, 15.2s …) — equal or
+    // multiple durations re-sync every few cycles into a visible heartbeat.
+    duration: `${13 + index * 1.1}s`,
+    delay: `${index * 0.42}s`,
   }
 })
+
+// Custom properties the .ring-breathe utility in globals.css reads. Declared
+// as a type because React's CSSProperties has no slot for custom properties.
+type RingVars = React.CSSProperties & {
+  '--ring-duration': string
+  '--ring-delay': string
+}
 
 export function SignInBackdrop() {
   return (
@@ -33,30 +46,48 @@ export function SignInBackdrop() {
       preserveAspectRatio="xMidYMid slice"
       fill="none"
     >
+      {/* The static rotate lives on a wrapping <g> in both clusters: a CSS
+          `transform` on the ellipse itself would replace the presentation
+          attribute outright, flattening every ring back to zero degrees the
+          moment the animation applied. */}
       <g transform="translate(640 300)">
         {RINGS.map((ring) => (
-          <ellipse
-            key={ring.rx}
-            rx={ring.rx}
-            ry={ring.ry}
-            transform={`rotate(${ring.rotate})`}
-            stroke="currentColor"
-            strokeWidth={1.25}
-            opacity={ring.opacity}
-          />
+          <g key={ring.rx} transform={`rotate(${ring.rotate})`}>
+            <ellipse
+              className="ring-breathe"
+              style={
+                { '--ring-duration': ring.duration, '--ring-delay': ring.delay } as RingVars
+              }
+              rx={ring.rx}
+              ry={ring.ry}
+              stroke="currentColor"
+              strokeWidth={1.25}
+              opacity={ring.opacity}
+            />
+          </g>
         ))}
       </g>
       <g transform="translate(120 980)">
         {RINGS.slice(0, 7).map((ring) => (
-          <ellipse
-            key={ring.rx}
-            rx={ring.rx * 0.62}
-            ry={ring.ry * 0.62}
-            transform={`rotate(${-ring.rotate})`}
-            stroke="currentColor"
-            strokeWidth={1.25}
-            opacity={ring.opacity * 0.8}
-          />
+          <g key={ring.rx} transform={`rotate(${-ring.rotate})`}>
+            <ellipse
+              className="ring-breathe"
+              // Counter-phase against the top cluster — offsetting the delay by
+              // half a period keeps the two corners from pulsing together, which
+              // is what would make the whole panel look like it is beating.
+              style={
+                {
+                  '--ring-duration': ring.duration,
+                  '--ring-delay': `-${parseFloat(ring.duration) / 2}s`,
+                } as RingVars
+              }
+              rx={ring.rx * 0.62}
+              ry={ring.ry * 0.62}
+              stroke="currentColor"
+              strokeWidth={1.25}
+              opacity={ring.opacity * 0.8}
+            />
+          </g>
         ))}
       </g>
     </svg>

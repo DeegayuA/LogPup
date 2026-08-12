@@ -10,6 +10,9 @@ import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { buildAppUpdate } from '@/features/apps/update-input'
+import { callGemini } from '@/features/gemini/client'
+import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
+import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
 
 const appInput = z.object({
   name: z.string().min(2).max(80),
@@ -24,6 +27,207 @@ async function requireAdmin() {
   const session = await auth()
   if (session?.user?.role !== 'admin') return null
   return session
+}
+
+// Hard ceiling on the generated text. The description column is validated at
+// 500 characters (appInput above), and a model that overshoots would otherwise
+// hand the admin a description that only fails on save — so we ask for far less
+// than the limit and still trim to it.
+const DESCRIPTION_CHAR_LIMIT = 500
+
+/** Mirrors the `techTags` ceiling on appInput above. */
+const MAX_GENERATED_TAGS = 10
+
+export type GeneratedApp = {
+  name: string
+  description: string
+  techTags: string[]
+}
+
+/**
+ * A private repo is not a failure — it is a request for a different input.
+ * Modelled as a success outcome rather than an error so the form can open the
+ * README paste box instead of showing a red message about a problem the admin
+ * has no way to solve from where they are standing.
+ */
+export type GenerateOutcome =
+  | ({ status: 'generated' } & GeneratedApp)
+  | { status: 'needs-readme'; reason: string }
+
+/** Pasted READMEs get the same ceiling as fetched ones, for the same reason. */
+const README_PASTE_LIMIT = 8000
+
+/**
+ * Turns whatever we know about a repository into the three fields, via Gemini.
+ *
+ * Shared by both entry points below so the fetched-README and pasted-README
+ * paths cannot drift into producing differently-shaped descriptions.
+ */
+async function generateFromFacts(
+  userId: string,
+  facts: string,
+  fallbackName: string,
+): Promise<ActionResult<GeneratedApp>> {
+  const prompt = [
+    'You are filling in a record for an internal engineering-operations tool that',
+    'tracks the apps a software studio runs. Given the repository below, return JSON',
+    'with exactly these keys: name, description, techTags.',
+    '',
+    'name: the product name a team would say out loud. Usually the repository name',
+    '  with proper spacing and capitalisation ("logpup" -> "LogPup", "crm-api" ->',
+    '  "CRM API"). Prefer a clearer title from the README heading when there is one.',
+    '  2 to 80 characters.',
+    '',
+    'description: ONE sentence, at most 40 words, saying what the product does and',
+    '  who it is for. Describe the product, not the repository — never mention README,',
+    '  GitHub, stars, licences, installation, or contributing. Plain prose: no',
+    '  marketing adjectives, no bullet points, no markdown, no quotes. Do not open',
+    '  with the product name or "This project".',
+    '',
+    'techTags: the technologies this app is actually built on, as an array of at most',
+    `  8 strings. Choose from this vocabulary wherever one fits: ${CURATED_TECH_TAGS.join(', ')}.`,
+    '  Use a term outside it only for something genuinely used and genuinely missing.',
+    '  Include only what the repository shows evidence of — no guessing from the',
+    '  problem domain. Empty array if nothing is clear.',
+    '',
+    'If the repository does not say enough to tell what the product does, return',
+    '{"name": "", "description": "", "techTags": []}.',
+    '',
+    facts,
+  ].join('\n')
+
+  let text: string
+  try {
+    ;({ text } = await callGemini(userId, [{ text: prompt }], { responseJson: true }))
+  } catch (error) {
+    // callGemini throws GeminiError with messages already written for users
+    // ("No active Gemini API keys — add one in Profile."), so pass it through.
+    const message = error instanceof Error ? error.message : 'Gemini request failed'
+    return err(message)
+  }
+
+  let parsed: { name?: unknown; description?: unknown; techTags?: unknown }
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    console.error('[apps] generateFromFacts: model returned non-JSON', text.slice(0, 200))
+    return err('Could not read the generated details — try again')
+  }
+
+  const description =
+    typeof parsed.description === 'string'
+      ? parsed.description.trim().replace(/^["']|["']$/g, '')
+      : ''
+  if (!description) {
+    return err('That repository does not say enough to describe it — write one yourself')
+  }
+
+  // Falling back to the repo name rather than failing: a repo can be perfectly
+  // identifiable ("logpup") while saying nothing about what it does, and the
+  // admin can always finish the sentence themselves.
+  const name =
+    typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : fallbackName
+
+  // Canonicalized against the curated vocabulary so "nextjs", "Next JS" and
+  // "next.js" all land on the one tag the rest of the workspace already filters
+  // by, instead of fragmenting the tag list.
+  const rawTags = Array.isArray(parsed.techTags) ? parsed.techTags : []
+  const techTags = [
+    ...new Set(
+      rawTags
+        .filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
+        .map((tag) => canonicalizeTag(tag.trim(), CURATED_TECH_TAGS)),
+    ),
+  ].slice(0, MAX_GENERATED_TAGS)
+
+  return ok({
+    name: name.slice(0, 80),
+    description: description.slice(0, DESCRIPTION_CHAR_LIMIT),
+    techTags,
+  })
+}
+
+/**
+ * Same three fields, generated from a README the admin pasted in by hand —
+ * the way in for private repositories when no GITHUB_TOKEN is configured.
+ *
+ * The repo URL is optional context: when it parses, its owner/name give the
+ * model a title to work from and supply the fallback name. When it doesn't,
+ * the pasted text has to carry the whole job on its own.
+ */
+export async function generateAppFromReadme(
+  readme: unknown,
+  repoUrl?: unknown,
+): Promise<ActionResult<GeneratedApp>> {
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
+
+  const text = typeof readme === 'string' ? readme.trim() : ''
+  if (text.length < 40) {
+    return err('Paste the README contents first — a few lines is not enough to work from')
+  }
+
+  const parsedUrl = typeof repoUrl === 'string' ? parseGitHubRepo(repoUrl) : null
+  const facts = [
+    parsedUrl ? `Repository: ${parsedUrl.owner}/${parsedUrl.repo}` : null,
+    `README:\n${text.slice(0, README_PASTE_LIMIT)}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  return generateFromFacts(session.user.id, facts, parsedUrl?.repo ?? '')
+}
+
+/**
+ * Fills in an app's name, description, and tech tags from its GitHub repository.
+ *
+ * Returns the values rather than saving them: the admin sees them in the form,
+ * edits what is wrong, and saves deliberately. AI-written fields silently
+ * persisted to a shared workspace record are not something anyone asked for.
+ *
+ * Gemini runs on the calling admin's own key (callGemini resolves it), so this
+ * costs whoever pressed the button — consistent with every other AI feature in
+ * LogPup.
+ */
+export async function generateAppFromRepo(
+  repoUrl: unknown,
+): Promise<ActionResult<GenerateOutcome>> {
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
+
+  const url = typeof repoUrl === 'string' ? repoUrl.trim() : ''
+  if (!url) return err('Add a repository URL first')
+
+  let context
+  try {
+    context = await fetchRepoContext(url)
+  } catch (error) {
+    if (error instanceof RepoFetchError) {
+      // Unreadable-but-real repo: hand the caller the reason and let it ask for
+      // a pasted README, rather than dead-ending on a message about server
+      // configuration the admin cannot change from a dialog.
+      if (error.recoverable) return ok({ status: 'needs-readme', reason: error.message })
+      return err(error.message)
+    }
+    console.error('[apps] generateAppFromRepo: unexpected failure', error)
+    return err('Could not read that repository')
+  }
+
+  // Everything the model gets, labelled. The README is the substance; the rest
+  // is what fills the gap when a repo has no README worth reading.
+  const facts = [
+    `Repository: ${context.owner}/${context.repo}`,
+    context.language ? `Primary language: ${context.language}` : null,
+    context.topics.length ? `Topics: ${context.topics.join(', ')}` : null,
+    context.description ? `GitHub description: ${context.description}` : null,
+    context.readme ? `README:\n${context.readme}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  const generated = await generateFromFacts(session.user.id, facts, context.repo)
+  if (!generated.ok) return generated
+  return ok({ status: 'generated', ...generated.data })
 }
 
 export async function createApp(input: unknown): Promise<ActionResult<{ slug: string }>> {

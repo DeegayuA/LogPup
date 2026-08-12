@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { NavLink } from '@/components/shell/sidebar'
+import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { adminNavItems, navItems } from '@/components/shell/nav-items'
 
 /**
@@ -118,6 +119,20 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
               </div>
             ) : null}
           </nav>
+
+          {/* Same quiet parent-company sign-off as the desktop sidebar, so the
+              two shells say the same thing about who makes LogPup. */}
+          <div className="border-t border-sidebar-border pt-3">
+            <a
+              href="https://altavision.lk"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Alta Vision — opens altavision.lk in a new tab"
+              className="inline-flex rounded-md opacity-80 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none motion-reduce:transition-none"
+            >
+              <AltaVisionLogo className="h-4 w-auto" />
+            </a>
+          </div>
         </DialogPrimitive.Popup>
       </DialogPortal>
     </Dialog>

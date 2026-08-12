@@ -2,7 +2,6 @@
 
 import { useTransition } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -33,7 +32,6 @@ export function TeamPanel({
   activeUsers: ActiveUser[]
   isAdmin: boolean
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
   function handleRemove(assignmentId: string) {
@@ -44,7 +42,6 @@ export function TeamPanel({
         return
       }
       toast.success('Member removed')
-      router.refresh()
     })
   }
 

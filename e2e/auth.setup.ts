@@ -18,7 +18,14 @@ setup('authenticate', async ({ page }) => {
   // DEV_LOGIN_EMAIL is set) posts to the `credentials` provider's authorize()
   // via a server action — this exercises the exact bypass path Task 3 built,
   // rather than re-implementing the CSRF/cookie POST by hand.
-  await page.getByRole('button', { name: `Dev login (${email})` }).click()
+  // Loose match on purpose: the sign-in page's exact label already drifted
+  // once ("Dev login (email)" → "Dev login · email"), and the punctuation is
+  // not what this setup tests — the bypass path is.
+  await page
+    .getByRole('button', {
+      name: new RegExp(`Dev login.*${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    })
+    .click()
   await expect(page).toHaveURL('/')
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
 

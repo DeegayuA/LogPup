@@ -2884,6 +2884,57 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
   return ok(undefined)
 }
 
+/**
+ * Throws away a meeting's whole write-up so it can be produced again.
+ *
+ * Clears three tables, all keyed on the meeting: the AI summary
+ * (meetingAiNotes), every note segment, and the follow-up questions. None of
+ * them cascade from one another — each references meetings.id directly — so all
+ * three deletes have to be spelled out.
+ *
+ * DELIBERATELY KEPT: the recording segments (the transcript), the speaker
+ * mappings, and the screen keyframes. Those are the evidence; the write-up is an
+ * interpretation of it. Keeping them means re-running the analysis costs another
+ * Gemini call rather than another meeting, and someone who cleared the notes by
+ * mistake has not destroyed the only record of what was said.
+ *
+ * PERMANENT, against the project's soft-delete rule, and the exemption is the
+ * point: these rows are derived data rebuildable from the transcript that
+ * survives, not a record of something that happened. A trash bin for
+ * regenerable output is a second thing to reason about for a recovery nobody
+ * needs. One caveat the caller must surface first — this also removes typed
+ * note segments, and those are NOT regenerable.
+ */
+export async function clearMeetingAiNotes(meetingId: string): Promise<ActionResult> {
+  const parsed = idInput.safeParse(meetingId)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data)
+  if (!ctx) return err('Not allowed')
+
+  await db.delete(meetingAiNotes).where(eq(meetingAiNotes.meetingId, parsed.data))
+  await db.delete(meetingNoteSegments).where(eq(meetingNoteSegments.meetingId, parsed.data))
+  // sourceMeetingId, not a plain meetingId: a follow-up is authored by one
+  // meeting and may be resolved in a later one. This clears the ones THIS
+  // meeting produced, which is the right scope — but it takes their resolution
+  // notes and answers with them, and those were written by people, not
+  // generated. The confirmation copy has to say so.
+  await db.delete(meetingFollowups).where(eq(meetingFollowups.sourceMeetingId, parsed.data))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: parsed.data,
+    entityLabel: ctx.meeting.title,
+    pagePath: '/meetings',
+    detail: 'cleared the meeting notes',
+  })
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
 const setSpeakerMappingInput = z.object({
   meetingId: z.uuid(),
   label: z.string().trim().min(1).max(60),

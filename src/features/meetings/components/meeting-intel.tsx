@@ -24,12 +24,25 @@ import {
   Plus,
   RotateCcw,
   Sparkles,
+  MicOff,
   Square,
+  Trash2,
   TriangleAlert,
   UserPlus,
   Users,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -69,6 +82,7 @@ import {
   closeFollowupAsStale,
   copyFollowupResponseToNotes,
   deferFollowupReason,
+  clearMeetingAiNotes,
   finalizeMeetingRecording,
   getMeetingIntel,
   noteFollowup,
@@ -150,6 +164,43 @@ declare global {
     webkitSpeechRecognition?: SpeechRecognitionConstructorLike
   }
 }
+
+/**
+ * What a recording is capturing.
+ *  - `mic`        — the microphone only, the original default.
+ *  - `screen+mic` — shared tab/screen audio mixed with the microphone.
+ *  - `screen`     — shared audio only, nothing from the room. For playing back
+ *                   a recorded call, or capturing a remote participant without
+ *                   putting the local room on the tape.
+ * The mic can be turned on and off within any of these while recording; the
+ * mode is what it STARTED as, which is what decides whether losing the mic
+ * leaves anything behind.
+ */
+type CaptureMode = 'mic' | 'screen' | 'screen+mic'
+
+/**
+ * SpeechRecognition error codes that will never succeed on retry, mapped to
+ * what to tell the user. Anything not listed is treated as transient and left
+ * to the auto-restart, subject to the consecutive-failure ceiling below.
+ *
+ * `language-not-supported` is the one that matters in practice: Chrome ships
+ * no Sinhala model in most builds, so the si-LK engine of Bilingual mode fails
+ * immediately on those machines.
+ */
+const PERMANENT_RECOGNITION_ERRORS: Record<string, string> = {
+  'not-allowed': 'microphone access was denied for live text',
+  'service-not-allowed': 'the browser blocked the speech service',
+  'audio-capture': 'no microphone was available',
+  'language-not-supported': 'this browser has no speech model for that language',
+}
+
+/**
+ * How many consecutive errors an engine may hit before we stop restarting it.
+ * Three rather than one because a single `network` or `no-speech` is ordinary;
+ * three in a row with no result in between is a broken engine pretending to be
+ * a slow one.
+ */
+const MAX_CONSECUTIVE_RECOGNITION_ERRORS = 3
 
 // The user-facing preference: "Bilingual" (the default) runs BOTH
 // recognizers at once and picks the better result per utterance — see
@@ -300,6 +351,7 @@ export function MeetingIntelPanel({
   canRecord,
   currentUserId,
   attendees = [],
+  autoOpen = false,
   appId = null,
   mentionUsers,
   onGlanceChange,
@@ -323,6 +375,16 @@ export function MeetingIntelPanel({
    * apart from "hasn't answered yet", or it shimmers a skeleton forever.
    */
   onGlanceChange?: (glance: MeetingGlance | null) => void
+  /**
+   * Open this panel on arrival, and scroll it into view.
+   *
+   * Set by the calendar's "Open the write-up, transcript and follow-ups"
+   * button, which is the only route from a calendar chip to a meeting's
+   * notes. That button used to switch to the list view and filter it to the
+   * meeting's day and then stop — leaving the write-up it named still
+   * collapsed, somewhere down a list, so the button read as doing nothing.
+   */
+  autoOpen?: boolean
 }) {
   // Collapsed by default. Expanded-by-default meant a 30-meeting page mounted
   // 30 note timelines and fired two server actions per row before anyone had
@@ -359,6 +421,15 @@ export function MeetingIntelPanel({
   // Set when dual mode couldn't start both engines (see startBilingualRecognition)
   // and fell back to a single engine — a quiet, one-line, non-blocking notice.
   // The meeting keeps recording regardless.
+  // Consecutive SpeechRecognition errors per engine, reset by any result. A
+  // ref, not state: it changes inside recognizer callbacks that must not
+  // re-render the panel mid-recording.
+  const engineErrorCountRef = useRef<Partial<Record<ActiveLanguage, number>>>({})
+  /** What this recording was started as. Drives the toolbar during capture —
+   *  a mic-only recording has no shared audio to fall back on, so its mic
+   *  toggle is a stop button in disguise and is not offered. */
+  const [captureMode, setCaptureMode] = useState<CaptureMode>('mic')
+  const [micOn, setMicOn] = useState(false)
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null)
   const [liveUnavailable, setLiveUnavailable] = useState(false)
   const [finalText, setFinalText] = useState('')
@@ -415,6 +486,13 @@ export function MeetingIntelPanel({
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamsRef = useRef<MediaStream[]>([])
   const audioCtxRef = useRef<AudioContext | null>(null)
+  /** The stream the MediaRecorder is bound to. Stable for a whole recording,
+   *  whatever is connected into it — see the comment on toggleMic. */
+  const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null)
+  /** Non-null exactly while the microphone is open. Doubles as the "is the mic
+   *  on" source of truth for code paths that run outside React state. */
+  const micStreamRef = useRef<MediaStream | null>(null)
+  const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
   // Chunks for the CURRENT segment only — not the whole meeting. Cutting a
   // segment (see cutSegment) hands these off to an upload and resets this to
   // [], which is what releases a finished segment's memory instead of
@@ -612,6 +690,20 @@ export function MeetingIntelPanel({
    * which is what lets the viewport prefetch call it straight from an effect
    * without that being a cascading render.
    */
+  async function handleClearNotes() {
+    const res = await clearMeetingAiNotes(meetingId)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    // 'refresh' rather than optimistic local clearing: the action deletes across
+    // three tables, and re-reading is the only way this panel's summary,
+    // segments, follow-ups, and carried-forward items all agree with what is
+    // actually left.
+    await loadIntel('refresh')
+    toast.success('Notes cleared — the transcript is still there to write up again')
+  }
+
   function loadIntelVisibly() {
     setLoading(true)
     setLoadError(null)
@@ -623,6 +715,29 @@ export function MeetingIntelPanel({
     setOpen(next)
     if (next && !intel) loadIntelVisibly()
   }
+
+  /**
+   * Honour `autoOpen` once — the calendar sent somebody here specifically to
+   * read this meeting's write-up, so open it and put it under their eyes.
+   *
+   * Guarded by a ref rather than by `open`, so that closing the panel again
+   * afterwards is a decision that sticks: keying off `open` would re-open it
+   * on the next render and make the collapse button useless for as long as
+   * the row stayed selected.
+   */
+  const autoOpenedRef = useRef(false)
+  useEffect(() => {
+    if (!autoOpen || autoOpenedRef.current) return
+    autoOpenedRef.current = true
+    setOpen(true)
+    loadIntelVisibly()
+    // After paint, so the panel it scrolls to is the expanded one rather than
+    // the collapsed row that is about to grow underneath the viewport.
+    requestAnimationFrame(() => {
+      rootRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on the autoOpen edge; loadIntelVisibly is stable enough and re-running would fight the user's own collapse
+  }, [autoOpen])
 
   function clearFlushTimer() {
     if (flushTimerRef.current) {
@@ -664,10 +779,14 @@ export function MeetingIntelPanel({
       for (const track of stream.getTracks()) track.stop()
     }
     streamsRef.current = []
+    micStreamRef.current = null
+    micNodeRef.current = null
+    destinationRef.current = null
     void audioCtxRef.current?.close().catch(() => undefined)
     audioCtxRef.current = null
     recorderRef.current = null
     setRecording(false)
+    setMicOn(false)
     setSeconds(0)
     setInterimText('')
     setInterimLeaderLang(null)
@@ -843,19 +962,24 @@ export function MeetingIntelPanel({
   // losing live text entirely; only give up if NOTHING is left. Any
   // utterance still buffered has lost its only possible pairing partner —
   // flush it immediately instead of waiting out the window.
-  function handleEngineUnavailable(lang: ActiveLanguage) {
+  function handleEngineUnavailable(lang: ActiveLanguage, reason?: string) {
     delete recognitionRefs.current[lang]
     engineInterimRef.current[lang] = ''
     refreshInterimDisplay()
     const remaining = Object.keys(recognitionRefs.current) as ActiveLanguage[]
     if (remaining.length === 0) {
+      // The reason survives even when there is nothing left to fall back to.
+      // "Live text stopped" alone says something broke but not whether it is
+      // worth acting on — a network drop is worth retrying, a browser with no
+      // Sinhala model never will be.
       setLiveUnavailable(true)
+      setFallbackNotice(reason ?? null)
       return
     }
     engineModeRef.current = 'single'
     flushPendingUtterance()
     setFallbackNotice(
-      `Live text for ${ACTIVE_LANGUAGE_LABEL[lang]} stopped — continuing in ${ACTIVE_LANGUAGE_LABEL[remaining[0]]} only.`,
+      `Live text for ${ACTIVE_LANGUAGE_LABEL[lang]} stopped${reason ? ` (${reason})` : ''} — continuing in ${ACTIVE_LANGUAGE_LABEL[remaining[0]]} only.`,
     )
   }
 
@@ -872,6 +996,11 @@ export function MeetingIntelPanel({
     recognition.interimResults = true
     recognition.lang = lang
     recognition.onresult = (event) => {
+      // Any result at all proves the engine works, so the consecutive-failure
+      // count starts over. Without this reset the counter is cumulative and a
+      // long meeting would eventually trip the give-up threshold on a handful
+      // of unrelated network blips spread across an hour.
+      engineErrorCountRef.current[lang] = 0
       let interim = ''
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i]
@@ -887,13 +1016,37 @@ export function MeetingIntelPanel({
       handleEngineInterim(lang, interim)
     }
     recognition.onerror = (event) => {
-      // Permanent failures (denied mic permission for recognition, no
-      // capture device) — stop retrying this engine. Transient errors
-      // (no-speech, network, aborted) are left to onend's restart-on-drop
-      // below.
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed' || event.error === 'audio-capture') {
+      // Permanent failures — stop retrying this engine and say why.
+      //
+      // `language-not-supported` belongs here and did not used to: Chrome
+      // ships no Sinhala Web Speech model in most builds, so the si-LK engine
+      // errors the instant it starts. Falling through to onend restarted it,
+      // which errored again, forever — an invisible loop whose only symptom
+      // was a Live transcript stuck on "Listening…" with no notice at all,
+      // because nothing ever reached handleEngineUnavailable to report it.
+      const permanent = PERMANENT_RECOGNITION_ERRORS[event.error]
+      if (permanent) {
         recognition.onend = null
-        handleEngineUnavailable(lang)
+        handleEngineUnavailable(lang, permanent)
+        return
+      }
+
+      // Everything else (no-speech, aborted, a blip of network) is genuinely
+      // transient and left to onend's restart. But "transient" repeated
+      // without end is just a permanent failure wearing a disguise: count
+      // consecutive errors and give up once an engine has failed this many
+      // times without ever producing a result. Silence with an explanation
+      // beats silence.
+      const failures = (engineErrorCountRef.current[lang] ?? 0) + 1
+      engineErrorCountRef.current[lang] = failures
+      if (failures >= MAX_CONSECUTIVE_RECOGNITION_ERRORS) {
+        recognition.onend = null
+        handleEngineUnavailable(
+          lang,
+          event.error === 'network'
+            ? 'no network connection to the speech service'
+            : `speech recognition kept failing (${event.error})`,
+        )
       }
     }
     recognition.onend = () => {
@@ -925,7 +1078,26 @@ export function MeetingIntelPanel({
       return false
     }
     recognitionRefs.current[lang] = recognition
+    // Fresh start, fresh count — otherwise a recording that ended with two
+    // network blips leaves the next one one error away from giving up.
+    engineErrorCountRef.current[lang] = 0
     return true
+  }
+
+  /**
+   * Starts recognition according to the current language preference. Extracted
+   * so the mic toggle can restart live text mid-recording using exactly the
+   * same rules the initial start used — two call sites choosing engines by
+   * different logic is how "bilingual" quietly becomes "English" on resume.
+   */
+  function startRecognitionForPreference() {
+    if (language === 'bilingual') {
+      startBilingualRecognition()
+      return
+    }
+    // Manual override — exactly one engine, in the chosen language.
+    engineModeRef.current = 'single'
+    if (!startEngine(language)) setLiveUnavailable(true)
   }
 
   // Starts both engines for "Bilingual (auto)" mode. Resource guard: some
@@ -1142,43 +1314,154 @@ export function MeetingIntelPanel({
     })
   }
 
-  async function startRecording(withScreen: boolean) {
+  /**
+   * Attaches the microphone to the live capture graph, acquiring the device if
+   * it is not already open. Safe to call while recording.
+   *
+   * Returns false when the browser refuses the device — the caller decides
+   * whether that is fatal (mic-only recording) or survivable (screen capture
+   * carrying on without it).
+   */
+  async function attachMic(): Promise<boolean> {
+    const audioCtx = audioCtxRef.current
+    const destination = destinationRef.current
+    if (!audioCtx || !destination) return false
+    if (micStreamRef.current) return true
+
+    let mic: MediaStream
+    try {
+      // Mono (channelCount: 1) — speech transcription gets nothing from a
+      // second channel, and halves what the encoder has to push through before
+      // audioBitsPerSecond even applies.
+      mic = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
+    } catch {
+      return false
+    }
+
+    micStreamRef.current = mic
+    streamsRef.current.push(mic)
+    const source = audioCtx.createMediaStreamSource(mic)
+    source.connect(destination)
+    micNodeRef.current = source
+    return true
+  }
+
+  /**
+   * Detaches the microphone and RELEASES the device — it does not merely mute.
+   *
+   * Muting via a gain node would be less code and would keep re-enabling
+   * instant, but it leaves the OS and browser recording indicators lit while
+   * the user believes the mic is off. For a tool that records meetings, the
+   * indicator has to tell the truth: if the light is on, audio is reaching us.
+   * Re-acquiring costs a getUserMedia call, which does not re-prompt once
+   * permission has been granted for the origin.
+   */
+  function detachMic() {
+    micNodeRef.current?.disconnect()
+    micNodeRef.current = null
+    const mic = micStreamRef.current
+    if (mic) {
+      for (const track of mic.getTracks()) track.stop()
+      streamsRef.current = streamsRef.current.filter((stream) => stream !== mic)
+    }
+    micStreamRef.current = null
+  }
+
+  /**
+   * Mic on/off mid-recording. The MediaRecorder is never touched: it is bound
+   * to the AudioContext destination stream, which stays the same object for the
+   * whole recording no matter what feeds into it. That is the entire reason the
+   * graph exists even for mic-only capture — swapping sources under a running
+   * recorder would otherwise mean stopping and restarting it, which would break
+   * the segment numbering the upload pipeline depends on.
+   */
+  async function toggleMic() {
+    if (micOn) {
+      detachMic()
+      // Live text is a microphone feature — the Web Speech engines listen to
+      // the device directly, not to our capture graph, so leaving them running
+      // with the mic released would just spin producing nothing.
+      stopAllRecognition()
+      setMicOn(false)
+      toast.info('Microphone off — still recording shared audio')
+      return
+    }
+
+    const ok = await attachMic()
+    if (!ok) {
+      toast.error('Could not turn the microphone on')
+      return
+    }
+    setMicOn(true)
+    if (liveSupported) startRecognitionForPreference()
+    toast.success('Microphone on')
+  }
+
+  async function startRecording(mode: CaptureMode) {
     const mimeType = pickMimeType()
     if (!mimeType) {
       toast.error('This browser cannot record audio — try Chrome')
       return
     }
     try {
-      // Mono (channelCount: 1) — speech transcription gets nothing from a
-      // second channel, and halves what the encoder has to push through
-      // before audioBitsPerSecond even applies below.
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
-      streamsRef.current.push(mic)
-      let captureStream = mic
+      const wantsScreen = mode !== 'mic'
+      const wantsMic = mode !== 'screen'
 
-      if (withScreen) {
-        // Sharing a tab/screen with audio; only the audio tracks are kept,
-        // mixed with the mic so the recording hears both sides of the call.
+      // The graph is built for EVERY mode, including mic-only. It used to be
+      // created only when mixing in screen audio, with mic-only handing its raw
+      // stream straight to the recorder — but a raw device stream cannot have
+      // sources added or removed later, so the mic could never be turned off
+      // and back on mid-recording. One destination stream, stable for the whole
+      // recording, is what makes that possible.
+      const audioCtx = new AudioContext()
+      audioCtxRef.current = audioCtx
+      const destination = audioCtx.createMediaStreamDestination()
+      destinationRef.current = destination
+
+      if (wantsScreen) {
+        // Sharing a tab/screen with audio; only the audio tracks are kept.
         const screen = await navigator.mediaDevices.getDisplayMedia({
           video: true,
           audio: true,
         })
         streamsRef.current.push(screen)
-        const audioCtx = new AudioContext()
-        audioCtxRef.current = audioCtx
-        const destination = audioCtx.createMediaStreamDestination()
-        audioCtx.createMediaStreamSource(mic).connect(destination)
         if (screen.getAudioTracks().length > 0) {
           audioCtx
             .createMediaStreamSource(new MediaStream(screen.getAudioTracks()))
             .connect(destination)
+        } else if (mode === 'screen') {
+          // Fatal here, unlike in screen+mic: there is no other source, so this
+          // would record an hour of silence and only reveal it at the write-up.
+          for (const track of screen.getTracks()) track.stop()
+          streamsRef.current = streamsRef.current.filter((s) => s !== screen)
+          void audioCtx.close().catch(() => undefined)
+          audioCtxRef.current = null
+          destinationRef.current = null
+          toast.error(
+            'That share has no audio. Pick a tab and tick “Share tab audio”, or record the mic too.',
+          )
+          return
         } else {
           toast.info(
             'No tab audio shared — recording mic only. Pick a tab and enable “Share audio” for both sides.',
           )
         }
-        captureStream = destination.stream
       }
+
+      if (wantsMic) {
+        const gotMic = await attachMic()
+        if (!gotMic) {
+          // Mic-only cannot proceed; screen+mic can, minus the mic.
+          if (mode === 'mic') throw new Error('microphone unavailable')
+          toast.warning('Microphone unavailable — recording shared audio only')
+        }
+        setMicOn(gotMic)
+      } else {
+        setMicOn(false)
+      }
+
+      setCaptureMode(mode)
+      const captureStream = destination.stream
 
       chunksRef.current = []
       headerChunkRef.current = null
@@ -1239,7 +1522,12 @@ export function MeetingIntelPanel({
       setSeconds(0)
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
 
-      if (liveSupported) {
+      // Live text only exists if a microphone does. Screen-only capture has
+      // nothing for the Web Speech engines to hear — they listen to the input
+      // device, not to our capture graph — so starting them would leave the
+      // pane on "Listening…" forever, which is exactly the silent-failure mode
+      // just fixed in the recognizer error handling.
+      if (liveSupported && micStreamRef.current) {
         finalTranscriptRef.current = ''
         setFinalText('')
         setInterimText('')
@@ -1256,13 +1544,7 @@ export function MeetingIntelPanel({
         // utterance of this recording.
         previousLangRef.current = lastActiveLangRef.current
 
-        if (language === 'bilingual') {
-          startBilingualRecognition()
-        } else {
-          // Manual override — exactly one engine, in the chosen language.
-          engineModeRef.current = 'single'
-          if (!startEngine(language)) setLiveUnavailable(true)
-        }
+        startRecognitionForPreference()
       }
     } catch {
       cleanupCapture()
@@ -1601,12 +1883,67 @@ export function MeetingIntelPanel({
         </Button>
         {open && canRecord && !recording && !finalizing ? (
           <>
-            <Button variant="outline" size="sm" type="button" onClick={() => startRecording(false)}>
+            <Button variant="outline" size="sm" type="button" onClick={() => startRecording('mic')}>
               <Mic /> Record mic
             </Button>
-            <Button variant="outline" size="sm" type="button" onClick={() => startRecording(true)}>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => startRecording('screen+mic')}
+            >
               <MonitorSpeaker /> Record screen + mic
             </Button>
+            {/* Screen without the room. The case this exists for: replaying a
+                recorded call, or capturing a remote speaker while the local
+                room is talking about something else. */}
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => startRecording('screen')}
+            >
+              <MonitorSpeaker /> Record screen only
+            </Button>
+            {/* Only offered when there is actually a write-up to throw away.
+                Sits with the record controls because clearing is what you do
+                right before recording again — the two serve one intention. */}
+            {intel?.notes ? (
+              <AlertDialog>
+                <AlertDialogTrigger
+                  render={
+                    <Button variant="ghost" size="sm" type="button" className="text-muted-foreground">
+                      <Trash2 aria-hidden /> Clear notes
+                    </Button>
+                  }
+                />
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear this meeting&apos;s notes?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Deletes the summary, every note, and the follow-up questions this meeting
+                      raised — including notes typed by hand and any answers already written
+                      against those follow-ups. This cannot be undone.
+                      <br />
+                      <br />
+                      The recording transcript is kept, so the notes can be written up again
+                      without recording the meeting a second time.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel render={<Button variant="outline" />}>
+                      Cancel
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                      render={<Button variant="destructive" />}
+                      onClick={handleClearNotes}
+                    >
+                      Clear notes
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : null}
             {liveSupported ? (
               <Select value={language} onValueChange={(v) => v && setLanguage(v as LanguagePreference)}>
                 <SelectTrigger className="h-8 w-32" aria-label="Live transcript language">
@@ -1645,6 +1982,22 @@ export function MeetingIntelPanel({
                 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
               </span>
             </Button>
+            {/* Offered only when shared audio is also being captured. On a
+                mic-only recording, turning the mic off would leave the recorder
+                writing silence — a stop button wearing a mute button's label,
+                which is worse than not offering it at all. */}
+            {captureMode !== 'mic' ? (
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                onClick={toggleMic}
+                aria-pressed={micOn}
+              >
+                {micOn ? <Mic /> : <MicOff />}
+                {micOn ? 'Mic on' : 'Mic off'}
+              </Button>
+            ) : null}
             <span
               className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive"
               role="status"

@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import { PawPrint } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { VersionBadge } from '@/components/shell/version-badge'
+import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { InstallButton } from '@/features/pwa/pwa'
 import { adminNavItems, navItems } from '@/components/shell/nav-items'
 
@@ -130,6 +131,21 @@ export function Sidebar({
           <CommandHint />
           <VersionBadge />
         </div>
+        {/* Parent-company mark, deliberately last and deliberately quiet. The
+            LogPup paw owns the top of the sidebar; this only answers "whose
+            tool is this", so it sits below everything and lifts on hover
+            rather than competing for the eye on every page load. The mark
+            stands alone — a "by" label next to a wordmark is two typographic
+            systems arguing at 11px. */}
+        <a
+          href="https://altavision.lk"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Alta Vision — opens altavision.lk in a new tab"
+          className="mt-2 inline-flex w-fit rounded-md pl-2 opacity-80 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+        >
+          <AltaVisionLogo className="h-3.5 w-auto" />
+        </a>
       </div>
     </nav>
   )

@@ -9,7 +9,6 @@ import {
   type FormEvent,
   type RefObject,
 } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -122,7 +121,6 @@ export function CapacityHeatEditable({
   capacities: UserCapacity[]
   apps: AssignableApp[]
 }) {
-  const router = useRouter()
   const [serverRows, setServerRows] = useState(capacities)
   const [rows, setRows] = useState(capacities)
   const [isPending, startTransition] = useTransition()
@@ -135,9 +133,10 @@ export function CapacityHeatEditable({
 
   // Adjusting state while rendering, the documented React pattern — not an
   // effect. `capacities` only gets a new identity when the server re-renders
-  // (i.e. after our own router.refresh()), and at that point the server list
-  // is authoritative and must replace whatever the optimistic edit left
-  // behind. Comparing against the last-seen props rather than resetting on
+  // (which the assignment actions trigger by revalidating — Next returns the
+  // re-rendered payload in the action's own response), and at that point the
+  // server list is authoritative and must replace whatever the optimistic edit
+  // left behind. Comparing against the last-seen props rather than resetting on
   // every render is what lets the optimistic state survive in between.
   if (serverRows !== capacities) {
     setServerRows(capacities)
@@ -174,7 +173,6 @@ export function CapacityHeatEditable({
         setStatus(warning ?? successMessage)
         // Replaces the optimistic guess with the server's truth — and pulls
         // in the real assignmentId for a row that was just created.
-        router.refresh()
       } catch {
         // A throw (DB outage, network) is not `{ ok: false }`; without this
         // the row would keep the optimistic value forever and the admin

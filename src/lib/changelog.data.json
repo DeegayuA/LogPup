@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.150",
+  "current": "v0.0.158",
   "versions": [
     {
       "version": "v0.0.1",
@@ -900,6 +900,54 @@
       "date": "2026-08-12",
       "hash": "3bfcb6b",
       "change": "."
+    },
+    {
+      "version": "v0.0.151",
+      "date": "2026-08-12",
+      "hash": "9e7d229",
+      "change": "Install Vercel Web Analytics Integration"
+    },
+    {
+      "version": "v0.0.152",
+      "date": "2026-08-12",
+      "hash": "62acf81",
+      "change": "Merge pull request #2 from DeegayuA/vercel/install-vercel-web-analytics-i-04xkl2"
+    },
+    {
+      "version": "v0.0.153",
+      "date": "2026-08-12",
+      "hash": "cf0326d",
+      "change": "."
+    },
+    {
+      "version": "v0.0.154",
+      "date": "2026-08-12",
+      "hash": "c144150",
+      "change": "fix: calendar grid review findings"
+    },
+    {
+      "version": "v0.0.155",
+      "date": "2026-08-12",
+      "hash": "ae841b8",
+      "change": "fix: disarm the roadmap keydown trap; correct the DragOverlay comment"
+    },
+    {
+      "version": "v0.0.156",
+      "date": "2026-08-12",
+      "hash": "316f124",
+      "change": "fix: make 0023_sprint_checkins replay-safe like its neighbours"
+    },
+    {
+      "version": "v0.0.157",
+      "date": "2026-08-12",
+      "hash": "37f6c36",
+      "change": "feat: panelled meeting write-up with tags, filters and language control"
+    },
+    {
+      "version": "v0.0.158",
+      "date": "2026-08-12",
+      "hash": "660f029",
+      "change": "feat: edit assignee, due date and title on meeting action items"
     }
   ]
 }

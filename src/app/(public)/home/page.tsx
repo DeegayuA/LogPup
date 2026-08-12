@@ -56,13 +56,23 @@ export default function PublicHomePage() {
           <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
           An internal tool by Alta Vision (Pvt) Ltd
         </span>
-        <h1 className="font-heading text-4xl leading-tight font-bold tracking-tight text-foreground">
-          The watchdog for your team&apos;s apps, people, and sprints.
+        {/* The product name is the <h1>, not the tagline. Google's review
+            compares the consent screen's app name against the home page and
+            rejected the first submission for a mismatch — a name that appears
+            only in the header chrome is easy for that check to miss. The
+            tagline still leads visually; it just isn't the heading any more. */}
+        <h1 className="font-heading text-5xl leading-none font-bold tracking-tight text-foreground">
+          LogPup
         </h1>
+        <p className="max-w-2xl font-heading text-2xl leading-tight font-bold tracking-tight text-foreground">
+          The watchdog for your team&apos;s apps, people, and sprints.
+        </p>
         <p className="max-w-2xl text-base leading-relaxed text-muted-foreground">
-          LogPup is the engineering operations HQ Alta Vision runs its studio on. It keeps
-          one shared picture of every product in flight: who is building it, how loaded they
-          are, what ships this sprint, and what was decided in the last meeting.
+          LogPup is the engineering operations HQ Alta Vision runs its studio on. It keeps one
+          shared picture of every product in flight: who is building it, how loaded they are,
+          what ships this sprint, and what was decided in the last meeting. Teams use it to
+          track their apps, plan sprints, see who still has capacity, and schedule, record, and
+          write up the meetings that move that work along.
         </p>
         <div className="flex flex-wrap items-center gap-3">
           {/* buttonVariants rather than <Button render={...}>: this is a

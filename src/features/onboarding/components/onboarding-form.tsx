@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -22,7 +21,6 @@ export function OnboardingForm({
   initialPhone: string | null
   derivedOrg: string | undefined
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [submitted, setSubmitted] = useState(false)
   const [phone, setPhone] = useState(initialPhone ?? '')
@@ -42,7 +40,6 @@ export function OnboardingForm({
         }
         setSubmitted(true)
         toast.success('Details submitted')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }

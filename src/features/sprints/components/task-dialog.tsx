@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useTransition, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -114,7 +113,6 @@ export function TaskDialog({
   sprintOptionsFailed?: boolean
   onNeedSprintOptions?: () => void
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(() => (task ? toFormState(task) : emptyForm()))
   // Tracks the task object we last synced `form` from, so we can re-seed the
@@ -172,7 +170,6 @@ export function TaskDialog({
         }
         toast.success('Task updated')
         onOpenChange(false)
-        router.refresh()
       } catch {
         // A thrown error (e.g. DB outage) is not `{ ok: false }` — without
         // this catch it's an unhandled rejection and Save silently does
@@ -193,7 +190,6 @@ export function TaskDialog({
         }
         toast.success('Task deleted')
         onOpenChange(false)
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }

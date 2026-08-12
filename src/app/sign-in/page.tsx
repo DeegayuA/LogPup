@@ -12,6 +12,8 @@ import {
 import { signIn } from '@/lib/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
+import { GoogleOneTap } from '@/features/auth/components/google-one-tap'
 import { PasswordAuth } from '@/features/auth/components/password-auth'
 import { SignInBackdrop } from '@/features/auth/components/sign-in-backdrop'
 import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
@@ -26,6 +28,10 @@ const CAPABILITIES = [
 ] as const
 
 const notionConfigured = !!process.env.NOTION_OAUTH_CLIENT_ID && !!process.env.NOTION_OAUTH_CLIENT_SECRET
+// An OAuth client id is public by design — it ships in every authorization URL
+// — so it is handed to the client component as a prop rather than duplicated
+// into a NEXT_PUBLIC_ variable that could drift from AUTH_GOOGLE_ID.
+const googleClientId = process.env.AUTH_GOOGLE_ID
 const devLoginEmail =
   process.env.NODE_ENV !== 'production' ? process.env.DEV_LOGIN_EMAIL : undefined
 
@@ -35,6 +41,10 @@ export default function SignInPage() {
       {/* Landing here means there is no session — drop any Cache Storage the
           previous user's install may still be holding. */}
       <ClearCachedShell />
+      {/* Renders no markup — it opens Google's own floating prompt. Skipped
+          entirely when no client id is configured, so local setups without
+          Google credentials don't ship a script that can only fail. */}
+      {googleClientId ? <GoogleOneTap clientId={googleClientId} /> : null}
       <aside className="relative hidden flex-col overflow-hidden border-r border-sidebar-border bg-sidebar p-10 text-sidebar-foreground lg:flex">
         <SignInBackdrop />
         {/* One orchestrated page-load sequence: the brand resolves top-down,
@@ -75,10 +85,28 @@ export default function SignInPage() {
         {/* Called out as a chip rather than a faint line: it is the one
             instruction on this panel, and at /60 alpha it also sat under the
             AA contrast floor. */}
-        <p className="relative inline-flex w-fit items-center gap-2 rounded-full border border-sidebar-border bg-sidebar-accent px-3 py-1.5 text-xs font-medium text-sidebar-accent-foreground motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:520ms] motion-safe:[animation-fill-mode:backwards]">
-          <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
-          Internal tool · sign in with your work account
-        </p>
+        <div className="relative flex flex-col gap-5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:520ms] motion-safe:[animation-fill-mode:backwards]">
+          <p className="inline-flex w-fit items-center gap-2 rounded-full border border-sidebar-border bg-sidebar-accent px-3 py-1.5 text-xs font-medium text-sidebar-accent-foreground">
+            <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
+            Internal tool · sign in with your work account
+          </p>
+          {/* Whose tool this is, on the one screen every user passes through
+              and the one Google's reviewer reaches from the consent flow.
+              No "by" label: a 11px lowercase word set against a wordmark
+              fights it for the baseline and reads as debris at this size. A
+              rule and the mark alone say the same thing and sit still. */}
+          <div className="border-t border-sidebar-border pt-5">
+            <a
+              href="https://altavision.lk"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Alta Vision — opens altavision.lk in a new tab"
+              className="inline-flex rounded-md opacity-90 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+            >
+              <AltaVisionLogo className="h-5 w-auto" />
+            </a>
+          </div>
+        </div>
       </aside>
 
       <div className="flex flex-col items-center justify-center gap-6 p-4 py-10 lg:p-10">
@@ -97,39 +125,50 @@ export default function SignInPage() {
             </p>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {/* Google is the primary path: filled, first, and the only provider
-                that can self-provision an account. */}
+            {/* The caveat comes before the button it is about. Sitting under
+                the button it read as an afterthought about something the user
+                had already clicked — and this one has to land first, because
+                it is the difference between meeting the browser's "unsafe"
+                warning prepared or bouncing off it. Boxed rather than set as
+                grey micro-copy so it reads as an instruction, not a footnote. */}
+            <p className="rounded-lg border border-border bg-muted/60 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+              Personal accounts need admin approval. App is still in development, so please click
+              unsafe and proceed if you see a warning.
+            </p>
+
+            {/* Google is primary — filled, first, and the only provider that can
+                self-provision an account. Notion sits directly under it as the
+                outline variant: same group, clearly secondary. */}
             <div className="flex flex-col gap-2">
               <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/' }) }}>
                 <Button type="submit" size="lg" className="w-full">Continue with Google</Button>
               </form>
-              <p className="text-center text-xs text-muted-foreground">
-                Personal accounts need admin approval. App is still in development, so please click unsafe and proceed if you see a warning.
-              </p>
-            </div>
 
-            {notionConfigured && (
-              <>
-                <div className="relative">
-                  <span aria-hidden className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t" />
-                  </span>
-                  <span className="relative flex justify-center">
-                    <span className="bg-card px-2 text-xs text-muted-foreground">or</span>
-                  </span>
-                </div>
+              {notionConfigured && (
                 <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
                   <Button type="submit" size="lg" variant="outline" className="w-full">
                     Continue with Notion
                   </Button>
                 </form>
-              </>
-            )}
+              )}
+            </div>
+
+            {/* The rule now separates OAuth from credentials — the real fork in
+                the page — instead of separating two OAuth buttons from each
+                other. */}
+            <div className="relative">
+              <span aria-hidden className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </span>
+              <span className="relative flex justify-center">
+                <span className="bg-card px-2 text-xs text-muted-foreground">or</span>
+              </span>
+            </div>
 
             {/* Email + password is the fallback, so it starts collapsed rather
                 than filling the card with fields nobody uses first. Native
                 <details> keeps this a server component — no JS to hydrate. */}
-            <details className="group border-t pt-4">
+            <details className="group">
               <summary className="flex cursor-pointer list-none items-center justify-center gap-1.5 rounded-md py-1 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                 Use email and password
                 <ChevronDown

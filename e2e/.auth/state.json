@@ -1,6 +1,16 @@
 {
   "cookies": [
     {
+      "name": "g_state",
+      "value": "{\"i_l\":0,\"i_ll\":1786533308709,\"i_b\":\"fHlKZQGLgSvYZOxhZ39Z8JMRiuf6v4v8g1NlgH8/Z24\",\"i_e\":{\"enable_itp_optimization\":24},\"i_et\":1786533308709}",
+      "domain": "localhost",
+      "path": "/",
+      "expires": 1802085308,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
       "name": "authjs.callback-url",
       "value": "http%3A%2F%2Flocalhost%3A3400%2F",
       "domain": "localhost",
@@ -12,10 +22,10 @@
     },
     {
       "name": "authjs.session-token",
-      "value": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwia2lkIjoiOHlHZS04aFViZ09FbUEyS19OZXJLZ1B1VnNpVDFqZlVqdkhJOGRrNTNjUUZFem1DNmY1ems1eHc5ZDkwWWZ0bk5vYUtRZ1JrMy1hLXNBQmJEMGFIYlEifQ..ZGfhjCS6JO9RiGOF7n0lOA.wv1oUcdE5eTmsRCTc-TIUMybN2hx32ow4Cd0EIbb8J_OSyPb_2VoRY-6Cl9icjOUa9ZLcwOKVY5mTkjZr9dcPncDU6TyZOf2D3GS-r5cLu3ScLk5_s7uL_yflL-_uXWrotXu8HOl54AayT9BN5EIdqgT35jBW33alQiR2DZNmNJa81RHV8vXVWDyXTQGF5_smGSx-38ID6qlZ2b0hctx6q_VVw5je_6ed0wHY1vaxdwqrSmXwjwbgVSfI6X4QSmIcPe_0rFv7nPipIId0xCn_7bt-teS3ZYnoipeySgPA1wNDYLggb0aoqlNvK3NZfWUMZdIYfUuUAdMrm_XcM7O4w.UJPKfqRU75o9WOjqGRzpBk3Oews7eiDiyXESD6pVNjA",
+      "value": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2Q0JDLUhTNTEyIiwia2lkIjoiOHlHZS04aFViZ09FbUEyS19OZXJLZ1B1VnNpVDFqZlVqdkhJOGRrNTNjUUZFem1DNmY1ems1eHc5ZDkwWWZ0bk5vYUtRZ1JrMy1hLXNBQmJEMGFIYlEifQ..DSeE4BwBrYYxTcYqRQMnNA.ghBq7BLV90zXaWjNCtKwPkZxTAH7c_HbGiRRVNuq2LyxCrxvL-0jqPrHR4KUk-c0OmWVWqo0i-nEuqu9Fo0iwEGGgKJB_RAyW62G0uhnRcFoDNgMKECKZep33MNI4sqGdpeP923lFgr_pAXLsx_syRqvnQCzrnRslpj95EGAud9Iu3hmtXCvFrzeOxGs-QidITu7nCIBM-DOENTtYDCyR1Ku1wBhTNHvRzdICzKDPiV-E8b2x5eNeLfQab6Rz2060YmsSpzONQE9rR8X6rm5CwcHI7DAadHNvLeY22bWQBw8RGwpLLUzuZKG9cUp6XoFw8z3g-xsrh3tpxukD67V2cOB31u6LmlZre7VfyKQMgoV97t9M51EHkYx15duR2N6oxknjP5_EAdRL4SezJv48g.cffWoJOhTazm5Y5KyWesjKYBXuSlvCRAyITG2grPnPQ",
       "domain": "localhost",
       "path": "/",
-      "expires": 1789013062.573235,
+      "expires": 1789125310.153139,
       "httpOnly": true,
       "secure": false,
       "sameSite": "Lax"

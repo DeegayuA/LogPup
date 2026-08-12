@@ -332,7 +332,7 @@ export function PanelNav({ items }: { items: PanelNavItem[] }) {
   }
 
   return (
-    <nav aria-label="Write-up sections" className="lg:sticky lg:top-4 lg:w-44 lg:shrink-0 lg:self-start">
+    <nav aria-label="Write-up sections" className="lg:sticky lg:top-18 lg:max-h-[calc(100dvh-5.5rem)] lg:w-44 lg:shrink-0 lg:self-start lg:overflow-y-auto">
       <ul className="flex gap-1.5 overflow-x-auto pb-1 lg:w-full lg:flex-col lg:overflow-visible lg:pb-0">
         {items.map((item) => {
           const Icon = item.icon

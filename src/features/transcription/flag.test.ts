@@ -2,19 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { parseLiveTranscriptionFlag } from './flag'
 
 describe('parseLiveTranscriptionFlag', () => {
-  it('is off when unset — the Web Speech path stays the default', () => {
-    expect(parseLiveTranscriptionFlag(undefined)).toBe(false)
+  it('is ON when unset — the Live path is the default now that it degrades safely', () => {
+    expect(parseLiveTranscriptionFlag(undefined)).toBe(true)
   })
 
-  it('is on only for the literal "1"', () => {
-    expect(parseLiveTranscriptionFlag('1')).toBe(true)
+  it('is off only for the literal "0"', () => {
+    expect(parseLiveTranscriptionFlag('0')).toBe(false)
   })
 
-  it('does not treat other truthy-looking values as enabled', () => {
-    // Matches the ENABLE_DB_CLEAR === '1' convention already used here; a typo
-    // like "true" must fail closed rather than silently enable a metered feature.
-    for (const value of ['', '0', 'true', 'TRUE', 'yes', 'on', ' 1']) {
-      expect(parseLiveTranscriptionFlag(value)).toBe(false)
+  it('treats every other value as enabled — the kill switch must be exact', () => {
+    // Opt-out flag: a typo ('OFF', 'false', ' 0') must fail OPEN to the live
+    // path, whose failure mode is a graceful fallback — not fail closed and
+    // silently take realtime transcription away from every meeting.
+    for (const value of ['', '1', 'true', 'false', 'off', 'OFF', ' 0', 'no']) {
+      expect(parseLiveTranscriptionFlag(value)).toBe(true)
     }
   })
 })

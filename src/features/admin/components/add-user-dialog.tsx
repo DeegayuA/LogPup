@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -52,7 +51,6 @@ const emptyState: FormState = {
 // Admin-only "add a teammate" dialog. The new account gets the shared starter
 // password and is forced to replace it on first sign-in (see src/proxy.ts).
 export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }) {
-  const router = useRouter()
   const [open, setOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(emptyState)
@@ -84,7 +82,6 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
           { duration: 15000 },
         )
         handleOpenChange(false)
-        router.refresh()
       } catch {
         // A thrown error (DB outage, dropped connection, a stale action id
         // after a redeploy) is not `{ ok: false }` — without this catch the

@@ -16,6 +16,59 @@ this app" interstitial and the app is capped at 100 users.
 
 ---
 
+## Fixing the rejection (submission of 12 Aug 2026)
+
+Google returned three findings. One had a code cause and is fixed; two are
+console/DNS work that only an account owner can do.
+
+### 1. "The website of your home page URL is not registered to you"
+
+Nothing to do with the site's content — Google could not tie
+`management.altavision.lk` to the Google account that submitted the app. Fix:
+
+1. Open [Search Console](https://search.google.com/search-console) **signed in as
+   the same Google account that owns the Cloud project**. This is the part that
+   trips people up: verifying under a personal account while the project belongs
+   to a work account leaves the app exactly as rejected.
+2. Add `altavision.lk` as a **Domain property** (not a URL prefix property) and
+   complete the DNS TXT record with whoever runs the `altavision.lk` zone. One
+   Domain property covers `management.` and every other subdomain.
+3. Wait for verification to report success, then in Google Cloud Console →
+   Google Auth Platform → *Branding*, confirm `altavision.lk` appears under
+   **Authorized domains**. The console reads that list from Search Console; it
+   will not accept a domain it cannot see verified.
+
+### 2. "Your home page does not explain the purpose of your app" — FIXED IN CODE
+
+The reviewer opened `https://management.altavision.lk` and was bounced to the
+sign-in screen, so there was nothing there to read. [src/proxy.ts](../src/proxy.ts)
+now **rewrites** the bare origin to the public home page for signed-out visitors
+— a rewrite rather than a redirect, so the explanation is served at the exact URL
+registered on the consent screen instead of at a URL the reviewer got moved to.
+
+Set **Application home page** to the bare origin `https://management.altavision.lk`.
+Confirm after deploying:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://management.altavision.lk
+# must be 200, NOT 307
+curl -s https://management.altavision.lk | grep -o 'LogPup' | head -1
+# must print LogPup
+```
+
+### 3. "The app name 'log-pup' does not match the app name on your home page"
+
+`log-pup` appears nowhere in this repo — it is the name Google auto-derived from
+the Cloud **project id**, and it stayed on the consent screen. Fix in Google Auth
+Platform → *Branding* → **App name** → `LogPup`. Exactly that: one word, capital
+L, capital P.
+
+The home page side is fixed too — `LogPup` is now the `<h1>` on
+[/home](../src/app/\(public\)/home/page.tsx) rather than appearing only in the
+header chrome, so the string the checker compares against is unmissable.
+
+---
+
 ## 0. The one shortcut worth checking first
 
 If **every** LogPup user has an `@altavision.lk` Google Workspace account, set
@@ -35,16 +88,30 @@ Decide this before submitting — switching later resets the review.
 
 | Item | Value / where |
 |---|---|
-| Production domain | `logpup.altavision.lk` |
+| Production domain | `management.altavision.lk` |
 | Domain ownership | Verified in [Google Search Console](https://search.google.com/search-console) under the **same Google account** that owns the Cloud project |
-| `AUTH_URL` (production env) | `https://logpup.altavision.lk` |
-| Authorized redirect URI | `https://logpup.altavision.lk/api/auth/callback/google` |
+| `AUTH_URL` (production env) | `https://management.altavision.lk` |
+| Authorized redirect URI | `https://management.altavision.lk/api/auth/callback/google` |
+| Authorized JavaScript origin | `https://management.altavision.lk` (and `http://localhost:3000` for dev) |
+
+That last row is required by **Google One Tap** — the prompt on `/sign-in` that
+offers an already-signed-in Google account without a redirect. If the origin is
+missing, One Tap does not error; it simply never appears, and the only symptom
+is a `GSI_LOGGER` line in the browser console. The full button keeps working
+either way.
+
+One Tap authenticates but does **not** authorize: it returns an ID token with no
+`calendar.events` scope and no refresh token. A user whose first-ever sign-in is
+One Tap therefore has no Calendar grant, and scheduling a meeting will fail for
+them until they press "Continue with Google" once. That is why the button stays
+the primary path on the card, and why One Tap needs no separate mention in the
+verification submission — it uses the same client id and grants nothing extra.
 
 Google will not accept `*.vercel.app` as an authorized domain — you cannot prove
 ownership of `vercel.app`. The custom domain must be live before you submit.
 
 Search Console tip: verify `altavision.lk` as a **Domain property** (DNS TXT
-record) and every subdomain, including `logpup.`, is covered at once.
+record) and every subdomain, including `management.`, is covered at once.
 
 ---
 
@@ -56,15 +123,15 @@ if any of them ever starts redirecting to `/sign-in`, verification fails.
 
 | Console field | URL |
 |---|---|
-| Application home page | `https://logpup.altavision.lk/home` |
-| Privacy policy link | `https://logpup.altavision.lk/privacy` |
-| Terms of service link | `https://logpup.altavision.lk/terms` |
+| Application home page | `https://management.altavision.lk` (the bare origin — it now serves the public home page) |
+| Privacy policy link | `https://management.altavision.lk/privacy` |
+| Terms of service link | `https://management.altavision.lk/terms` |
 
 Verify after each deploy:
 
 ```bash
 for p in home privacy terms; do
-  echo -n "/$p -> "; curl -s -o /dev/null -w '%{http_code}\n' "https://logpup.altavision.lk/$p"
+  echo -n "/$p -> "; curl -s -o /dev/null -w '%{http_code}\n' "https://management.altavision.lk/$p"
 done
 # every line must print 200. A 307 means the proxy matcher regressed.
 ```
@@ -77,18 +144,21 @@ Google wants a square **120x120 PNG, under 1 MB**, and the mark must match what
 users see in the app and on the site.
 
 ```bash
-curl -o logpup-120.png "https://logpup.altavision.lk/pwa-icon?size=120"
+curl -o logpup-120.png "https://management.altavision.lk/pwa-icon?size=120"
 ```
 
 Generated from the same paw as the PWA icons ([src/lib/brand.ts](../src/lib/brand.ts)),
 so the consent screen, installed app, and website stay consistent — which is
 exactly what brand verification checks.
 
-The Alta Vision corporate mark is separate: it sits in the footer of the public
-pages, from `public/altavision-logo.svg`. **That file is a placeholder wordmark —
-replace it with the real asset before submitting**, keeping the same path and a
-roughly 5.5:1 aspect ratio (or update the dimensions in
-[src/components/brand/alta-vision-logo.tsx](../src/components/brand/alta-vision-logo.tsx)).
+The Alta Vision corporate mark is separate — it says who *makes* LogPup, where the
+paw says what the app *is*, and both appear together rather than one replacing the
+other. It is the official flat mark from `altavision.lk`, stored at
+`public/altavision-logo.webp` (3774x607, alpha) and rendered by
+[src/components/brand/alta-vision-logo.tsx](../src/components/brand/alta-vision-logo.tsx)
+in the public-page footer, the app sidebar, the mobile nav drawer, and the sign-in
+panel. Keep the alpha channel if you ever re-export it: a flattened file shows a
+white plate on the dark sidebar.
 
 ---
 
@@ -101,9 +171,9 @@ Google Cloud Console → **Google Auth Platform** → *Branding* / *Audience* / 
 | App name | `LogPup` |
 | User support email | `deeghayus@altavision.lk` |
 | App logo | `logpup-120.png` from step 3 |
-| Application home page | `https://logpup.altavision.lk/home` |
-| Privacy policy link | `https://logpup.altavision.lk/privacy` |
-| Terms of service link | `https://logpup.altavision.lk/terms` |
+| Application home page | `https://management.altavision.lk` (the bare origin — it now serves the public home page) |
+| Privacy policy link | `https://management.altavision.lk/privacy` |
+| Terms of service link | `https://management.altavision.lk/terms` |
 | Authorized domain | `altavision.lk` |
 | Developer contact | `deeghayus@altavision.lk` |
 | User type | External |
@@ -154,7 +224,7 @@ domain is visible.
 
 Sequence, in this order:
 
-1. Start on `https://logpup.altavision.lk/home` — show the domain in the URL bar
+1. Start on `https://management.altavision.lk` — show the bare domain in the URL bar
    and the "Why LogPup asks for your Google Calendar" section.
 2. Click **Sign in**, then **Continue with Google**.
 3. **Show the full OAuth consent screen** — the app name, the logo, and the
@@ -167,7 +237,7 @@ Sequence, in this order:
 7. Back in LogPup, change the meeting time and save; return to Google Calendar and
    show the same event updated.
 8. Cancel the meeting in LogPup; show it gone from Google Calendar.
-9. Finish on `https://logpup.altavision.lk/privacy`, scrolling to the "Google user
+9. Finish on `https://management.altavision.lk/privacy`, scrolling to the "Google user
    data and Limited Use" section.
 
 Steps 5–8 are the whole point: they prove the scope maps to a real user-visible
@@ -212,4 +282,4 @@ a fresh submission goes to the back of the queue.
 | Logo doesn't match the app | Both generated from the same paw mark |
 | Video doesn't show the consent screen | Step 3 above |
 | Scope requested but not demonstrated | Only `calendar.events` is sensitive, and steps 5–8 demo it |
-| Alta Vision logo is a placeholder | **Open — replace `public/altavision-logo.svg`** |
+| Branding inconsistent between app and site | Real Alta Vision mark ships in the app shell, sign-in, and public pages |

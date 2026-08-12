@@ -16,7 +16,7 @@ import { geminiKeys } from '@/db/schema'
 import { decryptSecret } from '@/lib/crypto'
 import { GeminiError } from '@/features/gemini/client'
 import { MAX_ATTEMPTS, backoffDelayMs, shouldRetry, sleep } from '@/features/gemini/retry'
-import { DEFAULT_LIVE_MODEL, buildSetupMessage } from './live-protocol'
+import { LIVE_MODEL_FALLBACK_ORDER, buildSetupMessage } from './live-protocol'
 
 const AUTH_TOKENS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/auth_tokens'
 
@@ -120,15 +120,19 @@ async function mintWithKey(
  * failCount/lastUsedAt bookkeeping so a key that is failing here is also
  * deprioritised for ordinary Gemini calls.
  *
- * There is no model-fallback pass: unlike generateContent there is only one
- * Live model in play, and a token pinned to a model the socket won't accept is
- * worse than no token.
+ * Model fallback: each key walks LIVE_MODEL_FALLBACK_ORDER (primary Live
+ * preview, then the older 2.5 native-audio preview). A mint the endpoint
+ * rejects outright ('bad' — the model was renamed/retired, or this project
+ * has no access to that preview) or reports overloaded falls through to the
+ * next model on the SAME key; only key-level failures (auth/quota) rotate
+ * to the next key. The minted token stays pinned to exactly one model — the
+ * chain exists so a retired primary can never hard-fail the whole feature.
  */
 export async function mintLiveToken(
   userId: string,
   opts?: { model?: string },
 ): Promise<MintedLiveToken> {
-  const model = opts?.model ?? DEFAULT_LIVE_MODEL
+  const models = opts?.model ? [opts.model] : LIVE_MODEL_FALLBACK_ORDER
 
   const keys = await db
     .select()
@@ -143,6 +147,10 @@ export async function mintLiveToken(
   let sawAuthFailure = false
   let sawTransientBusy = false
 
+  // Remembered so the terminal error can say something specific when every
+  // (key, model) pair failed with a non-retriable mint rejection.
+  let lastBadMessage: string | null = null
+
   for (const key of keys) {
     let apiKey: string
     try {
@@ -151,34 +159,43 @@ export async function mintLiveToken(
       continue // corrupted row — nothing to bump, try the next key
     }
 
-    const result = await mintWithKey(apiKey, key.label, model)
+    for (const model of models) {
+      const result = await mintWithKey(apiKey, key.label, model)
 
-    if (result.ok) {
-      await db
-        .update(geminiKeys)
-        .set({ lastUsedAt: new Date(), failCount: 0 })
-        .where(eq(geminiKeys.id, key.id))
-      return {
-        token: result.token,
-        model,
-        expiresAt: new Date(Date.now() + TOKEN_TTL_MS).toISOString(),
+      if (result.ok) {
+        await db
+          .update(geminiKeys)
+          .set({ lastUsedAt: new Date(), failCount: 0 })
+          .where(eq(geminiKeys.id, key.id))
+        return {
+          token: result.token,
+          model,
+          expiresAt: new Date(Date.now() + TOKEN_TTL_MS).toISOString(),
+        }
       }
-    }
 
-    if (result.kind === 'bad') {
-      throw new GeminiError('BAD_RESPONSE', result.message)
-    }
+      if (result.kind === 'bad') {
+        // Unlike generateContent, a 'bad' mint is usually about the MODEL
+        // (renamed/retired preview, or a project without access to it), so
+        // it falls through to the next model on this same key instead of
+        // aborting the whole mint. Only once every model has been refused
+        // does it count against the terminal error below.
+        lastBadMessage = result.message
+        continue
+      }
 
-    if (result.kind === 'auth' || result.kind === 'quota') {
-      sawAuthFailure = true
-      await db
-        .update(geminiKeys)
-        .set({ failCount: sql`${geminiKeys.failCount} + 1`, lastUsedAt: new Date() })
-        .where(eq(geminiKeys.id, key.id))
-      continue
-    }
+      if (result.kind === 'auth' || result.kind === 'quota') {
+        sawAuthFailure = true
+        await db
+          .update(geminiKeys)
+          .set({ failCount: sql`${geminiKeys.failCount} + 1`, lastUsedAt: new Date() })
+          .where(eq(geminiKeys.id, key.id))
+        break // key-level failure — no model on this key will do better
+      }
 
-    sawTransientBusy = true
+      // 'overloaded' — try the next model on this key.
+      sawTransientBusy = true
+    }
   }
 
   if (sawAuthFailure) {
@@ -192,6 +209,9 @@ export async function mintLiveToken(
       'TRANSIENT_BUSY',
       'Gemini Live is busy right now — recording continues without live transcription.',
     )
+  }
+  if (lastBadMessage) {
+    throw new GeminiError('BAD_RESPONSE', lastBadMessage)
   }
   throw new GeminiError(
     'ALL_KEYS_FAILED',

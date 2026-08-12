@@ -14,6 +14,8 @@ export function PastMeetingsSection({
   currentUserId,
   isAdmin,
   users,
+  apps = [],
+  openMeetingId,
   selectedDay,
   onClearDay,
 }: {
@@ -23,6 +25,8 @@ export function PastMeetingsSection({
   isAdmin: boolean
   /** Mention pool for the notes editor — all active users. */
   users?: MentionUser[]
+  apps?: { id: string; name: string }[]
+  openMeetingId?: string
   /**
    * The day filter currently in force, shared with the upcoming list. Set
    * when somebody arrives here from the calendar — opening the write-up of a
@@ -102,6 +106,9 @@ export function PastMeetingsSection({
             currentUserId={currentUserId}
             isAdmin={isAdmin}
             users={users}
+          apps={apps}
+
+          openMeetingId={openMeetingId}
           />
         ) : null}
       </div>
