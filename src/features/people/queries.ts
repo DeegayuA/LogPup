@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { and, asc, desc, eq, gt, gte, ilike, isNull, lte, ne, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
@@ -6,7 +7,9 @@ import {
   assignmentHistory,
   assignments,
   meetingAttendees,
+  meetingFollowups,
   meetings,
+  sprints,
   tasks,
   users,
 } from '@/db/schema'
@@ -18,6 +21,21 @@ import {
   type HistoryRow,
   type PersonAllocationHistoryView,
 } from '@/features/people/allocation-history'
+import {
+  activityPeak,
+  activityTotal,
+  buildActivitySeries,
+  type ActivityDay,
+} from '@/features/people/activity-levels'
+import { splitPersonFollowups, type PersonFollowups } from '@/features/people/followup-split'
+import { isoDayAdd, isoDayOf } from '@/features/people/iso-day'
+import { splitPersonMeetings, type PersonMeetings } from '@/features/people/meeting-window'
+import {
+  summarizeOpenTasks,
+  type PersonTaskRow,
+  type TaskLoad,
+} from '@/features/people/task-workload'
+import { LK_TIMEZONE } from '@/lib/lk-holidays'
 
 export type TeamMember = {
   assignmentId: string
@@ -64,40 +82,37 @@ export type ActiveUser = { id: string; name: string }
 /** An app the dashboard's inline "Assign to app" control can target. */
 export type AssignableApp = { id: string; name: string; slug: string }
 
-export type PersonBreakdownEntry = {
+export type PersonAssignment = {
   appId: string
   appName: string
   slug: string
+  appStatus: 'active' | 'paused' | 'archived'
   role: string
   allocationPct: number
+  /** They lead this app (apps.leadId) — read nowhere else in the product. */
+  isLead: boolean
 }
 
-export type PersonTask = {
+export type PersonProfile = {
   id: string
-  title: string
-  status: 'todo' | 'in_progress' | 'done'
-  appName: string
-  appSlug: string
+  name: string
+  email: string
+  personalEmail: string | null
+  title: string | null
+  phone: string | null
+  avatarUrl: string | null
+  role: 'admin' | 'member'
+  active: boolean
+  status: 'pending' | 'approved' | 'rejected'
+  orgTags: string[]
+  createdAt: Date
 }
 
-export type PersonMeeting = { id: string; title: string; startsAt: Date }
-
-export type PersonDetail = {
-  user: {
-    id: string
-    name: string
-    email: string
-    title: string | null
-    phone: string | null
-    avatarUrl: string | null
-    role: 'admin' | 'member'
-    active: boolean
-  }
+export type PersonOverview = {
+  user: PersonProfile
   totalPct: number
   overallocated: boolean
-  breakdown: PersonBreakdownEntry[]
-  tasks: PersonTask[]
-  meetings: PersonMeeting[]
+  assignments: PersonAssignment[]
 }
 
 export async function getTeamForApp(appId: string): Promise<TeamMember[]> {
@@ -322,39 +337,59 @@ export async function listAssignableApps(): Promise<AssignableApp[]> {
     .orderBy(asc(apps.name))
 }
 
-export type ActivityDay = { date: string; count: number; level: 0 | 1 | 2 | 3 | 4 }
+export type PersonActivity = {
+  days: ActivityDay[]
+  total: number
+  /** Busiest single day — the top of the scale the legend describes. */
+  peak: number
+  fromIso: string
+  toIso: string
+}
+
+/** 26 weeks, the window the contribution grid is sized for. */
+const ACTIVITY_WEEKS = 26
 
 /**
- * Per-day task activity (tasks created for + assigned to the user) over the
- * last ~26 weeks, as a dense series for the contribution graph. Level ramp:
- * 0 = none, 1 = 1, 2 = 2–3, 3 = 4–5, 4 = 6+.
+ * The timezone literal, inlined into SQL rather than bound as a parameter.
+ * `AT TIME ZONE $1` gives Postgres nothing to infer the parameter's type from,
+ * and the value is a compile-time constant of ours — never user input — so
+ * `sql.raw` here carries no injection surface.
  */
-export async function getPersonActivity(userId: string): Promise<ActivityDay[]> {
-  const since = new Date()
-  since.setDate(since.getDate() - 26 * 7)
-  since.setHours(0, 0, 0, 0)
+const LK_TZ_SQL = sql.raw(`'${LK_TIMEZONE}'`)
 
+/**
+ * Per-day task activity — tasks CREATED with this person as the assignee —
+ * over the last 26 weeks, dense, for the contribution graph.
+ *
+ * DAY BOUNDARIES ARE ASIA/COLOMBO ON BOTH SIDES. `tasks.created_at` is a naive
+ * `timestamp`; every writer stores UTC (drizzle serialises JS Dates as UTC, and
+ * `now()` on Neon is UTC), so it is re-interpreted as UTC and then converted to
+ * the business timezone before bucketing. The JS side fills the same Colombo
+ * days. The previous version bucketed in the server's zone in SQL and keyed the
+ * fill loop off UTC, which silently shifted counts by one cell on any non-UTC
+ * server — and disagreed with as-of-date.ts and the sprint calendar, which have
+ * always resolved days in Colombo.
+ *
+ * The SQL lower bound is deliberately a day LOOSE (a plain UTC midnight one day
+ * before the window starts, rather than the exact Colombo instant): a few extra
+ * rows cost nothing and buildActivitySeries drops any day outside the range,
+ * whereas a bound computed a few hours tight would silently clip the oldest
+ * column.
+ */
+export async function getPersonActivity(userId: string): Promise<PersonActivity> {
+  const toIso = isoDayOf(new Date())
+  const fromIso = isoDayAdd(toIso, -(ACTIVITY_WEEKS * 7 - 1))
+  const since = new Date(`${isoDayAdd(fromIso, -1)}T00:00:00.000Z`)
+
+  const day = sql<string>`to_char((${tasks.createdAt} at time zone 'UTC') at time zone ${LK_TZ_SQL}, 'YYYY-MM-DD')`
   const rows = await db
-    .select({
-      day: sql<string>`to_char(${tasks.createdAt}, 'YYYY-MM-DD')`,
-      count: sql<number>`count(*)::int`,
-    })
+    .select({ day, count: sql<number>`count(*)::int` })
     .from(tasks)
     .where(and(eq(tasks.assigneeId, userId), gte(tasks.createdAt, since)))
-    .groupBy(sql`to_char(${tasks.createdAt}, 'YYYY-MM-DD')`)
+    .groupBy(day)
 
-  const byDay = new Map(rows.map((row) => [row.day, row.count]))
-  const series: ActivityDay[] = []
-  const cursor = new Date(since)
-  const today = new Date()
-  while (cursor <= today) {
-    const key = cursor.toISOString().slice(0, 10)
-    const count = byDay.get(key) ?? 0
-    const level = count === 0 ? 0 : count === 1 ? 1 : count <= 3 ? 2 : count <= 5 ? 3 : 4
-    series.push({ date: key, count, level })
-    cursor.setDate(cursor.getDate() + 1)
-  }
-  return series
+  const days = buildActivitySeries(rows, fromIso, toIso)
+  return { days, total: activityTotal(days), peak: activityPeak(days), fromIso, toIso }
 }
 
 export async function listActiveUsers(): Promise<ActiveUser[]> {
@@ -366,69 +401,244 @@ export async function listActiveUsers(): Promise<ActiveUser[]> {
     .orderBy(asc(users.name))
 }
 
-export async function getPersonDetail(userId: string): Promise<PersonDetail | null> {
-  const [userRow] = await db
-    .select({
-      id: users.id,
-      name: users.name,
-      email: users.email,
-      title: users.title,
-      phone: users.phone,
-      avatarUrl: users.avatarUrl,
-      role: users.role,
-      active: users.active,
-    })
-    .from(users)
-    .where(eq(users.id, userId))
-  if (!userRow) return null
-
-  const [breakdown, taskRows, meetingRows] = await Promise.all([
+/**
+ * Identity + live allocation. Looked up by id ALONE, with no active/approved
+ * filter: an admin has to be able to open the page of someone deactivated or
+ * still pending, precisely to see what they were carrying. The header states
+ * the account state instead of the page 404ing.
+ *
+ * Callers must have validated the id as a UUID first — every query in this
+ * section compares against a `uuid` column, and Postgres raises
+ * "invalid input syntax for type uuid" (an exception, not an empty result) for
+ * anything else.
+ *
+ * WRAPPED IN React `cache` because `generateMetadata` and the page body both
+ * need this person's name, and they are two separate invocations of the same
+ * render. Without memoisation the page would run this pair of queries twice on
+ * every load purely to title the browser tab. `cache` is per-request, so it
+ * neither leaks one viewer's data into another's render nor holds anything
+ * between requests — it is deduplication, not caching in the stale-data sense.
+ * Only this function is wrapped: it is the one read on the path twice.
+ */
+export const getPersonOverview = cache(async function getPersonOverview(
+  userId: string,
+): Promise<PersonOverview | null> {
+  const [userRows, assignmentRows] = await Promise.all([
+    db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        personalEmail: users.personalEmail,
+        title: users.title,
+        phone: users.phone,
+        avatarUrl: users.avatarUrl,
+        role: users.role,
+        active: users.active,
+        status: users.status,
+        orgTags: users.orgTags,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(eq(users.id, userId)),
     db
       .select({
         appId: apps.id,
         appName: apps.name,
         slug: apps.slug,
+        appStatus: apps.status,
         role: assignments.role,
         allocationPct: assignments.allocationPct,
+        leadId: apps.leadId,
       })
       .from(assignments)
       .innerJoin(apps, eq(assignments.appId, apps.id))
       .where(eq(assignments.userId, userId))
-      .orderBy(desc(assignments.allocationPct)),
-    db
-      .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        appName: apps.name,
-        appSlug: apps.slug,
-      })
-      .from(tasks)
-      .innerJoin(apps, eq(tasks.appId, apps.id))
-      .where(eq(tasks.assigneeId, userId))
-      .orderBy(asc(tasks.status), desc(tasks.createdAt)),
-    db
-      .select({
-        id: meetings.id,
-        title: meetings.title,
-        startsAt: meetings.startsAt,
-      })
-      .from(meetingAttendees)
-      .innerJoin(meetings, eq(meetingAttendees.meetingId, meetings.id))
-      .where(and(eq(meetingAttendees.userId, userId), gte(meetings.startsAt, new Date())))
-      .orderBy(asc(meetings.startsAt)),
+      .orderBy(desc(assignments.allocationPct), asc(apps.name)),
   ])
 
+  const [userRow] = userRows
+  if (!userRow) return null
+
   const [summary] = summarizeAllocations(
-    breakdown.map((b) => ({ userId, allocationPct: b.allocationPct })),
+    assignmentRows.map((row) => ({ userId, allocationPct: row.allocationPct })),
   )
 
   return {
     user: userRow,
     totalPct: summary?.totalPct ?? 0,
     overallocated: summary?.overallocated ?? false,
-    breakdown,
-    tasks: taskRows,
-    meetings: meetingRows,
+    assignments: assignmentRows.map(({ leadId, ...row }) => ({ ...row, isLead: leadId === userId })),
   }
+})
+
+export type PersonWorkload = {
+  /** Open work only, unsorted — bucketOpenTasks owns the ordering. */
+  openTasks: PersonTaskRow[]
+  load: TaskLoad
+  doneCount: number
+  totalCount: number
+  /** Today in the business timezone, so components never call `new Date()`. */
+  todayIso: string
+}
+
+/**
+ * A person's open work, with the two columns the product has been writing and
+ * never showing: `dueDate` (set by the ⌘K quick-add and accepted meeting
+ * suggestions) and `priority`. The sprint is joined in as well, so a task reads
+ * as "Alpha · Sprint 14 · due Friday" rather than as a bare title.
+ *
+ * TWO QUERIES, NEVER N+1: the open rows, and one aggregate for the lifetime
+ * counts. Done tasks are counted but not listed — every one ever closed used to
+ * render in full, so a long-tenured person's page grew without limit, and
+ * without a completion timestamp on `tasks` there is no meaningful way to order
+ * or window them anyway (see task-workload.ts).
+ */
+export async function getPersonWorkload(userId: string): Promise<PersonWorkload> {
+  const todayIso = isoDayOf(new Date())
+
+  const [openTasks, counts] = await Promise.all([
+    db
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        status: tasks.status,
+        priority: tasks.priority,
+        dueDate: tasks.dueDate,
+        createdAt: tasks.createdAt,
+        appName: apps.name,
+        appSlug: apps.slug,
+        sprintName: sprints.name,
+      })
+      .from(tasks)
+      .innerJoin(apps, eq(tasks.appId, apps.id))
+      // Left: a task in the backlog has no sprint, and dropping those would
+      // hide exactly the work nobody has scheduled yet.
+      .leftJoin(sprints, eq(tasks.sprintId, sprints.id))
+      .where(and(eq(tasks.assigneeId, userId), ne(tasks.status, 'done')))
+      .orderBy(asc(tasks.dueDate), desc(tasks.priority)),
+    db
+      .select({
+        total: sql<number>`count(*)::int`,
+        done: sql<number>`count(*) filter (where ${tasks.status} = 'done')::int`,
+      })
+      .from(tasks)
+      .where(eq(tasks.assigneeId, userId)),
+  ])
+
+  return {
+    openTasks,
+    load: summarizeOpenTasks(openTasks, todayIso),
+    doneCount: counts[0]?.done ?? 0,
+    totalCount: counts[0]?.total ?? 0,
+    todayIso,
+  }
+}
+
+export type PersonFollowupsView = PersonFollowups & { todayIso: string }
+
+/**
+ * Open meeting follow-ups in both directions — what this person owes, and what
+ * they are waiting on from someone else — in ONE query, split by the tested
+ * rules in followup-split.ts.
+ *
+ * Bounded by `status = 'open'` rather than by a LIMIT on purpose: a limit would
+ * have to be ordered, and any ordering that fits in SQL (newest source meeting
+ * first) truncates from the wrong end — the OLDEST debt is the item that must
+ * never fall off the page. Resolved items are excluded entirely; they live on
+ * the meeting they were resolved in.
+ */
+export async function getPersonFollowups(userId: string): Promise<PersonFollowupsView> {
+  const owner = alias(users, 'followup_owner')
+  const creator = alias(users, 'followup_creator')
+
+  const rows = await db
+    .select({
+      id: meetingFollowups.id,
+      text: meetingFollowups.text,
+      kind: meetingFollowups.kind,
+      ownerUserId: meetingFollowups.userId,
+      ownerUserName: owner.name,
+      personName: meetingFollowups.personName,
+      createdById: meetingFollowups.createdBy,
+      createdByName: creator.name,
+      meetingId: meetings.id,
+      meetingTitle: meetings.title,
+      meetingStartsAt: meetings.startsAt,
+      responseNote: meetingFollowups.responseNote,
+      deferReason: meetingFollowups.deferReason,
+    })
+    .from(meetingFollowups)
+    .innerJoin(meetings, eq(meetingFollowups.sourceMeetingId, meetings.id))
+    // Left joins throughout: userId is null when the AI couldn't match the
+    // spoken name to exactly one attendee, and createdBy is null for every
+    // AI-derived row. Inner joins here would drop precisely those items.
+    .leftJoin(owner, eq(meetingFollowups.userId, owner.id))
+    .leftJoin(creator, eq(meetingFollowups.createdBy, creator.id))
+    .where(
+      and(
+        eq(meetingFollowups.status, 'open'),
+        or(eq(meetingFollowups.userId, userId), eq(meetingFollowups.createdBy, userId)),
+      ),
+    )
+    .orderBy(asc(meetings.startsAt))
+
+  const todayIso = isoDayOf(new Date())
+  const split = splitPersonFollowups(
+    rows.map(({ ownerUserName, personName, ...row }) => ({
+      ...row,
+      // The resolved user's name when there is one, else the raw as-spoken
+      // name — which is kept on every row precisely so nothing is lost when
+      // the match failed.
+      ownerName: ownerUserName ?? personName,
+    })),
+    userId,
+    todayIso,
+  )
+
+  return { ...split, todayIso }
+}
+
+export type PersonMeetingsView = PersonMeetings & { now: Date }
+
+/** How far either side of now the meetings section reads. */
+const MEETING_WINDOW_DAYS = 60
+
+/**
+ * Meetings this person attends, upcoming and recent, with their RSVP — one
+ * query over a bounded window either side of now, split by splitPersonMeetings.
+ *
+ * The window is what keeps this O(1)-ish for someone with three years of
+ * standups behind them; the split caps what renders inside it and reports the
+ * full in-window totals so the UI can say how much it is not showing.
+ */
+export async function getPersonMeetings(userId: string): Promise<PersonMeetingsView> {
+  const now = new Date()
+  const from = new Date(now.getTime() - MEETING_WINDOW_DAYS * 86_400_000)
+  const until = new Date(now.getTime() + MEETING_WINDOW_DAYS * 86_400_000)
+
+  const rows = await db
+    .select({
+      id: meetings.id,
+      title: meetings.title,
+      startsAt: meetings.startsAt,
+      endsAt: meetings.endsAt,
+      meetingUrl: meetings.meetingUrl,
+      appName: apps.name,
+      appSlug: apps.slug,
+      response: meetingAttendees.response,
+    })
+    .from(meetingAttendees)
+    .innerJoin(meetings, eq(meetingAttendees.meetingId, meetings.id))
+    .leftJoin(apps, eq(meetings.appId, apps.id))
+    .where(
+      and(
+        eq(meetingAttendees.userId, userId),
+        gte(meetings.startsAt, from),
+        lte(meetings.startsAt, until),
+      ),
+    )
+    .orderBy(asc(meetings.startsAt))
+
+  return { ...splitPersonMeetings(rows, now), now }
 }

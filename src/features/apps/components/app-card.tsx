@@ -1,7 +1,6 @@
 import Link from 'next/link'
-import { differenceInCalendarDays, format } from 'date-fns'
-import { CalendarClock, CalendarDays, ListChecks, SquareKanban } from 'lucide-react'
-import { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent } from '@/components/ui/card'
+import { format, formatDistanceToNowStrict } from 'date-fns'
+import { CalendarDays, MessageSquare, SquareKanban, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import {
@@ -12,161 +11,251 @@ import {
   AvatarGroup,
   AvatarGroupCount,
 } from '@/components/ui/avatar'
-import type { AppWithMembers } from '@/features/apps/queries'
+import {
+  completionPct,
+  parseCalendarDate,
+  sprintDayProgress,
+  HEALTH_LABEL,
+  type AppStatus,
+  type HealthLevel,
+} from '@/features/apps/app-health'
+import { HealthDot } from '@/features/apps/components/health-dot'
+import { TaskSplitBar } from '@/features/apps/components/task-split-bar'
+import type { AppPortfolioEntry } from '@/features/apps/queries'
 
-const STATUS_DOT: Record<AppWithMembers['status'], string> = {
-  active: 'bg-primary',
-  paused: 'bg-chart-1',
-  archived: 'bg-muted-foreground/60',
-}
-
-const STATUS_LABEL: Record<AppWithMembers['status'], string> = {
+const STATUS_LABEL: Record<AppStatus, string> = {
   active: 'Active',
   paused: 'Paused',
   archived: 'Archived',
 }
 
-// Left-edge accent so a card's status reads at a glance across the grid, not
-// only from the chip in its corner.
-const STATUS_ACCENT: Record<AppWithMembers['status'], string> = {
-  active: 'border-l-primary',
-  paused: 'border-l-chart-1',
-  archived: 'border-l-muted-foreground/40',
+/**
+ * Left-edge accent keyed to HEALTH, not to status. Status is already stated in
+ * words on the card; what you cannot read from six feet away is which of
+ * twelve cards needs a human today, and that is the only thing worth spending
+ * colour on. `on-track` gets no accent at all — a grid where every card is
+ * coloured says nothing.
+ */
+const HEALTH_ACCENT: Record<HealthLevel, string> = {
+  'at-risk': 'border-l-destructive',
+  // --warning, not --chart-1: see health-dot.tsx. The split bar below IS a
+  // chart and keeps the ramp; this stripe is a status signal and must not.
+  watch: 'border-l-warning',
+  'on-track': 'border-l-transparent',
+  dormant: 'border-l-transparent',
 }
 
-const MAX_TAGS = 4
+const MAX_TAGS = 3
 const MAX_AVATARS = 4
 
-export function AppCard({ app }: { app: AppWithMembers }) {
+export function AppCard({ app, today }: { app: AppPortfolioEntry; today: string }) {
+  const { tasks, currentSprint, nextSprint, meetings, comments, lastActivityAt } = app.stats
+  const openTasks = tasks.todo + tasks.in_progress
+  const donePct = completionPct(tasks)
+
   const visibleTags = app.techTags.slice(0, MAX_TAGS)
   const extraTags = app.techTags.length - visibleTags.length
 
-  // Lead first in the stack when they are among the members
+  // Lead first in the avatar stack when they're also assigned to the app.
   const members = app.leadId
     ? [...app.members].sort((a, b) =>
-        a.userId === app.leadId ? -1 : b.userId === app.leadId ? 1 : 0
+        a.userId === app.leadId ? -1 : b.userId === app.leadId ? 1 : 0,
       )
     : app.members
   const visibleMembers = members.slice(0, MAX_AVATARS)
   const extraMembers = members.length - visibleMembers.length
-  const lead = app.leadId ? app.members.find((m) => m.userId === app.leadId) : undefined
 
-  const { tasks: t, activeSprint, sprintCount, meetingCount } = app.stats
-  const donePct = t.total > 0 ? (t.done / t.total) * 100 : 0
-  const inProgressPct = t.total > 0 ? (t.in_progress / t.total) * 100 : 0
-  const deadlineDate = activeSprint ? new Date(`${activeSprint.endDate}T12:00:00`) : null
-  const daysLeft = deadlineDate ? differenceInCalendarDays(deadlineDate, new Date()) : null
-  const deadlineSoon = daysLeft !== null && daysLeft <= 3
+  const progress = currentSprint
+    ? sprintDayProgress(currentSprint.startDate, currentSprint.endDate, today)
+    : null
+  const overrun = progress?.phase === 'ended'
 
   return (
     <Link
       href={`/apps/${app.slug}`}
+      // A whole-card link would otherwise announce every fragment on the card
+      // — each tag, each avatar, "Day 3 of 7" — as one run-on name. The full
+      // detail stays readable in browse mode; this is the tab-through summary,
+      // and it carries the three figures the card is built around rather than
+      // just the verdict. Someone arrowing down a grid of twelve links should
+      // not have to enter each card to find out which one has the overdue work.
+      aria-label={
+        `${app.name} — ${HEALTH_LABEL[app.health.level]}. ` +
+        `${openTasks} open, ${tasks.overdue} overdue, ${donePct}% done.`
+      }
       className="group block h-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
     >
-      <Card className={`h-full border-l-2 ${STATUS_ACCENT[app.status]} transition-[transform,box-shadow] duration-150 ease-out group-hover:-translate-y-0.5 group-hover:ring-ring/40 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0`}>
-        <CardHeader>
-          <CardTitle className="font-heading font-semibold">{app.name}</CardTitle>
-          <CardDescription className="font-mono text-xs">{app.slug}</CardDescription>
-          <CardAction>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
-              <span aria-hidden className={`size-1.5 rounded-full ${STATUS_DOT[app.status]}`} />
-              {STATUS_LABEL[app.status]}
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex flex-1 flex-col gap-3">
-          {app.description ? (
-            <p className="line-clamp-2 text-sm text-muted-foreground">{app.description}</p>
-          ) : null}
-          {visibleTags.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {visibleTags.map((tag) => (
-                <Badge key={tag} variant="outline" className="font-normal text-muted-foreground">
-                  {tag}
-                </Badge>
-              ))}
-              {extraTags > 0 ? (
-                <Badge variant="outline" className="font-mono font-normal text-muted-foreground">
-                  +{extraTags}
-                </Badge>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* Task progress — a mini stacked bar (done / in-progress / todo). */}
-          {t.total > 0 ? (
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-muted-foreground">{t.done}/{t.total} tasks done</span>
-                <span className="font-mono text-muted-foreground">{Math.round(donePct)}%</span>
-              </div>
-              <div className="flex h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden>
-                <div className="bg-primary" style={{ width: `${donePct}%` }} />
-                <div className="bg-chart-1" style={{ width: `${inProgressPct}%` }} />
-              </div>
-            </div>
-          ) : null}
-
-          {/* Deadline — the soonest-closing active sprint. */}
-          {activeSprint && deadlineDate ? (
-            <div className="flex items-center gap-1.5 text-xs">
-              <CalendarClock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-              <span className="truncate text-muted-foreground">{activeSprint.name} · ends</span>
-              <span
-                className={cn('shrink-0 font-medium', deadlineSoon ? 'text-destructive' : 'text-foreground')}
-              >
-                {format(deadlineDate, 'MMM d')}
-                {daysLeft !== null && daysLeft >= 0 ? ` · ${daysLeft}d left` : ' · overdue'}
-              </span>
-            </div>
-          ) : null}
-
-          {/* At-a-glance counts. */}
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1" title="Sprints">
-              <SquareKanban className="size-3.5" aria-hidden /> {sprintCount}
-            </span>
-            <span className="flex items-center gap-1" title="Open tasks">
-              <ListChecks className="size-3.5" aria-hidden /> {t.todo + t.in_progress} open
-            </span>
-            <span className="flex items-center gap-1" title="Meetings">
-              <CalendarDays className="size-3.5" aria-hidden /> {meetingCount}
-            </span>
+      <article
+        className={cn(
+          'flex h-full flex-col gap-3 rounded-xl border-l-2 bg-card p-4 ring-1 ring-foreground/10',
+          'transition-[transform,box-shadow] duration-150 ease-out',
+          'group-hover:-translate-y-0.5 group-hover:ring-ring/40',
+          'motion-reduce:transition-none motion-reduce:group-hover:translate-y-0',
+          HEALTH_ACCENT[app.health.level],
+          app.status === 'archived' && 'opacity-70',
+        )}
+      >
+        <header className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <h3 className="truncate font-heading text-base font-semibold tracking-tight">
+              {app.name}
+            </h3>
+            <p className="truncate font-mono text-2xs text-muted-foreground">
+              {app.slug}
+              {app.status !== 'active' ? ` · ${STATUS_LABEL[app.status]}` : null}
+            </p>
           </div>
+          <HealthDot health={app.health} />
+        </header>
 
-          <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-            {visibleMembers.length > 0 ? (
-              <AvatarGroup className="*:data-[slot=avatar]:ring-card">
-                {visibleMembers.map((member) => (
-                  <Avatar key={member.userId} size="sm" title={member.name}>
-                    {member.avatarUrl ? (
-                      <AvatarImage src={member.avatarUrl} alt={member.name} />
-                    ) : null}
-                    <AvatarFallback>{member.name.slice(0, 1).toUpperCase()}</AvatarFallback>
-                    {member.userId === app.leadId ? (
-                      <AvatarBadge title="Lead">
-                        <span className="sr-only">Lead</span>
-                      </AvatarBadge>
-                    ) : null}
-                  </Avatar>
-                ))}
-                {extraMembers > 0 ? (
-                  <AvatarGroupCount className="font-mono text-xs ring-card group-has-data-[size=sm]/avatar-group:size-6">
-                    +{extraMembers}
-                  </AvatarGroupCount>
-                ) : null}
-              </AvatarGroup>
-            ) : (
-              <span />
-            )}
-            {lead ? (
-              <span className="truncate text-xs text-muted-foreground">
-                Lead · <span className="font-medium text-foreground">{lead.name}</span>
+        {/* At-a-glance row — the three numbers that answer "is this healthy?" */}
+        <dl className="flex items-end gap-4">
+          <div className="flex flex-col">
+            <dt className="text-2xs text-muted-foreground">Open</dt>
+            <dd className="font-mono text-xl leading-tight font-semibold tabular-nums">
+              {openTasks}
+            </dd>
+          </div>
+          <div className="flex flex-col">
+            <dt className="text-2xs text-muted-foreground">Overdue</dt>
+            <dd
+              className={cn(
+                'font-mono text-xl leading-tight font-semibold tabular-nums',
+                tasks.overdue > 0 ? 'text-destructive' : 'text-muted-foreground',
+              )}
+            >
+              {tasks.overdue}
+            </dd>
+          </div>
+          <div className="flex flex-col">
+            <dt className="text-2xs text-muted-foreground">Done</dt>
+            <dd className="font-mono text-xl leading-tight font-semibold tabular-nums">
+              {donePct}
+              <span className="text-sm font-normal text-muted-foreground">%</span>
+            </dd>
+          </div>
+          {tasks.overdue > 0 ? (
+            <TriangleAlert
+              aria-hidden
+              className="mb-1 ml-auto size-4 shrink-0 text-destructive"
+            />
+          ) : null}
+        </dl>
+
+        <TaskSplitBar tasks={tasks} />
+
+        {/* Current sprint + its day-progress: the deadline you're running against. */}
+        {currentSprint && progress ? (
+          <div className="flex flex-col gap-1">
+            <div className="flex items-baseline justify-between gap-2 text-xs">
+              <span className="truncate text-muted-foreground">{currentSprint.name}</span>
+              <span
+                className={cn(
+                  'shrink-0 font-mono tabular-nums',
+                  overrun || progress.remainingDays <= 2
+                    ? 'font-medium text-destructive'
+                    : 'text-muted-foreground',
+                )}
+              >
+                {overrun
+                  ? `${-progress.remainingDays}d over`
+                  : `${progress.remainingDays}d left`}
               </span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+              <div
+                className={cn('h-full', overrun ? 'bg-destructive' : 'bg-chart-2')}
+                style={{ width: `${progress.pct}%` }}
+              />
+            </div>
+            <p className="font-mono text-2xs text-muted-foreground tabular-nums">
+              Day {progress.elapsedDays} of {progress.totalDays} · ends{' '}
+              {format(parseCalendarDate(currentSprint.endDate), 'MMM d')}
+            </p>
+          </div>
+        ) : nextSprint ? (
+          <p className="font-mono text-2xs text-muted-foreground tabular-nums">
+            Next sprint {nextSprint.name} starts{' '}
+            {format(parseCalendarDate(nextSprint.startDate), 'MMM d')}
+          </p>
+        ) : (
+          <p className="text-2xs text-muted-foreground">No sprint running</p>
+        )}
+
+        {visibleTags.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {visibleTags.map((tag) => (
+              <Badge key={tag} variant="outline" className="font-normal text-muted-foreground">
+                {tag}
+              </Badge>
+            ))}
+            {extraTags > 0 ? (
+              <Badge variant="outline" className="font-mono font-normal text-muted-foreground">
+                +{extraTags}
+              </Badge>
             ) : null}
           </div>
-        </CardContent>
-      </Card>
+        ) : null}
+
+        <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-2xs text-muted-foreground">
+          <span className="flex items-center gap-1" title="Sprints">
+            <SquareKanban className="size-3" aria-hidden />
+            <span className="font-mono tabular-nums">{app.stats.sprints.total}</span>
+            <span className="sr-only">sprints</span>
+          </span>
+          <span className="flex items-center gap-1" title="Meetings">
+            <CalendarDays className="size-3" aria-hidden />
+            <span className="font-mono tabular-nums">{meetings.total}</span>
+            <span className="sr-only">meetings</span>
+          </span>
+          <span className="flex items-center gap-1" title="Comments">
+            <MessageSquare className="size-3" aria-hidden />
+            <span className="font-mono tabular-nums">{comments}</span>
+            <span className="sr-only">comments</span>
+          </span>
+          <span className="ml-auto truncate">
+            {lastActivityAt
+              ? `Active ${formatDistanceToNowStrict(lastActivityAt, { addSuffix: true })}`
+              : 'No activity yet'}
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+          {visibleMembers.length > 0 ? (
+            <AvatarGroup className="*:data-[slot=avatar]:ring-card">
+              {visibleMembers.map((member) => (
+                <Avatar key={member.userId} size="sm" title={`${member.name} · ${member.role}`}>
+                  {member.avatarUrl ? (
+                    <AvatarImage src={member.avatarUrl} alt={member.name} />
+                  ) : null}
+                  <AvatarFallback>{member.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+                  {member.userId === app.leadId ? (
+                    <AvatarBadge title="Lead">
+                      <span className="sr-only">Lead</span>
+                    </AvatarBadge>
+                  ) : null}
+                </Avatar>
+              ))}
+              {extraMembers > 0 ? (
+                <AvatarGroupCount className="font-mono text-xs ring-card group-has-data-[size=sm]/avatar-group:size-6">
+                  +{extraMembers}
+                </AvatarGroupCount>
+              ) : null}
+            </AvatarGroup>
+          ) : (
+            <span className="text-2xs text-muted-foreground">Nobody assigned</span>
+          )}
+          <span className="truncate text-2xs text-muted-foreground">
+            {app.leadName ? (
+              <>
+                Lead · <span className="font-medium text-foreground">{app.leadName}</span>
+              </>
+            ) : (
+              'No lead'
+            )}
+          </span>
+        </div>
+      </article>
     </Link>
   )
 }

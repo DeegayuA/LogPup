@@ -216,7 +216,14 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
                     {user.name}
                   </Link>
                   {user.role === 'admin' ? (
-                    <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-label="Admin" />
+                    // role="img" so the label is actually exposed: an <svg>
+                    // has no implicit role, and several screen readers drop
+                    // aria-label on an unroled element entirely.
+                    <ShieldCheck
+                      role="img"
+                      aria-label="Admin"
+                      className="size-3.5 shrink-0 text-primary"
+                    />
                   ) : null}
                 </span>
                 <span className="truncate text-xs text-muted-foreground">

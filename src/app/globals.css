@@ -27,6 +27,11 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -72,6 +77,31 @@
   --accent: oklch(0.94 0.015 155);
   --accent-foreground: oklch(0.3 0.05 162);
   --destructive: oklch(0.55 0.21 27);
+  /* Text/icon colour for a SOLID --destructive fill. Three components already
+     wrote `text-destructive-foreground` (the RSVP "Can't" pill, the sprint
+     task dialog's delete, the notification count bubble) against a token that
+     was never defined — Tailwind v4 emitted nothing for it, so those three
+     surfaces rendered white-on-red only by inheritance accident and measured
+     ~3.5:1 in light and ~2.6:1 in dark. Defined here rather than deleted from
+     the callers because a solid destructive fill legitimately needs a paired
+     foreground. Light: near-white on the red, 5.10:1. */
+  --destructive-foreground: oklch(0.98 0.005 95);
+  /* Status pair, added for the meetings surfaces and usable anywhere:
+     --success = "this is settled/resolved", --warning = "this is carried
+     forward / not yet at risk but wants attention". They exist because the
+     alternative was pressing the data-viz ramp (--chart-1) and raw Tailwind
+     amber into service as status colours, which both happened. Deliberately
+     NOT the same as --primary: primary means "the working colour / the thing
+     you can act on", and a resolved follow-up is a state, not an action.
+     Success is close to primary in hue by necessity (green means done) —
+     which is exactly why every use of it in the meetings UI also carries a
+     check icon and the word "Resolved". Contrast, light theme:
+     success 4.82:1 on --background, 5.15:1 on --card, 4.52:1 on --muted;
+     warning 5.34 / 5.71 / 5.01. Both foregrounds clear 4.5:1 on their fill. */
+  --success: oklch(0.52 0.15 148);
+  --success-foreground: oklch(0.98 0.005 95);
+  --warning: oklch(0.52 0.12 62);
+  --warning-foreground: oklch(0.98 0.005 95);
   --weekend: oklch(0.5 0.19 25);
   --holiday: oklch(0.55 0.15 55);
   /* Bank/mercantile-only holidays (not gazetted public holidays): a blue
@@ -114,6 +144,16 @@
   --accent: oklch(0.28 0.02 163);
   --accent-foreground: oklch(0.93 0.01 140);
   --destructive: oklch(0.66 0.19 25);
+  /* Dark mode inverts which side of the fill carries the ink: near-white on
+     the lightened dark-mode red is only 3.21:1, while this near-black is
+     5.57:1 on the same fill. Same reasoning for success/warning below, which
+     are light-on-dark tokens and therefore need dark foregrounds
+     (10.54:1 and 10.23:1 respectively). */
+  --destructive-foreground: oklch(0.18 0.03 25);
+  --success: oklch(0.8 0.15 145);
+  --success-foreground: oklch(0.18 0.03 160);
+  --warning: oklch(0.82 0.13 72);
+  --warning-foreground: oklch(0.2 0.04 60);
   --weekend: oklch(0.72 0.18 25);
   --holiday: oklch(0.78 0.15 60);
   /* Same blue family as light mode, lightened for a dark surface: ~9.4:1
@@ -167,6 +207,14 @@
   .font-mono {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Mixed Sinhala/English prose (meeting notes, transcripts) needs more
+     leading than Latin-only text — see `bilingualText` in
+     src/features/meetings/components/meeting-chips.tsx, which sets it with
+     Tailwind's own `text-<size>/<leading>` syntax rather than a class here.
+     A custom class in this layer would lose to `text-sm`'s own line-height,
+     since Tailwind's utilities layer outranks base regardless of
+     specificity. */
 
   /* Coarse-pointer touch targets (WCAG 2.5.8, ~44x44 CSS px minimum).
      Several shared primitives are intentionally smaller than 44px on

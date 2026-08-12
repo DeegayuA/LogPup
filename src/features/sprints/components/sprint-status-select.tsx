@@ -27,13 +27,22 @@ export function SprintStatusSelect({ sprintId, status }: { sprintId: string; sta
   function handleChange(value: string | null) {
     if (!value || value === status) return
     startTransition(async () => {
-      const res = await updateSprintStatus(sprintId, value as Status)
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      try {
+        const res = await updateSprintStatus(sprintId, value as Status)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Sprint status updated')
+        router.refresh()
+      } catch {
+        // A server action can REJECT (a DB outage, a dropped connection) as
+        // well as resolve with `{ ok: false }`. Without this the rejection is
+        // unhandled, the select sits showing a status that was never saved,
+        // and nothing is said. Every other action call in this feature is
+        // guarded the same way.
+        toast.error('Something went wrong — try again')
       }
-      toast.success('Sprint status updated')
-      router.refresh()
     })
   }
 

@@ -40,16 +40,28 @@ import {
 } from '@/components/ui/dialog'
 import { deleteMeeting, rescheduleMeeting } from '@/features/meetings/actions'
 import { AddToCalendarMenu } from '@/features/meetings/components/add-to-calendar'
+import { MetaChip } from '@/features/meetings/components/meeting-chips'
+import {
+  durationLabel,
+  meetingTiming,
+  noRsvpYet,
+  tallyRsvps,
+  type AttendeeResponse,
+} from '@/features/meetings/components/meeting-glance'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
-/** "1h 30m" / "45m" — the span the reschedule fields preserve. */
-function durationLabel(startsAt: Date, endsAt: Date): string {
-  const minutes = Math.max(0, Math.round((endsAt.getTime() - startsAt.getTime()) / 60000))
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  if (hours === 0) return `${rest}m`
-  if (rest === 0) return `${hours}h`
-  return `${hours}h ${rest}m`
+/**
+ * How each attendee answered. Shown as a word next to their name rather than
+ * as a colour on their avatar: the response is fetched for every attendee and
+ * this panel — the one place that lists them by name at all — used to throw
+ * it away. `pending` gets no label; "hasn't replied" is the absence of an
+ * answer, not an answer.
+ */
+const RESPONSE_LABEL: Record<AttendeeResponse, string | null> = {
+  going: 'Going',
+  maybe: 'Maybe',
+  declined: "Can't",
+  pending: null,
 }
 
 function Section({
@@ -153,6 +165,8 @@ function MeetingDetailBody({
     setEnd(meeting.endsAt)
   }
 
+  const timing = meetingTiming(meeting.startsAt, meeting.endsAt, new Date())
+  const rsvp = tallyRsvps(meeting.attendees)
   const endBeforeStart = end.getTime() <= start.getTime()
   const moved =
     start.getTime() !== meeting.startsAt.getTime() || end.getTime() !== meeting.endsAt.getTime()
@@ -209,13 +223,38 @@ function MeetingDetailBody({
         <DialogDescription>
           {format(meeting.startsAt, 'EEEE, MMMM d, yyyy')}
           {' · '}
-          <span className="font-mono tabular-nums">
+          <span className="font-mono">
             {format(meeting.startsAt, 'h:mm a')} – {format(meeting.endsAt, 'h:mm a')}
           </span>
           {' · '}
           {durationLabel(meeting.startsAt, meeting.endsAt)}
         </DialogDescription>
         <div className="flex flex-wrap items-center gap-1.5">
+          {/* Where this meeting sits relative to now, and whether anybody has
+              answered — the two facts a chip in a month grid cannot show. */}
+          {timing.state === 'live' ? (
+            <MetaChip tone="active">
+              <span
+                className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
+                aria-hidden
+              />
+              {timing.label}
+            </MetaChip>
+          ) : (
+            <MetaChip tone={timing.state === 'soon' ? 'warning' : 'neutral'}>{timing.label}</MetaChip>
+          )}
+          {rsvp.total > 0 ? (
+            <MetaChip tone={noRsvpYet(rsvp, timing.state) ? 'warning' : 'neutral'}>
+              {noRsvpYet(rsvp, timing.state) ? (
+                'No replies yet'
+              ) : (
+                <>
+                  <span className="font-mono">{rsvp.going}</span>/
+                  <span className="font-mono">{rsvp.total}</span> going
+                </>
+              )}
+            </MetaChip>
+          ) : null}
           {meeting.appName && meeting.appSlug ? (
             <Badge variant="secondary" render={<Link href={`/apps/${meeting.appSlug}`} />}>
               {meeting.appName}
@@ -267,6 +306,11 @@ function MeetingDetailBody({
                     pile tells a screen-reader user nothing about who is in
                     the room. */}
                 <span className="min-w-0 truncate text-sm">{attendee.name}</span>
+                {RESPONSE_LABEL[attendee.response] ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {RESPONSE_LABEL[attendee.response]}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -285,9 +329,27 @@ function MeetingDetailBody({
         ) : (
           <p className="text-sm text-muted-foreground">No notes yet.</p>
         )}
-        <p className="text-xs text-muted-foreground">
-          Notes, transcripts and follow-ups are written in the list view.
-        </p>
+        {/* Not a dead end: the button that actually gets there is named right
+            here, next to the thing it is missing, instead of only in the
+            footer under a generic label. */}
+        {onOpenInList ? (
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            className="w-fit"
+            onClick={() => {
+              onOpenInList(meeting)
+              onOpenChange(false)
+            }}
+          >
+            <ListIcon aria-hidden /> Open the write-up, transcript and follow-ups
+          </Button>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            The write-up, transcript and follow-ups live in the list view.
+          </p>
+        )}
       </Section>
 
       {canManage ? (
@@ -369,19 +431,8 @@ function MeetingDetailBody({
           <span />
         )}
         <div className="flex flex-wrap items-center gap-2">
-          {onOpenInList ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              onClick={() => {
-                onOpenInList(meeting)
-                onOpenChange(false)
-              }}
-            >
-              <ListIcon /> Open in list view
-            </Button>
-          ) : null}
+          {/* The route to the notes now also sits inside the Notes section
+              above, where its absence is what prompts the question. */}
           <DialogClose render={<Button variant="outline" size="sm" />}>Close</DialogClose>
         </div>
       </DialogFooter>

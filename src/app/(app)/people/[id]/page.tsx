@@ -1,286 +1,149 @@
-import Link from 'next/link'
+import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { format } from 'date-fns'
-import { PawPrint, Phone, ShieldCheck } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { telHref } from '@/lib/phone'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { z } from 'zod'
+import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
+import { AssignmentsCard } from '@/features/people/components/assignments-card'
+import { PersonActivityCard } from '@/features/people/components/person-activity-card'
+import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
+import { PersonHeader } from '@/features/people/components/person-header'
+import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
+import { PersonStatRow } from '@/features/people/components/person-stat-row'
+import { PersonTasksCard } from '@/features/people/components/person-tasks-card'
+import { buildPersonStats } from '@/features/people/person-stats'
 import {
   getPersonActivity,
   getPersonAllocationHistory,
-  getPersonDetail,
+  getPersonFollowups,
+  getPersonMeetings,
+  getPersonOverview,
+  getPersonWorkload,
 } from '@/features/people/queries'
-import { ActivityGraph } from '@/features/people/components/activity-graph'
-import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
-import { CapacityBar, capacityBand } from '@/features/people/components/capacity-bar'
-import { cn } from '@/lib/utils'
 
-const TASK_STATUS_ORDER = ['todo', 'in_progress', 'done'] as const
+/**
+ * THE ROUTE PARAM IS VALIDATED BEFORE IT REACHES THE DATABASE, and this is not
+ * defensive decoration. `users.id` is a `uuid` column, so `/people/banana` used
+ * to hand Postgres a string it cannot cast and get back an exception —
+ * "invalid input syntax for type uuid" — not an empty result. That threw out of
+ * the server component, and with no error boundary anywhere under app/ the user
+ * landed on the framework's crash screen for what is simply a bad URL.
+ *
+ * A malformed id is a 404, not a 500: there is no person at that address and
+ * there never could be. Parsing here rather than inside each query keeps the
+ * queries honest about their contract (they document that callers must have
+ * validated) and means the check happens once for all five of them.
+ */
+const personId = z.uuid()
 
-const TASK_STATUS_LABEL: Record<(typeof TASK_STATUS_ORDER)[number], string> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  done: 'Done',
+export async function generateMetadata(props: {
+  params: Promise<{ id: string }>
+}): Promise<Metadata> {
+  const { id } = await props.params
+  const parsed = personId.safeParse(id)
+  // No throw and no notFound() here — metadata generation is not the place to
+  // decide the response. The page component owns that, and does the same parse.
+  if (!parsed.success) return { title: 'Person not found' }
+
+  // Deduplicated with the page's own call by React `cache` (see queries.ts), so
+  // titling the tab costs no extra database work.
+  const overview = await getPersonOverview(parsed.data)
+  if (!overview) return { title: 'Person not found' }
+
+  return {
+    title: overview.user.name,
+    description: `Workload, tasks, follow-ups and meetings for ${overview.user.name}.`,
+  }
 }
-
-const TASK_STATUS_DOT: Record<(typeof TASK_STATUS_ORDER)[number], string> = {
-  todo: 'bg-muted-foreground/40',
-  in_progress: 'bg-primary',
-  done: 'bg-primary/40',
-}
-
-const linkClass =
-  'rounded-sm underline-offset-2 transition-colors duration-150 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
 
 export default async function PersonDetailPage(props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params
-  const [person, activity, history] = await Promise.all([
-    getPersonDetail(id),
-    getPersonActivity(id),
-    getPersonAllocationHistory(id),
-  ])
-  if (!person) notFound()
+  const parsed = personId.safeParse(id)
+  if (!parsed.success) notFound()
+  const userId = parsed.data
 
-  const { user, totalPct, overallocated, breakdown, tasks, meetings } = person
-  const openTaskCount = tasks.filter((task) => task.status !== 'done').length
+  /**
+   * SIX READS, ALL IN PARALLEL — never N+1. Every section of this page is a
+   * single query (or, where a lifetime count is needed alongside a list, one
+   * query plus one aggregate issued together inside that function). Nothing
+   * here loops over a result set issuing more queries, and nothing fans out
+   * per app, per task or per meeting.
+   *
+   * The overview is awaited with the rest rather than first-then-others: an id
+   * that matches nobody is rare enough that serialising every load to rule it
+   * out costs more than the five wasted queries on the rare miss.
+   */
+  const [overview, workload, followups, meetings, activity, history] = await Promise.all([
+    getPersonOverview(userId),
+    getPersonWorkload(userId),
+    getPersonFollowups(userId),
+    getPersonMeetings(userId),
+    getPersonActivity(userId),
+    getPersonAllocationHistory(userId),
+  ])
+
+  if (!overview) notFound()
+
+  /**
+   * The stat strip is derived from the SAME summaries the cards below render —
+   * `workload.load` is what the Tasks card buckets, `followups.owed` is what the
+   * Follow-ups card lists — so a tile can never contradict the section it is
+   * summarising. That was the point of building the tiles as data
+   * (person-stats.ts) instead of hand-writing seven numbers here.
+   */
+  const stats = buildPersonStats({
+    totalPct: overview.totalPct,
+    assignmentCount: overview.assignments.length,
+    tasks: workload.load,
+    doneCount: workload.doneCount,
+    totalTaskCount: workload.totalCount,
+    meetingsAttended: meetings.attendedRecently,
+    meetingsWindowDays: meetings.attendedWindowDays,
+    followupsOwed: followups.owed.length,
+    followupsAwaiting: followups.awaiting.length,
+    followupsOldestOwedDays: followups.oldestOwedDays,
+  })
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      <header className="flex items-center gap-4">
-        <Avatar size="lg" className="size-14!">
-          {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
-          <AvatarFallback className="text-lg font-medium">
-            {user.name.slice(0, 1).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-heading text-2xl font-bold tracking-tight">{user.name}</h1>
-            {user.role === 'admin' ? (
-              <Badge variant="secondary">
-                <ShieldCheck aria-hidden /> Admin
-              </Badge>
-            ) : null}
-            {!user.active ? (
-              <Badge variant="outline" className="text-muted-foreground">
-                Inactive
-              </Badge>
-            ) : null}
-          </div>
-          <p className="truncate text-sm text-muted-foreground">
-            {[user.title, user.email].filter(Boolean).join(' · ')}
-          </p>
-        </div>
-        {user.phone ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-auto shrink-0"
-            render={<a href={telHref(user.phone)} />}
-          >
-            <Phone aria-hidden />
-            <span className="hidden font-mono sm:inline">{user.phone}</span>
-            <span className="sr-only">Call {user.name}</span>
-          </Button>
-        ) : null}
-      </header>
+      <PersonHeader overview={overview} />
 
+      <PersonStatRow stats={stats} />
+
+      {/*
+        One flat grid, not two hand-built columns. DOM order IS the mobile
+        order — overloaded (Workload) → doing (Tasks) → owes (Follow-ups) →
+        calendar → history — and on a wide screen the same order flows
+        row-major into two columns. Two column <div>s would have read
+        correctly at 1440px and shuffled into nonsense at 375px, which is the
+        usual way this layout goes wrong.
+
+        `items-start` keeps a short card from stretching to match a tall
+        neighbour; the last two span both columns because a 26-week grid and a
+        step chart both want the width.
+      */}
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Allocation</CardTitle>
-            {breakdown.length > 0 ? (
-              <CardAction>
-                <span className="font-mono text-xs text-muted-foreground">
-                  {breakdown.length} {breakdown.length === 1 ? 'app' : 'apps'}
-                </span>
-              </CardAction>
-            ) : null}
-          </CardHeader>
-          {breakdown.length === 0 ? (
-            <CardContent className="flex flex-col gap-1 py-4 text-center">
-              <p className="text-sm font-medium">Not assigned to any apps yet.</p>
-              <p className="text-xs text-muted-foreground">
-                Assign them from an app&apos;s Team panel.
-              </p>
-            </CardContent>
-          ) : (
-            <>
-              <CardContent className="flex flex-col divide-y divide-border">
-                {breakdown.map((entry) => (
-                  <div
-                    key={entry.appId}
-                    className="flex flex-col gap-1.5 py-2.5 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:gap-3"
-                  >
-                    <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                      <Link
-                        href={`/apps/${entry.slug}`}
-                        className={cn('truncate text-sm font-medium', linkClass)}
-                      >
-                        {entry.appName}
-                      </Link>
-                      <span className="truncate text-xs text-muted-foreground">{entry.role}</span>
-                    </div>
-                    <div className="flex items-center gap-2 sm:w-44">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
-                        <div
-                          className="h-full rounded-full bg-primary"
-                          style={{ width: `${Math.min(entry.allocationPct, 100)}%` }}
-                        />
-                      </div>
-                      <span className="w-10 shrink-0 text-right font-mono text-xs text-muted-foreground">
-                        {entry.allocationPct}%
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-              {/* Shared CapacityBar, same as /people and the dashboard — the
-                  hand-rolled meter here clipped at 100%, so 130% and 100% drew
-                  an identical full bar for the same person on two pages. */}
-              <CardContent className="flex flex-col gap-2 border-t border-border pt-4">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-sm font-medium">Total capacity</span>
-                </div>
-                <CapacityBar totalPct={totalPct} />
-                {overallocated ? (
-                  <p className="text-xs text-destructive">Over capacity — lighten the load.</p>
-                ) : null}
-                {/* The 80–99% band had no words anywhere — only an amber fill,
-                    which is invisible to a red/green-blind reader and silent
-                    to a screen reader. */}
-                {!overallocated && capacityBand(totalPct) === 'near' ? (
-                  <p className="text-xs text-muted-foreground">
-                    Near capacity — little room for anything new.
-                  </p>
-                ) : null}
-              </CardContent>
-            </>
-          )}
-        </Card>
+        <AssignmentsCard
+          assignments={overview.assignments}
+          totalPct={overview.totalPct}
+          overallocated={overview.overallocated}
+        />
 
-        {/* Sits directly after Allocation: the current split and how it got
-            that way are one story, and on mobile they stack in that order. */}
-        <AllocationHistoryCard history={history} />
+        <PersonTasksCard
+          openTasks={workload.openTasks}
+          todayIso={workload.todayIso}
+          doneCount={workload.doneCount}
+          totalCount={workload.totalCount}
+        />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ActivityGraph data={activity} />
-          </CardContent>
-        </Card>
+        <PersonFollowupsCard followups={followups} personName={overview.user.name} />
 
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Tasks</CardTitle>
-              {tasks.length > 0 ? (
-                <CardAction>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {openTaskCount} open
-                  </span>
-                </CardAction>
-              ) : null}
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              {tasks.length === 0 ? (
-                <div className="flex flex-col items-center gap-1.5 py-4 text-center">
-                  <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
-                  <p className="text-sm font-medium">All clear.</p>
-                  <p className="text-xs text-muted-foreground">
-                    Nothing on their plate right now.
-                  </p>
-                </div>
-              ) : (
-                TASK_STATUS_ORDER.map((status) => {
-                  const items = tasks.filter((task) => task.status === status)
-                  if (items.length === 0) return null
-                  return (
-                    <div key={status} className="flex flex-col gap-1.5">
-                      <div className="flex items-baseline gap-2">
-                        <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                          {TASK_STATUS_LABEL[status]}
-                        </h3>
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {items.length}
-                        </span>
-                      </div>
-                      <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
-                        {items.map((task) => (
-                          <li key={task.id} className="flex items-center gap-2.5 px-3 py-2">
-                            <span
-                              className={cn(
-                                'size-1.5 shrink-0 rounded-full',
-                                TASK_STATUS_DOT[status],
-                              )}
-                              aria-hidden
-                            />
-                            <span
-                              className={cn(
-                                'min-w-0 flex-1 truncate text-sm',
-                                status === 'done' && 'text-muted-foreground',
-                              )}
-                            >
-                              {task.title}
-                            </span>
-                            <Link
-                              href={`/apps/${task.appSlug}`}
-                              className={cn(
-                                'shrink-0 text-xs text-muted-foreground',
-                                linkClass,
-                              )}
-                            >
-                              {task.appName}
-                            </Link>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )
-                })
-              )}
-            </CardContent>
-          </Card>
+        <PersonMeetingsCard meetings={meetings} />
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Upcoming meetings</CardTitle>
-              {meetings.length > 0 ? (
-                <CardAction>
-                  <span className="font-mono text-xs text-muted-foreground">{meetings.length}</span>
-                </CardAction>
-              ) : null}
-            </CardHeader>
-            <CardContent>
-              {meetings.length === 0 ? (
-                <div className="flex flex-col gap-1 py-4 text-center">
-                  <p className="text-sm font-medium">No meetings ahead.</p>
-                  <p className="text-xs text-muted-foreground">The calendar is quiet.</p>
-                </div>
-              ) : (
-                <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
-                  {meetings.map((meeting) => (
-                    <li
-                      key={meeting.id}
-                      className="flex items-center justify-between gap-3 px-3 py-2"
-                    >
-                      <span className="min-w-0 truncate text-sm">{meeting.title}</span>
-                      <time
-                        dateTime={meeting.startsAt.toISOString()}
-                        className="shrink-0 font-mono text-xs text-muted-foreground"
-                      >
-                        {format(meeting.startsAt, 'EEE, MMM d · h:mm a')}
-                      </time>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+        <div className="lg:col-span-2">
+          <PersonActivityCard activity={activity} />
+        </div>
+
+        <div className="lg:col-span-2">
+          <AllocationHistoryCard history={history} />
         </div>
       </div>
     </div>

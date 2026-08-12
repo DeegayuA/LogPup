@@ -1,16 +1,18 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useId, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
   AlertCircle,
+  AudioLines,
   Check,
   ChevronDown,
   CircleCheck,
   CircleHelp,
+  Clock,
   Languages,
   Loader2,
   MessageCircleQuestion,
@@ -23,6 +25,7 @@ import {
   RotateCcw,
   Sparkles,
   Square,
+  TriangleAlert,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -31,6 +34,18 @@ import { cn } from '@/lib/utils'
 import type { ActionResult } from '@/lib/action-result'
 import type { MentionUser } from '@/components/mention-textarea'
 import { NoteTimeline } from '@/features/meetings/components/note-timeline'
+import {
+  bilingualText,
+  MetaChip,
+  SectionHeading,
+  SkeletonBlock,
+} from '@/features/meetings/components/meeting-chips'
+import { MeetingAiNotes, MeetingNotesEmpty } from '@/features/meetings/components/meeting-notes'
+import {
+  followupAge,
+  glanceFromIntel,
+  type MeetingGlance,
+} from '@/features/meetings/components/meeting-notes-model'
 import {
   addFollowup,
   copyFollowupResponseToNotes,
@@ -241,6 +256,7 @@ export function MeetingIntelPanel({
   attendees = [],
   appId = null,
   mentionUsers,
+  onGlanceChange,
 }: {
   meetingId: string
   meetingTitle: string
@@ -252,11 +268,29 @@ export function MeetingIntelPanel({
   appId?: string | null
   /** Wider mention pool for the note composer; falls back to attendees. */
   mentionUsers?: MentionUser[]
+  /**
+   * Hands the row above the counts derived from this meeting's intel every
+   * time it loads. The fetch happens either way; this is what stops the
+   * result being invisible until somebody expands the panel. `null` means
+   * "asked, and there is nothing to show" — a viewer who may not read this
+   * meeting's intel, or a request that failed — which the row needs to tell
+   * apart from "hasn't answered yet", or it shimmers a skeleton forever.
+   */
+  onGlanceChange?: (glance: MeetingGlance | null) => void
 }) {
-  // Notes are shown by default — no need to click a button to reveal them.
-  const [open, setOpen] = useState(true)
+  // Collapsed by default. Expanded-by-default meant a 30-meeting page mounted
+  // 30 note timelines and fired two server actions per row before anyone had
+  // asked to read anything — and, worse, presented every meeting as an
+  // undifferentiated wall. The counts that used to justify auto-opening now
+  // ride on the collapsed row itself (see onGlanceChange).
+  const [open, setOpen] = useState(false)
   const [intel, setIntel] = useState<MeetingIntel | null>(null)
   const [loading, setLoading] = useState(false)
+  // getMeetingIntel failing used to be a toast and nothing else: `intel`
+  // stayed null and the panel fell through to "No AI notes yet", which is a
+  // different and untrue statement. Now it is an inline error with a retry,
+  // matching NoteTimeline's own load-failure block.
+  const [loadError, setLoadError] = useState<string | null>(null)
   // The final, text-only synthesis pass over every transcribed segment — see
   // finalizeMeetingRecording. Runs automatically once recording stops (once
   // every in-flight segment upload has settled), and stays available to
@@ -305,6 +339,18 @@ export function MeetingIntelPanel({
   const [addPending, startAddFollowup] = useTransition()
 
   const router = useRouter()
+  const panelId = useId()
+
+  // The panel prefetches its meeting's intel so the collapsed row can show
+  // what the meeting produced — but a page can list dozens of meetings, and
+  // firing all of those requests on mount is how the list got slow. Gated on
+  // the row actually coming near the viewport instead. The initial value is
+  // "already in view" wherever IntersectionObserver does not exist (SSR, and
+  // any browser without it), so the gate can only ever delay a fetch, never
+  // lose one — and it is computed in the initializer rather than corrected in
+  // an effect, which would be a cascading render.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined')
 
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamsRef = useRef<MediaStream[]>([])
@@ -439,26 +485,83 @@ export function MeetingIntelPanel({
     }
   }
 
-  // `silent` refetches without swapping the whole panel for a spinner —
-  // used after a follow-up write, where the row already updated optimistically
-  // and blanking the panel would be a bigger disruption than the change.
-  async function loadIntel({ silent = false }: { silent?: boolean } = {}) {
-    if (!silent) setLoading(true)
-    try {
-      const res = await getMeetingIntel(meetingId)
-      if (res.ok) setIntel(res.data)
-      else if (!silent) toast.error(res.error)
-    } catch {
-      if (!silent) toast.error('Could not load meeting intelligence')
-    } finally {
-      if (!silent) setLoading(false)
+  // Every path that receives intel goes through here, so the row's glance
+  // chips and the panel's contents can never disagree about what this meeting
+  // produced.
+  function applyIntel(data: MeetingIntel) {
+    setIntel(data)
+    onGlanceChange?.(glanceFromIntel(data, new Date()))
+  }
+
+  /**
+   * The request currently in flight, so the viewport prefetch and a click on
+   * the toggle a few hundred milliseconds later share ONE getMeetingIntel
+   * instead of firing two — which is the whole point of the prefetch gate, and
+   * what the previous `!loading` guard could not catch (the prefetch runs
+   * silently and never sets `loading`). It resolves to a result rather than
+   * void so the click can report a failure it did not itself observe, instead
+   * of falling through to "No AI write-up for this meeting yet" — a load
+   * failure dressed up as an empty meeting.
+   */
+  const inFlightRef = useRef<Promise<{ ok: true } | { ok: false; error: string }> | null>(null)
+
+  /**
+   * - `visible`  a person asked for the panel: skeleton while it loads, and an
+   *              inline error with Retry if it fails.
+   * - `prefetch` the row came into view: silent, and only feeds the glance
+   *              chips.
+   * - `refresh`  a write just landed: silent (the row already updated
+   *              optimistically, blanking the panel would be the bigger
+   *              disruption) and deliberately NOT deduped, since the point is
+   *              to see what the server actually stored.
+   */
+  async function loadIntel(mode: 'visible' | 'prefetch' | 'refresh') {
+    const loud = mode === 'visible'
+    const existing = mode === 'refresh' ? null : inFlightRef.current
+    const request =
+      existing ??
+      getMeetingIntel(meetingId)
+        .then((res) => {
+          if (res.ok) {
+            applyIntel(res.data)
+            return { ok: true } as const
+          }
+          // Tell the row to stop waiting: a viewer who may not read this
+          // meeting's intel gets 'Not available' here, and a skeleton that
+          // never resolves is worse than no chips at all.
+          onGlanceChange?.(null)
+          return { ok: false, error: res.error } as const
+        })
+        .catch(() => {
+          onGlanceChange?.(null)
+          return { ok: false, error: 'Could not load these notes' } as const
+        })
+    if (mode !== 'refresh') inFlightRef.current = request
+
+    const result = await request
+    if (inFlightRef.current === request) inFlightRef.current = null
+    if (loud) {
+      setLoadError(result.ok ? null : result.error)
+      setLoading(false)
     }
+  }
+
+  /**
+   * The load a person asked for. The skeleton is switched on HERE rather than
+   * inside loadIntel so that loadIntel writes no state until after its await —
+   * which is what lets the viewport prefetch call it straight from an effect
+   * without that being a cascading render.
+   */
+  function loadIntelVisibly() {
+    setLoading(true)
+    setLoadError(null)
+    void loadIntel('visible')
   }
 
   function toggleOpen() {
     const next = !open
     setOpen(next)
-    if (next && !intel) void loadIntel()
+    if (next && !intel) loadIntelVisibly()
   }
 
   function clearFlushTimer() {
@@ -513,26 +616,39 @@ export function MeetingIntelPanel({
 
   useEffect(() => cleanupCapture, [])
 
-  // Notes that already exist should just be there — reading them shouldn't
-  // cost a click. Fetch once on mount and open the panel only when there is
-  // something to show, so meetings without analysis stay collapsed.
+  // Arms the viewport gate. Disconnects itself the first time the row is
+  // near the screen — this is a one-shot "has it been seen yet", not an
+  // ongoing subscription, so there is nothing to keep watching afterwards.
   useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const res = await getMeetingIntel(meetingId)
-        if (cancelled || !res.ok) return
-        setIntel(res.data)
-        if (res.data.notes || res.data.prep.length > 0) setOpen(true)
-      } catch {
-        /* Silent: this is an unprompted prefetch, not a user action. The
-           Intelligence button still loads on demand and reports failures. */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [meetingId])
+    if (inView) return
+    const element = rootRef.current
+    if (!element) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return
+        setInView(true)
+        observer.disconnect()
+      },
+      // Start fetching a little before the row is actually visible so the
+      // chips are usually there by the time it scrolls in.
+      { rootMargin: '300px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [inView])
+
+  // What a meeting produced should be legible without opening it, so the
+  // intel is fetched once the row comes into view and its counts are handed
+  // straight up to the collapsed row. Failures here stay silent: this is an
+  // unprompted prefetch, and expanding the panel re-runs the same load with a
+  // visible error and a retry.
+  useEffect(() => {
+    if (!inView) return
+    void loadIntel('prefetch')
+    // loadIntel closes over the onGlanceChange prop; listing it here would
+    // re-run the prefetch (and re-fire the request) on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetingId, inView])
 
   // Auto-scroll the live panel to the newest line, but only when the user
   // was already near the bottom — don't fight someone scrolling up to
@@ -938,7 +1054,10 @@ export function MeetingIntelPanel({
             ? 'Meeting analyzed — one or more segments still need a retry (see below)'
             : 'Meeting analyzed — notes are ready',
         )
-        await loadIntel()
+        // 'refresh', not the deduping path: the notes that exist now are the
+        // ones this analysis just wrote, so piggybacking on an older in-flight
+        // request would show the panel the meeting as it was before it ran.
+        await loadIntel('refresh')
       } catch {
         setFinalizeError('Something went wrong — try again')
         toast.error('Something went wrong — your segments are saved, try again')
@@ -1107,7 +1226,7 @@ export function MeetingIntelPanel({
       } catch {
         toast.error('Something went wrong — try again')
       } finally {
-        await loadIntel({ silent: true })
+        await loadIntel('refresh')
         setBusyFollowupId(null)
       }
     })
@@ -1224,7 +1343,7 @@ export function MeetingIntelPanel({
         // there's nothing to show here; refetch anyway so anything else that
         // changed server-side (or a pin onto a meeting shown elsewhere) is
         // reflected without a full reload.
-        await loadIntel({ silent: true })
+        await loadIntel('refresh')
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -1252,14 +1371,32 @@ export function MeetingIntelPanel({
   // accepted utterance once things go quiet between sentences.
   const currentLeadLang = interimLeaderLang ?? lastWinnerLang
 
+  // One clock read per render, shared by the notes' due-date maths and the
+  // follow-up ages below, so two sections of the same panel cannot disagree
+  // about what "today" is.
+  const now = new Date()
+
   return (
-    <div className="flex flex-col gap-2">
+    <div ref={rootRef} className="flex flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="ghost" size="sm" type="button" onClick={toggleOpen} aria-expanded={open}>
-          <Sparkles />
-          Notes
+        <Button
+          variant={open ? 'secondary' : 'outline'}
+          size="sm"
+          type="button"
+          onClick={toggleOpen}
+          aria-expanded={open}
+          aria-controls={panelId}
+        >
+          <NotebookPen aria-hidden />
+          {/* The label names what is behind the toggle, including the
+              recorder — the record controls only render once the panel is
+              open, so a manager needs to be told they are in there. */}
+          {open ? 'Hide notes' : canRecord ? 'Notes & recording' : 'Notes & follow-ups'}
           <ChevronDown
-            className={cn('transition-transform duration-150', open && 'rotate-180')}
+            className={cn(
+              'transition-transform duration-150 motion-reduce:transition-none',
+              open && 'rotate-180',
+            )}
             aria-hidden
           />
         </Button>
@@ -1298,7 +1435,7 @@ export function MeetingIntelPanel({
             >
               <Square />
               Stop ·{' '}
-              <span className="font-mono tabular-nums">
+              <span className="font-mono">
                 {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}
               </span>
             </Button>
@@ -1312,27 +1449,31 @@ export function MeetingIntelPanel({
               />
               Recording — audio is sent to Google Gemini for analysis
             </span>
-            {/* Segment progress — "12 min captured · 2 segments transcribed".
-                Mono/tabular-nums on the numbers since they update every
-                second and shouldn't visually jitter as digits change. */}
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <span className="font-mono tabular-nums">{Math.floor(seconds / 60)}</span> min captured
+            {/* Segment progress as chips rather than a run-on sentence of
+                mono numbers: this reads as instrumentation either way, so it
+                may as well be legible instrumentation. Failed segments are
+                --warning, not --destructive: their audio is parked on this
+                device and retryable (see the recovery panel below), so
+                nothing has actually been lost. `tabular-nums` is dropped
+                throughout — globals.css already applies it to .font-mono. */}
+            <span className="flex flex-wrap items-center gap-1.5">
+              <MetaChip>
+                <span className="font-mono">{Math.floor(seconds / 60)}</span> min captured
+              </MetaChip>
               {segments.length > 0 ? (
                 <>
-                  {' · '}
-                  <span className="font-mono tabular-nums">{doneSegmentCount}</span> segment
-                  {doneSegmentCount === 1 ? '' : 's'} transcribed
+                  <MetaChip tone="success">
+                    <span className="font-mono">{doneSegmentCount}</span> transcribed
+                  </MetaChip>
                   {uploadingSegmentCount > 0 ? (
-                    <>
-                      {' · '}
-                      <span className="font-mono tabular-nums">{uploadingSegmentCount}</span> in progress
-                    </>
+                    <MetaChip>
+                      <span className="font-mono">{uploadingSegmentCount}</span> uploading
+                    </MetaChip>
                   ) : null}
                   {failedSegments.length > 0 ? (
-                    <span className="text-destructive">
-                      {' · '}
-                      <span className="font-mono tabular-nums">{failedSegments.length}</span> failed
-                    </span>
+                    <MetaChip tone="warning">
+                      <span className="font-mono">{failedSegments.length}</span> to retry
+                    </MetaChip>
                   ) : null}
                 </>
               ) : null}
@@ -1375,23 +1516,40 @@ export function MeetingIntelPanel({
         <p className="text-xs text-muted-foreground">Live transcript needs Chrome — recording still works.</p>
       ) : null}
 
+      {/* The live transcript is a first-class surface, not console output: its
+          own titled card, so the difference between "committed text" and
+          "the engine's provisional guess" is stated once in the header
+          instead of being left for the reader to infer from italics. */}
       {showLiveText ? (
-        <div
-          ref={transcriptPanelRef}
-          onScroll={handleTranscriptScroll}
-          className="max-h-48 overflow-y-auto rounded-lg border border-dashed bg-muted/30 p-3 text-sm"
-          role="log"
-          aria-label="Live transcript"
-        >
-          {finalText || interimText ? (
-            <p className="whitespace-pre-wrap leading-relaxed">
-              {finalText}
-              {finalText && interimText ? ' ' : ''}
-              {interimText ? <span className="text-muted-foreground italic">{interimText}</span> : null}
-            </p>
-          ) : (
-            <p className="text-muted-foreground italic">Listening…</p>
-          )}
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b border-border bg-muted/40 px-3 py-1.5">
+            <span className="flex items-center gap-1.5 text-xs font-semibold">
+              <AudioLines className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              Live transcript
+            </span>
+            <span className="text-2xs text-muted-foreground">
+              Italic text is still provisional
+            </span>
+          </div>
+          <div
+            ref={transcriptPanelRef}
+            onScroll={handleTranscriptScroll}
+            className="max-h-56 overflow-y-auto px-3 py-2.5 text-sm"
+            role="log"
+            aria-label="Live transcript"
+          >
+            {finalText || interimText ? (
+              <p className={cn(bilingualText, 'whitespace-pre-wrap')}>
+                {finalText}
+                {finalText && interimText ? ' ' : ''}
+                {interimText ? (
+                  <span className="text-muted-foreground italic">{interimText}</span>
+                ) : null}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground italic">Listening…</p>
+            )}
+          </div>
         </div>
       ) : null}
 
@@ -1404,102 +1562,135 @@ export function MeetingIntelPanel({
           every successfully-transcribed segment (see runFinalize). */}
       {!recording && (segments.length > 0 || finalizeError) ? (
         <div
-          className="flex flex-col gap-2 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/10 p-3"
+          className="flex flex-col gap-2.5 overflow-hidden rounded-lg border border-warning/40 bg-warning/8"
           role="status"
         >
-          {finalizeError ? (
-            <p className="flex items-start gap-1.5 text-sm">
-              <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
-              <span>
-                {finalizeError} Your transcribed segments are saved — nothing was lost. Try again when
-                you&rsquo;re ready.
-              </span>
-            </p>
-          ) : null}
-
-          {failedSegments.length > 0 ? (
-            <ul className="flex flex-col gap-1.5">
-              {failedSegments.map((segment) => (
-                <li
-                  key={segment.index}
-                  className="flex flex-wrap items-center justify-between gap-2 text-sm"
-                >
-                  <span className="flex min-w-0 items-start gap-1.5">
-                    <AlertCircle
-                      className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
-                      aria-hidden
-                    />
-                    <span>
-                      Segment {segment.index + 1} didn&rsquo;t transcribe after{' '}
-                      {SEGMENT_UPLOAD_ATTEMPTS} tries
-                      {segment.error ? ` — ${segment.error}` : ''}. Its audio (
-                      {formatBytes(segment.blob.size)}) is saved on this device
-                      {segment.recovered ? ', recovered from an earlier session' : ''} and survives a
-                      reload.
-                    </span>
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    disabled={finalizing}
-                    onClick={() => retrySegment(segment.index)}
-                  >
-                    <RotateCcw aria-hidden /> Retry segment
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-
-          {!finalizing ? (
-            <span className="flex shrink-0 items-center gap-1.5">
+          {/* Was raw Tailwind amber — the one panel in the whole feature that
+              was styled outside the token set, and the most consequential
+              state in it ("audio recorded, not yet transcribed"). --warning
+              exists for exactly this: attention, not failure. Nothing is lost
+              here, which is why it is not --destructive. */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-warning/30 bg-warning/8 px-3 py-1.5">
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-warning">
+              <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+              {failedSegments.length > 0
+                ? `${failedSegments.length} recording ${failedSegments.length === 1 ? 'segment' : 'segments'} still to transcribe`
+                : 'Analysis needs another run'}
+            </span>
+            {!finalizing ? (
               <Button variant="outline" size="sm" type="button" onClick={runFinalize}>
                 <Sparkles aria-hidden /> {finalizeError ? 'Retry analysis' : 'Analyze again'}
               </Button>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" aria-hidden /> Writing up the minutes…
-            </span>
-          )}
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" aria-hidden /> Writing up the minutes…
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 px-3 pb-3">
+            {finalizeError ? (
+              <p className="text-sm">
+                {finalizeError} Your transcribed segments are saved — nothing was lost. Try again
+                when you&rsquo;re ready.
+              </p>
+            ) : null}
+
+            {failedSegments.length > 0 ? (
+              <ul className="flex flex-col gap-2">
+                {failedSegments.map((segment) => (
+                  <li
+                    key={segment.index}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/25 bg-card px-2.5 py-2"
+                  >
+                    <span className="flex min-w-0 flex-1 basis-56 flex-col gap-0.5">
+                      <span className="text-sm font-medium">
+                        Segment <span className="font-mono">{segment.index + 1}</span> didn&rsquo;t
+                        transcribe after <span className="font-mono">{SEGMENT_UPLOAD_ATTEMPTS}</span>{' '}
+                        tries
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {segment.error ? `${segment.error}. ` : ''}Its audio (
+                        <span className="font-mono">{formatBytes(segment.blob.size)}</span>) is saved
+                        on this device
+                        {segment.recovered ? ', recovered from an earlier session' : ''} and survives
+                        a reload.
+                      </span>
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      disabled={finalizing}
+                      onClick={() => retrySegment(segment.index)}
+                    >
+                      <RotateCcw aria-hidden /> Retry segment
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
       {open ? (
-        <div className="flex flex-col gap-3 rounded-lg border border-dashed p-3">
+        <div
+          id={panelId}
+          className="flex flex-col gap-6 rounded-lg border border-border bg-muted/25 p-3 sm:p-4"
+        >
           {loading ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" aria-hidden /> Fetching notes…
-            </span>
+            <IntelSkeleton />
+          ) : loadError ? (
+            /* Same shape as NoteTimeline's load failure — an inline message
+               that says what went wrong, and a control that tries again. The
+               old behaviour (a toast, then falling through to "No AI notes
+               yet") reported a load failure as an empty meeting. */
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+              <p className="flex items-center gap-1.5 text-sm text-destructive">
+                <AlertCircle className="size-4 shrink-0" aria-hidden /> {loadError}
+              </p>
+              <Button variant="outline" size="sm" type="button" onClick={loadIntelVisibly}>
+                <RotateCcw aria-hidden /> Retry
+              </Button>
+            </div>
           ) : (
             <>
-              <NoteTimeline
-                meetingId={meetingId}
-                meetingTitle={meetingTitle}
-                canManage={canRecord}
-                attendees={attendees}
-                appId={appId}
-                mentionUsers={mentionUsers}
-              />
+              {/* The write-up leads: it is what someone opening a past meeting
+                  came for. The full record (transcript, typed notes, the
+                  composer) sits underneath it. */}
+              {notes ? (
+                <MeetingAiNotes notes={notes} now={now} headingId={`${panelId}-summary`} />
+              ) : (
+                <MeetingNotesEmpty canRecord={canRecord}>
+                  <p className="text-xs text-muted-foreground">
+                    Gemini keys live in{' '}
+                    <Link href="/profile#gemini" className="underline hover:text-foreground">
+                      Profile → Gemini API keys
+                    </Link>
+                    .
+                  </p>
+                </MeetingNotesEmpty>
+              )}
 
-              <section className="flex flex-col gap-1.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="flex items-center gap-1.5 font-heading text-sm font-semibold">
-                    <MessageCircleQuestion className="size-3.5 text-primary" aria-hidden />
-                    Carried forward
-                  </h4>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    aria-expanded={addingFollowup}
-                    onClick={() => setAddingFollowup((value) => !value)}
-                  >
-                    <Plus aria-hidden />
-                    Add follow-up
-                  </Button>
-                </div>
+              <section className="flex flex-col gap-2">
+                <SectionHeading
+                  icon={MessageCircleQuestion}
+                  title="Carried forward"
+                  count={openCount > 0 ? openCount : undefined}
+                  action={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      aria-expanded={addingFollowup}
+                      onClick={() => setAddingFollowup((value) => !value)}
+                    >
+                      <Plus aria-hidden />
+                      Add follow-up
+                    </Button>
+                  }
+                />
                 {openCount > 0 ? (
                   <p className="text-xs text-muted-foreground">
                     Anything you don&rsquo;t resolve stays open and carries forward to the next
@@ -1517,11 +1708,13 @@ export function MeetingIntelPanel({
                   />
                 ) : null}
                 {prep.length > 0 ? (
-                  <ul className="flex flex-col gap-2.5">
+                  <ul className="flex flex-col gap-3">
                     {prep.map((group) => (
-                      <li key={group.userId} className="flex flex-col gap-1">
-                        <span className="text-sm font-medium">{group.person}</span>
-                        <ul className="flex flex-col gap-1">
+                      <li key={group.userId} className="flex flex-col gap-1.5">
+                        <h5 className="text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
+                          {group.person}
+                        </h5>
+                        <ul className="flex flex-col gap-1.5">
                           {group.items.map((item) => {
                             const openField =
                               composer?.id === item.id ? composer.field : null
@@ -1530,6 +1723,7 @@ export function MeetingIntelPanel({
                                 key={item.id}
                                 item={item}
                                 person={group.person}
+                                now={now}
                                 canWrite={canRecord || group.userId === currentUserId}
                                 canEditNotes={canRecord}
                                 busy={busyFollowupId === item.id && followupPending}
@@ -1563,119 +1757,64 @@ export function MeetingIntelPanel({
                 ) : null}
                 {openCount === 0 ? (
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <CircleCheck className="size-3.5 shrink-0" aria-hidden />
+                    <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden />
                     Nothing open is carried in for this meeting&rsquo;s attendees.
                   </p>
                 ) : null}
               </section>
 
-              {notes ? (
-                <>
-                  {/* The summary itself now auto-lands in the unified note
-                      timeline above as an 'ai' segment (see
-                      insertAutoNotesAndSuggestions) — no separate block here. */}
-
-                  {notes.perPerson.length > 0 ? (
-                    <section className="flex flex-col gap-1.5">
-                      <h4 className="font-heading text-sm font-semibold">By person</h4>
-                      <ul className="flex flex-col gap-2">
-                        {notes.perPerson.map((person) => (
-                          <li key={person.name} className="text-sm">
-                            <span className="font-medium">{person.name}</span>
-                            {person.points.length > 0 ? (
-                              <ul className="ml-4 list-disc text-muted-foreground">
-                                {person.points.map((point) => (
-                                  <li key={point}>{point}</li>
-                                ))}
-                              </ul>
-                            ) : null}
-                            {person.actionItems.length > 0 ? (
-                              <ul className="ml-4 list-disc">
-                                {person.actionItems.map((item) => (
-                                  <li key={item}>→ {item}</li>
-                                ))}
-                              </ul>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  ) : null}
-
-                  {notes.deadlines.length > 0 ? (
-                    <section className="flex flex-col gap-1.5">
-                      <h4 className="font-heading text-sm font-semibold">Deadlines</h4>
-                      <ul className="flex flex-col gap-1">
-                        {notes.deadlines.map((deadline) => (
-                          <li key={`${deadline.item}-${deadline.owner}`} className="text-sm">
-                            {deadline.item}
-                            <span className="text-muted-foreground"> — {deadline.owner}, </span>
-                            <span className="font-mono text-xs">{deadline.due}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  ) : null}
-
-                  {notes.terms.length > 0 ? (
-                    <section className="flex flex-col gap-1.5">
-                      <h4 className="font-heading text-sm font-semibold">Terms</h4>
-                      <ul className="flex flex-col gap-1">
-                        {notes.terms.map((term) => (
-                          <li key={term.term} className="text-sm">
-                            <span className="font-mono text-xs">{term.term}</span>
-                            <span className="text-muted-foreground"> — {term.explanation}</span>
-                            {term.sinhala ? (
-                              <span className="text-muted-foreground"> · {term.sinhala}</span>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  ) : null}
-
-                  {notes.questions.length > 0 ? (
-                    <section className="flex flex-col gap-1.5">
-                      <h4 className="font-heading text-sm font-semibold">For next meeting</h4>
-                      <ul className="flex flex-col gap-1.5">
-                        {notes.questions.map((entry) => (
-                          <li key={entry.person} className="text-sm">
-                            <span className="font-medium">{entry.person}:</span>
-                            <ul className="ml-4 list-disc text-muted-foreground">
-                              {entry.questions.map((question) => (
-                                <li key={question}>{question}</li>
-                              ))}
-                            </ul>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  ) : null}
-
-                  <p className="text-xs text-muted-foreground">
-                    Analyzed {format(notes.createdAt, 'MMM d, h:mm a')} ·{' '}
-                    <span className="font-mono">{notes.model}</span>
-                  </p>
-                </>
-              ) : prep.length === 0 ? (
-                <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
-                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                  <span>
-                    No AI notes yet.{' '}
-                    {canRecord
-                      ? 'Record the meeting (mic, or screen + mic for calls) and LogPup will transcribe it — English and Sinhala both work. You need a Gemini key in '
-                      : 'The meeting host can record and analyze it. Keys live in '}
-                    <Link href="/profile#gemini" className="underline hover:text-foreground">
-                      Profile → Gemini API keys
-                    </Link>
-                    .
-                  </span>
-                </p>
-              ) : null}
+              {/* The full record last: the transcript, the typed notes and the
+                  composer are the raw material the write-up above was made
+                  from, so they read as the appendix rather than the headline.
+                  The AI summary is passed down so the timeline does not repeat
+                  it — it is already rendered above at full size. */}
+              <section className="flex flex-col gap-2">
+                <SectionHeading icon={NotebookPen} title="Record" />
+                <NoteTimeline
+                  meetingId={meetingId}
+                  meetingTitle={meetingTitle}
+                  canManage={canRecord}
+                  attendees={attendees}
+                  appId={appId}
+                  mentionUsers={mentionUsers}
+                  shownElsewhere={notes?.summary ?? null}
+                />
+              </section>
             </>
           )}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * The panel's loading state. A skeleton rather than the old one-line
+ * "Fetching notes…" spinner because this surface has a known shape — a
+ * heading, a paragraph of summary, a list of action rows — and a spinner in a
+ * container that is about to be 400px tall tells the reader nothing about
+ * what is coming or how long to wait for it.
+ */
+function IntelSkeleton() {
+  return (
+    <div className="flex flex-col gap-4" role="status" aria-label="Loading notes">
+      <div className="flex flex-col gap-2">
+        <SkeletonBlock className="h-4 w-24" />
+        <SkeletonBlock className="h-3.5 w-full" />
+        <SkeletonBlock className="h-3.5 w-11/12" />
+        <SkeletonBlock className="h-3.5 w-3/5" />
+      </div>
+      <div className="flex flex-col gap-2">
+        <SkeletonBlock className="h-4 w-28" />
+        <div className="flex flex-col divide-y divide-border rounded-lg border">
+          {[0, 1, 2].map((row) => (
+            <div key={row} className="flex items-center justify-between gap-3 px-3 py-2.5">
+              <SkeletonBlock className="h-3.5 w-1/2" />
+              <SkeletonBlock className="h-3.5 w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1690,6 +1829,7 @@ export function MeetingIntelPanel({
 function FollowupRow({
   item,
   person,
+  now,
   canWrite,
   canEditNotes,
   busy,
@@ -1707,6 +1847,7 @@ function FollowupRow({
 }: {
   item: CarriedForwardItem
   person: string
+  now: Date
   canWrite: boolean
   canEditNotes: boolean
   busy: boolean
@@ -1726,25 +1867,52 @@ function FollowupRow({
   const stillOpenAndKept = keptOpen && !isResolved
   const fieldId = openField ? `followup-${openField}-${item.id}` : undefined
   const composerCopy = openField ? COMPOSER_COPY[openField] : null
+  // How long this has been rolling forward. An item raised at yesterday's
+  // meeting and one that has survived six weeks of meetings are not the same
+  // situation, and the row used to render them identically.
+  const age = followupAge(item.fromDate, now)
+  const stale = !isResolved && age.tone === 'stale'
 
   return (
     <li
       className={cn(
-        'flex flex-col gap-1.5 rounded-md px-2 py-1.5',
-        isResolved ? 'bg-muted/20' : 'bg-muted/40',
+        // Open vs resolved used to be bg-muted/20 against bg-muted/40 — a 20%
+        // alpha step on the same fill, which is invisible in both themes.
+        // Now the two states differ in border colour, fill, the leading icon
+        // and a word.
+        'flex flex-col gap-2 rounded-lg border px-2.5 py-2',
+        isResolved && 'border-success/30 bg-success/5',
+        !isResolved && !stale && 'border-warning/35 bg-warning/5',
+        stale && 'border-destructive/40 bg-destructive/5',
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <span className="flex min-w-0 flex-1 items-start gap-1.5 text-sm text-muted-foreground">
+        <span className="flex min-w-0 flex-1 basis-56 items-start gap-2 text-sm">
           {isResolved ? (
-            <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden />
-          ) : null}
-          <span>
-            <span className={isResolved ? undefined : 'text-foreground'}>{item.text}</span> — from
-            “{item.fromTitle}” ({format(item.fromDate, 'MMM d')})
-            {/* Provenance worth knowing: a hand-added item is someone's
-                deliberate ask, not something the model heard. */}
-            {item.createdBy ? ' · added by hand' : null}
+            <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" aria-hidden />
+          ) : (
+            <Clock
+              className={cn('mt-0.5 size-4 shrink-0', stale ? 'text-destructive' : 'text-warning')}
+              aria-hidden
+            />
+          )}
+          <span className="min-w-0">
+            <span className={cn(bilingualText, isResolved && 'text-muted-foreground')}>
+              {item.text}
+            </span>
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+              {isResolved ? (
+                <MetaChip tone="success">Resolved</MetaChip>
+              ) : (
+                <MetaChip tone={stale ? 'danger' : 'warning'}>{age.label}</MetaChip>
+              )}
+              <span>
+                from “{item.fromTitle}” ({format(item.fromDate, 'MMM d')})
+                {/* Provenance worth knowing: a hand-added item is someone's
+                    deliberate ask, not something the model heard. */}
+                {item.createdBy ? ' · added by hand' : null}
+              </span>
+            </span>
           </span>
         </span>
         {canWrite ? (
@@ -1832,7 +2000,7 @@ function FollowupRow({
           an update, not a conclusion. */}
       {item.responseNote ? (
         <div className="flex flex-wrap items-start justify-between gap-2 border-l-2 border-border pl-2">
-          <p className="min-w-0 flex-1 text-sm">
+          <p className={cn(bilingualText, 'min-w-0 flex-1 basis-56')}>
             <span className="text-muted-foreground">
               <MessageSquareQuote className="mr-1 inline size-3.5 align-[-2px]" aria-hidden />
               {person} said:{' '}
@@ -1859,14 +2027,14 @@ function FollowupRow({
       ) : null}
 
       {!isResolved && item.deferReason ? (
-        <p className="border-l-2 border-dashed border-border pl-2 text-sm">
+        <p className={cn(bilingualText, 'border-l-2 border-dashed border-border pl-2')}>
           <span className="text-muted-foreground">Why not yet: </span>
           {item.deferReason}
         </p>
       ) : null}
 
       {isResolved && item.resolutionNote ? (
-        <p className="border-l-2 border-primary/40 pl-2 text-sm">
+        <p className={cn(bilingualText, 'border-l-2 border-success/50 pl-2')}>
           <span className="text-muted-foreground">Outcome: </span>
           {item.resolutionNote}
         </p>

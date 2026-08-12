@@ -14,6 +14,7 @@ import {
   PlusIcon,
   SparklesIcon,
   Trash2Icon,
+  UsersIcon,
   XIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -30,6 +31,14 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { MentionText, MentionTextarea, type MentionUser } from '@/components/mention-textarea'
 import { MarkdownLite } from '@/components/markdown-lite'
+import { cn } from '@/lib/utils'
+import {
+  bilingualText,
+  MetaChip,
+  SectionHeading,
+  SkeletonBlock,
+} from '@/features/meetings/components/meeting-chips'
+import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
 import {
   acceptTaskSuggestion,
   addTypedNoteSegment,
@@ -80,6 +89,7 @@ export function NoteTimeline({
   attendees,
   appId,
   mentionUsers,
+  shownElsewhere = null,
 }: {
   meetingId: string
   meetingTitle: string
@@ -89,6 +99,13 @@ export function NoteTimeline({
   appId: string | null
   /** Wider mention pool (falls back to attendees). */
   mentionUsers?: MentionUser[]
+  /**
+   * Text already rendered above this timeline — in practice the AI summary,
+   * which is stored both on the meeting's ai_notes row and as an 'ai' segment
+   * here. Matching segments are hidden so the same paragraph is not printed
+   * twice on one screen; see isSameNoteText for why this compares content.
+   */
+  shownElsewhere?: string | null
 }) {
   const [data, setData] = useState<NoteTimelineData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -278,9 +295,17 @@ export function NoteTimeline({
   }
 
   if (loading) {
+    // Skeleton, not a spinner: this is a stack of bordered note cards and the
+    // reader can be told that before the data lands.
     return (
-      <div className="flex items-center gap-1.5 py-2 text-xs text-muted-foreground">
-        <Loader2Icon className="size-3 animate-spin" aria-hidden /> Loading notes…
+      <div className="flex flex-col gap-2" role="status" aria-label="Loading the record">
+        {[0, 1].map((row) => (
+          <div key={row} className="flex flex-col gap-2 rounded-lg border border-border p-2.5">
+            <SkeletonBlock className="h-3 w-40" />
+            <SkeletonBlock className="h-3.5 w-full" />
+            <SkeletonBlock className="h-3.5 w-2/3" />
+          </div>
+        ))}
       </div>
     )
   }
@@ -300,9 +325,13 @@ export function NoteTimeline({
 
   if (!data) return null
 
+  const segments = data.segments.filter(
+    (segment) => !(segment.source === 'ai' && isSameNoteText(segment.content, shownElsewhere)),
+  )
+
   const speakerLabels = Array.from(
     new Set(
-      data.segments
+      segments
         .filter((s) => s.source === 'voice' && s.speakerLabel)
         .map((s) => s.speakerLabel as string),
     ),
@@ -311,8 +340,10 @@ export function NoteTimeline({
   return (
     <div className="flex flex-col gap-3">
       {speakerLabels.length > 0 ? (
-        <section className="flex flex-col gap-1.5 rounded-lg border border-dashed p-2.5">
-          <h4 className="text-xs font-semibold text-muted-foreground">Who&rsquo;s who</h4>
+        <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5">
+          {/* h5: this sits inside the panel's "Record" h4, and used to be an
+              h4 styled smaller and weaker than the body text underneath it. */}
+          <SectionHeading as="h5" icon={UsersIcon} title="Who's who" />
           <div className="flex flex-wrap gap-2">
             {speakerLabels.map((label) => {
               const mapping = data.speakers.find((s) => s.label === label)
@@ -329,7 +360,7 @@ export function NoteTimeline({
                     >
                       <SelectTrigger
                         size="sm"
-                        className="pointer-coarse:min-h-11 w-40"
+                        className="w-40"
                         aria-label={`Who is ${label}?`}
                       >
                         <SelectValue placeholder="Assign…">
@@ -363,7 +394,7 @@ export function NoteTimeline({
         </section>
       ) : null}
 
-      {data.segments.length === 0 ? (
+      {segments.length === 0 ? (
         <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed px-4 py-6 text-center">
           <NotebookPenIcon className="size-4 text-muted-foreground/60" aria-hidden />
           <p className="text-sm font-medium">No notes yet</p>
@@ -373,7 +404,7 @@ export function NoteTimeline({
         </div>
       ) : (
         <ol className="flex flex-col gap-2">
-          {data.segments.map((segment) => {
+          {segments.map((segment) => {
             const meta = SOURCE_META[segment.source]
             const Icon = meta.icon
             const isEditing = editingId === segment.id
@@ -381,13 +412,25 @@ export function NoteTimeline({
             const speakerDisplay =
               segment.speakerName ?? segment.speakerLabel ?? (segment.source === 'typed' ? segment.createdByName : null)
             return (
-              <li key={segment.id} className="flex flex-col gap-1 rounded-lg border border-border p-2.5">
+              <li
+                key={segment.id}
+                className={cn(
+                  'flex flex-col gap-1.5 rounded-lg border border-border bg-card p-2.5',
+                  // The model's own write-up reads as a different kind of
+                  // thing from a person's typed note, so it gets a rule rather
+                  // than a fill — a tint here would have to borrow one of the
+                  // four state colours to say something that is not a state.
+                  segment.source === 'ai' && 'border-l-2 border-l-muted-foreground/40',
+                )}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="inline-flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
                     <Icon className="size-3.5 shrink-0" aria-hidden />
                     <span className="font-medium">{meta.label}</span>
-                    {speakerDisplay ? <span>· {speakerDisplay}</span> : null}
-                    <span className="font-mono tabular-nums">
+                    {speakerDisplay ? (
+                      <span className="font-medium text-foreground">{speakerDisplay}</span>
+                    ) : null}
+                    <span className="font-mono">
                       {format(segment.createdAt, 'MMM d, h:mm a')}
                     </span>
                   </span>
@@ -397,7 +440,6 @@ export function NoteTimeline({
                         variant="ghost"
                         size="icon-sm"
                         type="button"
-                        className="pointer-coarse:size-11"
                         onClick={() => startEdit(segment)}
                       >
                         <PencilIcon />
@@ -407,7 +449,6 @@ export function NoteTimeline({
                         variant="ghost"
                         size="icon-sm"
                         type="button"
-                        className="pointer-coarse:size-11"
                         disabled={deletingId === segment.id && deletePending}
                         onClick={() => handleDeleteSegment(segment.id)}
                       >
@@ -447,9 +488,9 @@ export function NoteTimeline({
                     </div>
                   </div>
                 ) : segment.source === 'ai' ? (
-                  <MarkdownLite content={segment.content} />
+                  <MarkdownLite content={segment.content} className={bilingualText} />
                 ) : (
-                  <p className="text-sm whitespace-pre-wrap">
+                  <p className={cn(bilingualText, 'whitespace-pre-wrap')}>
                     <MentionText text={segment.content} users={mentionPool} />
                   </p>
                 )}
@@ -480,7 +521,6 @@ export function NoteTimeline({
             <Button
               size="sm"
               type="button"
-              className="pointer-coarse:min-h-11"
               disabled={posting || draft.trim().length === 0}
               onClick={handleAddNote}
             >
@@ -492,25 +532,32 @@ export function NoteTimeline({
       ) : null}
 
       {data.suggestions.length > 0 ? (
-        <section className="flex flex-col gap-1.5">
-          <h4 className="flex items-center gap-1.5 font-heading text-sm font-semibold">
-            <SparklesIcon className="size-3.5 text-primary" aria-hidden />
-            Suggested tasks
-          </h4>
+        <section className="flex flex-col gap-2">
+          {/* `primary` used to mean four different things at once in this
+              feature — "AI proposed it", "resolved", "outcome", and plain
+              decoration on two icons. A suggestion is a proposal, not a
+              state, so it is a neutral card carrying the word "Suggested". */}
+          <SectionHeading
+            as="h5"
+            icon={SparklesIcon}
+            title="Suggested tasks"
+            count={data.suggestions.length}
+          />
           <ul className="flex flex-col gap-2">
             {data.suggestions.map((suggestion) => {
               const busy = suggestionBusyId === suggestion.id && suggestionPending
               return (
                 <li
                   key={suggestion.id}
-                  className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 p-2.5"
+                  className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed border-border bg-card p-2.5"
                 >
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    <p className="text-sm text-foreground">{suggestion.text}</p>
-                    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                  <div className="flex min-w-0 flex-1 basis-56 flex-col gap-1">
+                    <p className={cn(bilingualText, 'text-foreground')}>{suggestion.text}</p>
+                    <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                      <MetaChip>Suggested</MetaChip>
                       <span>{suggestion.suggestedUserName ?? 'Unassigned'}</span>
                       {suggestion.suggestedDueDate ? (
-                        <span className="font-mono tabular-nums">
+                        <span className="font-mono">
                           Due {format(parseISO(suggestion.suggestedDueDate), 'MMM d')}
                         </span>
                       ) : null}
@@ -521,7 +568,6 @@ export function NoteTimeline({
                       <Button
                         size="sm"
                         type="button"
-                        className="pointer-coarse:min-h-11"
                         disabled={busy || !appId}
                         title={appId ? undefined : 'Link this meeting to an app first'}
                         onClick={() => handleAcceptSuggestion(suggestion)}
@@ -533,7 +579,6 @@ export function NoteTimeline({
                         variant="outline"
                         size="sm"
                         type="button"
-                        className="pointer-coarse:min-h-11"
                         disabled={busy}
                         onClick={() => {
                           setEditingSuggestion(suggestion)
@@ -546,7 +591,6 @@ export function NoteTimeline({
                         variant="ghost"
                         size="icon-sm"
                         type="button"
-                        className="pointer-coarse:size-11"
                         disabled={busy}
                         onClick={() => handleDismissSuggestion(suggestion.id)}
                       >
@@ -659,7 +703,7 @@ export function NoteTimeline({
                   onChange={(e) =>
                     setSuggestionForm((f) => (f ? { ...f, dueDate: e.target.value } : f))
                   }
-                  className="font-mono tabular-nums"
+                  className="font-mono"
                 />
               </div>
               <DialogFooter>

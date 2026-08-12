@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, gte, isNull, lte, or } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, sprints, tasks, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
+import type { TaskStatus } from '@/features/sprints/board-view'
 
 export type Sprint = typeof sprints.$inferSelect
 
@@ -9,9 +10,21 @@ export type TaskWithAssignee = {
   id: string
   title: string
   description: string | null
-  status: string
+  // Narrowed from `string` to the pg enum's own union: the board groups,
+  // filters and drag-drop all switch on this, and every one of them had to
+  // cast before. The DB column is already `task_status`, so nothing widens.
+  status: TaskStatus
   priority: number
   sortOrder: number
+  /** Null = the app backlog. Carried so a card can say which sprint it is in
+   *  when the board is showing more than one. */
+  sprintId: string | null
+  /** Plain yyyy-mm-dd, as stored. Compared as a string against an ISO
+   *  "today" — never parsed into a Date for the overdue check. */
+  dueDate: string | null
+  /** Needed on the client: it is the first tiebreaker whenever two cards
+   *  share a rank, which is the normal case (see task-rank.ts). */
+  createdAt: Date
   assignee: { id: string; name: string; avatarUrl: string | null } | null
 }
 
@@ -147,6 +160,9 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
       status: tasks.status,
       priority: tasks.priority,
       sortOrder: tasks.sortOrder,
+      sprintId: tasks.sprintId,
+      dueDate: tasks.dueDate,
+      createdAt: tasks.createdAt,
       assigneeId: users.id,
       assigneeName: users.name,
       assigneeAvatarUrl: users.avatarUrl,
@@ -160,7 +176,14 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
         sprintId === null ? isNull(tasks.sprintId) : eq(tasks.sprintId, sprintId),
       ),
     )
-    .orderBy(asc(tasks.sortOrder))
+    // THREE keys, not one. `sort_order` defaults to 0 and writers outside the
+    // board (the ⌘K quick-add) insert without a rank, so ties are the normal
+    // case, not an edge case — `ORDER BY sort_order` alone returns tied rows
+    // in whatever order Postgres feels like, which is a board that silently
+    // reshuffles itself between two renders of identical data. `created_at`
+    // then `id` make the order total. Mirrors compareRanked in task-rank.ts,
+    // which the client applies to its optimistic copy for the same reason.
+    .orderBy(asc(tasks.sortOrder), asc(tasks.createdAt), asc(tasks.id))
 
   const board: Board = { todo: [], in_progress: [], done: [] }
   for (const row of rows) {
@@ -171,6 +194,9 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
       status: row.status,
       priority: row.priority,
       sortOrder: row.sortOrder,
+      sprintId: row.sprintId,
+      dueDate: row.dueDate,
+      createdAt: row.createdAt,
       assignee: row.assigneeId
         ? { id: row.assigneeId, name: row.assigneeName as string, avatarUrl: row.assigneeAvatarUrl }
         : null,

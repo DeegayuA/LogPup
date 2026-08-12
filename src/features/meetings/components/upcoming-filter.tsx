@@ -116,10 +116,13 @@ export function UpcomingMeetingsFiltered({
         ) : null}
       </div>
       {selected && filtered.length === 0 ? (
-        <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-16 text-center">
+        <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-10 text-center">
           <CalendarDaysIcon className="size-8 text-muted-foreground" aria-hidden />
           <div className="flex flex-col gap-1">
-            <p className="font-heading font-semibold">No meetings that day.</p>
+            {/* "Upcoming", not just "No meetings that day": the same day filter
+                now also narrows the Past section below, which may well have
+                meetings on that day. */}
+            <p className="font-heading font-semibold">No upcoming meetings that day.</p>
             <p className="text-sm text-muted-foreground">Pick another day or clear the filter.</p>
           </div>
           <Button variant="outline" size="sm" type="button" onClick={() => setSelected(undefined)}>

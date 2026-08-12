@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { createTask } from '@/features/sprints/task-actions'
 import { parseTaskIntent, type IntentPerson } from '@/lib/task-intent'
-import type { TaskStatus } from '@/features/sprints/components/board'
+import type { GroupPatch } from '@/features/sprints/board-view'
 
 /** What Enter will actually do — shown to the user before it does it. */
 type ComposerPlan = {
@@ -82,13 +82,19 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
  * you can't tell it happened.
  */
 export function TaskComposer({
-  status,
+  patch,
   columnTitle,
   team,
   appId,
   sprintId,
 }: {
-  status: TaskStatus
+  /**
+   * What this column MEANS, from board-view's `patchForGroup` — the same
+   * object a drop into this column would apply. Grouping by assignee and
+   * typing into Ada's column therefore creates the task already assigned to
+   * Ada, which is the only reading of that gesture that isn't a surprise.
+   */
+  patch: GroupPatch
   columnTitle: string
   team: { userId: string; name: string }[]
   appId: string
@@ -125,9 +131,13 @@ export function TaskComposer({
           appId,
           sprintId,
           title: plan.title,
-          assigneeId: plan.assignee?.id ?? null,
-          priority: 0,
-          status,
+          // A name typed into the field beats the column's implied assignee:
+          // the preview above the input has already said out loud who it
+          // resolved to, so honouring the column instead would contradict
+          // what the user was just shown.
+          assigneeId: plan.assignee?.id ?? patch.assigneeId ?? null,
+          priority: patch.priority ?? 0,
+          status: patch.status ?? 'todo',
           dueDate: plan.due,
         })
         if (!res.ok) {

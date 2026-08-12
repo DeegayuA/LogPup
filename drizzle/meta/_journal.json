@@ -127,6 +127,20 @@
       "when": 1786462691932,
       "tag": "0018_meeting_screenshots",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786472555129,
+      "tag": "0019_user-personal-email",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786473449180,
+      "tag": "0020_task_rank",
+      "breakpoints": true
     }
   ]
 }

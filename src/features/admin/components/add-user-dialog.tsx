@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/select'
 import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { createUser } from '@/features/admin/actions'
+import { PERSONAL_EMAIL_MAX_LENGTH } from '@/features/auth/personal-email-schema'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
 
 type FormState = {
@@ -34,6 +35,7 @@ type FormState = {
   role: 'admin' | 'member'
   title: string
   phone: string
+  personalEmail: string
   orgTags: string[]
 }
 
@@ -43,6 +45,7 @@ const emptyState: FormState = {
   role: 'member',
   title: '',
   phone: '',
+  personalEmail: '',
   orgTags: [],
 }
 
@@ -69,6 +72,7 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
           role: form.role,
           title: form.title.trim() || undefined,
         phone: form.phone.trim() || undefined,
+          personalEmail: form.personalEmail.trim() || undefined,
           orgTags: form.orgTags,
         })
         if (!res.ok) {
@@ -165,6 +169,22 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
             />
             <p className="text-xs text-muted-foreground">
               Optional — powers the call button on People.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="new-user-personal-email">Personal email</Label>
+            <Input
+              id="new-user-personal-email"
+              type="email"
+              autoComplete="off"
+              value={form.personalEmail}
+              onChange={(e) => setForm((f) => ({ ...f, personalEmail: e.target.value }))}
+              maxLength={PERSONAL_EMAIL_MAX_LENGTH}
+              placeholder="name@gmail.com"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional second address for contact only — they still sign in with the
+              email above.
             </p>
           </div>
           <div className="flex flex-col gap-2">

@@ -6,51 +6,59 @@ function Shimmer({ className }: { className?: string }) {
   )
 }
 
+/**
+ * Models the SHELL only — title, identity line, six header counters, the
+ * section bar — and then one neutral content block.
+ *
+ * The old skeleton always painted a three-column kanban board, so opening any
+ * other tab flashed a board that was never going to appear. A skeleton can't
+ * see `?tab=`, so the honest thing is to promise only the part that is the
+ * same on every tab and leave the rest as a single undifferentiated block.
+ */
 export default function AppDetailLoading() {
   return (
-    <div className="flex flex-1 flex-col gap-4 p-6" aria-busy="true" aria-label="Loading app">
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-3">
-          <Shimmer className="h-8 w-48" />
-          <Shimmer className="h-5 w-16 rounded-full" />
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <Shimmer className="h-4 w-24" />
-          <Shimmer className="h-4 w-14" />
-          <div className="flex items-center gap-1.5">
-            <Shimmer className="h-5 w-14 rounded-4xl" />
-            <Shimmer className="h-5 w-16 rounded-4xl" />
+    <div className="flex flex-1 flex-col gap-5 p-6" aria-busy="true" aria-label="Loading app">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Shimmer className="h-8 w-48" />
+              <Shimmer className="h-5 w-16 rounded-full" />
+              <Shimmer className="h-5 w-20 rounded-full" />
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Shimmer className="h-3 w-20" />
+              <Shimmer className="h-3 w-24" />
+              <Shimmer className="h-3 w-12" />
+            </div>
+            <Shimmer className="h-4 w-80" />
+            <div className="flex items-center gap-1.5">
+              <Shimmer className="h-5 w-14 rounded-4xl" />
+              <Shimmer className="h-5 w-16 rounded-4xl" />
+            </div>
           </div>
+          <Shimmer className="h-7 w-20 rounded-lg" />
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex flex-col gap-2 rounded-xl border bg-card p-3">
+              <Shimmer className="h-3 w-12" />
+              <Shimmer className="h-5 w-10" />
+            </div>
+          ))}
         </div>
       </div>
 
-      <div className="flex h-8 items-center gap-1 border-b border-border">
-        <Shimmer className="h-4 w-20" />
-        <Shimmer className="h-4 w-16" />
-        <Shimmer className="h-4 w-20" />
-        <Shimmer className="h-4 w-18" />
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Shimmer className="h-8 w-56 rounded-lg" />
-          <Shimmer className="h-8 w-20 rounded-lg" />
-        </div>
-        <Shimmer className="h-8 w-24 rounded-lg" />
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {[0, 1, 2].map((col) => (
-          <div
-            key={col}
-            className="flex flex-col gap-3 rounded-xl bg-card p-3 ring-1 ring-foreground/10"
-          >
-            <Shimmer className="h-4 w-20" />
-            {[0, 1, 2].map((row) => (
-              <Shimmer key={row} className="h-20 w-full rounded-lg" />
-            ))}
-          </div>
+      <div className="flex items-center gap-4 border-b border-border pb-2">
+        {['w-20', 'w-14', 'w-20', 'w-24', 'w-20', 'w-16'].map((width) => (
+          <Shimmer key={width} className={`h-4 ${width}`} />
         ))}
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <Shimmer className="h-28 w-full rounded-xl" />
+        <Shimmer className="h-40 w-full rounded-xl" />
       </div>
     </div>
   )

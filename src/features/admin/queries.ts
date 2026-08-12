@@ -12,6 +12,7 @@ export type AdminUser = {
   orgTags: string[]
   title: string | null
   phone: string | null
+  personalEmail: string | null
   mustChangePassword: boolean
 }
 
@@ -34,6 +35,7 @@ export async function listAllUsers(): Promise<AdminUser[]> {
       orgTags: users.orgTags,
       title: users.title,
       phone: users.phone,
+      personalEmail: users.personalEmail,
       mustChangePassword: users.mustChangePassword,
     })
     .from(users)

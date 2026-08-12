@@ -1,0 +1,2 @@
+ALTER TABLE "tasks" ALTER COLUMN "sort_order" SET DATA TYPE double precision;--> statement-breakpoint
+CREATE INDEX "tasks_app_sprint_sort_idx" ON "tasks" USING btree ("app_id","sprint_id","sort_order");

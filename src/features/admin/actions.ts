@@ -14,6 +14,7 @@ import { normalizePhone } from '@/lib/phone'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
 import { jobRoleInput } from '@/features/auth/title-schema'
+import { personalEmailInput } from '@/features/auth/personal-email-schema'
 
 // Temporary testing tool. Enabled only when ENABLE_DB_CLEAR=1 so it can be turned off
 // (remove the flag) the moment testing is done. Wipes business data but KEEPS users,
@@ -57,11 +58,11 @@ function revalidateAdminPaths() {
   revalidatePath('/')
 }
 
-// A job role surfaces in more places than the admin table it is edited from:
-// the People directory, each person's detail page, the header account menu
-// (rendered by the (app) layout) and the teammate's own Profile, which now
-// only reads it.
-function revalidateJobRolePaths() {
+// Profile fields (job role, personal email) surface in more places than the
+// admin table they are edited from: the People directory, each person's
+// detail page, the header account menu (rendered by the (app) layout) and the
+// teammate's own Profile, which only reads them.
+function revalidateUserDetailPaths() {
   revalidateAdminPaths()
   revalidatePath('/people/[id]', 'page')
   revalidatePath('/profile')
@@ -170,6 +171,9 @@ const createUserInput = z.object({
     .refine((value) => !value || normalizePhone(value) !== null, {
       message: 'That does not look like a phone number',
     }),
+  // Contact-only second address. Not checked against emailAllowed() and not
+  // checked for uniqueness — see the column comment in db/schema.ts.
+  personalEmail: personalEmailInput.optional(),
   orgTags: orgTagsInput.default([]),
 })
 
@@ -182,7 +186,7 @@ export async function createUser(
 
   const parsed = createUserInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
-  const { email, name, role, title, phone, orgTags } = parsed.data
+  const { email, name, role, title, phone, personalEmail, orgTags } = parsed.data
 
   // Sign-in is domain-gated (every provider funnels through emailAllowed), so
   // an account outside the allowlist would be a locked door — refuse up front.
@@ -209,6 +213,7 @@ export async function createUser(
       role,
       title: title || null,
       phone: phone ? normalizePhone(phone) : null,
+      personalEmail: personalEmail || null,
       orgTags: effectiveOrgTags,
       passwordHash: hashPassword(starterPassword),
       mustChangePassword: true,
@@ -261,6 +266,35 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
 }
 
 /**
+ * Second, contact-only address (users.personal_email). Blank clears it.
+ *
+ * ADMIN-ONLY, and requireAdmin() below is the enforcement — there is no
+ * self-service counterpart, same as setUserTitle. It re-reads the role from
+ * the session on every call and fails closed.
+ *
+ * This never touches users.email. That column is the sign-in identity: it is
+ * unique, domain-gated by emailAllowed(), and the lookup key for every
+ * provider. Writing an address here can therefore neither create a second
+ * login nor collide with anyone else's account.
+ */
+export async function setUserPersonalEmail(userId: string, email: unknown): Promise<ActionResult> {
+  if (!(await requireAdmin())) return err('Admins only')
+
+  const parsedId = z.uuid().safeParse(userId)
+  if (!parsedId.success) return err('Invalid user')
+
+  const parsed = personalEmailInput.safeParse(email)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  await db
+    .update(users)
+    .set({ personalEmail: parsed.data || null })
+    .where(eq(users.id, parsedId.data))
+  revalidateUserDetailPaths()
+  return ok(undefined)
+}
+
+/**
  * Job role (users.title) — display metadata, distinct from the admin|member
  * permission enum on users.role, which this never touches. Blank clears it.
  *
@@ -285,7 +319,7 @@ export async function setUserTitle(userId: string, title: unknown): Promise<Acti
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, parsedId.data))
-  revalidateJobRolePaths()
+  revalidateUserDetailPaths()
   return ok(undefined)
 }
 

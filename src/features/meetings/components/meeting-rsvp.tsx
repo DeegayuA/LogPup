@@ -11,9 +11,21 @@ import { respondToMeeting, setMeetingLink } from '@/features/meetings/rsvp-actio
 
 export type AttendeeResponse = 'pending' | 'going' | 'maybe' | 'declined'
 
+/*
+ * The three RSVP states, each on the status token that means what it means —
+ * and each with a paired foreground that actually contrasts against it.
+ *
+ * What was here before: "Going" borrowed --primary (the app's action colour,
+ * not a state), "Maybe" borrowed --chart-1 (the data-viz ember ramp, ~3.5:1
+ * behind 12px text in light mode), and "Can't" referenced
+ * --destructive-foreground, which no stylesheet defined — Tailwind emitted
+ * nothing for it and the pill rendered with whatever colour it inherited,
+ * measuring ~3.5:1 in light and ~2.6:1 in dark. All three now clear 4.5:1;
+ * see the token block in globals.css for the measurements.
+ */
 const OPTIONS = [
-  { id: 'going', label: 'Going', icon: Check, active: 'bg-primary text-primary-foreground' },
-  { id: 'maybe', label: 'Maybe', icon: HelpCircle, active: 'bg-chart-1 text-background' },
+  { id: 'going', label: 'Going', icon: Check, active: 'bg-success text-success-foreground' },
+  { id: 'maybe', label: 'Maybe', icon: HelpCircle, active: 'bg-warning text-warning-foreground' },
   { id: 'declined', label: "Can't", icon: X, active: 'bg-destructive text-destructive-foreground' },
 ] as const
 

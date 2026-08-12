@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, type FormEvent } from 'react'
+import { useEffect, useState, useTransition, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -34,9 +34,14 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { updateTask, deleteTask } from '@/features/sprints/task-actions'
+import { STATUS_LABEL, TASK_STATUSES, type TaskStatus } from '@/features/sprints/board-view'
+import type { SprintOption } from '@/features/sprints/actions'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 
 const UNASSIGNED = '__unassigned__'
+/** Sentinel for "no sprint" — a Select value must be a non-empty string, and
+ *  the backlog is a real choice, not the absence of one. */
+const BACKLOG = '__backlog__'
 
 const PRIORITY_OPTIONS = [
   { value: '0', label: 'None' },
@@ -50,6 +55,10 @@ type FormState = {
   description: string
   assigneeId: string
   priority: string
+  status: TaskStatus
+  /** yyyy-mm-dd or '' — the native date input's own empty value. */
+  dueDate: string
+  sprintId: string
 }
 
 function toFormState(task: TaskWithAssignee): FormState {
@@ -58,26 +67,52 @@ function toFormState(task: TaskWithAssignee): FormState {
     description: task.description ?? '',
     assigneeId: task.assignee?.id ?? UNASSIGNED,
     priority: String(task.priority),
+    status: task.status,
+    dueDate: task.dueDate ?? '',
+    sprintId: task.sprintId ?? BACKLOG,
   }
 }
 
 function emptyForm(): FormState {
-  return { title: '', description: '', assigneeId: UNASSIGNED, priority: '0' }
+  return {
+    title: '',
+    description: '',
+    assigneeId: UNASSIGNED,
+    priority: '0',
+    status: 'todo',
+    dueDate: '',
+    sprintId: BACKLOG,
+  }
 }
 
 export function TaskDialog({
   task,
   team,
   isAdmin,
+  currentUserId,
   onOpenChange,
   mentionUsers,
+  sprintOptions,
+  sprintOptionsFailed = false,
+  onNeedSprintOptions,
 }: {
   task: TaskWithAssignee | null
   team: { userId: string; name: string }[]
   isAdmin: boolean
+  /** Who is looking. `updateTask` allows an admin or the task's own assignee
+   *  and refuses everyone else — without this the dialog cannot tell which
+   *  one you are, so it offers a form that only fails on Save. */
+  currentUserId?: string
   onOpenChange: (open: boolean) => void
   /** Wider mention pool (e.g. all active users) — falls back to the app team. */
   mentionUsers?: { id: string; name: string }[]
+  /** Null until the app's sprints have been fetched; the control says so
+   *  rather than silently offering only the backlog. */
+  sprintOptions?: SprintOption[] | null
+  /** True once that fetch has failed — so the control can say so instead of
+   *  claiming to still be loading. */
+  sprintOptionsFailed?: boolean
+  onNeedSprintOptions?: () => void
 }) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
@@ -93,9 +128,31 @@ export function TaskDialog({
     if (task) setForm(toFormState(task))
   }
 
+  /*
+   * Exactly the rule `updateTask` enforces on the server: an admin, or the
+   * person the task is assigned to. Mirroring it here is not the permission
+   * (the action re-checks) — it is what stops the dialog from being a dead
+   * end: a member opening a teammate's card previously got every field
+   * enabled, typed a change, pressed Save and was told "Not allowed" with
+   * their edit still on screen and nowhere to go. `currentUserId` is optional
+   * for callers outside the board, which get the previous always-editable
+   * behaviour rather than a silently read-only dialog.
+   */
+  const canEdit =
+    isAdmin ||
+    currentUserId === undefined ||
+    (task?.assignee?.id != null && task.assignee.id === currentUserId)
+
+  // Fetching the app's other sprints is a real request, so it waits until a
+  // dialog is actually opened — a board nobody edits never pays for it.
+  const isOpen = task !== null
+  useEffect(() => {
+    if (isOpen) onNeedSprintOptions?.()
+  }, [isOpen, onNeedSprintOptions])
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!task) return
+    if (!task || !canEdit) return
     startTransition(async () => {
       try {
         const res = await updateTask(task.id, {
@@ -103,6 +160,11 @@ export function TaskDialog({
           description: form.description,
           assigneeId: form.assigneeId === UNASSIGNED ? null : form.assigneeId,
           priority: Number(form.priority),
+          status: form.status,
+          // '' from a cleared native date input means "no due date". Sending
+          // '' would fail the ISO-date check and reject the whole save.
+          dueDate: form.dueDate === '' ? null : form.dueDate,
+          sprintId: form.sprintId === BACKLOG ? null : form.sprintId,
         })
         if (!res.ok) {
           toast.error(res.error)
@@ -142,8 +204,14 @@ export function TaskDialog({
     <Dialog open={task !== null} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit task</DialogTitle>
-          <DialogDescription>Update the task&apos;s details.</DialogDescription>
+          <DialogTitle>{canEdit ? 'Edit task' : 'Task'}</DialogTitle>
+          <DialogDescription>
+            {canEdit
+              ? 'Update the task’s details.'
+              : task?.assignee
+                ? `Only ${task.assignee.name} or an admin can change this task.`
+                : 'Only an admin can change an unassigned task.'}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
@@ -155,6 +223,7 @@ export function TaskDialog({
               minLength={1}
               maxLength={140}
               required
+              disabled={!canEdit}
               className="h-9 font-medium md:text-base"
             />
           </div>
@@ -162,6 +231,7 @@ export function TaskDialog({
             <Label htmlFor="task-description">Description</Label>
             <MentionTextarea
               id="task-description"
+              disabled={!canEdit}
               users={mentionUsers ?? team.map((m) => ({ id: m.userId, name: m.name }))}
               value={form.description}
               onValueChange={(description) => setForm((f) => ({ ...f, description }))}
@@ -183,6 +253,7 @@ export function TaskDialog({
               <Label htmlFor="task-assignee">Assignee</Label>
               <Select
                 value={form.assigneeId}
+                disabled={!canEdit}
                 onValueChange={(value) => setForm((f) => ({ ...f, assigneeId: value ?? UNASSIGNED }))}
               >
                 <SelectTrigger id="task-assignee" className="w-full">
@@ -221,6 +292,7 @@ export function TaskDialog({
               <Label htmlFor="task-priority">Priority</Label>
               <Select
                 value={form.priority}
+                disabled={!canEdit}
                 onValueChange={(value) => setForm((f) => ({ ...f, priority: value ?? '0' }))}
               >
                 <SelectTrigger id="task-priority" className="w-full">
@@ -240,6 +312,94 @@ export function TaskDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+          {/*
+            Status, due date and sprint were previously unreachable: status
+            could ONLY be changed by a pointer drag (so keyboard-only users
+            could never move a task at all), a due date could be set by the
+            quick-add and then never seen or edited again, and there was no
+            way anywhere in the product to move a task between sprints even
+            though the action already accepted it.
+          */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="task-status">Status</Label>
+              <Select
+                value={form.status}
+                disabled={!canEdit}
+                onValueChange={(value) =>
+                  setForm((f) => ({ ...f, status: (value ?? 'todo') as TaskStatus }))
+                }
+              >
+                <SelectTrigger id="task-status" className="w-full">
+                  <SelectValue>
+                    {(value: string) => STATUS_LABEL[value as TaskStatus] ?? 'To do'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {TASK_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {STATUS_LABEL[status]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="task-due">Due date</Label>
+              <Input
+                id="task-due"
+                type="date"
+                value={form.dueDate}
+                onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+                disabled={!canEdit}
+                className="h-9 font-mono hover:border-ring/40"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="task-sprint">Sprint</Label>
+              <Select
+                value={form.sprintId}
+                disabled={!canEdit}
+                onValueChange={(value) => setForm((f) => ({ ...f, sprintId: value ?? BACKLOG }))}
+              >
+                <SelectTrigger id="task-sprint" className="w-full">
+                  <SelectValue>
+                    {(value: string) =>
+                      value === BACKLOG
+                        ? 'Backlog'
+                        : (sprintOptions?.find((sprint) => sprint.id === value)?.name ??
+                          'Current sprint')
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={BACKLOG}>Backlog (no sprint)</SelectItem>
+                  {/* The task's own sprint must remain selectable while the
+                      list is still loading, or reopening the dialog would
+                      offer no way back to where the task already is. */}
+                  {form.sprintId !== BACKLOG &&
+                  !(sprintOptions ?? []).some((sprint) => sprint.id === form.sprintId) ? (
+                    <SelectItem value={form.sprintId}>Current sprint</SelectItem>
+                  ) : null}
+                  {(sprintOptions ?? []).map((sprint) => (
+                    <SelectItem key={sprint.id} value={sprint.id}>
+                      {sprint.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Three states, all said out loud: loading, failed, and the
+                  ordinary list. Silence on failure would leave a control
+                  offering only "Backlog" and looking like the truth. */}
+              {sprintOptions === null ? (
+                <p className="text-2xs text-muted-foreground" role="status">
+                  {sprintOptionsFailed
+                    ? 'Couldn’t load this app’s sprints — reopen this task to try again.'
+                    : 'Loading sprints…'}
+                </p>
+              ) : null}
             </div>
           </div>
           <DialogFooter className="justify-between sm:justify-between">
@@ -270,9 +430,18 @@ export function TaskDialog({
             ) : (
               <span />
             )}
-            <Button type="submit" disabled={isPending}>
-              {isPending ? 'Saving…' : 'Save changes'}
-            </Button>
+            {canEdit ? (
+              <Button type="submit" disabled={isPending}>
+                {isPending ? 'Saving…' : 'Save changes'}
+              </Button>
+            ) : (
+              // No Save at all rather than a disabled one: there is nothing
+              // this person can do to enable it, and a permanently greyed
+              // button reads as a bug to be poked at.
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

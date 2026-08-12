@@ -15,6 +15,7 @@
 // being *blocked* would only teach people to delete the script.
 
 import { readdirSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -47,10 +48,11 @@ async function main() {
   if (expected.size === 0) return
 
   let rows
+  let sqlClient
   try {
     const { neon } = await import('@neondatabase/serverless')
-    const sql = neon(url)
-    rows = await sql`select table_name from information_schema.tables where table_schema = 'public'`
+    sqlClient = neon(url)
+    rows = await sqlClient`select table_name from information_schema.tables where table_schema = 'public'`
   } catch {
     // Unreachable database, wrong credentials, offline laptop. Not this
     // script's job to complain about any of those — the app itself will.
@@ -58,15 +60,51 @@ async function main() {
   }
 
   const present = new Set(rows.map((row) => row.table_name))
-  const missing = [...expected].filter((name) => !present.has(name)).sort()
-  if (missing.length === 0) return
+  const missingTables = [...expected].filter((name) => !present.has(name)).sort()
 
-  const plural = missing.length === 1 ? 'table is' : 'tables are'
+  // The authoritative check. Comparing table names only ever catches a
+  // migration that CREATEs one — it stayed silent on 0020, which merely
+  // widened tasks.sort_order to double precision and added an index, and an
+  // unapplied 0020 breaks board ordering just as thoroughly as an unapplied
+  // 0017 broke recording. Drizzle records each applied migration as
+  // sha256(file contents) in drizzle.__drizzle_migrations, so diffing that
+  // against the files on disk catches every kind of drift — new columns, type
+  // changes, indexes, constraints — with no SQL parsing at all.
+  let pending = []
+  try {
+    const applied = new Set(
+      (await sqlClient`select hash from drizzle.__drizzle_migrations`).map((row) => row.hash),
+    )
+    pending = readdirSync(join(root, 'drizzle'))
+      .filter((file) => file.endsWith('.sql'))
+      .sort()
+      .filter(
+        (file) =>
+          !applied.has(createHash('sha256').update(readFileSync(join(root, 'drizzle', file), 'utf8')).digest('hex')),
+      )
+  } catch {
+    // No drizzle bookkeeping schema yet (a fresh database, or one migrated
+    // entirely by hand). The table check below still applies.
+  }
+
+  if (pending.length === 0 && missingTables.length === 0) return
+
+  let message = `\n${RED}${BOLD}  Pending database migration${RESET}\n`
+  if (pending.length > 0) {
+    message +=
+      `  ${pending.length} migration file${pending.length === 1 ? '' : 's'} in drizzle/ ` +
+      `${pending.length === 1 ? 'has' : 'have'} never been applied to your database:\n` +
+      pending.map((file) => `    ${YELLOW}${file}${RESET}\n`).join('')
+  }
+  if (missingTables.length > 0) {
+    message +=
+      `  ${missingTables.length} table${missingTables.length === 1 ? '' : 's'} defined in drizzle/ ` +
+      `but missing from your database:\n` +
+      missingTables.map((name) => `    ${YELLOW}${name}${RESET}\n`).join('')
+  }
+  const only = pending.length + missingTables.length === 1
   process.stderr.write(
-    `\n${RED}${BOLD}  Pending database migration${RESET}\n` +
-      `  ${missing.length} ${plural} defined in drizzle/ but missing from your database:\n` +
-      missing.map((name) => `    ${YELLOW}${name}${RESET}\n`).join('') +
-      `  Anything that uses ${missing.length === 1 ? 'it' : 'them'} fails at runtime.\n` +
+    `${message}  Anything depending on ${only ? 'it' : 'them'} fails at runtime.\n` +
       `  Fix: ${BOLD}npm run db:migrate${RESET}\n\n`,
   )
 }

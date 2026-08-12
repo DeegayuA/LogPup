@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { isSameDay } from 'date-fns'
 import { CalendarDays, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { HolidayLegend } from '@/components/shared/holiday-icon'
@@ -36,6 +37,14 @@ export function MeetingsViews({
   // chip can hand its day to the list view on the way over.
   const [day, setDay] = useState<Date | undefined>(undefined)
 
+  // The day filter has to reach BOTH halves of the list view. It used to reach
+  // only the upcoming half, so the calendar dialog's "Open the write-up,
+  // transcript and follow-ups" — the one route from a chip to a meeting's
+  // notes — sent anyone who clicked it on a PAST meeting to an upcoming list
+  // filtered to a day in the past (always empty) with the past section still
+  // collapsed. The meeting they asked for was on screen nowhere.
+  const pastForDay = day ? past.filter((meeting) => isSameDay(meeting.startsAt, day)) : past
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -68,9 +77,19 @@ export function MeetingsViews({
       </div>
 
       {view === 'list' ? (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-8">
           <section className="flex flex-col gap-3">
-            <h2 className="font-heading text-base font-medium">Upcoming</h2>
+            {/* text-lg semibold — the same level the calendar view's month
+                heading renders at. These two are one click apart and were
+                visibly different sizes and weights for the same heading
+                level. The count is here because a section heading with a
+                number in it is the cheapest at-a-glance fact on the page. */}
+            <h2 className="flex items-baseline gap-2 font-heading text-lg font-semibold">
+              Upcoming
+              <span className="font-mono text-sm font-normal text-muted-foreground">
+                {upcoming.length}
+              </span>
+            </h2>
             <UpcomingMeetingsFiltered
               meetings={upcoming}
               currentUserId={currentUserId}
@@ -81,10 +100,12 @@ export function MeetingsViews({
             />
           </section>
           <PastMeetingsSection
-            meetings={past}
+            meetings={pastForDay}
             currentUserId={currentUserId}
             isAdmin={isAdmin}
             users={users}
+            selectedDay={day}
+            onClearDay={() => setDay(undefined)}
           />
         </div>
       ) : (

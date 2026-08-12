@@ -27,12 +27,23 @@ export function AppComments({
     const text = body.trim()
     if (!text || pending) return
     startTransition(async () => {
-      const result = await postAppComment(appId, text)
-      if (result.ok) {
-        setBody('')
-        router.refresh()
-      } else {
-        toast.error(result.error)
+      try {
+        const result = await postAppComment(appId, text)
+        if (result.ok) {
+          // Cleared only on success. Losing what someone typed because the
+          // network blinked is the one failure mode a comment box must not
+          // have — the text stays in the textarea and Comment stays enabled.
+          setBody('')
+          router.refresh()
+        } else {
+          toast.error(result.error)
+        }
+      } catch {
+        // `postAppComment` returns err() for everything it can foresee, but a
+        // server action can still reject on a transport failure (offline, a
+        // deploy mid-flight). Without this the rejection is unhandled: the
+        // button silently un-disables and nothing tells the user why.
+        toast.error('Could not reach the server — your comment is still here, try again')
       }
     })
   }
@@ -46,11 +57,18 @@ export function AppComments({
 
   return (
     <div className="flex flex-col gap-4">
-      <h3 className="font-heading text-sm font-semibold">Discussion</h3>
+      <div className="flex items-baseline justify-between gap-3">
+        {/* h2, not h3: this is now a whole page section sitting directly
+            under the app's h1, not a card inside the Overview tab. */}
+        <h2 className="font-heading text-sm font-semibold">Discussion</h2>
+        <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+          {comments.length} {comments.length === 1 ? 'comment' : 'comments'}
+        </span>
+      </div>
 
       <ul className="flex flex-col gap-4">
         {comments.length === 0 ? (
-          <li className="text-sm text-muted-foreground">
+          <li className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
             No comments yet. Start the conversation — type <span className="font-medium">@</span> to
             mention a teammate and notify them.
           </li>

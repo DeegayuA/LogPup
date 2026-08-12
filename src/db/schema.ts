@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm'
 import {
-  pgTable, pgEnum, text, uuid, integer, boolean, date, timestamp,
+  pgTable, pgEnum, text, uuid, integer, doublePrecision, boolean, date, timestamp,
   index, uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
 
@@ -33,6 +33,12 @@ export const users = pgTable('users', {
   // the user typed it (display form); tel: links use the digits-only form
   // computed by src/lib/phone.ts.
   phone: text('phone'),
+  // Second, contact-only address (typically a personal gmail when `email` is
+  // the company one). Deliberately NOT unique and NOT domain-gated: it is
+  // never an identity. Every sign-in path — Google, password, Notion — looks
+  // up `email` and only `email`, so nothing stored here can become a second
+  // way into an account.
+  personalEmail: text('personal_email'),
   role: userRole('role').notNull().default('member'),
   active: boolean('active').notNull().default(true),
   // Admin-approval gate for self-signup (see src/lib/auth.ts signIn callback).
@@ -154,12 +160,29 @@ export const tasks = pgTable('tasks', {
   status: taskStatus('status').notNull().default('todo'),
   assigneeId: uuid('assignee_id').references(() => users.id),
   priority: integer('priority').notNull().default(0),
-  sortOrder: integer('sort_order').notNull().default(0),
+  // FRACTIONAL RANK, not a dense index. Widened from `integer` to
+  // `double precision` in migration 0020 so a reorder is ONE update of ONE
+  // row (the midpoint between its two new neighbours) instead of renumbering
+  // every task below it. An integer column cannot express that midpoint once
+  // neighbours are adjacent, which is why the old code had to fall back to
+  // re-spreading the column — the exact renumber this avoids. The rank math
+  // (and the precision-exhaustion guard that DOES trigger a rebalance, after
+  // ~50 splits at one spot) lives in src/features/sprints/task-rank.ts.
+  //
+  // Reads MUST still order by (sort_order, created_at, id): the DB default is
+  // 0 and writers outside the board (the ⌘K quick-add) insert at 0, so ties
+  // are normal and a bare `ORDER BY sort_order` returns them in whatever order
+  // Postgres feels like — a board that reshuffles itself between renders.
+  sortOrder: doublePrecision('sort_order').notNull().default(0),
   // Plain calendar day, no time: set from phrases like "today" / "friday" in
   // the ⌘K natural-language quick-add (see src/lib/task-intent.ts).
   dueDate: date('due_date'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-})
+}, (t) => [
+  // Covers the board's only read: filter (app_id, sprint_id), order by rank.
+  // `tasks` had no index at all, so every board render was a full scan + sort.
+  index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder),
+])
 
 export const meetings = pgTable('meetings', {
   id: uuid('id').primaryKey().defaultRandom(),

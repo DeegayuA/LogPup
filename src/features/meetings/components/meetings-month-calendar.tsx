@@ -31,25 +31,30 @@ import { HolidayIcons, holidayCategoryLabel, holidayToneClass } from '@/componen
 import { getLkHoliday, isLkSunday } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
 import { rescheduleMeeting } from '@/features/meetings/actions'
+import { meetingTiming } from '@/features/meetings/components/meeting-glance'
 import { MeetingDetailDialog } from '@/features/meetings/components/meeting-detail-dialog'
 import { dayKeyToDate, moveMeetingToDay } from '@/features/meetings/reschedule'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
-/* Event chips colored per app on the shared chart ramp (stable hash), the
-   way Untitled UI's event calendar colors per calendar source. */
-const CHIP_TONES = [
-  'border-chart-1 bg-chart-1/15',
-  'border-chart-2 bg-chart-2/15',
-  'border-chart-3 bg-chart-3/15',
-  'border-chart-4 bg-chart-4/15',
-  'border-chart-5 bg-chart-5/15',
-]
-
-function chipTone(appName: string | null): string {
-  if (!appName) return 'border-primary bg-primary/12'
-  let hash = 0
-  for (const char of appName) hash = (hash + char.charCodeAt(0)) % CHIP_TONES.length
-  return CHIP_TONES[hash]
+/*
+ * Chip colour encodes STATE, not identity.
+ *
+ * Chips used to be tinted by hashing the app name across chart-1..5. That hue
+ * carried no information a reader could use: two apps collide as soon as
+ * their char codes agree mod 5, the ramp is the data-viz ramp (borrowed, and
+ * needed elsewhere), and the code's own comment conceded the app name had to
+ * be repeated as text anyway because colour could not name it. Meanwhile the
+ * things that DO mean something — is it running right now, has it already
+ * happened — were carried by a dashed border and nothing else.
+ *
+ * So: one neutral chip, one accent for "happening now", one recessive
+ * treatment for "already over". The app name stays where it always was, in
+ * words.
+ */
+function chipTone(isPast: boolean, isLive: boolean): string {
+  if (isLive) return 'border-l-primary bg-primary/10 text-foreground'
+  if (isPast) return 'border-l-border bg-muted/50 text-muted-foreground'
+  return 'border-l-muted-foreground/40 bg-card text-foreground'
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -69,15 +74,11 @@ const DRAG_INSTRUCTIONS =
 type Entry = { meeting: MeetingSummary; isPast: boolean }
 type ReschedulePatch = { meetingId: string; startsAt: Date; endsAt: Date; isPast: boolean }
 
-/** Full chip text for the accessible tree — the visible spans truncate, and the
-    app is otherwise encoded only as a border hue. */
-function chipLabel(meeting: MeetingSummary, isPast: boolean): string {
-  return [
-    meeting.title,
-    format(meeting.startsAt, 'h:mm a'),
-    meeting.appName,
-    isPast ? 'past' : null,
-  ]
+/** Full chip text for the accessible tree — the visible spans truncate, and a
+    chip's state is otherwise carried by colour alone. */
+function chipLabel(meeting: MeetingSummary, isPast: boolean, isLive: boolean): string {
+  const state = isLive ? 'happening now' : isPast ? 'past' : null
+  return [meeting.title, format(meeting.startsAt, 'h:mm a'), meeting.appName, state]
     .filter(Boolean)
     .join(', ')
 }
@@ -102,6 +103,9 @@ export function MeetingsMonthCalendar({
   /** Hands a day back to the parent so a chip can drop into the filtered list. */
   onSelectDay?: (date: Date) => void
 }) {
+  // One clock read for the whole grid, so every chip in it agrees about which
+  // meeting is running right now.
+  const now = new Date()
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()))
   const [expanded, setExpanded] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
@@ -341,6 +345,7 @@ export function MeetingsMonthCalendar({
                         <MeetingChip
                           key={entry.meeting.id}
                           entry={entry}
+                          now={now}
                           draggable={canManage(entry.meeting)}
                           onOpen={setOpenId}
                         />
@@ -359,7 +364,13 @@ export function MeetingsMonthCalendar({
             // Opaque wrapper: the chip's own tone is a 15% tint that would
             // read as whatever it happens to fly over.
             <div className="cursor-grabbing rounded-sm bg-popover shadow-md">
-              <ChipFace entry={dragging} />
+              <ChipFace
+                entry={dragging}
+                isLive={
+                  meetingTiming(dragging.meeting.startsAt, dragging.meeting.endsAt, now).state ===
+                  'live'
+                }
+              />
             </div>
           ) : null}
         </DragOverlay>
@@ -454,7 +465,9 @@ function DayCell({
           type="button"
           aria-expanded={isExpanded}
           onClick={onToggleExpanded}
-          className="w-fit rounded-sm text-2xs text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+          /* 12px, not 11px: this is an interactive control, and muted text at
+             11px is below the practical legibility floor. */
+          className="w-fit rounded-sm text-xs font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
         >
           {isExpanded ? 'Show less' : `+${entries.length - MAX_VISIBLE} more`}
         </button>
@@ -464,27 +477,20 @@ function DayCell({
 }
 
 /** The chip's visuals, shared by the real chip and the drag overlay. */
-function ChipFace({ entry }: { entry: Entry }) {
+function ChipFace({ entry, isLive = false }: { entry: Entry; isLive?: boolean }) {
   const { meeting, isPast } = entry
   return (
     <div
       className={cn(
-        'flex min-w-0 flex-col gap-0.5 rounded-sm border-l-2 px-1.5 py-0.5 text-left',
-        chipTone(meeting.appName),
-        isPast && 'border-dashed',
+        'flex min-w-0 flex-col rounded-sm border-l-2 px-1.5 py-1 text-left',
+        chipTone(isPast, isLive),
       )}
     >
-      <span className="flex w-full min-w-0 items-center gap-1">
-        <span className="min-w-0 truncate text-xs">{meeting.title}</span>
-        <span className="ml-auto shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
-          {format(meeting.startsAt, 'h:mm a')}
-        </span>
+      <span className="min-w-0 truncate text-xs font-medium">{meeting.title}</span>
+      <span className="flex w-full min-w-0 items-center gap-1 text-xs text-muted-foreground">
+        <span className="shrink-0 font-mono">{format(meeting.startsAt, 'h:mm a')}</span>
+        {meeting.appName ? <span className="min-w-0 truncate">· {meeting.appName}</span> : null}
       </span>
-      {meeting.appName ? (
-        <span className="w-full min-w-0 truncate text-2xs text-muted-foreground">
-          {meeting.appName}
-        </span>
-      ) : null}
     </div>
   )
 }
@@ -493,20 +499,24 @@ function ChipFace({ entry }: { entry: Entry }) {
  * A real control, not a tooltip-only div: the full title, time and app name
  * live in the accessible tree (the visible spans truncate), activating the
  * chip opens the meeting's details, and — for anyone allowed to manage it —
- * dragging it onto another day moves it. "Past" is a dashed, hollow border
- * plus a spoken ", past" — never opacity, which drove the chip text under AA
- * and said nothing to a screen reader.
+ * dragging it onto another day moves it. "Past" is a recessive fill plus a
+ * spoken ", past" (see chipTone / chipLabel) — never opacity, which drove the
+ * chip text under AA and said nothing to a screen reader at all.
  */
 function MeetingChip({
   entry,
+  now,
   draggable,
   onOpen,
 }: {
   entry: Entry
+  /** Shared clock read for the whole grid — see MeetingsMonthCalendar. */
+  now: Date
   draggable: boolean
   onOpen: (meetingId: string) => void
 }) {
   const { meeting, isPast } = entry
+  const isLive = meetingTiming(meeting.startsAt, meeting.endsAt, now).state === 'live'
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: meeting.id,
     disabled: !draggable,
@@ -543,33 +553,32 @@ function MeetingChip({
         onOpen(meeting.id)
       }}
       className={cn(
-        'flex min-w-0 flex-col gap-0.5 rounded-sm border-l-2 px-1.5 py-0.5 text-left',
+        'flex min-w-0 flex-col rounded-sm border-l-2 px-1.5 py-1 text-left',
         'transition-colors duration-150 hover:brightness-95 motion-reduce:transition-none',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        chipTone(meeting.appName),
-        isPast && 'border-dashed bg-transparent',
+        chipTone(isPast, isLive),
         draggable && 'cursor-grab active:cursor-grabbing',
         // The chip stays in place as a ghost while its overlay copy follows
         // the pointer, so the day's layout doesn't jump mid-drag.
         isDragging && 'opacity-40',
       )}
     >
-      <span className="sr-only">{chipLabel(meeting, isPast)}</span>
-      <span aria-hidden className="flex w-full min-w-0 items-center gap-1">
-        <span className="min-w-0 truncate text-xs">{meeting.title}</span>
-        <span className="ml-auto shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
-          {format(meeting.startsAt, 'h:mm a')}
-        </span>
+      <span className="sr-only">{chipLabel(meeting, isPast, isLive)}</span>
+      {/* The app name and the time are visible text, never encoded in the
+          chip's colour: colour here says only which state the meeting is in
+          (running / upcoming / over), and the accessible label above says the
+          same thing in words (WCAG 1.4.1). Both were 11px — below the
+          practical floor for muted text — and are now 12px. */}
+      <span aria-hidden className="min-w-0 truncate text-xs font-medium">
+        {meeting.title}
       </span>
-      {/* The app name is visible text, not just the border hue: five chart
-          tones are hashed across every app, so colour alone can neither name
-          the app nor tell two of them apart for a colourblind user
-          (WCAG 1.4.1). */}
-      {meeting.appName ? (
-        <span aria-hidden className="w-full min-w-0 truncate text-2xs text-muted-foreground">
-          {meeting.appName}
-        </span>
-      ) : null}
+      <span
+        aria-hidden
+        className="flex w-full min-w-0 items-center gap-1 text-xs text-muted-foreground"
+      >
+        <span className="shrink-0 font-mono">{format(meeting.startsAt, 'h:mm a')}</span>
+        {meeting.appName ? <span className="min-w-0 truncate">· {meeting.appName}</span> : null}
+      </span>
     </button>
   )
 }

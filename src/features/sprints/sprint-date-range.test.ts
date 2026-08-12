@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_SPRINT_DAYS,
+  addCalendarDays,
+  dayDelta,
   defaultSprintRange,
+  inclusiveDayCount,
   initialSprintStatus,
   isSprintRunningNow,
+  moveSprintRange,
+  resizeSprintEnd,
+  resizeSprintStart,
   shiftEndDate,
   sprintDurationLabel,
 } from './sprint-date-range'
@@ -140,5 +146,87 @@ describe('isSprintRunningNow', () => {
 
   it('excludes a done sprint even if its range contains today', () => {
     expect(isSprintRunningNow('done', '2026-08-08', '2026-08-15', '2026-08-11')).toBe(false)
+  })
+})
+
+describe('addCalendarDays', () => {
+  it('adds within a month', () => expect(addCalendarDays('2026-08-12', 3)).toBe('2026-08-15'))
+  it('subtracts across a month boundary', () =>
+    expect(addCalendarDays('2026-08-01', -1)).toBe('2026-07-31'))
+  it('crosses a year boundary', () =>
+    expect(addCalendarDays('2026-12-31', 1)).toBe('2027-01-01'))
+  it('handles a leap day', () => expect(addCalendarDays('2028-02-28', 1)).toBe('2028-02-29'))
+  it('is a no-op at zero', () => expect(addCalendarDays('2026-08-12', 0)).toBe('2026-08-12'))
+})
+
+describe('dayDelta', () => {
+  it('is 0 for the same day', () => expect(dayDelta('2026-08-12', '2026-08-12')).toBe(0))
+  it('is positive forwards', () => expect(dayDelta('2026-08-12', '2026-08-15')).toBe(3))
+  it('is negative backwards', () => expect(dayDelta('2026-08-15', '2026-08-12')).toBe(-3))
+  it('counts across a DST-shifting month without drifting', () =>
+    // The whole point of the UTC round trip: a naive local-Date subtraction
+    // over a DST boundary yields 30.958… days and rounds wrong.
+    expect(dayDelta('2026-03-01', '2026-04-01')).toBe(31))
+  it('round-trips with addCalendarDays', () =>
+    expect(addCalendarDays('2026-08-12', dayDelta('2026-08-12', '2026-11-03'))).toBe('2026-11-03'))
+})
+
+describe('inclusiveDayCount', () => {
+  it('counts a single day as 1', () =>
+    expect(inclusiveDayCount('2026-08-12', '2026-08-12')).toBe(1))
+  it('counts a week as 7', () => expect(inclusiveDayCount('2026-08-10', '2026-08-16')).toBe(7))
+  it('goes non-positive on an inverted range', () =>
+    expect(inclusiveDayCount('2026-08-16', '2026-08-10')).toBeLessThan(1))
+})
+
+describe('moveSprintRange', () => {
+  it('slides both ends and keeps the duration', () => {
+    const moved = moveSprintRange('2026-08-10', '2026-08-16', 5)
+    expect(moved).toEqual({ startDate: '2026-08-15', endDate: '2026-08-21' })
+    expect(inclusiveDayCount(moved.startDate, moved.endDate)).toBe(7)
+  })
+  it('slides backwards', () =>
+    expect(moveSprintRange('2026-08-10', '2026-08-16', -10)).toEqual({
+      startDate: '2026-07-31',
+      endDate: '2026-08-06',
+    }))
+  it('is identity at zero, so a no-op drag writes nothing', () =>
+    expect(moveSprintRange('2026-08-10', '2026-08-16', 0)).toEqual({
+      startDate: '2026-08-10',
+      endDate: '2026-08-16',
+    }))
+})
+
+describe('resizeSprintStart', () => {
+  it('moves the start and leaves the end alone', () =>
+    expect(resizeSprintStart('2026-08-10', '2026-08-16', -3)).toEqual({
+      startDate: '2026-08-07',
+      endDate: '2026-08-16',
+    }))
+  it('clamps at the end date rather than inverting the sprint', () =>
+    expect(resizeSprintStart('2026-08-10', '2026-08-16', 50)).toEqual({
+      startDate: '2026-08-16',
+      endDate: '2026-08-16',
+    }))
+  it('allows a one-day sprint exactly at the clamp', () =>
+    expect(resizeSprintStart('2026-08-10', '2026-08-16', 6).startDate).toBe('2026-08-16'))
+})
+
+describe('resizeSprintEnd', () => {
+  it('moves the end and leaves the start alone', () =>
+    expect(resizeSprintEnd('2026-08-10', '2026-08-16', 4)).toEqual({
+      startDate: '2026-08-10',
+      endDate: '2026-08-20',
+    }))
+  it('clamps at the start date rather than inverting the sprint', () =>
+    expect(resizeSprintEnd('2026-08-10', '2026-08-16', -50)).toEqual({
+      startDate: '2026-08-10',
+      endDate: '2026-08-10',
+    }))
+  it('never produces a range createSprint would reject', () => {
+    for (const delta of [-100, -7, -1, 0, 1, 100]) {
+      const range = resizeSprintEnd('2026-08-10', '2026-08-16', delta)
+      expect(range.endDate >= range.startDate).toBe(true)
+    }
   })
 })

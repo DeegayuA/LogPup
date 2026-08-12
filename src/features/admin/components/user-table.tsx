@@ -34,10 +34,12 @@ import {
 import {
   setUserActive,
   setUserOrgTags,
+  setUserPersonalEmail,
   setUserPhone,
   setUserRole,
   setUserTitle,
 } from '@/features/admin/actions'
+import { PERSONAL_EMAIL_MAX_LENGTH } from '@/features/auth/personal-email-schema'
 import { Input } from '@/components/ui/input'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
 import type { AdminUser } from '@/features/admin/queries'
@@ -124,6 +126,59 @@ function PhoneCell({ user }: { user: AdminUser }) {
       maxLength={30}
       aria-label={`Phone number for ${user.name}`}
       className="h-8 w-36 font-mono text-xs"
+    />
+  )
+}
+
+// One user's second, contact-only address. Same save-on-blur/Enter,
+// revert-on-Escape shape as PhoneCell above — and, like it, prop-driven so
+// the refreshed server value wins if two admins edit at once.
+//
+// This is NOT the sign-in email (that one lives in the User column and is
+// deliberately not editable here): setUserPersonalEmail only ever writes
+// users.personal_email.
+function PersonalEmailCell({ user }: { user: AdminUser }) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+  const [draft, setDraft] = useState(user.personalEmail ?? '')
+
+  function save() {
+    const next = draft.trim()
+    if (next === (user.personalEmail ?? '')) return
+    startTransition(async () => {
+      try {
+        const res = await setUserPersonalEmail(user.id, next)
+        if (!res.ok) {
+          toast.error(res.error)
+          setDraft(user.personalEmail ?? '')
+          return
+        }
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+        setDraft(user.personalEmail ?? '')
+      }
+    })
+  }
+
+  return (
+    <Input
+      type="email"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={save}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          event.currentTarget.blur()
+        }
+        if (event.key === 'Escape') setDraft(user.personalEmail ?? '')
+      }}
+      disabled={isPending}
+      placeholder="—"
+      maxLength={PERSONAL_EMAIL_MAX_LENGTH}
+      aria-label={`Personal email for ${user.name}`}
+      className="h-8 w-52 text-xs"
     />
   )
 }
@@ -263,6 +318,7 @@ export function UserTable({
           <TableHead>User</TableHead>
           <TableHead>Job role</TableHead>
           <TableHead>Phone</TableHead>
+          <TableHead>Personal email</TableHead>
           <TableHead>Organizations</TableHead>
           <TableHead>Role</TableHead>
           <TableHead>Active</TableHead>
@@ -300,6 +356,9 @@ export function UserTable({
               </TableCell>
               <TableCell>
                 <PhoneCell user={user} />
+              </TableCell>
+              <TableCell>
+                <PersonalEmailCell user={user} />
               </TableCell>
               <TableCell>
                 <OrgTagsCell user={user} suggestions={allOrgTags} />

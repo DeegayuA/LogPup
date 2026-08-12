@@ -105,25 +105,33 @@ export function SprintFormDialog({ appId }: { appId: string }) {
     event.preventDefault()
     setErrors({})
     startTransition(async () => {
-      const res = await createSprint({
-        appId,
-        name: form.name,
-        goal: form.goal || undefined,
-        startDate: form.startDate,
-        endDate: form.endDate,
-      })
-      if (!res.ok) {
-        const field = identifyField(res.error)
-        if (field) {
-          setErrors((e) => ({ ...e, [field]: res.error }))
-        } else {
-          toast.error(res.error)
+      try {
+        const res = await createSprint({
+          appId,
+          name: form.name,
+          goal: form.goal || undefined,
+          startDate: form.startDate,
+          endDate: form.endDate,
+        })
+        if (!res.ok) {
+          const field = identifyField(res.error)
+          if (field) {
+            setErrors((e) => ({ ...e, [field]: res.error }))
+          } else {
+            toast.error(res.error)
+          }
+          return
         }
-        return
+        toast.success('Sprint created')
+        handleOpenChange(false)
+        router.refresh()
+      } catch {
+        // A server action can REJECT as well as resolve with `{ ok: false }`.
+        // Unhandled, that leaves the dialog open, the Create button un-stuck
+        // and nothing said — the user retypes the whole sprint. Matches the
+        // guard on every other action call in this feature.
+        toast.error('Something went wrong — try again')
       }
-      toast.success('Sprint created')
-      handleOpenChange(false)
-      router.refresh()
     })
   }
 
