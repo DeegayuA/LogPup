@@ -5,6 +5,8 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/shell/theme-provider";
 import { PwaRegister } from "@/features/pwa/pwa";
+import { Analytics } from "@vercel/analytics/next"
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 // Body text — Satoshi (variable). Exposed as --font-sans.
 const satoshi = localFont({
@@ -52,6 +54,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
       className={`${satoshi.variable} ${cabinet.variable} ${geistMono.variable} h-full antialiased`}
     >
+      
       <body className="min-h-full flex flex-col">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           {children}

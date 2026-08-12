@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.139",
+  "current": "v0.0.145",
   "versions": [
     {
       "version": "v0.0.1",
@@ -834,6 +834,42 @@
       "date": "2026-08-12",
       "hash": "139166f",
       "change": "docs: meeting load reduction design spec (sub-project B)"
+    },
+    {
+      "version": "v0.0.140",
+      "date": "2026-08-12",
+      "hash": "a084ada",
+      "change": "docs: app-wide soft deletes design spec (sub-project D)"
+    },
+    {
+      "version": "v0.0.141",
+      "date": "2026-08-12",
+      "hash": "dad797c",
+      "change": "feat: auto-assign identified tasks with manual override"
+    },
+    {
+      "version": "v0.0.142",
+      "date": "2026-08-12",
+      "hash": "fb6e4c3",
+      "change": "docs: people work history, observed load and KPIs design spec (sub-project C)"
+    },
+    {
+      "version": "v0.0.143",
+      "date": "2026-08-12",
+      "hash": "600e845",
+      "change": "docs: soft-delete implementation plan (D, 7 tasks)"
+    },
+    {
+      "version": "v0.0.144",
+      "date": "2026-08-12",
+      "hash": "21445d6",
+      "change": "."
+    },
+    {
+      "version": "v0.0.145",
+      "date": "2026-08-12",
+      "hash": "99fbe9c",
+      "change": "."
     }
   ]
 }
