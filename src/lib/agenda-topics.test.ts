@@ -132,8 +132,168 @@ describe('matchAgendaTopic', () => {
     expect(typeof result.bucket).toBe('string')
   })
 
-  it('matches multi-word keywords as whole phrases', () => {
+  it('matches keywords that happen to be single words, inside a longer phrase', () => {
+    // Renamed from "matches multi-word keywords as whole phrases" — this case
+    // exercises "sprint"/"retrospective", which are single-word keywords, not
+    // multi-word phrases. See the next test for genuine phrase matching.
     const result = matchAgendaTopic('Quarterly sprint retrospective planning', ['Scrum Master'])
     expect(result.hit).toBe('primary')
+  })
+
+  it('matches a genuine multi-word keyword phrase as a whole, not a fragment of unrelated words', () => {
+    const positive = matchAgendaTopic("Let's do a thorough code review before merging", ['Tech Lead'])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Engineering architecture & leadership')
+    expect(positive.quote).toEqual(expect.stringMatching(/code review/i))
+
+    // "encoded reviewer" contains letters that look adjacent to "code review"
+    // but is not that literal phrase anywhere in the string — whole-phrase
+    // matching must not be fooled by a near-miss.
+    const negative = matchAgendaTopic('We hired a new encoded reviewer this week', ['Tech Lead'])
+    expect(negative.hit).toBe('none')
+  })
+
+  it('quote is the earliest-occurring matching keyword in the text, not the first one listed in the bucket', () => {
+    // Within "QA & testing", 'quality assurance' sits before 'sign-off' in
+    // the source array, but here it also occurs first IN THE TEXT — this
+    // pins that the selection is by text position, not array order.
+    const early = matchAgendaTopic('Quality assurance sign-off needed before release', ['QA Engineer'])
+    expect(early.hit).toBe('primary')
+    expect(early.quote).toEqual(expect.stringMatching(/quality assurance/i))
+
+    // Reversed: here 'sign-off' occurs first in the text even though
+    // 'quality assurance' is still listed earlier in the bucket's array —
+    // the cited quote must follow the text, not the array.
+    const reversed = matchAgendaTopic('Sign-off is pending; quality assurance flagged one issue', [
+      'QA Engineer',
+    ])
+    expect(reversed.hit).toBe('primary')
+    expect(reversed.quote).toEqual(expect.stringMatching(/sign-off/i))
+  })
+})
+
+// --- keyword precision regression tests --------------------------------------
+//
+// A primary hit is the one signal that FLOORS a candidate to `required`
+// (spec E3/R6) — a false positive here doesn't just add noise, it manufactures
+// a wrong required tier. Several buckets originally used bare, common English
+// words (e.g. "board", "model", "support", "network", "content") as their sole
+// keyword, which fire on completely unrelated everyday usage. Each pair below
+// pins the false positive as fixed AND that the intended, more specific
+// phrasing still matches — these tests are the documentation of where the
+// line is drawn.
+describe('matchAgendaTopic — keyword precision (false-positive regressions)', () => {
+  it('"board" — a circuit board is not a boardroom', () => {
+    const negative = matchAgendaTopic('Finalize the new circuit board layout for the enclosure', ['CEO'])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic("Preparing the deck for Monday's board meeting", ['CEO'])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Executive & leadership')
+    expect(positive.quote).toEqual(expect.stringMatching(/board meeting/i))
+  })
+
+  it('"model" — a pricing model is not an ML model', () => {
+    const negative = matchAgendaTopic('Finalize the new pricing model before the client call', [
+      'Data Scientist',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('Review the model training results before the demo', [
+      'Data Scientist',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Data & machine learning')
+    expect(positive.quote).toEqual(expect.stringMatching(/model training/i))
+  })
+
+  it('"support" — a schema supporting multi-tenant data is not customer support', () => {
+    const negative = matchAgendaTopic('Will the new schema support multi-tenant data?', ['Support'])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('The support ticket queue needs review before lunch', ['Support'])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Support & customer success')
+    expect(positive.quote).toEqual(expect.stringMatching(/support ticket/i))
+  })
+
+  it('"network" — a partner network is not the infrastructure network', () => {
+    const negative = matchAgendaTopic('Grow our partner network in the region this quarter', [
+      'Network Engineer',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic("Investigating last night's network outage across the region", [
+      'Network Engineer',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('DevOps, infrastructure & security')
+    expect(positive.quote).toEqual(expect.stringMatching(/network outage/i))
+  })
+
+  it('"content" — API response content is not marketing content', () => {
+    const negative = matchAgendaTopic('Validate the response content returned by the new endpoint', [
+      'Marketing',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('Review the content calendar before the launch', ['Marketing'])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Marketing & sales')
+    expect(positive.quote).toEqual(expect.stringMatching(/content calendar/i))
+  })
+
+  it('"schedule" — "let\'s schedule a call" is not a delivery schedule', () => {
+    const negative = matchAgendaTopic("Let's schedule a quick call for tomorrow afternoon", [
+      'Project Manager',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('The release schedule needs revisiting before launch', [
+      'Project Manager',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Delivery & project management')
+    expect(positive.quote).toEqual(expect.stringMatching(/release schedule/i))
+  })
+
+  it('"quality" — quality craftsmanship is not quality assurance', () => {
+    const negative = matchAgendaTopic('The team takes quality seriously in everything they build', [
+      'QA Engineer',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('quality assurance sign-off needed before release', ['QA Engineer'])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('QA & testing')
+    expect(positive.quote).toEqual(expect.stringMatching(/quality assurance/i))
+  })
+
+  it('"component" — a hardware component is not a UI component', () => {
+    const negative = matchAgendaTopic('Order the replacement component for the industrial enclosure', [
+      'Frontend Developer',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('We need to refactor the shared React component library', [
+      'Frontend Developer',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Frontend & client engineering')
+    expect(positive.quote).toEqual(expect.stringMatching(/react component/i))
+  })
+
+  it('"database" — a database of vendor contacts is not a schema/engineering database', () => {
+    const negative = matchAgendaTopic('Sort the database of vendor contacts before the meeting', [
+      'Backend Developer',
+    ])
+    expect(negative.hit).not.toBe('primary')
+
+    const positive = matchAgendaTopic('Review the database schema before we ship the migration', [
+      'Backend Developer',
+    ])
+    expect(positive.hit).toBe('primary')
+    expect(positive.bucket).toBe('Backend & API engineering')
+    expect(positive.quote).toEqual(expect.stringMatching(/database schema/i))
   })
 })

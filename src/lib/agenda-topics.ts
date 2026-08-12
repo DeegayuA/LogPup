@@ -47,7 +47,12 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'front-end',
       'ui',
       'interface',
-      'component',
+      // Bare "component" is a common English word outside software too
+      // (hardware components, org-chart components) — a primary hit FLOORS
+      // someone to `required` (spec R6), so it needs a qualifying phrase.
+      'ui component',
+      'react component',
+      'frontend component',
       'responsive',
       'browser',
       'client-side',
@@ -78,7 +83,13 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'endpoint',
       'integration',
       'microservice',
-      'database',
+      // Bare "database" fires on any casual mention ("a database of vendor
+      // contacts") that has nothing to do with the schema/engineering sense
+      // that should floor a Backend Developer to required.
+      'database schema',
+      'database migration',
+      'database performance',
+      'database query',
       'migration',
     ],
     primaryRoles: ['Backend Developer', 'Full-stack Developer', 'Database Administrator'],
@@ -116,7 +127,19 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   },
   {
     name: 'QA & testing',
-    keywords: ['qa', 'testing', 'regression', 'bug', 'defect', 'quality', 'test case', 'sign-off'],
+    keywords: [
+      'qa',
+      'testing',
+      'regression',
+      'bug',
+      'defect',
+      // Bare "quality" is used loosely about almost anything ("quality
+      // craftsmanship"); the specific phrases are what actually mean QA.
+      'quality assurance',
+      'quality control',
+      'test case',
+      'sign-off',
+    ],
     primaryRoles: ['QA Engineer', 'Automation QA Engineer'],
     adjacentRoles: ['Software Engineer', 'Test Technician', 'EMC Test Engineer', 'Compliance Engineer'],
   },
@@ -131,7 +154,13 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'outage',
       'uptime',
       'security',
-      'network',
+      // Bare "network" fires on "partner network", "our network of
+      // contacts" — none of which is the infra sense that should floor a
+      // Network Engineer to required.
+      'network outage',
+      'network security',
+      'network infrastructure',
+      'network latency',
       'vulnerability',
     ],
     primaryRoles: [
@@ -145,7 +174,21 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   },
   {
     name: 'Data & machine learning',
-    keywords: ['data', 'analytics', 'dataset', 'dashboard', 'model', 'machine learning', 'ml', 'metrics'],
+    keywords: [
+      'data',
+      'analytics',
+      'dataset',
+      'dashboard',
+      // Bare "model" fires on "pricing model", "business model" — everyday
+      // business language that has nothing to do with an ML model.
+      'ml model',
+      'model training',
+      'model accuracy',
+      'model deployment',
+      'machine learning',
+      'ml',
+      'metrics',
+    ],
     primaryRoles: ['Data Engineer', 'Data Analyst', 'Data Scientist', 'ML Engineer'],
     adjacentRoles: ['Backend Developer', 'Software Engineer'],
   },
@@ -226,7 +269,11 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'scrum',
       'milestone',
       'timeline',
-      'schedule',
+      // Bare "schedule" fires on "let's schedule a call" — nearly every
+      // meeting mentions scheduling something without being ABOUT delivery.
+      'project schedule',
+      'delivery schedule',
+      'release schedule',
       'kanban',
     ],
     primaryRoles: [
@@ -240,7 +287,20 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   },
   {
     name: 'Executive & leadership',
-    keywords: ['strategy', 'budget', 'quarterly', 'okr', 'okrs', 'board', 'executive', 'leadership'],
+    keywords: [
+      'strategy',
+      'budget',
+      'quarterly',
+      'okr',
+      'okrs',
+      // Bare "board" fires on "circuit board" — the qualifying phrase is
+      // what actually means the governance sense that should floor a CEO.
+      'board meeting',
+      'board update',
+      'boardroom',
+      'executive',
+      'leadership',
+    ],
     primaryRoles: ['CEO', 'Chief Operating Officer', 'Director'],
     adjacentRoles: ['CTO', 'Engineering Manager', 'Product Manager'],
   },
@@ -263,7 +323,11 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
       'campaign',
       'social media',
       'seo',
-      'content',
+      // Bare "content" fires on "response content", "page content" — any
+      // API/UI discussion, not just marketing content.
+      'content calendar',
+      'content strategy',
+      'marketing content',
       'sales',
       'pitch',
       'deal',
@@ -274,7 +338,21 @@ export const TOPIC_BUCKETS: TopicBucket[] = [
   },
   {
     name: 'Support & customer success',
-    keywords: ['support', 'ticket', 'helpdesk', 'help desk', 'escalation', 'customer', 'client issue'],
+    keywords: [
+      // Bare "support" is one of the most overloaded verbs in English
+      // ("does the schema support multi-tenant data?") — the qualifying
+      // phrase is what actually means the customer-support sense.
+      'customer support',
+      'support ticket',
+      'support team',
+      'technical support',
+      'ticket',
+      'helpdesk',
+      'help desk',
+      'escalation',
+      'customer',
+      'client issue',
+    ],
     primaryRoles: ['Support', 'Customer Success'],
     adjacentRoles: ['QA Engineer', 'Product Manager', 'Sales'],
   },
@@ -312,11 +390,29 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** The verbatim matched span of `keyword` in `text`, or null if it isn't there as a whole word. */
-function findWholeWordMatch(text: string, keyword: string): string | null {
-  const pattern = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'iu')
-  const match = pattern.exec(text)
-  return match ? match[0] : null
+/**
+ * Among `keywords`, the verbatim span that occurs EARLIEST in `text` (whole
+ * word/phrase, case-insensitive), or null if none of them are there at all.
+ *
+ * Scanning every keyword rather than stopping at the first array-order hit
+ * matters for the cited `quote`: a bucket can hold several keywords, and the
+ * one that happens to sit first in the source array is not necessarily the
+ * one closest to what the agenda is actually about. The earliest-occurring
+ * span in the text is the more honest citation.
+ */
+function findEarliestKeywordMatch(text: string, keywords: string[]): string | null {
+  let bestQuote: string | null = null
+  let bestIndex = Infinity
+  for (const keyword of keywords) {
+    const pattern = new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'iu')
+    const match = pattern.exec(text)
+    if (!match) continue
+    if (match.index < bestIndex) {
+      bestIndex = match.index
+      bestQuote = match[0]
+    }
+  }
+  return bestQuote
 }
 
 function normalizeRoleToken(role: string): string {
@@ -331,9 +427,13 @@ function normalizeRoleToken(role: string): string {
  * Every bucket whose keywords appear in `text` is a candidate; among those,
  * the best result for THIS candidate's role tokens wins (primary beats
  * adjacent beats no-hit) — the first bucket in TOPIC_BUCKETS order breaks
- * ties. That is what makes "the agenda mentions the frontend rewrite and the
- * QA sign-off" still floor a QA Engineer to primary, rather than losing them
- * to whichever bucket's keyword happened to appear first in the text.
+ * ties between buckets. That is what makes "the agenda mentions the frontend
+ * rewrite and the QA sign-off" still floor a QA Engineer to primary, rather
+ * than losing them to whichever bucket's keyword happened to appear first in
+ * the text. Within a single bucket, the cited quote is the EARLIEST-occurring
+ * matching keyword in the text, not the first one listed in that bucket's
+ * `keywords` array — a citation should point at the most contextually
+ * relevant span, not an implementation detail of array order.
  *
  * Buckets never stack: this returns a single hit, never a sum. A role that
  * matches no bucket for this text is 'none' — UNKNOWN to the scorer, never a
@@ -351,14 +451,7 @@ export function matchAgendaTopic(text: string, roleTokens: string[]): AgendaTopi
   let best: { level: 1 | 2; bucket: string; quote: string } | null = null
 
   for (const bucket of TOPIC_BUCKETS) {
-    let quote: string | null = null
-    for (const keyword of bucket.keywords) {
-      const match = findWholeWordMatch(trimmed, keyword)
-      if (match) {
-        quote = match
-        break
-      }
-    }
+    const quote = findEarliestKeywordMatch(trimmed, bucket.keywords)
     if (!quote) continue // this bucket's topic isn't in the agenda at all
 
     const isPrimary = bucket.primaryRoles.some((role) => normalizedTokens.has(normalizeRoleToken(role)))
