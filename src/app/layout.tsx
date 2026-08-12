@@ -77,6 +77,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {children}
           <Toaster />
           <PwaRegister />
+          <Analytics />
+          <SpeedInsights />
         </ThemeProvider>
         <Analytics />
         <SpeedInsights />
