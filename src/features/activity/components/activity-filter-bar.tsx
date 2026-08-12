@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,52 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ACTIVITY_ENTITY_TYPES } from '@/features/activity/types'
+
+/**
+ * One date bound, typed locally and committed on blur or Enter.
+ *
+ * NOT a directly-controlled input bound to the URL. That version pushed a
+ * navigation on every `onChange` — and since a `type="date"` field fires
+ * onChange on each keyboard segment (month, then day, then year), a partial
+ * value like "2026-08-" round-tripped to the server, came back as "" and
+ * wiped what the user was mid-way through typing. Typing a date by keyboard
+ * was impossible; only the picker worked.
+ *
+ * The parent gives each instance a `key` derived from the committed value, so
+ * a navigation (Clear, back button, a shared link) remounts this with the new
+ * value as its initial draft — resyncing without a setState-in-effect.
+ */
+function DateFilter({
+  value,
+  label,
+  onCommit,
+}: {
+  value: string
+  label: string
+  onCommit: (next: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+
+  return (
+    <Input
+      type="date"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft !== value) onCommit(draft)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          e.currentTarget.blur()
+        }
+        if (e.key === 'Escape') setDraft(value)
+      }}
+      aria-label={label}
+      className="h-8 w-36 font-mono text-xs"
+    />
+  )
+}
 
 /** What the /activity URL currently says. '' means "not filtered". */
 export type ActivityFilterState = {
@@ -75,6 +122,13 @@ export function ActivityFilterBar({
     { value: ALL, label: 'All apps' },
     ...apps.map((app) => ({ value: app.id, label: app.name })),
   ]
+  // The type select needs `items` for the same reason, even though its values
+  // are already words: without the map, <Select.Value> shows the ALL sentinel
+  // ("__all__") verbatim in the unfiltered default state.
+  const typeItems = [
+    { value: ALL, label: 'All types' },
+    ...ACTIVITY_ENTITY_TYPES.map((type) => ({ value: type, label: type })),
+  ]
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -98,6 +152,7 @@ export function ActivityFilterBar({
 
       <Select
         value={current.type || ALL}
+        items={typeItems}
         onValueChange={(value) => apply({ type: !value || value === ALL ? '' : value })}
       >
         <SelectTrigger size="sm" className="w-36" aria-label="Filter by type">
@@ -131,20 +186,18 @@ export function ActivityFilterBar({
         </SelectContent>
       </Select>
 
-      <Input
-        type="date"
+      <DateFilter
+        key={`from-${current.from}`}
         value={current.from}
-        onChange={(e) => apply({ from: e.target.value })}
-        aria-label="From date"
-        className="h-8 w-36 font-mono text-xs"
+        label="From date"
+        onCommit={(from) => apply({ from })}
       />
       <span className="text-xs text-muted-foreground">to</span>
-      <Input
-        type="date"
+      <DateFilter
+        key={`to-${current.to}`}
         value={current.to}
-        onChange={(e) => apply({ to: e.target.value })}
-        aria-label="To date"
-        className="h-8 w-36 font-mono text-xs"
+        label="To date"
+        onCommit={(to) => apply({ to })}
       />
 
       {anyFilter ? (

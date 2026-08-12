@@ -73,7 +73,7 @@ export async function uploadOwnAvatar(formData: FormData): Promise<ActionResult<
     entityType: 'user',
     entityId: session.user.id,
     entityLabel: current?.name ?? session.user.name ?? 'Unknown user',
-    pagePath: '/profile',
+    pagePath: `/people/${session.user.id}`,
     detail: 'avatar',
   })
 
@@ -100,7 +100,7 @@ export async function removeOwnAvatar(): Promise<ActionResult> {
     entityType: 'user',
     entityId: session.user.id,
     entityLabel: current?.name ?? session.user.name ?? 'Unknown user',
-    pagePath: '/profile',
+    pagePath: `/people/${session.user.id}`,
     detail: 'avatar',
   })
 

@@ -125,5 +125,55 @@ describe('splitPersonMeetings', () => {
     expect(result.totalUpcoming).toBe(0)
     expect(result.totalRecent).toBe(0)
     expect(result.attendedRecently).toBe(0)
+    expect(result.today).toBe(0)
+  })
+})
+
+// NOW is 2026-08-12T06:00Z — 11:30 AM in Asia/Colombo, so "today" there runs
+// from 2026-08-11T18:30Z to 2026-08-12T18:29Z. The dashboard's "Meetings
+// today" tile reads this field; each case below is one it used to get wrong
+// back when the count was filtered out of the `upcoming` display list.
+describe('splitPersonMeetings today count', () => {
+  it('counts meetings that already finished today, not just the ones ahead', () => {
+    const result = splitPersonMeetings(
+      [
+        meeting({ id: 'this-morning', startsAt: new Date(NOW.getTime() - 3 * HOUR) }),
+        meeting({ id: 'this-afternoon', startsAt: new Date(NOW.getTime() + 3 * HOUR) }),
+      ],
+      NOW,
+    )
+    expect(result.upcoming).toHaveLength(1)
+    expect(result.today).toBe(2)
+  })
+
+  it('is not capped by upcomingLimit the way the display list is', () => {
+    const rows = Array.from({ length: 8 }, (_, i) =>
+      meeting({ id: `m${i}`, startsAt: new Date(NOW.getTime() + (i + 1) * (HOUR / 2)) }),
+    )
+    const result = splitPersonMeetings(rows, NOW)
+    expect(result.upcoming).toHaveLength(5) // the cap
+    expect(result.today).toBe(8)
+  })
+
+  it('uses the Colombo calendar day, not the UTC one', () => {
+    const result = splitPersonMeetings(
+      [
+        // 20:00Z on the 11th is already 01:30 on the 12th in Colombo.
+        meeting({ id: 'colombo-today', startsAt: new Date('2026-08-11T20:00:00.000Z') }),
+        // 10:00Z on the 11th is still the 11th there.
+        meeting({ id: 'colombo-yesterday', startsAt: new Date('2026-08-11T10:00:00.000Z') }),
+      ],
+      NOW,
+    )
+    expect(result.today).toBe(1)
+  })
+
+  it('excludes tomorrow', () => {
+    const result = splitPersonMeetings(
+      [meeting({ id: 'tomorrow', startsAt: new Date(NOW.getTime() + DAY) })],
+      NOW,
+    )
+    expect(result.upcoming).toHaveLength(1)
+    expect(result.today).toBe(0)
   })
 })

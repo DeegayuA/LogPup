@@ -8,7 +8,7 @@ import {
   SquareKanban,
   Users,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 
 export const metadata: Metadata = {
   title: 'LogPup — engineering ops for Alta Vision teams',
@@ -65,9 +65,12 @@ export default function PublicHomePage() {
           are, what ships this sprint, and what was decided in the last meeting.
         </p>
         <div className="flex flex-wrap items-center gap-3">
-          <Button asChild size="lg">
-            <Link href="/sign-in">Sign in</Link>
-          </Button>
+          {/* buttonVariants rather than <Button render={...}>: this is a
+              navigation, so the accessible element should be the anchor
+              itself, not a button wrapping one. */}
+          <Link href="/sign-in" className={buttonVariants({ size: 'lg' })}>
+            Sign in
+          </Link>
           <p className="text-xs text-muted-foreground">
             Access is granted by an Alta Vision administrator. New accounts land in a pending
             queue until approved.

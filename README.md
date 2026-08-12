@@ -70,10 +70,15 @@ The UI follows the committed **"watchdog calm"** spec — warm stone surfaces, p
 
 `graphify-out/` holds a queryable graph of the whole codebase (727 nodes, 38 communities): open `graphify-out/graph.html` in a browser, read `graphify-out/GRAPH_REPORT.md`, or ask questions with `graphify query "..."`.
 
+## Public pages
+
+Four routes are reachable without a session, and are excluded from the auth guard in `src/proxy.ts`: `/sign-in`, plus `/home`, `/privacy`, and `/terms` under `src/app/(public)/`. They exist because Google's OAuth review fetches the home page, privacy policy, and terms with no session before it will approve the sensitive `calendar.events` scope — put them back behind the guard and verification breaks with nothing else in the app noticing. `src/app/robots.ts` allows crawling of exactly those four.
+
 ## Deploying (Vercel)
 
 - Framework preset **Next.js**, root directory = repo root, production branch `main`.
 - Set all env vars above for Production (change `AUTH_URL` to the production origin).
 - Register the production OAuth redirect URIs with Google (and Notion if enabled).
+- Getting the Google consent screen verified — console fields, scope justification, demo-video script: [docs/google-oauth-verification.md](docs/google-oauth-verification.md).
 - `vercel.json` schedules the nightly backup cron.
 - ACCEPTED RISK: in-memory per-instance — on serverless scale-out lockout weakens; move to durable store (e.g. Upstash/DB) before external exposure. (login rate limiter, `src/lib/rate-limit.ts`)

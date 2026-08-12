@@ -60,12 +60,36 @@ export function clampPxPerHour(value: number): number {
  * Shortest an event block may be drawn, whatever the zoom.
  *
  * At the minimum zoom a 15-minute meeting is 8px tall: too short to read a
- * title in, and — more to the point — too short to reliably click. 22px keeps
- * one line of text and a real hit target. Blocks shorter than their true
- * duration therefore overlap the next slot slightly; that is the honest trade,
- * and the alternative (a meeting you cannot open) is worse.
+ * title in, and — more to the point — too short to reliably click. 24px keeps
+ * one line of text and clears the 24×24 CSS-pixel floor of WCAG 2.2 SC 2.5.8
+ * on its own, before the coarse-pointer hit-slop in globals.css widens it to
+ * 44×44 (which it can only do because the block no longer clips itself — see
+ * the `overflow-hidden` note on `TimeGridEvent`).
+ *
+ * A block stretched to this floor covers more of the column than its duration
+ * does. That is NOT left for the painter to sort out: `minEventMinutes` below
+ * feeds the stretched extent back into the overlap packer, so two back-to-back
+ * 15-minute standups get two lanes instead of one silently painting over the
+ * other.
  */
-export const MIN_EVENT_HEIGHT_PX = 22
+export const MIN_EVENT_HEIGHT_PX = 24
+
+/**
+ * How many minutes of the day `MIN_EVENT_HEIGHT_PX` covers at a given zoom —
+ * the RENDERED extent of the shortest possible block.
+ *
+ * The packer reasons in minutes and the clamp happens in pixels, so without
+ * this the two disagree: `layoutOverlaps` correctly calls 09:00–09:15 and
+ * 09:15–09:30 non-overlapping (half-open intervals) and gives both the full
+ * column width, while `eventGeometry` stretches the first one down over the
+ * second, whose opaque fill then erases it. Clamping each event's end to
+ * `start + minEventMinutes(pxPerHour)` before packing turns that clamp-induced
+ * collision into a real lane split.
+ */
+export function minEventMinutes(pxPerHour: number): number {
+  if (!(pxPerHour > 0)) return 0
+  return (MIN_EVENT_HEIGHT_PX * 60) / pxPerHour
+}
 
 /**
  * A meeting this long or longer goes in the ALL-DAY STRIP above the scrolling
@@ -104,8 +128,37 @@ export function isAllDayMeeting(startMs: number, endMs: number): boolean {
  * one — and without ever writing "+5:30" as a literal, which would be wrong
  * the moment this is asked about anywhere else.
  */
-function zoneOffsetMs(instantMs: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
+/*
+ * Constructing an `Intl.DateTimeFormat` is the expensive part of every helper
+ * below — it loads and compiles a locale/timezone pattern — while formatting
+ * with one already built is cheap. A formatter is immutable and depends on
+ * nothing but its options, so one per timezone, kept for the life of the
+ * module, is safe. Without this cache a single Week view render costs ~35
+ * constructions, and a zoom gesture (one wheel event per frame) multiplies
+ * that by the frame rate.
+ */
+const offsetFormatters = new Map<string, Intl.DateTimeFormat>()
+
+/*
+ * A calendar day's boundaries are a pure function of (iso, timeZone) — they
+ * cannot change while the tab is open — so they are worth remembering rather
+ * than re-deriving on every zoom notch and every clock tick. Both caches are
+ * capped and cleared wholesale when they fill: paging through a year touches
+ * ~365 keys and there is nothing here worth an LRU for.
+ */
+const CACHE_LIMIT = 512
+const dayStartCache = new Map<string, number>()
+const dayWindowCache = new Map<string, DayWindow>()
+
+function remember<V>(cache: Map<string, V>, key: string, value: V): void {
+  if (cache.size >= CACHE_LIMIT) cache.clear()
+  cache.set(key, value)
+}
+
+function offsetFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = offsetFormatters.get(timeZone)
+  if (cached) return cached
+  const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone,
     hourCycle: 'h23',
     year: 'numeric',
@@ -114,7 +167,13 @@ function zoneOffsetMs(instantMs: number, timeZone: string): number {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-  }).formatToParts(new Date(instantMs))
+  })
+  offsetFormatters.set(timeZone, formatter)
+  return formatter
+}
+
+function zoneOffsetMs(instantMs: number, timeZone: string): number {
+  const parts = offsetFormatter(timeZone).formatToParts(new Date(instantMs))
 
   const at = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? '0')
   const asUtc = Date.UTC(at('year'), at('month') - 1, at('day'), at('hour'), at('minute'), at('second'))
@@ -134,10 +193,14 @@ function zoneOffsetMs(instantMs: number, timeZone: string): number {
  * whoever reuses it.
  */
 export function zonedDayStartMs(iso: string, timeZone: string = LK_TIMEZONE): number {
+  const key = `${timeZone}|${iso}`
+  const cached = dayStartCache.get(key)
+  if (cached !== undefined) return cached
   const [year, month, day] = iso.split('-').map(Number)
   const utcMidnight = Date.UTC(year, month - 1, day)
   const firstPass = utcMidnight - zoneOffsetMs(utcMidnight, timeZone)
   const secondPass = utcMidnight - zoneOffsetMs(firstPass, timeZone)
+  remember(dayStartCache, key, secondPass)
   return secondPass
 }
 
@@ -154,11 +217,16 @@ export type DayWindow = {
  *  neighbouring midnights rather than `start + 24h`, so a DST day is 23 or 25
  *  hours long instead of silently losing an hour off its end. */
 export function dayWindow(iso: string, timeZone: string = LK_TIMEZONE): DayWindow {
+  const key = `${timeZone}|${iso}`
+  const cached = dayWindowCache.get(key)
+  if (cached) return cached
   const startMs = zonedDayStartMs(iso, timeZone)
   // +36h then re-snap: any instant safely inside the next day, whatever the
   // offset change, snapped back to that day's own midnight.
   const nextIso = toIsoDateInTimeZone(new Date(startMs + 36 * 60 * MS_PER_MINUTE), timeZone)
-  return { iso, startMs, endMs: zonedDayStartMs(nextIso, timeZone) }
+  const window: DayWindow = { iso, startMs, endMs: zonedDayStartMs(nextIso, timeZone) }
+  remember(dayWindowCache, key, window)
+  return window
 }
 
 export type DaySegment = {

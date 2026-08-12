@@ -1,7 +1,6 @@
 'use client'
 
 import { useRef, useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Loader2, Trash2, Upload } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -51,7 +50,6 @@ export function AvatarUpload({
   name: string
   avatarUrl: string | null
 }) {
-  const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
   const [isPending, startTransition] = useTransition()
   const [preview, setPreview] = useState<string | null>(null)
@@ -74,7 +72,12 @@ export function AvatarUpload({
       }
 
       // Local preview so the new picture appears before the round trip; it is
-      // dropped once the server value arrives via router.refresh().
+      // dropped once the server value arrives. That arrival needs no
+      // `router.refresh()`: `uploadOwnAvatar` revalidates `/profile` (and
+      // `/people`, and the root layout the header avatar sits in), and Next
+      // returns the re-rendered payload for this route in the action's own
+      // response — the refresh that used to be here was a second render of a
+      // page the server had already re-rendered.
       const objectUrl = URL.createObjectURL(resized)
       setPreview(objectUrl)
 
@@ -89,7 +92,6 @@ export function AvatarUpload({
           return
         }
         toast.success('Profile picture updated')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
         setPreview(null)
@@ -108,7 +110,6 @@ export function AvatarUpload({
         }
         setPreview(null)
         toast.success('Profile picture removed')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }

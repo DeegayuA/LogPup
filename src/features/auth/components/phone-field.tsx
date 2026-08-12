@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Phone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -18,7 +17,6 @@ import { setOwnPhone } from '@/features/auth/actions'
 
 /** Self-serve contact number — what the call button on People dials. */
 export function PhoneField({ phone }: { phone: string | null }) {
-  const router = useRouter()
   const [value, setValue] = useState(phone ?? '')
   const [isPending, startTransition] = useTransition()
 
@@ -32,7 +30,6 @@ export function PhoneField({ phone }: { phone: string | null }) {
           return
         }
         toast.success(value.trim() ? 'Phone number saved' : 'Phone number removed')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }

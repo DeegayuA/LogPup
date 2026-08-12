@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { KeyRound, Pause, Play, Plus, Trash2 } from 'lucide-react'
 import {
@@ -24,7 +23,6 @@ import { addGeminiKey, deleteGeminiKey, toggleGeminiKey } from '@/features/gemin
 import type { GeminiKeyRow } from '@/features/gemini/queries'
 
 export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [label, setLabel] = useState('')
   const [key, setKey] = useState('')
@@ -42,7 +40,6 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
         toast.success('Gemini key added')
         setLabel('')
         setKey('')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -58,7 +55,6 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
           return
         }
         toast.success(active ? 'Key resumed' : 'Key paused')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -74,7 +70,6 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
           return
         }
         toast.success('Key removed')
-        router.refresh()
       } catch {
         toast.error('Something went wrong — try again')
       }

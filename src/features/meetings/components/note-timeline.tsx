@@ -690,6 +690,13 @@ export function NoteTimeline({
                     <p className={cn(bilingualText, 'text-foreground')}>{suggestion.text}</p>
                     <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                       <MetaChip>Suggested</MetaChip>
+                      {suggestion.suggestedAppName ? (
+                        // Where this task will actually be filed — the AI's
+                        // routing decision (suggestedAppId, ai-actions.ts).
+                        // Without this label, accepting a routed suggestion
+                        // files it into an app the card never named.
+                        <MetaChip>→ {suggestion.suggestedAppName}</MetaChip>
+                      ) : null}
                       <span>{suggestion.suggestedUserName ?? 'Unassigned'}</span>
                       {suggestion.suggestedDueDate ? (
                         <span className="font-mono">
@@ -703,8 +710,20 @@ export function NoteTimeline({
                       <Button
                         size="sm"
                         type="button"
-                        disabled={busy || !appId}
-                        title={appId ? undefined : 'Link this meeting to an app first'}
+                        // A suggestion the AI routed to a specific app can be
+                        // accepted even when the MEETING has no app — the
+                        // server files it into suggestion.suggestedAppId
+                        // (acceptTaskSuggestion falls back to meeting.appId
+                        // only when routing was inconclusive). Gating on the
+                        // meeting's app alone made routed suggestions
+                        // unclickable exactly where routing matters most:
+                        // multi-project meetings not pinned to one app.
+                        disabled={busy || (!appId && !suggestion.suggestedAppId)}
+                        title={
+                          appId || suggestion.suggestedAppId
+                            ? undefined
+                            : 'Link this meeting to an app first'
+                        }
                         onClick={() => handleAcceptSuggestion(suggestion)}
                       >
                         {busy ? <Loader2Icon className="animate-spin" aria-hidden /> : <CheckIcon aria-hidden />}

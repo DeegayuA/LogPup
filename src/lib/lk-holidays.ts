@@ -97,15 +97,42 @@ export const LK_TIMEZONE = 'Asia/Colombo'
  * wrong day.
  */
 export function toIsoDateInTimeZone(date: Date, timeZone: string = LK_TIMEZONE): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
+  const parts = isoDateFormatter(timeZone).formatToParts(date)
+
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+/*
+ * Building an `Intl.DateTimeFormat` compiles a locale/timezone pattern and is
+ * by far the expensive half of these helpers; formatting with one already
+ * built is cheap. A formatter is immutable and determined entirely by its
+ * options, so one per timezone for the life of the module is both safe and
+ * enough. This matters because the calendar's day headers call
+ * `getLkHoliday` + `isLkSunday` once per visible day, on every render.
+ */
+const isoDateFormatters = new Map<string, Intl.DateTimeFormat>()
+const weekdayFormatters = new Map<string, Intl.DateTimeFormat>()
+
+function isoDateFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = isoDateFormatters.get(timeZone)
+  if (cached) return cached
+  const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(date)
+  })
+  isoDateFormatters.set(timeZone, formatter)
+  return formatter
+}
 
-  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
-  return `${part('year')}-${part('month')}-${part('day')}`
+function weekdayFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = weekdayFormatters.get(timeZone)
+  if (cached) return cached
+  const formatter = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' })
+  weekdayFormatters.set(timeZone, formatter)
+  return formatter
 }
 
 /**
@@ -130,7 +157,7 @@ export function isLkHoliday(date: Date, tz: string = LK_TIMEZONE): string | unde
 
 /** True when `date` falls on a Sunday, evaluated in `tz` (default Asia/Colombo). */
 export function isLkSunday(date: Date, tz: string = LK_TIMEZONE): boolean {
-  return new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(date) === 'Sun'
+  return weekdayFormatter(tz).format(date) === 'Sun'
 }
 
 /** The single icon kind the UI renders for a holiday — one of these ever, never several. */

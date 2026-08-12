@@ -62,7 +62,7 @@ export async function setOwnPhone(phone: string): Promise<ActionResult> {
     entityType: 'user',
     entityId: session.user.id,
     entityLabel: session.user.name ?? session.user.email,
-    pagePath: '/profile',
+    pagePath: `/people/${session.user.id}`,
     detail: value === null ? 'clearing their phone number' : 'their phone number',
     metadata: { phone: { to: value } },
   })
@@ -101,7 +101,7 @@ export async function setOwnPassword(
     entityType: 'user',
     entityId: session.user.id,
     entityLabel: session.user.name ?? session.user.email,
-    pagePath: '/profile',
+    pagePath: `/people/${session.user.id}`,
     detail: 'their password',
   })
 

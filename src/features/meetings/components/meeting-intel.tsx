@@ -44,6 +44,7 @@ import {
   SkeletonBlock,
 } from '@/features/meetings/components/meeting-chips'
 import { MeetingAiNotes, MeetingNotesEmpty } from '@/features/meetings/components/meeting-notes'
+import { MeetingPrepSection } from '@/features/meetings/components/meeting-prep'
 import {
   followupAge,
   glanceFromIntel,
@@ -1513,7 +1514,14 @@ export function MeetingIntelPanel({
               <Select value={language} onValueChange={(v) => v && setLanguage(v as LanguagePreference)}>
                 <SelectTrigger className="h-8 w-32" aria-label="Live transcript language">
                   <Languages className="size-3.5 text-muted-foreground" aria-hidden />
-                  <SelectValue />
+                  {/* Base UI's Value renders the raw value ("si-LK") unless
+                      given the label — same items-less pitfall fixed on the
+                      Lead select in app-form-dialog.tsx. */}
+                  <SelectValue>
+                    {(value: LanguagePreference) =>
+                      LANGUAGE_OPTIONS.find((opt) => opt.value === value)?.label ?? value
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {LANGUAGE_OPTIONS.map((opt) => (
@@ -1803,6 +1811,12 @@ export function MeetingIntelPanel({
                   </p>
                 </MeetingNotesEmpty>
               )}
+
+              {/* One meeting covers every project its people work on — the
+                  per-attendee walk-through (their apps, sprint counts, and
+                  check-ins) loads its own board-derived data independently of
+                  the transcript-bearing intel above (see meeting-prep.tsx). */}
+              <MeetingPrepSection meetingId={meetingId} currentUserId={currentUserId} />
 
               {unattributed.length > 0 ? (
                 <section className="flex flex-col gap-2">

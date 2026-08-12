@@ -298,15 +298,21 @@ export function MeetingForm({
   async function prefillTeam(appId: string) {
     setPendingTeamAppId(appId)
     try {
-      const team = await teamForApp(appId)
+      const res = await teamForApp(appId)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
       setForm((f) => {
         if (f.appId !== appId) return f
         return {
           ...f,
-          ...applyTeamPrefill(f, team.map((member) => member.id), activeUsers.map((u) => u.id)),
+          ...applyTeamPrefill(f, res.data.map((member) => member.id), activeUsers.map((u) => u.id)),
         }
       })
     } catch {
+      // The ActionResult contract means the action itself never throws — this
+      // catches the transport (offline, dialog closed mid-flight), which can.
       toast.error('Could not load the team for that app')
     } finally {
       // Only the fetch that set the marker may clear it — a slow response

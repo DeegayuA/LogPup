@@ -6,6 +6,10 @@ import { revalidatePath } from 'next/cache'
 import { del } from '@vercel/blob'
 import { db } from '@/db'
 import { apps, meetingAttendees, meetingScreenshots, meetings, users } from '@/db/schema'
+import {
+  formatBusinessTime,
+  formatBusinessWeekdayDayMonth,
+} from '@/features/people/format-instant'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { format } from 'date-fns'
@@ -272,7 +276,10 @@ export async function createMeeting(
     appId,
     appName: await appNameById(appId),
     pagePath: '/meetings',
-    detail: `for ${format(new Date(startsAt), 'EEE, MMM d · h:mm a')}`,
+    // Business timezone, not the server's: this string is PERSISTED into the
+    // trail, so a UTC server would bake "5h30 earlier" into the row forever —
+    // unlike the surrounding UI, a log line can never be re-rendered right.
+    detail: `for ${formatBusinessWeekdayDayMonth(new Date(startsAt))} · ${formatBusinessTime(new Date(startsAt))}`,
     metadata: { startsAt, endsAt, attendeeCount: attendeeIds.length },
   })
 
@@ -400,7 +407,8 @@ export async function rescheduleMeeting(
     appId: existing.appId,
     appName: await appNameById(existing.appId),
     pagePath: '/meetings',
-    detail: `to ${format(nextStart, 'EEE, MMM d · h:mm a')}`,
+    // Business timezone — persisted string, same reason as createMeeting.
+    detail: `to ${formatBusinessWeekdayDayMonth(nextStart)} · ${formatBusinessTime(nextStart)}`,
     metadata: {
       startsAt: { from: existing.startsAt.toISOString(), to: nextStart.toISOString() },
       endsAt: { from: existing.endsAt.toISOString(), to: nextEnd.toISOString() },
@@ -550,12 +558,29 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
   return ok(undefined)
 }
 
-/** Thin server-action wrapper over getTeamForApp so the client meeting form
- * can prefill attendees when an app is selected. */
-export async function teamForApp(appId: string): Promise<{ id: string; name: string }[]> {
+/**
+ * Thin server-action wrapper over getTeamForApp so the client meeting form
+ * can prefill attendees when an app is selected. ActionResult rather than a
+ * bare array so a failed lookup is distinguishable from an app that simply
+ * has no team — with a bare [] for both, the form would silently show "no
+ * suggestions" for what was actually an error.
+ */
+export async function teamForApp(
+  appId: string,
+): Promise<ActionResult<{ id: string; name: string }[]>> {
   const session = await requireSession()
-  if (!session) return []
+  if (!session) return err('Sign in required')
 
-  const team = await getTeamForApp(appId)
-  return team.map((member) => ({ id: member.userId, name: member.name }))
+  // uuid shape checked here rather than left to Postgres — a malformed id
+  // would otherwise surface as a uuid cast error thrown across the action
+  // boundary instead of a plain err().
+  const parsed = z.uuid().safeParse(appId)
+  if (!parsed.success) return err('Invalid app')
+
+  try {
+    const team = await getTeamForApp(parsed.data)
+    return ok(team.map((member) => ({ id: member.userId, name: member.name })))
+  } catch {
+    return err('Could not load the team for that app')
+  }
 }

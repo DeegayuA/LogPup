@@ -18,12 +18,23 @@ export function activityConditions(
     filters.appId ? eq(activityLog.appId, filters.appId) : undefined,
     filters.from ? gte(activityLog.createdAt, filters.from) : undefined,
     filters.to ? lte(activityLog.createdAt, filters.to) : undefined,
-    // Keyset pagination: strictly older than the cursor row, with id as the
-    // tiebreaker for rows sharing a timestamp (bulk writes in one action).
+    // Keyset pagination: at-or-older than the cursor's millisecond, with id
+    // as the tiebreaker inside it.
+    //
+    // `lte`, NOT `lt`, and this is the whole subtlety. created_at is
+    // timestamptz(6) filled by now(), but a JS Date carries milliseconds, so
+    // the cursor round-trips as a FLOORED value: a boundary row stored at
+    // 12:00:00.123456 encodes as …123. Under `lt` every row in
+    // [.123000, .123456) — genuinely older, and never yet shown — fails the
+    // strict comparison and is silently skipped forever, while the
+    // `eq`-tiebreaker branch can only ever fire on the rare row whose
+    // microseconds are exactly zero. Widening to `lte` keeps that whole
+    // millisecond in play; the `lt(id)` tiebreaker (ids being the secondary
+    // sort key) is what stops the boundary row repeating.
     cursor
       ? or(
           lt(activityLog.createdAt, cursor.createdAt),
-          and(eq(activityLog.createdAt, cursor.createdAt), lt(activityLog.id, cursor.id)),
+          and(lte(activityLog.createdAt, cursor.createdAt), lt(activityLog.id, cursor.id)),
         )
       : undefined,
   ]

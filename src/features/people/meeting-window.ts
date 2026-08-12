@@ -21,6 +21,8 @@
  * within the window so the UI can say "5 of 23" instead of quietly truncating.
  */
 
+import { isoDayOf } from '@/features/people/iso-day'
+
 export type AttendeeResponse = 'pending' | 'going' | 'maybe' | 'declined'
 
 export type PersonMeetingRow = {
@@ -48,6 +50,17 @@ export type PersonMeetings = {
   attendedRecently: number
   /** How many days back `attendedRecently` looks, for the UI's label. */
   attendedWindowDays: number
+  /**
+   * Every meeting on today's business-timezone calendar day, whether still
+   * ahead or already finished.
+   *
+   * Counted here, from the FULL row set, because the two lists above are
+   * display slices: `upcoming` is capped at `upcomingLimit` and holds only
+   * `endsAt > now`, so counting today's meetings from it both truncates at
+   * the cap and silently drops every meeting that already ended today —
+   * which is most of them by mid-afternoon, exactly when someone looks.
+   */
+  today: number
 }
 
 export type SplitOptions = {
@@ -66,6 +79,7 @@ export function splitPersonMeetings(
   const { upcomingLimit, recentLimit, attendedWindowDays } = { ...DEFAULTS, ...options }
   const nowMs = now.getTime()
   const windowStartMs = nowMs - attendedWindowDays * 86_400_000
+  const todayIso = isoDayOf(now)
 
   const entries = rows.map((row) => ({
     ...row,
@@ -88,5 +102,7 @@ export function splitPersonMeetings(
       (entry) => entry.response !== 'declined' && entry.startsAt.getTime() >= windowStartMs,
     ).length,
     attendedWindowDays,
+    // From `entries`, not from the sliced lists above — see the field's note.
+    today: entries.filter((entry) => isoDayOf(entry.startsAt) === todayIso).length,
   }
 }

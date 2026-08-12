@@ -59,11 +59,17 @@ import {
   partitionAutoAssign,
   canUndoAutoAssign,
   buildAutoAssignNotification,
+  resolveSuggestedAppId,
+  assembleMeetingPrep,
   type NoteSource,
   type SpeakerMapping,
   type AutoAssignCandidate,
   type AutoAssignNotificationPayload,
+  type AppOption,
+  type AttendeePrep,
 } from '@/features/meetings/notes'
+import { getCheckinsForSprints } from '@/features/sprints/checkin-queries'
+import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { concatenateSegments } from '@/features/meetings/recording-segments'
 import { formatCapturedAt, MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
 
@@ -939,11 +945,16 @@ export async function analyzeMeetingAudio(
 
   const attendees = await fetchAttendees(id)
   const attendeeNames = attendees.map((a) => a.name)
+  // One meeting covers every project its people work on — the model gets each
+  // attendee's app list so it can route action items ("suggestedApp"), and
+  // resolveSuggestedAppId later resolves against exactly this same union.
+  const appsByUser = await fetchAttendeeAppLists(attendees.map((a) => a.id))
+  const appOptions = unionAppOptions(appsByUser)
 
   const prompt = `You are LogPup's meeting analyst for a software team.
 Audio of the meeting "${meeting.title}"${meeting.agenda ? ` (agenda: ${meeting.agenda})` : ''} is attached.
 Known attendees: ${attendeeNames.length > 0 ? attendeeNames.join(', ') : 'unknown'}.
-This is a Sri Lankan team meeting. Speakers routinely CODE-SWITCH between Sinhala and English —
+${attendeeAppsPromptBlock(attendees, appsByUser)}This is a Sri Lankan team meeting. Speakers routinely CODE-SWITCH between Sinhala and English —
 often mid-sentence, sometimes mid-phrase — and that is completely normal for this team, not an
 error to correct. Transcribe each phrase in whichever language it was ACTUALLY spoken in: Sinhala
 words in Sinhala script (සිංහල), English words in Latin script, on the same line, exactly as a
@@ -978,7 +989,7 @@ Return STRICT JSON only, matching exactly:
   "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
   "questions": [{ "person": "...", "questions": ["question this person should answer at the next meeting"] }],
   "speakerSegments": [{ "speaker": "attendee name if identifiable, else \"Speaker 1\"/\"Speaker 2\"/… used consistently for the same voice, or null", "text": "what this speaker said in this turn, verbatim in whichever language(s) they actually used — never translated or normalized to one language" }],
-  "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0 }]
+  "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0, "suggestedApp": "app name copied EXACTLY from the attendee app lists above, or null" }]
 }
 Use "bilingual" for "language" whenever the meeting code-switches between Sinhala and English —
 the common case for this team — and "en"/"si" only when it is genuinely all one language throughout.
@@ -991,7 +1002,10 @@ using the same label for the same voice throughout. If you genuinely cannot tell
 return exactly ONE entry with "speaker": null and "text" set to the full transcript — never invent
 distinct labels you are not confident about. actionItems are the concrete next steps raised in the
 discussion (overlap with perPerson's actionItems is fine); suggestedDueDate must be a real ISO date
-or null, and confidence is your own 0–1 estimate of how sure you are about the assignee/due date.`
+or null, and confidence is your own 0–1 estimate of how sure you are about the assignee/due date.
+For "suggestedApp", pick the ONE app (project) the task belongs to, copied exactly from the attendee
+app lists above — never invent an app name; use null when no listed app clearly fits or when no app
+lists were given.`
 
   const audioBytes = Buffer.from(await audio.arrayBuffer())
   const mimeType = audio.type || 'audio/webm'
@@ -1017,7 +1031,7 @@ or null, and confidence is your own 0–1 estimate of how sure you are about the
     return err('Gemini request failed — try again')
   }
 
-  return persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
+  return persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed, appOptions)
 }
 
 /**
@@ -1038,6 +1052,11 @@ async function persistMeetingAnalysis(
   attendees: AttendeeRef[],
   raw: string,
   modelUsed: string,
+  /** The attendees' app union the caller's prompt offered the model (see
+   *  fetchAttendeeAppLists) — what resolveSuggestedAppId resolves against.
+   *  [] disables app routing outright; the live-transcript fallback passes
+   *  exactly that, since its raw JSON never carries actionItems anyway. */
+  appOptions: AppOption[],
 ): Promise<ActionResult> {
   const createdBy = author.id
   let parsed: Record<string, unknown>
@@ -1072,6 +1091,7 @@ async function persistMeetingAnalysis(
       speakerSegments,
       actionItems,
       attendees,
+      appOptions,
     ))
   } catch (error) {
     console.error('[meeting-notes] auto note/suggestion insert failed:', error)
@@ -1389,6 +1409,10 @@ async function finalizeMeetingRecordingInner(
       attendees,
       fallback,
       'live-transcript',
+      // No Gemini pass ran, so there are no actionItems to route — [] keeps
+      // this fallback byte-for-byte what it was before app routing existed
+      // (and skips the two attendee-app queries it would never use).
+      [],
     )
     if (!persisted.ok) return persisted
     return ok({ mode: 'live-transcript' as const })
@@ -1402,6 +1426,11 @@ async function finalizeMeetingRecordingInner(
   }
 
   const attendeeNames = attendees.map((a) => a.name)
+  // Same app-routing vocabulary as analyzeMeetingAudio: the prompt below
+  // shows the model these lists, and resolveSuggestedAppId resolves its
+  // "suggestedApp" answers against the identical union.
+  const appsByUser = await fetchAttendeeAppLists(attendees.map((a) => a.id))
+  const appOptions = unionAppOptions(appsByUser)
 
   // Change-detected screen keyframes captured alongside the audio (see
   // screen-keyframes.ts) — fetched here and handed to Gemini as labelled
@@ -1446,7 +1475,7 @@ NOT necessarily refer to the same person across a segment boundary — use conte
 mentioned, and context to attribute speech consistently in YOUR OWN speakerSegments output below,
 rather than trusting the per-segment labels to already match up.
 Known attendees: ${attendeeNames.length > 0 ? attendeeNames.join(', ') : 'unknown'}.
-This is a Sri Lankan team that routinely code-switches between Sinhala and English mid-sentence — the
+${attendeeAppsPromptBlock(attendees, appsByUser)}This is a Sri Lankan team that routinely code-switches between Sinhala and English mid-sentence — the
 transcript already reflects that (Sinhala in සිංහල script, English in Latin script, technical terms
 like "sprint"/"deploy"/"PR" left in English) — keep it that way in your own output, never
 force-translate or paraphrase into a single language.
@@ -1483,7 +1512,7 @@ Return STRICT JSON only, matching exactly:
   "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
   "questions": [{ "person": "...", "questions": ["question this person should answer at the next meeting"] }],
   "speakerSegments": [{ "speaker": "attendee name if identifiable, else \"Speaker 1\"/\"Speaker 2\"/… used CONSISTENTLY for the same voice across the WHOLE meeting, or null", "text": "what this speaker said in this turn, verbatim in whichever language(s) they actually used" }],
-  "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0 }]
+  "actionItems": [{ "text": "concrete, assignable next step", "suggestedAssigneeLabel": "attendee name or speaker label this belongs to, or null", "suggestedDueDate": "YYYY-MM-DD or null — never a phrase", "confidence": 0.0, "suggestedApp": "app name copied EXACTLY from the attendee app lists above, or null" }]
 }
 Use "bilingual" for "language" whenever the meeting code-switches between Sinhala and English — the
 common case for this team — and "en"/"si" only when it is genuinely all one language throughout.
@@ -1495,7 +1524,10 @@ speakerSegments must cover the whole meeting, in chronological order, one entry 
 you genuinely cannot tell speakers apart, return exactly ONE entry with "speaker": null and "text" set
 to the full transcript — never invent distinct labels you are not confident about. actionItems are the
 concrete next steps raised in the discussion (overlap with perPerson's actionItems is fine);
-suggestedDueDate must be a real ISO date or null.`
+suggestedDueDate must be a real ISO date or null, and confidence is your own 0–1 estimate of how sure
+you are about the assignee/due date. For "suggestedApp", pick the ONE app (project) the task belongs
+to, copied exactly from the attendee app lists above — never invent an app name; use null when no
+listed app clearly fits or when no app lists were given.`
 
   let raw: string
   let modelUsed: string = DEFAULT_GEMINI_MODEL
@@ -1516,7 +1548,15 @@ suggestedDueDate must be a real ISO date or null.`
     return err('Gemini request failed — try again')
   }
 
-  const persisted = await persistMeetingAnalysis(id, meeting, session.user, attendees, raw, modelUsed)
+  const persisted = await persistMeetingAnalysis(
+    id,
+    meeting,
+    session.user,
+    attendees,
+    raw,
+    modelUsed,
+    appOptions,
+  )
   if (!persisted.ok) return persisted
   return ok({ mode: 'full' as const })
 }
@@ -1825,6 +1865,111 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     })),
     autoAssignTasks: meeting.autoAssignTasks,
   })
+}
+
+/**
+ * "Around the table" prep — one row per attendee: the apps they work on,
+ * per-app open/overdue counts for the current sprint, and their latest
+ * sprint check-in measured against what their board computes (checkinGap).
+ * A SIBLING of getMeetingIntel rather than a field on it, so this
+ * board-derived payload can load and refresh independently of the (heavier)
+ * transcript-bearing intel — an inline check-in only needs THIS refetched.
+ *
+ * Same read gate as getMeetingIntel: these rows lay out named people's
+ * workloads across every project, which is exactly the kind of cross-project
+ * view that must not leak past the people who were actually in the room.
+ *
+ * Every fetch below is batched — one query per table however many attendees
+ * there are (getCheckinsForSprints is the documented ONE-query grouped read)
+ * — and every branchy decision (which sprint is "current", which check-in is
+ * "latest", what counts as overdue) lives in the pure, tested
+ * assembleMeetingPrep, not here.
+ */
+export async function getMeetingPrep(meetingId: string): Promise<ActionResult<AttendeePrep[]>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const idParsed = idInput.safeParse(meetingId)
+  if (!idParsed.success) return err(idParsed.error.issues[0].message)
+  const id = idParsed.data
+
+  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  if (!meeting) return err('Meeting not found')
+  if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
+
+  const attendees = await fetchAttendees(id)
+  if (attendees.length === 0) return ok([])
+  const attendeeIds = attendees.map((row) => row.id)
+
+  const assignmentRows = await db
+    .select({
+      userId: assignments.userId,
+      appId: assignments.appId,
+      appName: apps.name,
+      appSlug: apps.slug,
+    })
+    .from(assignments)
+    .innerJoin(apps, eq(assignments.appId, apps.id))
+    .where(inArray(assignments.userId, attendeeIds))
+
+  // Same "running now" predicate as getActiveSprints (sprints/queries.ts):
+  // status 'active', plus 'planned' rows whose date range already contains
+  // today — covering sprints nobody remembered to flip. Fetched for ALL apps,
+  // not just assigned ones, so assembleMeetingPrep can also discover an app
+  // someone mid-handover only holds tasks in.
+  const todayIso = toIsoDateInTimeZone(new Date())
+  const sprintRows = await db
+    .select({
+      sprintId: sprints.id,
+      sprintName: sprints.name,
+      appId: sprints.appId,
+      appName: apps.name,
+      appSlug: apps.slug,
+      startDate: sprints.startDate,
+    })
+    .from(sprints)
+    .innerJoin(apps, eq(sprints.appId, apps.id))
+    .where(
+      or(
+        eq(sprints.status, 'active'),
+        and(
+          eq(sprints.status, 'planned'),
+          lte(sprints.startDate, todayIso),
+          gte(sprints.endDate, todayIso),
+        ),
+      ),
+    )
+  const sprintIds = sprintRows.map((row) => row.sprintId)
+
+  // Only the attendees' own tasks: unassigned tasks belong to nobody's
+  // counts, and other people's never land in these rows (computeTaskProgress
+  // filters per person anyway — this just keeps the fetch narrow).
+  const taskRows =
+    sprintIds.length > 0
+      ? await db
+          .select({
+            sprintId: tasks.sprintId,
+            assigneeId: tasks.assigneeId,
+            status: tasks.status,
+            dueDate: tasks.dueDate,
+          })
+          .from(tasks)
+          .where(and(inArray(tasks.sprintId, sprintIds), inArray(tasks.assigneeId, attendeeIds)))
+      : []
+
+  const checkinsBySprint = await getCheckinsForSprints(sprintIds)
+  const checkinRows = [...checkinsBySprint.values()].flat()
+
+  return ok(
+    assembleMeetingPrep({
+      attendees,
+      assignments: assignmentRows,
+      sprints: sprintRows,
+      tasks: taskRows,
+      checkins: checkinRows,
+      todayIso,
+    }),
+  )
 }
 
 const setAutoAssignInput = z.object({ meetingId: z.uuid(), enabled: z.boolean() })
@@ -2367,6 +2512,14 @@ export type TaskSuggestionView = {
   suggestedUserId: string | null
   suggestedUserName: string | null
   suggestedDueDate: string | null
+  /**
+   * The app the AI confidently routed this item into (suggestedAppId in
+   * schema.ts), with its display name for the card. Null means no confident
+   * app — accepting falls back to the meeting's own app, exactly the
+   * pre-routing behaviour.
+   */
+  suggestedAppId: string | null
+  suggestedAppName: string | null
   status: 'open' | 'accepted' | 'dismissed'
   createdTaskId: string | null
   /**
@@ -2397,6 +2550,9 @@ const authorUsers = alias(users, 'note_author_users')
 const suggestedUsers = alias(users, 'note_suggested_users')
 const suggestionTasks = alias(tasks, 'note_suggestion_tasks')
 const suggestionApps = alias(apps, 'note_suggestion_apps')
+// The app a suggestion was ROUTED to (suggestedAppId) — distinct from
+// suggestionApps above, which is the created task's actual app.
+const suggestionTargetApps = alias(apps, 'note_suggestion_target_apps')
 
 /**
  * The unified note timeline for a meeting: typed/voice/ai segments in
@@ -2476,6 +2632,8 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
       suggestedUserId: meetingTaskSuggestions.suggestedUserId,
       suggestedUserName: suggestedUsers.name,
       suggestedDueDate: meetingTaskSuggestions.suggestedDueDate,
+      suggestedAppId: meetingTaskSuggestions.suggestedAppId,
+      suggestedAppName: suggestionTargetApps.name,
       status: meetingTaskSuggestions.status,
       createdTaskId: meetingTaskSuggestions.createdTaskId,
       acceptedBy: meetingTaskSuggestions.acceptedBy,
@@ -2487,6 +2645,10 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
     .leftJoin(suggestedUsers, eq(meetingTaskSuggestions.suggestedUserId, suggestedUsers.id))
     .leftJoin(suggestionTasks, eq(meetingTaskSuggestions.createdTaskId, suggestionTasks.id))
     .leftJoin(suggestionApps, eq(suggestionTasks.appId, suggestionApps.id))
+    .leftJoin(
+      suggestionTargetApps,
+      eq(meetingTaskSuggestions.suggestedAppId, suggestionTargetApps.id),
+    )
     .where(
       and(
         eq(meetingTaskSuggestions.meetingId, id),
@@ -2731,7 +2893,12 @@ export async function acceptTaskSuggestion(
   const ctx = await canManageMeeting(suggestion.meetingId)
   if (!ctx) return err('Not allowed')
   const { session, meeting } = ctx
-  if (!meeting.appId) return err('Link this meeting to an app before creating tasks from it')
+  // The app the AI confidently routed this item to wins (suggestedAppId, see
+  // schema.ts); a suggestion with no routed app files into the meeting's own
+  // app — exactly the pre-routing behaviour, including this error when the
+  // meeting has none either.
+  const targetAppId = suggestion.suggestedAppId ?? meeting.appId
+  if (!targetAppId) return err('Link this meeting to an app before creating tasks from it')
 
   const payload = suggestionToTaskPayload(
     {
@@ -2739,7 +2906,7 @@ export async function acceptTaskSuggestion(
       suggestedUserId: suggestion.suggestedUserId,
       suggestedDueDate: suggestion.suggestedDueDate,
     },
-    { appId: meeting.appId, sprintId: null },
+    { appId: targetAppId, sprintId: null },
     {
       title: parsed.data.title,
       assigneeId: parsed.data.assigneeId,
@@ -2869,18 +3036,23 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
   const ctx = await canManageMeeting(suggestion.meetingId)
   if (!ctx) return err('Not allowed')
   const { meeting } = ctx
-  if (!meeting.appId) return err('Not allowed')
 
   const [task] = await db.select().from(tasks).where(eq(tasks.id, suggestion.createdTaskId))
   if (!task) return err('That task no longer exists')
 
+  // Reconstruct against the task's OWN appId — the app the auto pass really
+  // filed into. Re-deriving it as `suggestion.suggestedAppId ?? meeting.appId`
+  // would wrongly refuse the undo for an unrouted suggestion whose meeting was
+  // unlinked from its app after the auto pass ran (both null). The appId is
+  // not part of canUndoAutoAssign's comparison anyway; it only satisfies the
+  // payload shape.
   const original = suggestionToTaskPayload(
     {
       text: suggestion.text,
       suggestedUserId: suggestion.suggestedUserId,
       suggestedDueDate: suggestion.suggestedDueDate,
     },
-    { appId: meeting.appId, sprintId: null },
+    { appId: task.appId, sprintId: null },
   )
   const eligible = canUndoAutoAssign(
     { status: task.status, title: task.title, assigneeId: task.assigneeId, dueDate: task.dueDate },
@@ -2916,7 +3088,9 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
 
   // Same board-revalidation as deleteTask (task-actions.ts) — the task just
   // vanished from wherever it was filed, not only from this meeting's panel.
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, meeting.appId))
+  // task.appId, not meeting.appId: a routed task lived on a different board
+  // than the meeting's own app.
+  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, task.appId))
   if (app) revalidatePath('/apps/' + app.slug)
   revalidatePath('/meetings')
   return ok(undefined)

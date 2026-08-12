@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Pencil } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -53,7 +52,6 @@ const SELF_TITLE = 'Cannot change your own account'
 // does not touch. Uses the shared grouped select (src/lib/job-roles.ts) so
 // the curated list matches the add-user dialog; saves on every change.
 function JobRoleCell({ user }: { user: AdminUser }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
   function save(title: string) {
@@ -64,7 +62,6 @@ function JobRoleCell({ user }: { user: AdminUser }) {
           toast.error(res.error)
           return
         }
-        router.refresh()
       } catch {
         toast.error('Something went wrong. Please try again.')
       }
@@ -86,7 +83,6 @@ function JobRoleCell({ user }: { user: AdminUser }) {
 // clears it. Prop-driven like the other cells: the refreshed server value
 // flows back down, so nothing drifts if two admins edit at once.
 function PhoneCell({ user }: { user: AdminUser }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [draft, setDraft] = useState(user.phone ?? '')
 
@@ -101,7 +97,6 @@ function PhoneCell({ user }: { user: AdminUser }) {
           setDraft(user.phone ?? '')
           return
         }
-        router.refresh()
       } catch {
         toast.error('Something went wrong. Please try again.')
         setDraft(user.phone ?? '')
@@ -138,7 +133,6 @@ function PhoneCell({ user }: { user: AdminUser }) {
 // deliberately not editable here): setUserPersonalEmail only ever writes
 // users.personal_email.
 function PersonalEmailCell({ user }: { user: AdminUser }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [draft, setDraft] = useState(user.personalEmail ?? '')
 
@@ -153,7 +147,6 @@ function PersonalEmailCell({ user }: { user: AdminUser }) {
           setDraft(user.personalEmail ?? '')
           return
         }
-        router.refresh()
       } catch {
         toast.error('Something went wrong. Please try again.')
         setDraft(user.personalEmail ?? '')
@@ -187,7 +180,6 @@ function PersonalEmailCell({ user }: { user: AdminUser }) {
 // each add/remove saves immediately via setUserOrgTags, and the refreshed
 // server data flows back down — no local copy to drift out of sync.
 function OrgTagsCell({ user, suggestions }: { user: AdminUser; suggestions: string[] }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
   function handleTagsChange(next: string[]) {
@@ -198,7 +190,6 @@ function OrgTagsCell({ user, suggestions }: { user: AdminUser; suggestions: stri
           toast.error(res.error)
           return
         }
-        router.refresh()
       } catch {
         toast.error('Something went wrong. Please try again.')
       }
@@ -268,7 +259,6 @@ export function UserTable({
   users: AdminUser[]
   currentUserId: string
 }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
   // Every tag already on any user, offered as one-click suggestions when
@@ -288,7 +278,6 @@ export function UserTable({
           return
         }
         toast.success('Role updated')
-        router.refresh()
       } catch {
         toast.error('Something went wrong. Please try again.')
       }
@@ -304,7 +293,6 @@ export function UserTable({
           return
         }
         toast.success(active ? 'User activated' : 'User deactivated')
-        router.refresh()
       } catch {
         toast.error('Something went wrong. Please try again.')
       }

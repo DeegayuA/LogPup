@@ -1,6 +1,9 @@
 import { Suspense } from 'react'
-import { format } from 'date-fns'
 import { getSession } from '@/lib/session'
+import {
+  businessHourOf,
+  formatBusinessWeekdayLong,
+} from '@/features/people/format-instant'
 import {
   MyDayZone,
   MyDayZoneSkeleton,
@@ -53,11 +56,16 @@ export default async function DashboardPage() {
   const user = session?.user
   const isAdmin = user?.role === 'admin'
 
+  // Both the hour and the date resolve in the BUSINESS timezone, not the
+  // server's. This renders on the server — UTC on Vercel — so `getHours()`
+  // would wish a Colombo user good evening over their morning coffee, and
+  // `format()` would print yesterday's date next to a "Meetings today" tile
+  // that counts today's. See features/people/format-instant.ts.
   const now = new Date()
   const firstName = user?.name?.trim().split(/\s+/)[0]
   const greeting = firstName
-    ? `${greetingFor(now.getHours())}, ${firstName}`
-    : greetingFor(now.getHours())
+    ? `${greetingFor(businessHourOf(now))}, ${firstName}`
+    : greetingFor(businessHourOf(now))
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -65,7 +73,7 @@ export default async function DashboardPage() {
         <div className="flex flex-col gap-1">
           <h1 className="font-heading text-2xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            {greeting} · {format(now, 'EEEE, MMMM d')}
+            {greeting} · {formatBusinessWeekdayLong(now)}
           </p>
         </div>
         {user ? (

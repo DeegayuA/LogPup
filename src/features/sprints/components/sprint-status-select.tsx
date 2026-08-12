@@ -1,7 +1,6 @@
 'use client'
 
 import { useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   Select,
@@ -21,7 +20,6 @@ const STATUS_OPTIONS: { value: Status; label: string }[] = [
 ]
 
 export function SprintStatusSelect({ sprintId, status }: { sprintId: string; status: Status }) {
-  const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
   function handleChange(value: string | null) {
@@ -34,7 +32,6 @@ export function SprintStatusSelect({ sprintId, status }: { sprintId: string; sta
           return
         }
         toast.success('Sprint status updated')
-        router.refresh()
       } catch {
         // A server action can REJECT (a DB outage, a dropped connection) as
         // well as resolve with `{ ok: false }`. Without this the rejection is

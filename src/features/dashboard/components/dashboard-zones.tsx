@@ -9,7 +9,6 @@ import {
   getUserCapacities,
   listAssignableApps,
 } from '@/features/people/queries'
-import { isoDayOf } from '@/features/people/iso-day'
 import { getActiveSprints, getNextUpcomingSprint } from '@/features/sprints/queries'
 import { listApps } from '@/features/apps/queries'
 import { summarizePortfolio } from '@/features/apps/app-health'
@@ -65,16 +64,15 @@ export async function MyDayZone({ userId, userName }: { userId: string; userName
     listNotifications(userId, 8),
   ])
 
-  const todayIso = workload.todayIso ?? isoDayOf(new Date())
-  const meetingsToday = meetings.upcoming.filter(
-    (entry) => isoDayOf(entry.startsAt) === todayIso,
-  ).length
-
+  // meetings.today, NOT a filter over meetings.upcoming: `upcoming` is a
+  // display slice — capped at 5 and holding only meetings that have not
+  // ended — so counting from it undercounts a busy day and drops every
+  // meeting already finished. See features/people/meeting-window.ts.
   const myDayStats = buildMyDayStats({
     tasks: workload.load,
     followupsOwed: followups.owed.length,
     oldestOwedDays: followups.oldestOwedDays,
-    meetingsToday,
+    meetingsToday: meetings.today,
   })
 
   return (

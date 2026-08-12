@@ -73,6 +73,29 @@ export function formatBusinessWeekdayDayMonth(date: Date): string {
   return `${weekday}, ${month} ${day}`
 }
 
+/** `Wednesday, August 12` — the dashboard's header date, spelled out. */
+export function formatBusinessWeekdayLong(date: Date): string {
+  const { weekday, month, day } = partsOf(date, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
+  return `${weekday}, ${month} ${day}`
+}
+
+/**
+ * The hour (0–23) of an instant in the business timezone — for deciding
+ * morning/afternoon/evening on the server, where `date.getHours()` answers
+ * for the SERVER's zone and would greet a Colombo user five and a half hours
+ * out of step with their own day.
+ */
+export function businessHourOf(date: Date): number {
+  // hourCycle 'h23' so midnight reads 0, not the '24' that a plain
+  // hour12:false yields in some ICU versions.
+  const { hour } = partsOf(date, { hour: 'numeric', hourCycle: 'h23' })
+  return Number(hour)
+}
+
 /** `Aug 2026` — the "joined" line in the header. */
 export function formatBusinessMonthYear(date: Date): string {
   const { month, year } = partsOf(date, { month: 'short', year: 'numeric' })

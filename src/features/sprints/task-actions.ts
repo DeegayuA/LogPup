@@ -568,7 +568,9 @@ export async function bulkUpdateTasks(
   if (Object.keys(patch).length === 0) return err('Nothing to update')
 
   const rows = await db
-    .select({ id: tasks.id, appId: tasks.appId, assigneeId: tasks.assigneeId })
+    // title rides along for the activity row's label — a batch still names
+    // one real task rather than reading "updated task 5 tasks".
+    .select({ id: tasks.id, appId: tasks.appId, assigneeId: tasks.assigneeId, title: tasks.title })
     .from(tasks)
     .where(inArray(tasks.id, taskIds))
   if (rows.length === 0) return err('No tasks found')
@@ -615,7 +617,11 @@ export async function bulkUpdateTasks(
     verb: 'updated',
     entityType: 'task',
     entityId: allowed[0].id,
-    entityLabel: allowed.length === 1 ? '1 task' : `${allowed.length} tasks`,
+    // A real task title, with the batch size in `detail`. The label used to
+    // be "5 tasks", which the feed renders after the entity type — "updated
+    // task 5 tasks".
+    entityLabel: allowed[0].title,
+    detail: allowed.length > 1 ? `and ${allowed.length - 1} more` : null,
     appId: touchedAppIds.length === 1 ? touchedAppIds[0] : null,
     metadata: { patch, taskIds: allowed.map((row) => row.id) },
   })
