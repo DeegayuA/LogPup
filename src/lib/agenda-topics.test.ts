@@ -161,14 +161,20 @@ describe('matchAgendaTopic', () => {
     expect(early.hit).toBe('primary')
     expect(early.quote).toEqual(expect.stringMatching(/quality assurance/i))
 
-    // Reversed: here 'sign-off' occurs first in the text even though
-    // 'quality assurance' is still listed earlier in the bucket's array —
-    // the cited quote must follow the text, not the array.
-    const reversed = matchAgendaTopic('Sign-off is pending; quality assurance flagged one issue', [
+    // Reversed: 'release sign-off' is the LAST keyword in the bucket's array
+    // and 'regression' is the fifth, but here the sign-off phrase occurs first
+    // in the text — so the cited quote must follow the text, not the array.
+    //
+    // Both are real multi-word keywords on purpose. An earlier draft of this
+    // test used a bare "Sign-off is pending…" sentence, which can only match
+    // if the bucket carries bare `sign-off` — and it deliberately does not,
+    // because a sign-off is approval on any document in any department. That
+    // draft was asserting behaviour the safety design forbids.
+    const reversed = matchAgendaTopic('Release sign-off is blocked by a regression in checkout', [
       'QA Engineer',
     ])
     expect(reversed.hit).toBe('primary')
-    expect(reversed.quote).toEqual(expect.stringMatching(/sign-off/i))
+    expect(reversed.quote).toEqual(expect.stringMatching(/release sign-off/i))
   })
 })
 
