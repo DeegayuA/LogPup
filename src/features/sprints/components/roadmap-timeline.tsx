@@ -891,7 +891,16 @@ function BarBody({
         }
         onEdit(sprint)
       }}
-      onKeyDown={(event) => onNudge(sprint, 'move', event)}
+      onKeyDown={(event) => {
+        // Forward to dnd-kit FIRST. `{...listeners}` above spreads its keyboard
+        // activator, and a bare onKeyDown here would replace it — the same trap
+        // already sidestepped for onPointerDown a few lines up. Harmless while
+        // only PointerSensor is registered, but it would silently kill
+        // keyboard drag the moment a KeyboardSensor is added, with no error to
+        // trace. Disarmed now rather than left for whoever adds one.
+        listeners?.onKeyDown?.(event)
+        onNudge(sprint, 'move', event)
+      }}
       className="flex h-full min-w-0 flex-1 cursor-grab items-center rounded-md px-1 text-left outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span aria-hidden className="truncate text-xs font-medium">
@@ -930,7 +939,11 @@ function ResizeHandle({
       {...attributes}
       {...listeners}
       aria-label={`${kind === 'start' ? 'Start' : 'End'} date of ${sprint.name}, ${format(parseIso(iso), 'MMMM d, yyyy')}. Use the arrow keys to change it.`}
-      onKeyDown={(event) => onNudge(sprint, kind, event)}
+      onKeyDown={(event) => {
+        // Same forwarding rule as BarBody — see the note there.
+        listeners?.onKeyDown?.(event)
+        onNudge(sprint, kind, event)
+      }}
       className={cn(
         'h-full w-2.5 shrink-0 cursor-ew-resize rounded-md outline-none',
         'bg-foreground/0 transition-colors duration-150 motion-reduce:transition-none',

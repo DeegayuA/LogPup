@@ -504,8 +504,12 @@ export function Board({
           ))}
         </div>
 
-        {/* Portalled to the body: the column strip clips its own overflow, so
-            a card dragged across it would otherwise vanish at the edge. */}
+        {/* Rendered OUTSIDE the column strip above, not portalled (dnd-kit's
+            DragOverlay does not portal by default and there is no createPortal
+            here). That placement is what matters: the strip is overflow-x-auto,
+            so an overlay nested inside it would be clipped at the edge mid-drag.
+            Keep this as a sibling of the strip — moving it inside would
+            reintroduce the clipping this avoids. */}
         <DragOverlay>
           {dragging ? <TaskCardFace task={dragging} todayIso={todayIso} /> : null}
         </DragOverlay>
