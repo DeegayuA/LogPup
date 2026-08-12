@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { QueryBuilder } from 'drizzle-orm/pg-core'
 import { sprints, tasks } from '@/db/schema'
 import { liveSprints, liveTasks } from '@/db/live'
 
@@ -21,12 +22,22 @@ vi.mock('@/features/activity/log', () => ({ logActivity: logActivityMock }))
 let sprintQueue: unknown[][] = []
 let taskCountQueue: unknown[][] = []
 let sprintReturningQueue: unknown[][] = []
+let sprintInsertReturningQueue: unknown[][] = []
+
+// Every `db.update(sprints).set({ status: 'done' }).where(<cond>)` demote
+// call this test suite sees — captured so the "demote active siblings" tests
+// below can render <cond> to real SQL (via QueryBuilder, connection-free,
+// same technique as src/db/live.test.ts) and assert it actually excludes
+// trashed sprints, not just simulate a happy-path result.
+const demoteWhereConditions: unknown[] = []
 
 // db.update(...).where(...) — WITHOUT a .returning() — must still be
-// directly awaitable, because deleteSprint hands it straight to db.batch()
-// as the tasks-release statement. A thenable stands in for that.
-function updateWhereResult(table: unknown, values: Record<string, unknown>) {
+// directly awaitable, because deleteSprint/createSprint/updateSprintStatus
+// all hand it straight to db.batch() in their active-sprint branches. A
+// thenable stands in for that.
+function updateWhereResult(table: unknown, values: Record<string, unknown>, whereArg: unknown) {
   writeSpy(table, values)
+  if (table === sprints && values.status === 'done') demoteWhereConditions.push(whereArg)
   const rows = table === sprints ? sprintReturningQueue.shift() ?? [] : []
   return {
     then(onFulfilled: (v: unknown) => unknown) {
@@ -52,15 +63,26 @@ vi.mock('@/db', () => ({
     }),
     update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({
-        where: () => updateWhereResult(table, values),
+        where: (whereArg: unknown) => updateWhereResult(table, values, whereArg),
       }),
+    }),
+    insert: (table: unknown) => ({
+      values: (values: unknown) => {
+        writeSpy(table, values)
+        return {
+          then(onFulfilled: (v: unknown) => unknown) {
+            return Promise.resolve(undefined).then(onFulfilled)
+          },
+          returning: async () => (table === sprints ? sprintInsertReturningQueue.shift() ?? [] : []),
+        }
+      },
     }),
     batch: async (queries: unknown[]) => Promise.all(queries),
     delete: deleteSpy,
   },
 }))
 
-const { deleteSprint } = await import('./actions')
+const { createSprint, deleteSprint, updateSprintStatus } = await import('./actions')
 
 const SPRINT_ID = '33333333-3333-4333-8333-333333333333'
 
@@ -75,6 +97,8 @@ beforeEach(() => {
   sprintQueue = []
   taskCountQueue = []
   sprintReturningQueue = []
+  sprintInsertReturningQueue = []
+  demoteWhereConditions.length = 0
 })
 
 describe('deleteSprint', () => {
@@ -119,5 +143,52 @@ describe('deleteSprint', () => {
     expect(logActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ verb: 'deleted', entityType: 'sprint', entityId: SPRINT_ID }),
     )
+  })
+})
+
+// D5 review fix: createSprint and updateSprintStatus demote sibling 'active'
+// sprints without an isNull(deletedAt) filter, so a trashed-but-active sprint
+// silently got flipped to 'done' — and a later restore would bring it back
+// mutated. These tests render the ACTUAL where-clause SQL the demote
+// statement runs with (via QueryBuilder, connection-free — same technique as
+// src/db/live.test.ts) rather than only simulating a happy-path result, so a
+// regression that drops the filter again fails here even though the mocked
+// rows would still make the action itself return `ok`.
+function demoteWhereSql(condition: unknown): string {
+  const qb = new QueryBuilder()
+  const withFrom = qb.select().from(sprints)
+  return withFrom.where(condition as Parameters<typeof withFrom.where>[0]).toSQL().sql.toLowerCase()
+}
+
+describe('createSprint / updateSprintStatus: the demote-siblings guard excludes trashed sprints', () => {
+  it('createSprint (born active) demotes only LIVE active siblings', async () => {
+    asAdmin()
+    sprintInsertReturningQueue = [[]]
+
+    const res = await createSprint({
+      appId: '55555555-5555-4555-8555-555555555555',
+      name: 'Sprint born active',
+      startDate: '2000-01-01',
+      endDate: '2999-01-01',
+    })
+
+    expect(res.ok).toBe(true)
+    expect(demoteWhereConditions).toHaveLength(1)
+    const sql = demoteWhereSql(demoteWhereConditions[0])
+    expect(sql).toContain('deleted_at')
+    expect(sql).toContain('is null')
+  })
+
+  it('updateSprintStatus(→active) demotes only LIVE active siblings', async () => {
+    asAdmin()
+    sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1', status: 'planned' }]]
+
+    const res = await updateSprintStatus(SPRINT_ID, 'active')
+
+    expect(res.ok).toBe(true)
+    expect(demoteWhereConditions).toHaveLength(1)
+    const sql = demoteWhereSql(demoteWhereConditions[0])
+    expect(sql).toContain('deleted_at')
+    expect(sql).toContain('is null')
   })
 })

@@ -99,7 +99,7 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
         db
           .update(sprints)
           .set({ status: 'done' })
-          .where(and(eq(sprints.appId, appId), eq(sprints.status, 'active'))),
+          .where(and(eq(sprints.appId, appId), eq(sprints.status, 'active'), isNull(sprints.deletedAt))),
         db
           .insert(sprints)
           .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status }),
@@ -342,6 +342,7 @@ export async function updateSprintStatus(
               eq(sprints.appId, existing.appId),
               eq(sprints.status, 'active'),
               ne(sprints.id, sprintId),
+              isNull(sprints.deletedAt),
             ),
           ),
       ])

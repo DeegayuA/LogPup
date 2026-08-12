@@ -31,6 +31,7 @@ export async function respondToMeeting(
     .select({ title: liveMeetings.title })
     .from(liveMeetings)
     .where(eq(liveMeetings.id, meetingId))
+  if (!meeting) return err('Meeting not found')
 
   const result = await db
     .update(meetingAttendees)
