@@ -222,6 +222,39 @@ green tests never caught it.
 | Calendar: chip drag to another day | **PASS — with a confession** | see below |
 | Non-admin sees no drag affordances | **NOT TESTED** | the only local identity is the admin dev-login; obtaining a non-admin session would mean creating or altering accounts in the shared dev DB |
 
+## Landing prep — attempted, stopped, and why
+
+Renumbering ours after main's migrations and merging `main` was attempted
+and **aborted** (`git merge --abort`; branch left clean at the verified
+state). Two blockers, both upstream:
+
+1. **Main's own migration chain is broken.** Its journal lists idx 21
+   `0021_activity_log`, but neither `drizzle/0021_activity_log.sql` nor
+   `drizzle/meta/0021_snapshot.json` exists on main, and
+   `0022_meeting_task_auto_assign`'s snapshot has `prevId 4b8ba6ec…` — the id
+   of that phantom 0021 snapshot. Any replay of main's journal fails at 21,
+   and our renumbered migrations would chain onto a hole. This must be fixed
+   on main first.
+2. **Main commit `d95efa6` (".") independently re-implemented the sprint
+   board surface** that branch 2 built: `tasks.sort_order` converted to
+   `double precision` with a rank system (`planInsert`/`compareRanked`,
+   rebalancing), board filters + toolbar + bulk bar, due dates on cards, a
+   different `TaskCardFace`, `PointerSensor` + grip-only keyboard drag
+   (`sortableKeyboardCoordinates`) instead of the shared
+   Mouse/Touch/Keyboard `DragSurface`, and its own `sprint-edit-dialog`
+   (add/add conflict). The conflicts in `board.tsx`, `board-column.tsx`,
+   `task-card.tsx`, `roadmap.tsx`, `sprint-edit-dialog.tsx` are two
+   divergent implementations of the same components, not textual overlaps.
+   Reconciling them means porting one architecture onto the other — deciding
+   which sensor model, which ordering scheme, and which card face survive.
+   That is a product/architecture decision; either wholesale side silently
+   deletes the other's work, so per the standing instruction this is
+   reported instead of guessed at.
+
+The renumbering (ours would become 0023/0024, next free after main's
+0019–0022) is blocked behind the same merge, since regenerating snapshots
+requires main's snapshots in-tree.
+
 #### Confession: one real meeting was moved and restored
 
 The planned no-op test (drag out and back to the same day) missed on the
