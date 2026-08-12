@@ -298,7 +298,9 @@ export function SprintEditDialog({
                   <AlertDialogTitle>Delete this sprint?</AlertDialogTitle>
                   <AlertDialogDescription>
                     Moves &ldquo;{sprint?.name}&rdquo; to Trash — admins can view and restore it.
-                    Its tasks are not deleted — they move back to this app&apos;s backlog.
+                    Its tasks are not deleted and keep their sprint: they show in this
+                    app&apos;s backlog while the sprint is in Trash, and go back to the
+                    sprint if it is restored.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
