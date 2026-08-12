@@ -2080,6 +2080,7 @@ export function MeetingIntelPanel({
                     mentionUsers={mentionUsers}
                     shownElsewhere={notes?.summary ?? null}
                     autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
+                    deadlines={notes?.deadlines ?? []}
                   />
                 </Panel>
               </PanelsLayout>

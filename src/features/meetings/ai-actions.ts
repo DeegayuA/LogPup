@@ -2862,6 +2862,74 @@ export async function setSpeakerMapping(
   return ok(undefined)
 }
 
+const updateSuggestionInput = z
+  .object({
+    text: z.string().trim().min(1).max(140),
+    suggestedUserId: z.uuid().nullable(),
+    suggestedDueDate: z.iso.date().nullable(),
+  })
+  .partial()
+
+/**
+ * Edits an OPEN suggestion in place — reassign, reschedule, or retitle it
+ * before it becomes a task. This is the "state (a)" half of editing an
+ * action item on the note timeline; the "state (b)" half (a suggestion that
+ * already became a task) goes through updateTask in task-actions.ts instead
+ * — see resolveActionItemEditTarget in note-timeline-model.ts for the
+ * routing decision. Refuses once status has moved past 'open', the same
+ * "already handled" guard acceptTaskSuggestion and dismissTaskSuggestion
+ * already enforce — a suggestion that became a task is no longer this row's
+ * source of truth for any of these fields.
+ *
+ * Partial: only the keys the caller actually sent are written. This
+ * codebase has been bitten twice by a `.set()` built from a
+ * fully-populated object silently overwriting fields nobody meant to
+ * touch — z.object(...).partial() plus building `set` from
+ * Object.keys(parsed.data) (not from the input's own keys, and not a fixed
+ * field list) is what keeps an omitted field from ever reaching the UPDATE,
+ * same shape as taskUpdateInput in task-actions.ts.
+ */
+export async function updateTaskSuggestion(suggestionId: string, input: unknown): Promise<ActionResult> {
+  const idParsed = idInput.safeParse(suggestionId)
+  if (!idParsed.success) return err(idParsed.error.issues[0].message)
+
+  const [suggestion] = await db
+    .select()
+    .from(meetingTaskSuggestions)
+    .where(eq(meetingTaskSuggestions.id, idParsed.data))
+  if (!suggestion) return err('Not found')
+  if (suggestion.status !== 'open') return err('This suggestion was already handled')
+
+  const ctx = await canManageMeeting(suggestion.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  const parsed = updateSuggestionInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const set: Record<string, unknown> = {}
+  for (const key of Object.keys(parsed.data) as (keyof typeof parsed.data)[]) {
+    set[key] = parsed.data[key]
+  }
+  if (Object.keys(set).length === 0) return err('Nothing to update')
+
+  await db.update(meetingTaskSuggestions).set(set).where(eq(meetingTaskSuggestions.id, suggestion.id))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'updated',
+    entityType: 'suggestion',
+    entityId: suggestion.id,
+    // Meeting title, not suggestion.text — see acceptTaskSuggestion.
+    entityLabel: ctx.meeting.title,
+    appId: ctx.meeting.appId,
+    pagePath: '/meetings',
+    detail: 'a task suggestion',
+  })
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
 const acceptSuggestionInput = z.object({
   suggestionId: z.uuid(),
   title: z.string().trim().min(1).max(140).optional(),

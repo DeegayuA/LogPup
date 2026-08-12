@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
+import { useEffect, useState, useTransition, type ReactNode } from 'react'
 import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
@@ -19,7 +19,9 @@ import {
   UsersIcon,
   XIcon,
 } from 'lucide-react'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { DateTimeWheelField, roundUpToStep } from '@/components/ui/datetime-wheel'
 import {
   Dialog,
   DialogContent,
@@ -42,6 +44,15 @@ import {
 } from '@/features/meetings/components/meeting-chips'
 import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
 import {
+  buildSuggestionUpdatePayload,
+  buildTaskUpdatePayload,
+  classifyDueDateInput,
+  findDueDateHint,
+  resolveActionItemEditTarget,
+  type ActionItemEditPatch,
+  type DeadlineHintSource,
+} from '@/features/meetings/components/note-timeline-model'
+import {
   acceptTaskSuggestion,
   addTypedNoteSegment,
   deleteNoteSegment,
@@ -50,10 +61,12 @@ import {
   getMeetingNoteTimeline,
   setSpeakerMapping,
   undoAutoAcceptedSuggestion,
+  updateTaskSuggestion,
   type NoteSegmentView,
   type NoteTimelineData,
   type TaskSuggestionView,
 } from '@/features/meetings/ai-actions'
+import { updateTask } from '@/features/sprints/task-actions'
 
 const NOT_ATTENDEE = '__not_attendee__'
 const UNASSIGNED = '__unassigned__'
@@ -85,6 +98,323 @@ function toEditForm(suggestion: TaskSuggestionView): EditForm {
   }
 }
 
+/**
+ * Applies an inline edit's patch to a row's CLIENT-side view immediately,
+ * ahead of the server round trip — see handleActionItemEdit. Title lands on
+ * `taskTitle` for an already-accepted (auto-assigned) row, since that is
+ * what the card actually renders once a task exists; `text` for an open
+ * suggestion. `people` resolves an assignee id back to the display name this
+ * timeline shows, without waiting on the server to hand it back.
+ */
+function applyOptimisticActionItemPatch(
+  suggestion: TaskSuggestionView,
+  patch: ActionItemEditPatch,
+  people: MentionUser[],
+): TaskSuggestionView {
+  const next = { ...suggestion }
+  const isTask = suggestion.status === 'accepted' && suggestion.createdTaskId !== null
+  if (patch.title !== undefined) {
+    if (isTask) next.taskTitle = patch.title
+    else next.text = patch.title
+  }
+  if (patch.assigneeId !== undefined) {
+    next.suggestedUserId = patch.assigneeId
+    next.suggestedUserName = patch.assigneeId ? (people.find((p) => p.id === patch.assigneeId)?.name ?? null) : null
+  }
+  if (patch.dueDate !== undefined) {
+    next.suggestedDueDate = patch.dueDate
+  }
+  return next
+}
+
+/* --- inline editors for a live action-item row (suggestion or task) -----
+ *
+ * These three are the "can edit people, assign" feature: reassign,
+ * reschedule or retitle a row without leaving the write-up. Which record an
+ * edit actually writes to (the open suggestion, or the task it already
+ * became) is resolveActionItemEditTarget's job — these components only ever
+ * emit a patch; NoteTimeline.handleActionItemEdit does the routing. */
+
+/** One person's initial, for the assignee trigger's avatar — no avatarUrl is
+ *  threaded down this far (attendees/mentionUsers are both {id, name}), so
+ *  this is deliberately initials-only rather than a broken image request. */
+function PersonInitial({ name }: { name: string | null }) {
+  return (
+    <Avatar size="sm" className="size-5">
+      <AvatarFallback className="text-2xs">{name ? name.slice(0, 1).toUpperCase() : '?'}</AvatarFallback>
+    </Avatar>
+  )
+}
+
+/**
+ * Click the assigned person to reassign — a Select over the meeting's
+ * attendees first, then any other approved active user (see `people` at the
+ * call site), with an explicit "Nobody / unassigned" option so clearing an
+ * assignment is never a special case. Shows the name (and an initials
+ * avatar), never a raw id.
+ */
+function ActionItemAssignee({
+  currentId,
+  currentName,
+  people,
+  disabled,
+  onChange,
+  label,
+}: {
+  currentId: string | null
+  currentName: string | null
+  people: MentionUser[]
+  disabled: boolean
+  onChange: (id: string | null) => void
+  label: string
+}) {
+  return (
+    <Select
+      value={currentId ?? UNASSIGNED}
+      onValueChange={(v) => v && onChange(v === UNASSIGNED ? null : v)}
+      disabled={disabled}
+    >
+      <SelectTrigger size="sm" className="h-auto gap-1.5 border-transparent bg-transparent px-1 py-0.5 hover:border-border hover:bg-muted/50" aria-label={label}>
+        <SelectValue>
+          {() => (
+            <span className="inline-flex items-center gap-1.5">
+              <PersonInitial name={currentName} />
+              <span className="text-xs font-medium">{currentName ?? 'Unassigned'}</span>
+            </span>
+          )}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={UNASSIGNED}>Nobody / unassigned</SelectItem>
+        {people.map((person) => (
+          <SelectItem key={person.id} value={person.id}>
+            {person.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * Click the due chip to set/change/clear it, via the same DateTimeWheelField
+ * every other date+time picker in this codebase uses — no second picker
+ * built for this one spot.
+ *
+ * Three distinct things this can show, and they must never be confused with
+ * one another:
+ *  - a REAL due date (suggestedDueDate/dueDate actually stored) — the
+ *    ordinary chip, dates only, no fabricated urgency.
+ *  - an UNRESOLVED HINT — the model wrote a due-date phrase for this same
+ *    item elsewhere in its write-up (see findDueDateHint) that never
+ *    resolved to a real date ("Today at 4:30 PM, 5:00 PM, or 5:50 PM" is
+ *    three candidate times, not a timestamp) — shown as a quoted hint the
+ *    user can turn into a real date with one click, never rendered as if it
+ *    were itself a deadline.
+ *  - a RESOLVED HINT — same idea, but the phrase WAS a real date in a format
+ *    normalizeDueDate's strict-ISO rule rejected ("August 20, 2026") — shown
+ *    pre-filled so confirming it is one click, not a re-type.
+ *  - nothing at all — a plain, clearly-labeled "No due date".
+ */
+function ActionItemDueDate({
+  id,
+  currentIso,
+  hint,
+  disabled,
+  onSave,
+  label,
+}: {
+  /** A DOM-id-safe key (the row's suggestion id) — kept separate from
+   *  `label`, which is human-readable text (spaces, quotes) and unsafe to
+   *  use as an element id. */
+  id: string
+  currentIso: string | null
+  hint: string | null
+  disabled: boolean
+  onSave: (iso: string | null) => void
+  label: string
+}) {
+  const [editing, setEditing] = useState(false)
+  const currentDate = currentIso ? parseISO(currentIso) : null
+  const [pending, setPending] = useState<Date>(currentDate ?? roundUpToStep(new Date()))
+
+  function openEditor(seed: Date | null) {
+    setPending(seed ?? currentDate ?? roundUpToStep(new Date()))
+    setEditing(true)
+  }
+
+  function commit() {
+    onSave(format(pending, 'yyyy-MM-dd'))
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-1">
+        <DateTimeWheelField id={`due-${id}`} label="Due date" value={pending} onChange={setPending} className="w-56" />
+        <Button size="icon-sm" type="button" onClick={commit}>
+          <CheckIcon aria-hidden />
+          <span className="sr-only">Save due date</span>
+        </Button>
+        {currentIso ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            type="button"
+            onClick={() => {
+              onSave(null)
+              setEditing(false)
+            }}
+          >
+            <XIcon aria-hidden />
+            <span className="sr-only">Clear due date</span>
+          </Button>
+        ) : null}
+        <Button size="sm" variant="ghost" type="button" onClick={() => setEditing(false)}>
+          Cancel
+        </Button>
+      </span>
+    )
+  }
+
+  const triggerClass =
+    'rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-60'
+
+  if (currentDate) {
+    return (
+      <button type="button" disabled={disabled} onClick={() => openEditor(null)} className={triggerClass} aria-label={`${label} — click to change`}>
+        <MetaChip>
+          Due <span className="font-mono tabular-nums">{format(currentDate, 'MMM d')}</span>
+        </MetaChip>
+      </button>
+    )
+  }
+
+  if (hint) {
+    const classified = classifyDueDateInput(hint)
+    if (classified.kind === 'resolved') {
+      const resolvedDate = parseISO(classified.iso)
+      return (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => openEditor(resolvedDate)}
+          className={triggerClass}
+          aria-label={`${label} — the write-up said "${hint}", click to confirm ${format(resolvedDate, 'MMM d')}`}
+        >
+          <MetaChip tone="warning">
+            Hint <span className="font-mono tabular-nums">{format(resolvedDate, 'MMM d')}</span>
+          </MetaChip>
+        </button>
+      )
+    }
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => openEditor(null)}
+        className={triggerClass}
+        aria-label={`${label} — unresolved hint from the write-up: "${classified.raw}", not a real date. Click to set one.`}
+      >
+        <MetaChip tone="warning">Unresolved: &ldquo;{classified.raw}&rdquo;</MetaChip>
+      </button>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => openEditor(null)}
+      className={cn(triggerClass, 'text-xs text-muted-foreground italic hover:text-foreground')}
+      aria-label={`${label} — no due date, click to set one`}
+    >
+      No due date
+    </button>
+  )
+}
+
+/**
+ * Click the title to edit it — same save-on-blur-or-Enter, revert-on-Escape
+ * shape as the admin table's PhoneCell/PersonalEmailCell, adapted to a
+ * click-to-reveal control (rather than an always-visible input) so a row of
+ * chips doesn't turn into a permanent text box.
+ */
+function ActionItemTitle({
+  value,
+  disabled,
+  onSave,
+  ariaLabel,
+  display,
+}: {
+  value: string
+  disabled: boolean
+  onSave: (next: string) => void
+  ariaLabel: string
+  /**
+   * What to show when NOT editing, if it needs to be more than plain text —
+   * the auto-assigned card links its title to the task's board, and that
+   * link has to survive editing being added beside it rather than being
+   * replaced by a bare click-to-edit span (the two affordances would fight
+   * over the same click otherwise). Defaults to plain text.
+   */
+  display?: ReactNode
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+
+  if (editing) {
+    return (
+      <Input
+        autoFocus
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          setEditing(false)
+          const next = draft.trim()
+          if (next && next !== value) onSave(next)
+          else setDraft(value)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            event.currentTarget.blur()
+          }
+          if (event.key === 'Escape') {
+            setDraft(value)
+            setEditing(false)
+          }
+        }}
+        minLength={1}
+        maxLength={140}
+        aria-label={ariaLabel}
+        className="h-auto min-w-0 flex-1 basis-48 py-0.5 text-sm"
+      />
+    )
+  }
+
+  return (
+    <span className="flex min-w-0 flex-1 basis-48 items-start gap-1">
+      <span className="min-w-0 flex-1">
+        {display ?? <span className={cn(bilingualText, 'text-foreground')}>{value}</span>}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          setDraft(value)
+          setEditing(true)
+        }}
+      >
+        <PencilIcon aria-hidden />
+        <span className="sr-only">{ariaLabel}</span>
+      </Button>
+    </span>
+  )
+}
+
 export function NoteTimeline({
   meetingId,
   meetingTitle,
@@ -94,6 +424,7 @@ export function NoteTimeline({
   mentionUsers,
   shownElsewhere = null,
   autoAssignCappedCount = 0,
+  deadlines = [],
 }: {
   meetingId: string
   meetingTitle: string
@@ -118,6 +449,14 @@ export function NoteTimeline({
    * exactly the ones that landed there instead.
    */
   autoAssignCappedCount?: number
+  /**
+   * The SAME analysis pass's free-text deadlines[] (meetingAiNotes.deadlines)
+   * — used only to find an unresolved/unrejected due-date HINT for a
+   * suggestion whose own suggestedDueDate is null (see findDueDateHint in
+   * note-timeline-model.ts). Never written to; this timeline owns
+   * suggestions and tasks, not the AI notes row.
+   */
+  deadlines?: DeadlineHintSource[]
 }) {
   const [data, setData] = useState<NoteTimelineData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -146,7 +485,69 @@ export function NoteTimeline({
   const [undoBusyId, setUndoBusyId] = useState<string | null>(null)
   const [undoPending, startUndoPending] = useTransition()
 
+  // Inline row edits (assignee/due date/title) — a SEPARATE busy/pending pair
+  // from every action above so editing one row never reads as "busy" for
+  // accept/dismiss/undo on another, and so only the row actually saving shows
+  // a pending state (the codebase has an existing complaint about
+  // table-wide pending locks).
+  const [actionEditBusyId, setActionEditBusyId] = useState<string | null>(null)
+  const [actionEditPending, startActionEditPending] = useTransition()
+
   const mentionPool = mentionUsers ?? attendees
+  // Meeting attendees first, then any other approved active user — see
+  // ActionItemAssignee's picker. Deduped so an attendee who is also in the
+  // wider mentionPool (the common case) is not offered twice.
+  const assigneePool: MentionUser[] = [
+    ...attendees,
+    ...mentionPool.filter((person) => !attendees.some((attendee) => attendee.id === person.id)),
+  ]
+
+  /**
+   * One inline edit to one action-item row. Routes to the suggestion or the
+   * task it already became (resolveActionItemEditTarget) — never both, and
+   * never bypassing updateTask's own authz for the already-a-task case (see
+   * that function's own comment on why). Optimistic: the row updates
+   * immediately from `patch`, using `people` to resolve an assignee id back
+   * to a display name locally rather than waiting on a round trip; a
+   * failure reverts to the pre-edit snapshot and reports why.
+   */
+  function handleActionItemEdit(suggestion: TaskSuggestionView, patch: ActionItemEditPatch) {
+    const target = resolveActionItemEditTarget(suggestion)
+    if (!target) {
+      toast.error('This item can no longer be edited')
+      return
+    }
+    const snapshot = data
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            suggestions: prev.suggestions.map((row) =>
+              row.id === suggestion.id ? applyOptimisticActionItemPatch(row, patch, assigneePool) : row,
+            ),
+          }
+        : prev,
+    )
+    setActionEditBusyId(suggestion.id)
+    startActionEditPending(async () => {
+      try {
+        const res =
+          target.kind === 'suggestion'
+            ? await updateTaskSuggestion(target.id, buildSuggestionUpdatePayload(patch))
+            : await updateTask(target.id, buildTaskUpdatePayload(patch))
+        if (!res.ok) {
+          toast.error(res.error)
+          setData(snapshot)
+          return
+        }
+      } catch {
+        toast.error('Something went wrong — try again')
+        setData(snapshot)
+      } finally {
+        setActionEditBusyId(null)
+      }
+    })
+  }
 
   async function load() {
     setLoading(true)
@@ -589,26 +990,39 @@ export function NoteTimeline({
           <ul className="flex flex-col gap-2">
             {autoSuggestions.map((suggestion) => {
               const busy = undoBusyId === suggestion.id && undoPending
+              const editBusy = actionEditBusyId === suggestion.id && actionEditPending
+              const rowDisabled = busy || editBusy
+              const titleText = suggestion.taskTitle ?? suggestion.text
+              const linkedTitle =
+                suggestion.appSlug && suggestion.createdTaskId ? (
+                  <Link
+                    href={`/apps/${suggestion.appSlug}`}
+                    className={cn(
+                      bilingualText,
+                      'text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                    )}
+                  >
+                    {titleText}
+                  </Link>
+                ) : (
+                  <p className={cn(bilingualText, 'text-foreground')}>{titleText}</p>
+                )
               return (
                 <li
                   key={suggestion.id}
                   className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-success/30 bg-success/5 p-2.5"
                 >
                   <div className="flex min-w-0 flex-1 basis-56 flex-col gap-1">
-                    {suggestion.appSlug && suggestion.createdTaskId ? (
-                      <Link
-                        href={`/apps/${suggestion.appSlug}`}
-                        className={cn(
-                          bilingualText,
-                          'text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
-                        )}
-                      >
-                        {suggestion.taskTitle ?? suggestion.text}
-                      </Link>
+                    {canManage ? (
+                      <ActionItemTitle
+                        value={titleText}
+                        display={linkedTitle}
+                        disabled={rowDisabled}
+                        onSave={(next) => handleActionItemEdit(suggestion, { title: next })}
+                        ariaLabel={`Edit title: ${titleText}`}
+                      />
                     ) : (
-                      <p className={cn(bilingualText, 'text-foreground')}>
-                        {suggestion.taskTitle ?? suggestion.text}
-                      </p>
+                      linkedTitle
                     )}
                     <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                       {/* Sparkles = AI acted; check = the outcome was
@@ -620,7 +1034,19 @@ export function NoteTimeline({
                         <CheckIcon className="size-3.5 shrink-0" aria-hidden />
                         Auto-assigned
                       </MetaChip>
-                      {suggestion.suggestedUserId ? (
+                      {canManage ? (
+                        <span className="inline-flex items-center gap-1">
+                          to
+                          <ActionItemAssignee
+                            currentId={suggestion.suggestedUserId}
+                            currentName={suggestion.suggestedUserName}
+                            people={assigneePool}
+                            disabled={rowDisabled}
+                            onChange={(id) => handleActionItemEdit(suggestion, { assigneeId: id })}
+                            label={`Reassign "${titleText}"`}
+                          />
+                        </span>
+                      ) : suggestion.suggestedUserId ? (
                         <>
                           to{' '}
                           <Link
@@ -631,7 +1057,16 @@ export function NoteTimeline({
                           </Link>
                         </>
                       ) : null}
-                      {suggestion.suggestedDueDate ? (
+                      {canManage ? (
+                        <ActionItemDueDate
+                          id={suggestion.id}
+                          currentIso={suggestion.suggestedDueDate}
+                          hint={suggestion.suggestedDueDate ? null : findDueDateHint(suggestion.text, deadlines)}
+                          disabled={rowDisabled}
+                          onSave={(iso) => handleActionItemEdit(suggestion, { dueDate: iso })}
+                          label={`Due date for "${titleText}"`}
+                        />
+                      ) : suggestion.suggestedDueDate ? (
                         <span className="font-mono">
                           Due {format(parseISO(suggestion.suggestedDueDate), 'MMM d')}
                         </span>
@@ -644,7 +1079,7 @@ export function NoteTimeline({
                         variant="outline"
                         size="sm"
                         type="button"
-                        disabled={busy}
+                        disabled={rowDisabled}
                         onClick={() => handleUndoAutoAssign(suggestion.id)}
                       >
                         {busy ? <Loader2Icon className="animate-spin" aria-hidden /> : <UndoIcon aria-hidden />}
@@ -681,13 +1116,24 @@ export function NoteTimeline({
           <ul className="flex flex-col gap-2">
             {manualSuggestions.map((suggestion) => {
               const busy = suggestionBusyId === suggestion.id && suggestionPending
+              const editBusy = actionEditBusyId === suggestion.id && actionEditPending
+              const rowDisabled = busy || editBusy
               return (
                 <li
                   key={suggestion.id}
                   className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-dashed border-border bg-card p-2.5"
                 >
                   <div className="flex min-w-0 flex-1 basis-56 flex-col gap-1">
-                    <p className={cn(bilingualText, 'text-foreground')}>{suggestion.text}</p>
+                    {canManage ? (
+                      <ActionItemTitle
+                        value={suggestion.text}
+                        disabled={rowDisabled}
+                        onSave={(next) => handleActionItemEdit(suggestion, { title: next })}
+                        ariaLabel={`Edit title: ${suggestion.text}`}
+                      />
+                    ) : (
+                      <p className={cn(bilingualText, 'text-foreground')}>{suggestion.text}</p>
+                    )}
                     <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                       <MetaChip>Suggested</MetaChip>
                       {suggestion.suggestedAppName ? (
@@ -697,8 +1143,28 @@ export function NoteTimeline({
                         // files it into an app the card never named.
                         <MetaChip>→ {suggestion.suggestedAppName}</MetaChip>
                       ) : null}
-                      <span>{suggestion.suggestedUserName ?? 'Unassigned'}</span>
-                      {suggestion.suggestedDueDate ? (
+                      {canManage ? (
+                        <ActionItemAssignee
+                          currentId={suggestion.suggestedUserId}
+                          currentName={suggestion.suggestedUserName}
+                          people={assigneePool}
+                          disabled={rowDisabled}
+                          onChange={(id) => handleActionItemEdit(suggestion, { assigneeId: id })}
+                          label={`Assignee for "${suggestion.text}"`}
+                        />
+                      ) : (
+                        <span>{suggestion.suggestedUserName ?? 'Unassigned'}</span>
+                      )}
+                      {canManage ? (
+                        <ActionItemDueDate
+                          id={suggestion.id}
+                          currentIso={suggestion.suggestedDueDate}
+                          hint={suggestion.suggestedDueDate ? null : findDueDateHint(suggestion.text, deadlines)}
+                          disabled={rowDisabled}
+                          onSave={(iso) => handleActionItemEdit(suggestion, { dueDate: iso })}
+                          label={`Due date for "${suggestion.text}"`}
+                        />
+                      ) : suggestion.suggestedDueDate ? (
                         <span className="font-mono">
                           Due {format(parseISO(suggestion.suggestedDueDate), 'MMM d')}
                         </span>
@@ -718,7 +1184,7 @@ export function NoteTimeline({
                         // meeting's app alone made routed suggestions
                         // unclickable exactly where routing matters most:
                         // multi-project meetings not pinned to one app.
-                        disabled={busy || (!appId && !suggestion.suggestedAppId)}
+                        disabled={busy || editBusy || (!appId && !suggestion.suggestedAppId)}
                         title={
                           appId || suggestion.suggestedAppId
                             ? undefined
@@ -733,19 +1199,19 @@ export function NoteTimeline({
                         variant="outline"
                         size="sm"
                         type="button"
-                        disabled={busy}
+                        disabled={busy || editBusy}
                         onClick={() => {
                           setEditingSuggestion(suggestion)
                           setSuggestionForm(toEditForm(suggestion))
                         }}
                       >
-                        <PencilIcon aria-hidden /> Edit
+                        <PencilIcon aria-hidden /> Edit &amp; add
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon-sm"
                         type="button"
-                        disabled={busy}
+                        disabled={busy || editBusy}
                         onClick={() => handleDismissSuggestion(suggestion.id)}
                       >
                         <XIcon aria-hidden />
