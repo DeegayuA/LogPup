@@ -7,6 +7,7 @@ import { db } from '@/db'
 import { appComments, apps, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 
 const MAX_COMMENT_LENGTH = 2000
@@ -49,7 +50,21 @@ export async function postAppComment(appId: string, body: string): Promise<Actio
       .where(eq(apps.id, validAppId))
     if (!app) return err('App not found')
 
-    await db.insert(appComments).values({ appId: validAppId, authorId, body: trimmed })
+    const [created] = await db
+      .insert(appComments)
+      .values({ appId: validAppId, authorId, body: trimmed })
+      .returning({ id: appComments.id })
+    await logActivity({
+      actorId: authorId,
+      verb: 'commented',
+      entityType: 'comment',
+      entityId: created.id,
+      entityLabel: app.name,
+      appId: validAppId,
+      appName: app.name,
+      pagePath: `/apps/${app.slug}`,
+      detail: trimmed.length > 60 ? `${trimmed.slice(0, 59)}…` : trimmed,
+    })
 
     // Notify anyone @mentioned (except the author). Best-effort and separately
     // caught — the comment is already saved at this point, and losing a

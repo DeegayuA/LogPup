@@ -16,6 +16,7 @@ import {
   describeCalendarError,
   updateCalendarEventTime,
 } from '@/features/calendar/google-calendar'
+import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
 
@@ -108,6 +109,12 @@ async function slugForApp(appId: string | null): Promise<string | null> {
   if (!appId) return null
   const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, appId))
   return app?.slug ?? null
+}
+
+async function appNameById(appId: string | null): Promise<string | null> {
+  if (!appId) return null
+  const [app] = await db.select({ name: apps.name }).from(apps).where(eq(apps.id, appId))
+  return app?.name ?? null
 }
 
 async function revalidateMeetingPaths(appId: string | null) {
@@ -256,6 +263,19 @@ export async function createMeeting(
     throw error
   }
 
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'created',
+    entityType: 'meeting',
+    entityId: meetingId,
+    entityLabel: title,
+    appId,
+    appName: await appNameById(appId),
+    pagePath: '/meetings',
+    detail: `for ${format(new Date(startsAt), 'EEE, MMM d · h:mm a')}`,
+    metadata: { startsAt, endsAt, attendeeCount: attendeeIds.length },
+  })
+
   const { reason } = await syncCalendarInvite(
     {
       id: meetingId,
@@ -313,6 +333,18 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
   )
   if (reason) return err(retryFailedMessage(reason))
 
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: existing.id,
+    entityLabel: existing.title,
+    appId: existing.appId,
+    appName: await appNameById(existing.appId),
+    pagePath: '/meetings',
+    detail: 'with calendar invites',
+  })
+
   await revalidateMeetingPaths(existing.appId)
   return ok(undefined)
 }
@@ -359,6 +391,22 @@ export async function rescheduleMeeting(
     .set({ startsAt: nextStart, endsAt: nextEnd })
     .where(eq(meetings.id, existing.id))
 
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'moved',
+    entityType: 'meeting',
+    entityId: existing.id,
+    entityLabel: existing.title,
+    appId: existing.appId,
+    appName: await appNameById(existing.appId),
+    pagePath: '/meetings',
+    detail: `to ${format(nextStart, 'EEE, MMM d · h:mm a')}`,
+    metadata: {
+      startsAt: { from: existing.startsAt.toISOString(), to: nextStart.toISOString() },
+      endsAt: { from: existing.endsAt.toISOString(), to: nextEnd.toISOString() },
+    },
+  })
+
   const calendarWarning = existing.googleEventId
     ? await syncCalendarTime(existing.createdBy, existing.googleEventId, nextStart, nextEnd)
     : undefined
@@ -403,6 +451,18 @@ export async function updateMeetingNotes(meetingId: string, notes: string): Prom
   if (!canManageMeeting(session, existing)) return err('Not allowed')
 
   await db.update(meetings).set({ notes: notes || null }).where(eq(meetings.id, meetingId))
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: meetingId,
+    entityLabel: existing.title,
+    appId: existing.appId,
+    appName: await appNameById(existing.appId),
+    pagePath: '/meetings',
+    detail: 'notes',
+  })
 
   // Notify anyone @mentioned in the notes (except the author). Best-effort.
   try {
@@ -474,6 +534,17 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
   }
 
   await db.delete(meetings).where(eq(meetings.id, meetingId))
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'deleted',
+    entityType: 'meeting',
+    entityId: meetingId,
+    entityLabel: existing.title,
+    appId: existing.appId,
+    appName: await appNameById(existing.appId),
+    pagePath: '/meetings',
+  })
 
   await revalidateMeetingPaths(existing.appId)
   return ok(undefined)

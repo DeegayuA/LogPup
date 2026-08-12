@@ -499,3 +499,52 @@ export const meetingScreenshots = pgTable('meeting_screenshots', {
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('meeting_screenshots_meeting_captured_idx').on(t.meetingId, t.capturedAtMs)])
+
+// Append-only trail of every mutation in the product: who did what, to which
+// thing, from which page, when — the "complete backtrack". Written by
+// logActivity (src/features/activity/log.ts) from inside every mutating
+// server action; read by the dashboard's Recent-activity feed and /activity.
+//
+// DELIBERATE DENORMALIZATION, twice over:
+//  - entityId has NO foreign key. Most entities cascade-delete (a deleted app
+//    takes its tasks, sprints and meetings with it); an FK — even ON DELETE
+//    SET NULL — would either erase or orphan exactly the history a deletion
+//    is most worth remembering. entityLabel carries the name as it read at
+//    write time so the row stays legible forever.
+//  - appId/appName the same, for grouping a feed by product after the
+//    product is gone.
+// actorId DOES reference users: accounts are deactivated, never deleted, so
+// the join is safe, and it's how "who" stays a real person with an avatar.
+//
+// verb and entityType are text, not pgEnums, on purpose: a new verb is a new
+// string at a call site, not a migration — and with npm run db:migrate broken
+// (see docs/superpowers/specs/2026-08-12-dashboard-activity-design.md) every
+// avoided migration matters.
+export const activityLog = pgTable('activity_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorId: uuid('actor_id').notNull().references(() => users.id),
+  // created | updated | deleted | moved | completed | reopened | assigned |
+  // unassigned | rsvp | resolved | approved | rejected | commented | …
+  verb: text('verb').notNull(),
+  // app | task | sprint | meeting | user | assignment | comment | followup
+  entityType: text('entity_type').notNull(),
+  entityId: uuid('entity_id').notNull(),
+  entityLabel: text('entity_label').notNull(),
+  appId: uuid('app_id'),
+  appName: text('app_name'),
+  // The page the change belongs to (e.g. /apps/logpup, /meetings/<id>) — for
+  // "which page" in the feed and as the row's click-through target.
+  pagePath: text('page_path'),
+  // Human fragment completing "actor verb entity …": "moved to In progress".
+  detail: text('detail'),
+  // Machine-readable before/after for fields the change touched.
+  metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // The firehose: dashboard feed + /activity, newest first.
+  index('activity_log_created_idx').on(t.createdAt),
+  // Per-entity timeline ("backtrack this task").
+  index('activity_log_entity_idx').on(t.entityType, t.entityId, t.createdAt),
+  // Per-person filter on /activity.
+  index('activity_log_actor_idx').on(t.actorId, t.createdAt),
+])

@@ -73,9 +73,43 @@ export function segmentRetryDelayMs(attempt: number): number {
  * hand back a string; keep the two in sync when either changes.
  */
 export function isRetriableSegmentError(message: string): boolean {
-  return !/unexpectedly large|Only admins|No audio received|pending migration has not been applied/i.test(
+  // "No active Gemini API keys" is in this list because retrying cannot
+  // conjure a key: the meeting keeps recording, the audio stays parked
+  // on-device (segment-store.ts), and the moment a key is added the manual
+  // Retry (or the on-mount recovery pass) picks the segment back up. Burning
+  // the automatic attempts against a condition only a human can change would
+  // just delay the honest answer.
+  return !/unexpectedly large|Only admins|No audio received|pending migration has not been applied|No active Gemini API keys/i.test(
     message,
   )
+}
+
+/**
+ * Ceiling on the live-transcript hint attached to ONE segment upload.
+ * The hint's whole job is spelling — attendee names, product terms, numbers —
+ * for the ~5 minutes of audio in that segment, and speech runs ~150 wpm
+ * ≈ 900 chars/min, so ~6k chars comfortably covers a segment plus overlap
+ * for context. Before this cap the client sent the ENTIRE live transcript
+ * so far with EVERY segment: by hour two that is ~110k chars per upload,
+ * ~25 uploads deep — a quadratic token bill for hint text about parts of the
+ * meeting the segment's audio doesn't even contain. The final synthesis pass
+ * still gets the full transcript once, where it genuinely helps.
+ */
+export const SEGMENT_HINT_MAX_CHARS = 6000
+
+/**
+ * The tail of the live transcript, cut at a word boundary so the hint never
+ * opens mid-word (a truncated first token would actively teach the model a
+ * misspelling — the one thing a hint exists to prevent).
+ */
+export function hintTail(hint: string, maxChars: number = SEGMENT_HINT_MAX_CHARS): string {
+  const trimmed = hint.trim()
+  if (trimmed.length <= maxChars) return trimmed
+  const tail = trimmed.slice(-maxChars)
+  const firstSpace = tail.indexOf(' ')
+  // No space in the whole window means one giant unbroken token — keep it
+  // rather than return nothing.
+  return firstSpace === -1 ? tail : tail.slice(firstSpace + 1)
 }
 
 export type TranscribedSegment = { index: number; transcript: string }

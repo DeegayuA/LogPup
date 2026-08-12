@@ -7,6 +7,7 @@ import { db } from '@/db'
 import { meetingAttendees, meetings } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 import { MEETING_URL_ERROR, meetingUrlSchema } from '@/features/meetings/meeting-url'
 
 const RESPONSES = ['going', 'maybe', 'declined'] as const
@@ -24,6 +25,12 @@ export async function respondToMeeting(
   const parsed = responseSchema.safeParse(response)
   if (!parsed.success) return err('Invalid response')
 
+  // Grab the title up front so the activity row can name the meeting.
+  const [meeting] = await db
+    .select({ title: meetings.title })
+    .from(meetings)
+    .where(eq(meetings.id, meetingId))
+
   const result = await db
     .update(meetingAttendees)
     .set({ response: parsed.data })
@@ -31,6 +38,16 @@ export async function respondToMeeting(
     .returning({ userId: meetingAttendees.userId })
 
   if (result.length === 0) return err("You're not on this meeting's invite list")
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'rsvp',
+    entityType: 'meeting',
+    entityId: meetingId,
+    entityLabel: meeting?.title ?? '',
+    pagePath: '/meetings',
+    detail: parsed.data,
+  })
 
   revalidatePath('/meetings')
   revalidatePath('/')
@@ -46,7 +63,7 @@ export async function setMeetingLink(meetingId: string, url: string): Promise<Ac
   if (!parsed.success) return err(MEETING_URL_ERROR)
 
   const [meeting] = await db
-    .select({ createdBy: meetings.createdBy })
+    .select({ createdBy: meetings.createdBy, title: meetings.title })
     .from(meetings)
     .where(eq(meetings.id, meetingId))
   if (!meeting) return err('Meeting not found')
@@ -55,6 +72,18 @@ export async function setMeetingLink(meetingId: string, url: string): Promise<Ac
   }
 
   await db.update(meetings).set({ meetingUrl: parsed.data }).where(eq(meetings.id, meetingId))
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: meetingId,
+    entityLabel: meeting.title,
+    pagePath: '/meetings',
+    detail: 'meeting link',
+    metadata: { meetingUrl: parsed.data },
+  })
+
   revalidatePath('/meetings')
   return ok(undefined)
 }

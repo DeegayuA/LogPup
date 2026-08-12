@@ -15,6 +15,7 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
 import { jobRoleInput } from '@/features/auth/title-schema'
 import { personalEmailInput } from '@/features/auth/personal-email-schema'
+import { logActivity } from '@/features/activity/log'
 
 // Temporary testing tool. Enabled only when ENABLE_DB_CLEAR=1 so it can be turned off
 // (remove the flag) the moment testing is done. Wipes business data but KEEPS users,
@@ -45,6 +46,18 @@ export async function clearTestData(
   await db.delete(sprints)
   await db.delete(assignments)
   await db.delete(apps)
+
+  // One row for the whole wipe — the deleted rows themselves are gone, so
+  // there is nothing more granular worth naming.
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'deleted',
+    entityType: 'user',
+    entityId: session.user.id,
+    entityLabel: 'test data',
+    pagePath: '/admin',
+    detail: 'cleared all business data',
+  })
 
   revalidatePath('/', 'layout')
   return ok(undefined)
@@ -95,6 +108,13 @@ export async function setUserRole(userId: string, role: 'admin' | 'member'): Pro
   const parsed = roleInput.safeParse(role)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  // Read name + current role up front: the name labels the activity row, the
+  // role is both the before value and the input to the last-admin check.
+  const [target] = await db
+    .select({ name: users.name, role: users.role })
+    .from(users)
+    .where(eq(users.id, userId))
+
   if (parsed.data === 'member') {
     // Check-then-write: reads the target's current role, then (if it's an
     // admin) counts other active admins before writing. This isn't atomic
@@ -102,7 +122,6 @@ export async function setUserRole(userId: string, role: 'admin' | 'member'): Pro
     // admins could both pass the check — but this is an internal admin-only
     // tool, and JWT re-validation on every request shrinks the exploitable
     // window to essentially nothing in practice.
-    const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId))
     if (target?.role === 'admin') {
       const otherAdmins = await otherActiveAdminCount(userId)
       if (wouldLeaveNoAdmins(otherAdmins)) return err('Cannot remove the last admin')
@@ -110,6 +129,16 @@ export async function setUserRole(userId: string, role: 'admin' | 'member'): Pro
   }
 
   await db.update(users).set({ role: parsed.data }).where(eq(users.id, userId))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: userId,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${userId}`,
+    detail: `role to ${parsed.data}`,
+    metadata: { role: { from: target?.role, to: parsed.data } },
+  })
   revalidateAdminPaths()
   return ok(undefined)
 }
@@ -122,9 +151,15 @@ export async function setUserActive(userId: string, active: boolean): Promise<Ac
   const parsed = z.boolean().safeParse(active)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  // Same up-front read as setUserRole: name for the activity row, role for
+  // the last-admin check, active as the before value.
+  const [target] = await db
+    .select({ name: users.name, role: users.role, active: users.active })
+    .from(users)
+    .where(eq(users.id, userId))
+
   if (parsed.data === false) {
     // Same check-then-write tradeoff as setUserRole above — see that comment.
-    const [target] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId))
     if (target?.role === 'admin') {
       const otherAdmins = await otherActiveAdminCount(userId)
       if (wouldLeaveNoAdmins(otherAdmins)) return err('Cannot remove the last admin')
@@ -132,6 +167,16 @@ export async function setUserActive(userId: string, active: boolean): Promise<Ac
   }
 
   await db.update(users).set({ active: parsed.data }).where(eq(users.id, userId))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: userId,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${userId}`,
+    detail: parsed.data ? 'account active' : 'account inactive',
+    metadata: { active: { from: target?.active, to: parsed.data } },
+  })
   revalidateAdminPaths()
   return ok(undefined)
 }
@@ -182,7 +227,8 @@ const createUserInput = z.object({
 export async function createUser(
   input: unknown,
 ): Promise<ActionResult<{ starterPassword: string }>> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsed = createUserInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -206,34 +252,50 @@ export async function createUser(
   const effectiveOrgTags = orgTags.length > 0 ? orgTags : derivedOrg ? [derivedOrg] : []
 
   const starterPassword = randomBytes(6).toString('base64url')
+  let createdId: string
   try {
-    await db.insert(users).values({
-      email,
-      name,
-      role,
-      title: title || null,
-      phone: phone ? normalizePhone(phone) : null,
-      personalEmail: personalEmail || null,
-      orgTags: effectiveOrgTags,
-      passwordHash: hashPassword(starterPassword),
-      mustChangePassword: true,
-      active: true,
-      // An admin creating the account IS the vetting step — the 'pending'
-      // column default is for open Google self-signup only (see
-      // src/lib/auth.ts), which this path bypasses entirely.
-      status: 'approved',
-    })
+    const [created] = await db
+      .insert(users)
+      .values({
+        email,
+        name,
+        role,
+        title: title || null,
+        phone: phone ? normalizePhone(phone) : null,
+        personalEmail: personalEmail || null,
+        orgTags: effectiveOrgTags,
+        passwordHash: hashPassword(starterPassword),
+        mustChangePassword: true,
+        active: true,
+        // An admin creating the account IS the vetting step — the 'pending'
+        // column default is for open Google self-signup only (see
+        // src/lib/auth.ts), which this path bypasses entirely.
+        status: 'approved',
+      })
+      .returning({ id: users.id })
+    createdId = created.id
   } catch {
     // Unique-email race between the check above and the insert.
     return err('A user with that email already exists')
   }
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'created',
+    entityType: 'user',
+    entityId: createdId,
+    entityLabel: name,
+    pagePath: `/people/${createdId}`,
+    detail: `as ${role}`,
+  })
 
   revalidateAdminPaths()
   return ok({ starterPassword })
 }
 
 export async function setUserOrgTags(userId: string, tags: unknown): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -241,7 +303,22 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
   const parsed = orgTagsInput.safeParse(tags)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  const [target] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, parsedId.data))
+
   await db.update(users).set({ orgTags: parsed.data }).where(eq(users.id, parsedId.data))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: parsedId.data,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${parsedId.data}`,
+    detail: 'organization tags',
+    metadata: { orgTags: { to: parsed.data } },
+  })
   revalidateAdminPaths()
   return ok(undefined)
 }
@@ -251,7 +328,8 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
  * anyone; a user sets their own through setOwnPhone (features/auth/actions).
  */
 export async function setUserPhone(userId: string, phone: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -260,7 +338,22 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
   const value = trimmed === '' ? null : normalizePhone(trimmed)
   if (trimmed !== '' && value === null) return err('That does not look like a phone number')
 
+  const [target] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, parsedId.data))
+
   await db.update(users).set({ phone: value }).where(eq(users.id, parsedId.data))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: parsedId.data,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${parsedId.data}`,
+    detail: 'phone number',
+    metadata: { phone: { to: value } },
+  })
   revalidateAdminPaths()
   return ok(undefined)
 }
@@ -278,7 +371,8 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
  * login nor collide with anyone else's account.
  */
 export async function setUserPersonalEmail(userId: string, email: unknown): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -286,10 +380,25 @@ export async function setUserPersonalEmail(userId: string, email: unknown): Prom
   const parsed = personalEmailInput.safeParse(email)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  const [target] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, parsedId.data))
+
   await db
     .update(users)
     .set({ personalEmail: parsed.data || null })
     .where(eq(users.id, parsedId.data))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: parsedId.data,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${parsedId.data}`,
+    detail: 'personal email',
+    metadata: { personalEmail: { to: parsed.data || null } },
+  })
   revalidateUserDetailPaths()
   return ok(undefined)
 }
@@ -310,7 +419,8 @@ export async function setUserPersonalEmail(userId: string, email: unknown): Prom
  * their own account can't lock anyone out.
  */
 export async function setUserTitle(userId: string, title: unknown): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -318,7 +428,22 @@ export async function setUserTitle(userId: string, title: unknown): Promise<Acti
   const parsed = jobRoleInput.safeParse(title)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
+  const [target] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, parsedId.data))
+
   await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, parsedId.data))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: parsedId.data,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${parsedId.data}`,
+    detail: 'job role',
+    metadata: { title: { to: parsed.data || null } },
+  })
   revalidateUserDetailPaths()
   return ok(undefined)
 }
@@ -334,15 +459,30 @@ const approveUserInput = z.object({
 // No canEditUser self-target guard: a pending user is never the acting
 // admin's own account (an admin session already implies status='approved').
 export async function approveUser(userId: string, role: 'admin' | 'member'): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsed = approveUserInput.safeParse({ userId, role })
   if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [target] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, parsed.data.userId))
 
   await db
     .update(users)
     .set({ status: 'approved', role: parsed.data.role })
     .where(eq(users.id, parsed.data.userId))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'approved',
+    entityType: 'user',
+    entityId: parsed.data.userId,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${parsed.data.userId}`,
+    detail: `as ${parsed.data.role}`,
+  })
   revalidateAdminPaths()
   return ok(undefined)
 }
@@ -351,12 +491,26 @@ export async function approveUser(userId: string, role: 'admin' | 'member'): Pro
 // from then on (see the signIn/jwt callbacks in src/lib/auth.ts) — there is
 // currently no "un-reject" path back to pending or approved from this UI.
 export async function rejectUser(userId: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
 
+  const [target] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, parsedId.data))
+
   await db.update(users).set({ status: 'rejected' }).where(eq(users.id, parsedId.data))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'rejected',
+    entityType: 'user',
+    entityId: parsedId.data,
+    entityLabel: target?.name ?? 'Unknown user',
+    pagePath: `/people/${parsedId.data}`,
+  })
   revalidateAdminPaths()
   return ok(undefined)
 }

@@ -7,11 +7,19 @@ import { db } from '@/db'
 import { apps, sprints, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { logActivity } from '@/features/activity/log'
 import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
+
+// How a status reads inside an activity detail: "moved X to In progress".
+const STATUS_LABELS: Record<TaskStatus, string> = {
+  todo: 'To do',
+  in_progress: 'In progress',
+  done: 'Done',
+}
 
 /**
  * A rank is a `double precision` column, so the only thing that must never
@@ -231,7 +239,8 @@ async function nextRankFor(
 
 export async function createTask(input: unknown): Promise<ActionResult<{ taskId: string }>> {
   // Any authenticated member may create a task — no role check beyond a session.
-  if (!(await requireSession())) return err('Sign in required')
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
   const parsed = taskInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -261,6 +270,15 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
     if (isForeignKeyViolation(error)) return err('Invalid app, sprint, or assignee')
     return unexpected('createTask', error)
   }
+
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'created',
+    entityType: 'task',
+    entityId: created.id,
+    entityLabel: title,
+    appId,
+  })
 
   await revalidateApp(appId)
   return ok({ taskId: created.id })
@@ -310,6 +328,32 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     if (isForeignKeyViolation(error)) return err('Invalid sprint or assignee')
     return unexpected('updateTask', error)
   }
+
+  // One row per save, with the most meaningful verb the patch supports:
+  // a status change outranks an assignee change outranks a plain edit.
+  const nextStatus = parsed.data.status
+  const nextAssignee = parsed.data.assigneeId
+  let verb = 'updated'
+  let detail: string | null = null
+  let metadata: Record<string, unknown> | null = null
+  if (nextStatus !== undefined && nextStatus !== existing.status) {
+    verb = nextStatus === 'done' ? 'completed' : existing.status === 'done' ? 'reopened' : 'moved'
+    if (verb === 'moved') detail = `to ${STATUS_LABELS[nextStatus]}`
+    metadata = { status: { from: existing.status, to: nextStatus } }
+  } else if (nextAssignee !== undefined && nextAssignee !== existing.assigneeId) {
+    verb = nextAssignee === null ? 'unassigned' : 'assigned'
+    metadata = { assigneeId: { from: existing.assigneeId, to: nextAssignee } }
+  }
+  await logActivity({
+    actorId: session.user.id,
+    verb,
+    entityType: 'task',
+    entityId: taskId,
+    entityLabel: parsed.data.title ?? existing.title,
+    appId: existing.appId,
+    detail,
+    metadata,
+  })
 
   await revalidateApp(existing.appId)
   return ok(undefined)
@@ -399,6 +443,33 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
     return unexpected('moveTaskOnBoard', error)
   }
 
+  // ONE row per drag — the rebalance above is plumbing for this same move,
+  // not a separate act. Which field the drop changed decides the verb.
+  let verb = 'moved'
+  let detail: string | null = null
+  let metadata: Record<string, unknown> | null = null
+  if (status !== undefined && status !== existing.status) {
+    verb = status === 'done' ? 'completed' : existing.status === 'done' ? 'reopened' : 'moved'
+    if (verb === 'moved') detail = `to ${STATUS_LABELS[status]}`
+    metadata = { status: { from: existing.status, to: status } }
+  } else if (assigneeId !== undefined && assigneeId !== existing.assigneeId) {
+    verb = assigneeId === null ? 'unassigned' : 'assigned'
+    metadata = { assigneeId: { from: existing.assigneeId, to: assigneeId } }
+  } else if (priority !== undefined && priority !== existing.priority) {
+    detail = `to priority ${priority}`
+    metadata = { priority: { from: existing.priority, to: priority } }
+  }
+  await logActivity({
+    actorId: session.user.id,
+    verb,
+    entityType: 'task',
+    entityId: taskId,
+    entityLabel: existing.title,
+    appId: existing.appId,
+    detail,
+    metadata,
+  })
+
   await revalidateApp(existing.appId)
   return ok(undefined)
 }
@@ -463,6 +534,20 @@ export async function bulkUpdateTasks(
     return unexpected('bulkUpdateTasks', error)
   }
 
+  // ONE summary row for the whole batch, not one per task — the trail reads
+  // "updated 6 tasks", anchored on the first task, with the full id list in
+  // metadata. appId only when the selection stayed within a single app.
+  const touchedAppIds = [...new Set(allowed.map((row) => row.appId))]
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'task',
+    entityId: allowed[0].id,
+    entityLabel: allowed.length === 1 ? '1 task' : `${allowed.length} tasks`,
+    appId: touchedAppIds.length === 1 ? touchedAppIds[0] : null,
+    metadata: { patch, taskIds: allowed.map((row) => row.id) },
+  })
+
   // A multi-select can legitimately span apps (it cannot today, but the
   // action must not assume the UI's shape) — one batched slug lookup, not
   // one per app.
@@ -472,7 +557,8 @@ export async function bulkUpdateTasks(
 }
 
 export async function deleteTask(taskId: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   if (!z.uuid().safeParse(taskId).success) return err('Task not found')
 
   const existing = await taskById(taskId)
@@ -483,6 +569,16 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
   } catch (error) {
     return unexpected('deleteTask', error)
   }
+
+  // `existing` was read before the delete, so the row can still be named.
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'deleted',
+    entityType: 'task',
+    entityId: taskId,
+    entityLabel: existing.title,
+    appId: existing.appId,
+  })
 
   await revalidateApp(existing.appId)
   return ok(undefined)

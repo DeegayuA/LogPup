@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import {
   AppWindow,
   CalendarDays,
+  History,
   Keyboard,
   LayoutDashboard,
   Loader2,
@@ -320,6 +321,7 @@ export function CommandCenterProvider({
     { label: 'Apps', href: '/apps', icon: AppWindow, shortcut: 'G A' },
     { label: 'People', href: '/people', icon: Users, shortcut: 'G P' },
     { label: 'Meetings', href: '/meetings', icon: CalendarDays, shortcut: 'G M' },
+    { label: 'Activity', href: '/activity', icon: History, shortcut: undefined },
     { label: 'Profile', href: '/profile', icon: User, shortcut: undefined },
     ...(isAdmin
       ? [{ label: 'Admin', href: '/admin', icon: ShieldCheck, shortcut: undefined }]

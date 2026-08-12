@@ -8,6 +8,7 @@ import { apps, sprints, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
+import { logActivity } from '@/features/activity/log'
 import { initialSprintStatus } from '@/features/sprints/sprint-date-range'
 
 const sprintInput = z
@@ -70,7 +71,8 @@ async function slugForApp(appId: string): Promise<string | null> {
 }
 
 export async function createSprint(input: unknown): Promise<ActionResult<{ sprintId: string }>> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   const parsed = sprintInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -111,6 +113,17 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
   }
 
   const slug = await slugForApp(appId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'created',
+    entityType: 'sprint',
+    entityId: sprintId,
+    entityLabel: name,
+    appId,
+    pagePath: slug ? '/apps/' + slug : null,
+    detail: status === 'active' ? 'as the active sprint' : null,
+    metadata: { status, startDate, endDate },
+  })
   if (slug) revalidatePath('/apps/' + slug)
   return ok({ sprintId })
 }
@@ -133,7 +146,8 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
  * the person, via `updateSprintStatus`.
  */
 export async function updateSprint(sprintId: string, input: unknown): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const parsed = sprintUpdateInput.safeParse(input)
@@ -162,6 +176,28 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
   }
 
   const slug = await slugForApp(existing.appId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'sprint',
+    entityId: sprintId,
+    entityLabel: parsed.data.name ?? existing.name,
+    appId: existing.appId,
+    pagePath: slug ? '/apps/' + slug : null,
+    detail:
+      parsed.data.startDate !== undefined || parsed.data.endDate !== undefined
+        ? `to ${startDate} – ${endDate}`
+        : null,
+    metadata: {
+      before: {
+        name: existing.name,
+        goal: existing.goal,
+        startDate: existing.startDate,
+        endDate: existing.endDate,
+      },
+      after: set,
+    },
+  })
   if (slug) revalidatePath('/apps/' + slug)
   return ok(undefined)
 }
@@ -175,11 +211,12 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 export async function deleteSprint(
   sprintId: string,
 ): Promise<ActionResult<{ releasedTasks: number }>> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
-    .select({ appId: sprints.appId })
+    .select({ appId: sprints.appId, name: sprints.name })
     .from(sprints)
     .where(eq(sprints.id, sprintId))
   if (!existing) return err('Sprint not found')
@@ -199,6 +236,17 @@ export async function deleteSprint(
   }
 
   const slug = await slugForApp(existing.appId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'deleted',
+    entityType: 'sprint',
+    entityId: sprintId,
+    entityLabel: existing.name,
+    appId: existing.appId,
+    pagePath: slug ? '/apps/' + slug : null,
+    detail: `releasing ${attached?.total ?? 0} tasks to the backlog`,
+    metadata: { releasedTasks: attached?.total ?? 0 },
+  })
   if (slug) revalidatePath('/apps/' + slug)
   return ok({ releasedTasks: attached?.total ?? 0 })
 }
@@ -247,12 +295,13 @@ export async function updateSprintStatus(
   sprintId: string,
   status: SprintStatus,
 ): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  const session = await requireAdmin()
+  if (!session) return err('Admins only')
   if (!SPRINT_STATUSES.includes(status)) return err('Invalid status')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
-    .select({ appId: sprints.appId })
+    .select({ appId: sprints.appId, name: sprints.name, status: sprints.status })
     .from(sprints)
     .where(eq(sprints.id, sprintId))
   if (!existing) return err('Sprint not found')
@@ -283,6 +332,17 @@ export async function updateSprintStatus(
   }
 
   const slug = await slugForApp(existing.appId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'sprint',
+    entityId: sprintId,
+    entityLabel: existing.name,
+    appId: existing.appId,
+    pagePath: slug ? '/apps/' + slug : null,
+    detail: 'to ' + status,
+    metadata: { status: { from: existing.status, to: status } },
+  })
   if (slug) revalidatePath('/apps/' + slug)
   return ok(undefined)
 }
