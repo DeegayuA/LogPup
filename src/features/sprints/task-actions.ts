@@ -4,12 +4,13 @@ import { z } from 'zod'
 import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, sprints, tasks } from '@/db/schema'
+import { apps, meetingFollowups, sprints, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
+import { decideFollowupResolutionOnTaskStatusChange } from '@/features/meetings/followups'
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
@@ -163,6 +164,55 @@ function isForeignKeyViolation(error: unknown): boolean {
 async function taskById(taskId: string) {
   const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId))
   return task ?? null
+}
+
+/**
+ * The other half of closing the loop between meeting follow-ups and tasks
+ * (see meetings/ai-actions.ts's linkFollowupToTask, which sets
+ * meeting_followups.resolved_by_task_id when a task is created from a
+ * suggestion that matches an open follow-up). A task moving TO 'done'
+ * resolves the follow-up it's linked to; moving back OUT of 'done' reopens
+ * it — decideFollowupResolutionOnTaskStatusChange is the pure decision,
+ * this is just wiring it to a write.
+ *
+ * Called from every path that can change a task's status (updateTask,
+ * moveTaskOnBoard) AFTER that write has already succeeded, and always
+ * wrapped in its own try/catch by the caller: follow-up bookkeeping must
+ * NEVER fail the task move it's riding on. A task with no linked follow-up
+ * (the overwhelming majority) costs one no-op UPDATE that matches zero rows.
+ */
+async function syncLinkedFollowups(
+  taskId: string,
+  fromStatus: TaskStatus,
+  toStatus: TaskStatus,
+): Promise<void> {
+  const decision = decideFollowupResolutionOnTaskStatusChange(fromStatus, toStatus)
+  if (decision === 'none') return
+
+  if (decision === 'resolve') {
+    await db
+      .update(meetingFollowups)
+      .set({
+        status: 'resolved',
+        resolvedAt: new Date(),
+        resolutionNote: 'Resolved automatically — the linked task was completed',
+      })
+      .where(and(eq(meetingFollowups.resolvedByTaskId, taskId), eq(meetingFollowups.status, 'open')))
+    return
+  }
+
+  // reopen: only undo what THIS auto-resolve did, not a manual resolve that
+  // happens to share the same linked task — resolutionNote is the marker.
+  await db
+    .update(meetingFollowups)
+    .set({ status: 'open', resolvedAt: null, resolutionNote: null })
+    .where(
+      and(
+        eq(meetingFollowups.resolvedByTaskId, taskId),
+        eq(meetingFollowups.status, 'resolved'),
+        eq(meetingFollowups.resolutionNote, 'Resolved automatically — the linked task was completed'),
+      ),
+    )
 }
 
 async function revalidateApps(appIds: readonly string[]) {
@@ -355,6 +405,17 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     metadata,
   })
 
+  // Best-effort, deliberately outside the try/catch above: the task move
+  // already succeeded, and a follow-up bookkeeping failure must never turn
+  // a successful save into a reported failure.
+  if (nextStatus !== undefined && nextStatus !== existing.status) {
+    try {
+      await syncLinkedFollowups(taskId, existing.status, nextStatus)
+    } catch (error) {
+      console.error(`[sprints] follow-up sync failed for task ${taskId}:`, error)
+    }
+  }
+
   await revalidateApp(existing.appId)
   return ok(undefined)
 }
@@ -469,6 +530,17 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
     detail,
     metadata,
   })
+
+  // Same best-effort follow-up sync as updateTask — a drag that changes
+  // column is exactly the other way a task's status changes, and a linked
+  // follow-up has to react to it identically either way.
+  if (status !== undefined && status !== existing.status) {
+    try {
+      await syncLinkedFollowups(taskId, existing.status, status)
+    } catch (error) {
+      console.error(`[sprints] follow-up sync failed for task ${taskId}:`, error)
+    }
+  }
 
   await revalidateApp(existing.appId)
   return ok(undefined)

@@ -11,7 +11,33 @@ const nextConfig: NextConfig = {
   // "optimize" this back toward the old whole-recording size; a multi-hour
   // meeting now never needs more than one segment's worth of body size at a
   // time, no matter how long the meeting runs.
-  experimental: { serverActions: { bodySizeLimit: '8mb' } },
+  experimental: {
+    serverActions: { bodySizeLimit: '8mb' },
+    // STALE-WHILE-REVALIDATE for navigation.
+    //
+    // Every route in this app is dynamic — they all read the session — and
+    // Next's default client-cache TTL for a dynamic segment is 0. That makes
+    // the prefetch it already did for every in-viewport <Link> almost
+    // worthless: the payload is thrown away, so bouncing People → a person →
+    // back to People pays for the full page again, every time, including via
+    // the Back button.
+    //
+    // 30s is long enough to cover the "check a detail and come straight back"
+    // loop this app is mostly made of, and short enough that nothing anyone
+    // reads here can drift meaningfully within it. It is NOT a correctness
+    // risk after a write: every mutating action calls `revalidatePath`, which
+    // invalidates these cached segments rather than waiting them out, so a
+    // change you just made is never what this serves you.
+    //
+    // The honest limit: this serves cached segments instantly for the window,
+    // it does not refetch them in the background. True background
+    // revalidation needs `cacheComponents: true` plus `use cache` +
+    // `cacheTag` on the queries and `revalidateTag(tag, 'max')` in the
+    // actions — a real migration (see
+    // node_modules/next/dist/docs/01-app/02-guides/migrating-to-cache-components.md),
+    // and the next step from here rather than something to half-do now.
+    staleTimes: { dynamic: 30, static: 300 },
+  },
   // playwright.config.ts runs its own `next dev` (E2E_TEST_MODE=1) alongside
   // whatever dev server a human already has open on :3000. Next 16 dev
   // servers hold a per-distDir lock for the life of the process, so reusing

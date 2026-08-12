@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { desc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { activityLog, users } from '@/db/schema'
@@ -42,7 +43,7 @@ export async function listActivity(options: {
 }
 
 /** The dashboard's Recent-activity card: latest N, no filters, no cursor. */
-export async function listRecentActivity(limit = 10): Promise<ActivityRow[]> {
+export const listRecentActivity = cache(async function listRecentActivity(limit = 10): Promise<ActivityRow[]> {
   const { rows } = await listActivity({ limit })
   return rows
-}
+})

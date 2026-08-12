@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { TriangleAlert } from 'lucide-react'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import {
   Card,
   CardAction,
@@ -19,7 +19,7 @@ import { listApps } from '@/features/apps/queries'
 import { listActiveUsers } from '@/features/people/queries'
 
 export default async function AdminPage() {
-  const session = await auth()
+  const session = await getSession()
   if (session?.user?.role !== 'admin') notFound()
 
   const dbClearEnabled = process.env.ENABLE_DB_CLEAR === '1'

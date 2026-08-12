@@ -50,8 +50,13 @@ import type { MeetingSummary } from '@/features/meetings/queries'
  * So: one neutral chip, one accent for "happening now", one recessive
  * treatment for "already over". The app name stays where it always was, in
  * words.
+ *
+ * Exported so the Day/Week time grid paints those same three states the same
+ * three ways. Two colour languages for "happening now" on one page — one in
+ * the month grid, one in the week grid, a single click apart — would be worse
+ * than either of them alone.
  */
-function chipTone(isPast: boolean, isLive: boolean): string {
+export function chipTone(isPast: boolean, isLive: boolean): string {
   if (isLive) return 'border-l-primary bg-primary/10 text-foreground'
   if (isPast) return 'border-l-border bg-muted/50 text-muted-foreground'
   return 'border-l-muted-foreground/40 bg-card text-foreground'
@@ -95,6 +100,8 @@ export function MeetingsMonthCalendar({
   currentUserId,
   isAdmin,
   onSelectDay,
+  month,
+  onMonthChange,
 }: {
   upcoming: MeetingSummary[]
   past: MeetingSummary[]
@@ -102,11 +109,23 @@ export function MeetingsMonthCalendar({
   isAdmin: boolean
   /** Hands a day back to the parent so a chip can drop into the filtered list. */
   onSelectDay?: (date: Date) => void
+  /** Month on show. Pass it (with `onMonthChange`) to drive the grid from
+   *  outside — the calendar surface does, so the month the URL names and the
+   *  month this grid draws cannot disagree. Omit both and the grid keeps its
+   *  own cursor exactly as it always has. */
+  month?: Date
+  onMonthChange?: (month: Date) => void
 }) {
   // One clock read for the whole grid, so every chip in it agrees about which
   // meeting is running right now.
   const now = new Date()
-  const [cursor, setCursor] = useState(() => startOfMonth(new Date()))
+  const [internalCursor, setInternalCursor] = useState(() => startOfMonth(new Date()))
+  const cursor = month ? startOfMonth(month) : internalCursor
+  const isControlled = month !== undefined
+  const setCursor = (next: Date) => {
+    if (!isControlled) setInternalCursor(next)
+    onMonthChange?.(next)
+  }
   const [expanded, setExpanded] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -274,7 +293,7 @@ export function MeetingsMonthCalendar({
             size="icon-sm"
             type="button"
             aria-label="Previous month"
-            onClick={() => setCursor((c) => addMonths(c, -1))}
+            onClick={() => setCursor(addMonths(cursor, -1))}
           >
             <ChevronLeft />
           </Button>
@@ -292,7 +311,7 @@ export function MeetingsMonthCalendar({
             size="icon-sm"
             type="button"
             aria-label="Next month"
-            onClick={() => setCursor((c) => addMonths(c, 1))}
+            onClick={() => setCursor(addMonths(cursor, 1))}
           >
             <ChevronRight />
           </Button>

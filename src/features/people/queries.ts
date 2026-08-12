@@ -132,7 +132,7 @@ export async function getTeamForApp(appId: string): Promise<TeamMember[]> {
     .orderBy(desc(assignments.allocationPct))
 }
 
-export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
+export const getUserCapacities = cache(async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
   const rows = await db
     .select({
       userId: users.id,
@@ -205,7 +205,7 @@ export async function getUserCapacities(q?: string): Promise<UserCapacity[]> {
   }
 
   return [...byUser.values()]
-}
+})
 
 /**
  * The team capacity list exactly as it stood at `at`, in the SAME shape as
@@ -329,13 +329,13 @@ export async function getPersonAllocationHistory(
  * excluded — assigning fresh capacity to a shut-down app is never the intent
  * — but paused ones stay, since work resuming there is normal.
  */
-export async function listAssignableApps(): Promise<AssignableApp[]> {
+export const listAssignableApps = cache(async function listAssignableApps(): Promise<AssignableApp[]> {
   return db
     .select({ id: apps.id, name: apps.name, slug: apps.slug })
     .from(apps)
     .where(ne(apps.status, 'archived'))
     .orderBy(asc(apps.name))
-}
+})
 
 export type PersonActivity = {
   days: ActivityDay[]
@@ -494,7 +494,7 @@ export type PersonWorkload = {
  * without a completion timestamp on `tasks` there is no meaningful way to order
  * or window them anyway (see task-workload.ts).
  */
-export async function getPersonWorkload(userId: string): Promise<PersonWorkload> {
+export const getPersonWorkload = cache(async function getPersonWorkload(userId: string): Promise<PersonWorkload> {
   const todayIso = isoDayOf(new Date())
 
   const [openTasks, counts] = await Promise.all([
@@ -533,7 +533,7 @@ export async function getPersonWorkload(userId: string): Promise<PersonWorkload>
     totalCount: counts[0]?.total ?? 0,
     todayIso,
   }
-}
+})
 
 export type PersonFollowupsView = PersonFollowups & { todayIso: string }
 
@@ -548,7 +548,7 @@ export type PersonFollowupsView = PersonFollowups & { todayIso: string }
  * never fall off the page. Resolved items are excluded entirely; they live on
  * the meeting they were resolved in.
  */
-export async function getPersonFollowups(userId: string): Promise<PersonFollowupsView> {
+export const getPersonFollowups = cache(async function getPersonFollowups(userId: string): Promise<PersonFollowupsView> {
   const owner = alias(users, 'followup_owner')
   const creator = alias(users, 'followup_creator')
 
@@ -597,7 +597,7 @@ export async function getPersonFollowups(userId: string): Promise<PersonFollowup
   )
 
   return { ...split, todayIso }
-}
+})
 
 export type PersonMeetingsView = PersonMeetings & { now: Date }
 
@@ -612,7 +612,7 @@ const MEETING_WINDOW_DAYS = 60
  * standups behind them; the split caps what renders inside it and reports the
  * full in-window totals so the UI can say how much it is not showing.
  */
-export async function getPersonMeetings(userId: string): Promise<PersonMeetingsView> {
+export const getPersonMeetings = cache(async function getPersonMeetings(userId: string): Promise<PersonMeetingsView> {
   const now = new Date()
   const from = new Date(now.getTime() - MEETING_WINDOW_DAYS * 86_400_000)
   const until = new Date(now.getTime() + MEETING_WINDOW_DAYS * 86_400_000)
@@ -641,4 +641,4 @@ export async function getPersonMeetings(userId: string): Promise<PersonMeetingsV
     .orderBy(asc(meetings.startsAt))
 
   return { ...splitPersonMeetings(rows, now), now }
-}
+})

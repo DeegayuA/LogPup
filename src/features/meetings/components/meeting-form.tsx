@@ -12,7 +12,7 @@ import {
 import { useRouter } from 'next/navigation'
 import { addHours, format } from 'date-fns'
 import { toast } from 'sonner'
-import { Loader2, PlusIcon, XIcon } from 'lucide-react'
+import { Loader2, PlusIcon, UsersIcon, XIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { createMeeting, teamForApp } from '@/features/meetings/actions'
+import { addEveryone, applyTeamPrefill } from '@/features/meetings/attendee-prefill'
 import { icsHref } from '@/features/meetings/components/add-to-calendar'
 import { MEETING_URL_ERROR, isValidMeetingUrl } from '@/features/meetings/meeting-url'
 import type { ActiveUser } from '@/features/people/queries'
@@ -64,6 +65,12 @@ type FormState = {
   agenda: string
   meetingUrl: string
   attendeeIds: string[]
+  // Which of attendeeIds only the app-team prefill put there (see
+  // attendee-prefill.ts for the swap semantics). Lives inside FormState, not
+  // its own useState, so a prefill response updates both lists in ONE
+  // updater — split state could apply one half against a form the user had
+  // already changed.
+  prefilledIds: string[]
 }
 
 function emptyState(defaultAppId?: string): FormState {
@@ -76,6 +83,7 @@ function emptyState(defaultAppId?: string): FormState {
     agenda: '',
     meetingUrl: '',
     attendeeIds: [],
+    prefilledIds: [],
   }
 }
 
@@ -194,6 +202,7 @@ export function MeetingForm({
   // the next change to the quick-add text re-parses.
   useEffect(() => {
     if (!preview) return
+    const named = new Set(preview.attendees.map((a) => a.id))
     setForm((f) => ({
       ...f,
       title: preview.title.slice(0, 120),
@@ -202,9 +211,12 @@ export function MeetingForm({
       end: preview.endsAt ?? f.end,
       meetingUrl: preview.meetingUrl ?? f.meetingUrl,
       attendeeIds:
-        preview.attendees.length > 0
-          ? Array.from(new Set([...f.attendeeIds, ...preview.attendees.map((a) => a.id)]))
+        named.size > 0
+          ? Array.from(new Set([...f.attendeeIds, ...named]))
           : f.attendeeIds,
+      // Naming someone in the phrase is a human decision about them — promote
+      // them out of the prefill so a later app change can't swap them away.
+      prefilledIds: f.prefilledIds.filter((id) => !named.has(id)),
     }))
   }, [preview])
 
@@ -214,6 +226,10 @@ export function MeetingForm({
       setForm(emptyState(defaultAppId))
       setQuickAdd('')
       setSettled('')
+      // Opened from an app page (defaultAppId set): the meeting is linked to
+      // that app from the first paint, so its team is offered without a
+      // manual re-select of the same app.
+      if (defaultAppId) void prefillTeam(defaultAppId)
     }
   }
 
@@ -232,20 +248,24 @@ export function MeetingForm({
       document.getElementById('meeting-quick-add')?.focus()
       return
     }
+    const named = new Set(intent.attendees.map((a) => a.id))
     setForm((f) => ({
       ...f,
       title: intent.title.slice(0, 120),
-      // Set directly instead of going through handleAppChange: that fetches the
-      // app's team and replaces the attendee list, which would race with (and
-      // overwrite) the people just named in the phrase.
+      // Set directly instead of going through handleAppChange: that would
+      // fetch and prefill the app's whole team on top of the explicit
+      // "with <names>" just typed. Naming people IS the attendee decision
+      // here — the team suggestion rides only on the app select.
       appId: intent.appId ?? f.appId,
       start: intent.startsAt ?? f.start,
       end: intent.endsAt ?? f.end,
       meetingUrl: intent.meetingUrl ?? f.meetingUrl,
       attendeeIds:
-        intent.attendees.length > 0
-          ? Array.from(new Set([...f.attendeeIds, ...intent.attendees.map((a) => a.id)]))
+        named.size > 0
+          ? Array.from(new Set([...f.attendeeIds, ...named]))
           : f.attendeeIds,
+      // Same promotion as the auto-fill effect: named people become manual.
+      prefilledIds: f.prefilledIds.filter((id) => !named.has(id)),
     }))
   }
 
@@ -257,15 +277,39 @@ export function MeetingForm({
     applyQuickAdd()
   }
 
-  async function handleAppChange(appId: string) {
-    setForm((f) => ({ ...f, appId }))
-    if (!appId) return
+  /**
+   * One teamForApp call per app selection (itself a single query over
+   * assignments); the merge is pure and lives in attendee-prefill.ts. The
+   * updater re-checks the selected app before applying: a response can land
+   * after the user has already switched to "No app" (which fetches nothing,
+   * so nothing newer would overwrite the stale team) or after quick-add
+   * re-pointed the form at a different app.
+   */
+  async function prefillTeam(appId: string) {
     try {
       const team = await teamForApp(appId)
-      setForm((f) => ({ ...f, attendeeIds: team.map((member) => member.id) }))
+      setForm((f) => {
+        if (f.appId !== appId) return f
+        return {
+          ...f,
+          ...applyTeamPrefill(f, team.map((member) => member.id), activeUsers.map((u) => u.id)),
+        }
+      })
     } catch {
       toast.error('Could not load the team for that app')
     }
+  }
+
+  function handleAppChange(appId: string) {
+    if (!appId) {
+      // "No app" needs no fetch: the team suggestion simply retracts, and
+      // manually-picked people stay (see attendee-prefill.ts for why the
+      // prefill follows the app instead of lingering).
+      setForm((f) => ({ ...f, appId, ...applyTeamPrefill(f, [], []) }))
+      return
+    }
+    setForm((f) => ({ ...f, appId }))
+    void prefillTeam(appId)
   }
 
   function toggleAttendee(id: string) {
@@ -274,6 +318,10 @@ export function MeetingForm({
       attendeeIds: f.attendeeIds.includes(id)
         ? f.attendeeIds.filter((a) => a !== id)
         : [...f.attendeeIds, id],
+      // Either direction is a human decision about this person: adding makes
+      // them manual, and removing spends their prefill entry — so a later
+      // re-add is manual too, and an app change won't take them back out.
+      prefilledIds: f.prefilledIds.filter((a) => a !== id),
     }))
   }
 
@@ -507,44 +555,67 @@ export function MeetingForm({
                 ))}
               </div>
             ) : null}
-            <Popover open={attendeePickerOpen} onOpenChange={setAttendeePickerOpen}>
-              <PopoverTrigger
-                render={
-                  <Button
-                    id="meeting-attendees-add"
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    aria-invalid={noAttendees || undefined}
-                    aria-describedby={noAttendees ? 'meeting-attendees-error' : undefined}
-                    className="w-fit"
-                  />
-                }
-              >
-                <PlusIcon /> Add attendee
-              </PopoverTrigger>
-              <PopoverContent className="w-56 p-0">
-                <Command>
-                  <CommandInput placeholder="Search people…" />
-                  <CommandList>
-                    <CommandEmpty>No one found.</CommandEmpty>
-                    <CommandGroup>
-                      {availableUsers.map((u) => (
-                        <CommandItem
-                          key={u.id}
-                          onSelect={() => {
-                            toggleAttendee(u.id)
-                            setAttendeePickerOpen(false)
-                          }}
-                        >
-                          {u.name}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
+            <div className="flex flex-wrap items-center gap-2">
+              <Popover open={attendeePickerOpen} onOpenChange={setAttendeePickerOpen}>
+                <PopoverTrigger
+                  render={
+                    <Button
+                      id="meeting-attendees-add"
+                      variant="outline"
+                      size="sm"
+                      type="button"
+                      aria-invalid={noAttendees || undefined}
+                      aria-describedby={noAttendees ? 'meeting-attendees-error' : undefined}
+                      className="w-fit"
+                    />
+                  }
+                >
+                  <PlusIcon /> Add attendee
+                </PopoverTrigger>
+                <PopoverContent className="w-56 p-0">
+                  <Command>
+                    <CommandInput placeholder="Search people…" />
+                    <CommandList>
+                      <CommandEmpty>No one found.</CommandEmpty>
+                      <CommandGroup>
+                        {availableUsers.map((u) => (
+                          <CommandItem
+                            key={u.id}
+                            onSelect={() => {
+                              toggleAttendee(u.id)
+                              setAttendeePickerOpen(false)
+                            }}
+                          >
+                            {u.name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              {/* Ad-hoc meetings (no app => no team to prefill) get ONE bulk
+                  affordance instead of the whole org being auto-dumped into
+                  every meeting. Deliberately hidden once an app is chosen —
+                  there the team prefill is the bulk path. Joins as manual
+                  picks: clicking this is a decision, not a suggestion. */}
+              {!form.appId && availableUsers.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-fit"
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      attendeeIds: addEveryone(f.attendeeIds, activeUsers.map((u) => u.id)),
+                    }))
+                  }
+                >
+                  <UsersIcon /> Add everyone active
+                </Button>
+              ) : null}
+            </div>
             {noAttendees ? (
               <p id="meeting-attendees-error" role="alert" className="text-xs text-destructive">
                 At least one attendee is required.

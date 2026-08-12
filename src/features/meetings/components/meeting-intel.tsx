@@ -14,6 +14,7 @@ import {
   CircleHelp,
   Clock,
   Languages,
+  ListTodo,
   Loader2,
   MessageCircleQuestion,
   MessageSquareQuote,
@@ -26,6 +27,7 @@ import {
   Sparkles,
   Square,
   TriangleAlert,
+  UserPlus,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -49,6 +51,8 @@ import {
 } from '@/features/meetings/components/meeting-notes-model'
 import {
   addFollowup,
+  attributeFollowup,
+  closeFollowupAsStale,
   copyFollowupResponseToNotes,
   deferFollowupReason,
   finalizeMeetingRecording,
@@ -61,7 +65,9 @@ import {
   type CarriedForwardItem,
   type FollowupPersonOption,
   type FollowupTargetOption,
+  type LinkedTaskView,
   type MeetingIntel,
+  type UnattributedFollowupView,
 } from '@/features/meetings/ai-actions'
 import {
   pickUtterance,
@@ -336,6 +342,12 @@ export function MeetingIntelPanel({
   const [composer, setComposer] = useState<OpenComposer>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [keptOpenIds, setKeptOpenIds] = useState<Set<string>>(new Set())
+  // "Needs attribution" — a separate write from the carried-forward ones
+  // above (it targets a different row shape, meetingFollowups.userId rather
+  // than status), so it gets its own pending/busy pair instead of sharing
+  // busyFollowupId with rows that aren't even rendered from the same list.
+  const [attributePending, startAttribute] = useTransition()
+  const [busyAttributeId, setBusyAttributeId] = useState<string | null>(null)
   // The "add a follow-up by hand" form. Collapsed until asked for — the
   // section's job is still mostly to show what came back from last time.
   const [addingFollowup, setAddingFollowup] = useState(false)
@@ -1278,6 +1290,15 @@ export function MeetingIntelPanel({
     )
   }
 
+  // Distinct from handleResolve: the outcome note it writes says HOW this
+  // was closed (no answer ever came) rather than claiming the item was
+  // actually addressed — see closeFollowupAsStale's own comment.
+  function handleCloseStale(followupId: string) {
+    setComposer((prev) => (prev?.id === followupId ? null : prev))
+    patchFollowup(followupId, { status: 'resolved', resolvedAt: new Date() })
+    runFollowupWrite(followupId, () => closeFollowupAsStale(followupId), 'Closed as stale')
+  }
+
   function handleReopen(item: CarriedForwardItem) {
     // Keep the note that was there as a draft — reopening usually means the
     // answer was wrong or incomplete, not that it should be retyped.
@@ -1378,6 +1399,27 @@ export function MeetingIntelPanel({
     })
   }
 
+  // Gives an unattributed item (the model named someone it couldn't
+  // resolve to a user) a real owner. No optimistic patch here — unlike the
+  // carried-forward writes above, this row moves to a whole different list
+  // (unattributed -> prep) once it succeeds, which the refetch handles more
+  // honestly than a local patch guessing at the new shape would.
+  function handleAttribute(followupId: string, userId: string) {
+    setBusyAttributeId(followupId)
+    startAttribute(async () => {
+      try {
+        const res = await attributeFollowup(followupId, userId)
+        if (res.ok) toast.success('Attributed — it now carries forward normally')
+        else toast.error(res.error)
+      } catch {
+        toast.error('Something went wrong — try again')
+      } finally {
+        await loadIntel('refresh')
+        setBusyAttributeId(null)
+      }
+    })
+  }
+
   // Optimistic flip + revert-on-failure, same shape as runFollowupWrite —
   // the switch's own position is the confirmation, so it has to move the
   // instant it's clicked, and move back if the server refuses it.
@@ -1409,6 +1451,8 @@ export function MeetingIntelPanel({
   const autoAssignTasks = intel?.autoAssignTasks ?? true
   const prep = intel?.prep ?? []
   const people = intel?.people ?? []
+  const approvedUsers = intel?.approvedUsers ?? []
+  const unattributed = intel?.unattributed ?? []
   const upcomingMeetings = intel?.upcomingMeetings ?? []
   // Resolved rows stay on screen as a record, so "is anything still owed?"
   // has to count open ones rather than trust the list being empty.
@@ -1416,6 +1460,11 @@ export function MeetingIntelPanel({
     (total, group) => total + group.items.filter((item) => item.status === 'open').length,
     0,
   )
+  // Attendees first, then anyone else approved — the model may have named a
+  // client contact or someone who wasn't even in this meeting's attendee
+  // list, so the picker can't stop at `people`.
+  const attendeeIds = new Set(people.map((option) => option.id))
+  const attributionPeople = [...people, ...approvedUsers.filter((option) => !attendeeIds.has(option.id))]
   const showLiveText = recording && liveSupported && !liveUnavailable
   // Whichever engine is "currently winning": an in-flight interim result
   // takes priority (it's the freshest signal of which language is being
@@ -1755,6 +1804,32 @@ export function MeetingIntelPanel({
                 </MeetingNotesEmpty>
               )}
 
+              {unattributed.length > 0 ? (
+                <section className="flex flex-col gap-2">
+                  <SectionHeading
+                    icon={UserPlus}
+                    title="Needs attribution"
+                    count={unattributed.length}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Heard from someone the notes couldn&rsquo;t match to a person — pick who it&rsquo;s
+                    for and it carries forward normally from here.
+                  </p>
+                  <ul className="flex flex-col gap-1.5">
+                    {unattributed.map((item) => (
+                      <UnattributedRow
+                        key={item.id}
+                        item={item}
+                        people={attributionPeople}
+                        canWrite={canRecord}
+                        busy={busyAttributeId === item.id && attributePending}
+                        onAttribute={(userId) => handleAttribute(item.id, userId)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
               <section className="flex flex-col gap-2">
                 <SectionHeading
                   icon={MessageCircleQuestion}
@@ -1829,10 +1904,17 @@ export function MeetingIntelPanel({
                                 onReopen={() => handleReopen(item)}
                                 onNotYet={() => handleNotYet(item.id)}
                                 onCopyResponse={() => handleCopyResponse(item)}
+                                onCloseStale={() => handleCloseStale(item.id)}
                               />
                             )
                           })}
                         </ul>
+                        {group.overflowCount > 0 ? (
+                          <p className="pl-1 text-2xs text-muted-foreground">
+                            +<span className="font-mono tabular-nums">{group.overflowCount}</span>{' '}
+                            more, oldest shown first
+                          </p>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -1931,6 +2013,114 @@ function IntelSkeleton() {
   )
 }
 
+const LINKED_TASK_STATUS_LABEL: Record<LinkedTaskView['status'], string> = {
+  todo: 'To do',
+  in_progress: 'In progress',
+  done: 'Done',
+}
+const LINKED_TASK_STATUS_TONE: Record<LinkedTaskView['status'], 'neutral' | 'active' | 'success'> = {
+  todo: 'neutral',
+  in_progress: 'active',
+  done: 'success',
+}
+
+/**
+ * What replaces the bare Resolve button once a follow-up is linked to a
+ * task (see linkFollowupToTask / task-actions.ts's follow-up sync) — the
+ * task and its live status, so it's visible that finishing the task is what
+ * clears this row, not a click here.
+ */
+function LinkedTaskChip({ task }: { task: LinkedTaskView }) {
+  const label = (
+    <>
+      <ListTodo className="size-3.5 shrink-0" aria-hidden />
+      {task.title}
+    </>
+  )
+  return (
+    <span className="flex min-h-9 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      {task.appSlug ? (
+        <Link
+          href={`/apps/${task.appSlug}`}
+          className="flex items-center gap-1 underline decoration-border underline-offset-2 hover:text-foreground hover:decoration-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          {label}
+        </Link>
+      ) : (
+        <span className="flex items-center gap-1">{label}</span>
+      )}
+      <MetaChip tone={LINKED_TASK_STATUS_TONE[task.status]}>{LINKED_TASK_STATUS_LABEL[task.status]}</MetaChip>
+    </span>
+  )
+}
+
+/**
+ * One unattributed item: the model heard a person and a commitment but
+ * couldn't resolve the name to a user. A tiny, self-contained picker + one
+ * button — the same "who it's for" Select the add-follow-up form uses, just
+ * scoped to one row instead of a whole form, since attributing is the only
+ * thing this control does.
+ */
+function UnattributedRow({
+  item,
+  people,
+  canWrite,
+  busy,
+  onAttribute,
+}: {
+  item: UnattributedFollowupView
+  people: FollowupPersonOption[]
+  canWrite: boolean
+  busy: boolean
+  onAttribute: (userId: string) => void
+}) {
+  const [personId, setPersonId] = useState('')
+
+  return (
+    <li className="flex flex-col gap-2 rounded-lg border border-warning/35 bg-warning/5 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
+      <span className="flex min-w-0 flex-1 items-start gap-2 text-sm">
+        <AlertCircle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+        <span className="min-w-0">
+          <span className={bilingualText}>{item.text}</span>
+          <span className="mt-0.5 block text-xs text-muted-foreground">
+            Heard as &ldquo;{item.personName}&rdquo;
+          </span>
+        </span>
+      </span>
+      {canWrite ? (
+        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <Select value={personId} onValueChange={(value) => setPersonId((value as string | null) ?? '')}>
+            <SelectTrigger className="h-9 w-44" aria-label={`Who “${item.text}” is for`}>
+              <SelectValue>
+                {(value: string) => people.find((option) => option.id === value)?.name ?? 'Pick a person'}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {people.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            disabled={busy || !personId}
+            onClick={() => onAttribute(personId)}
+          >
+            {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+            Attribute
+          </Button>
+        </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">Only the organizer or an admin can attribute this.</span>
+      )}
+    </li>
+  )
+}
+
 /**
  * One carried-forward item. Every control here acts on a single click —
  * Resolve closes it, Not yet keeps it, Reopen undoes a resolve — and the
@@ -1956,6 +2146,7 @@ function FollowupRow({
   onReopen,
   onNotYet,
   onCopyResponse,
+  onCloseStale,
 }: {
   item: CarriedForwardItem
   person: string
@@ -1974,6 +2165,7 @@ function FollowupRow({
   onReopen: () => void
   onNotYet: () => void
   onCopyResponse: () => void
+  onCloseStale: () => void
 }) {
   const isResolved = item.status === 'resolved'
   const stillOpenAndKept = keptOpen && !isResolved
@@ -2016,7 +2208,19 @@ function FollowupRow({
               {isResolved ? (
                 <MetaChip tone="success">Resolved</MetaChip>
               ) : (
-                <MetaChip tone={stale ? 'danger' : 'warning'}>{age.label}</MetaChip>
+                <>
+                  {stale ? <MetaChip tone="danger">Stale</MetaChip> : null}
+                  <MetaChip tone={stale ? 'danger' : 'warning'}>
+                    {age.days === 0 ? (
+                      'Raised today'
+                    ) : (
+                      <>
+                        Open <span className="font-mono tabular-nums">{age.days}</span>{' '}
+                        {age.days === 1 ? 'day' : 'days'}
+                      </>
+                    )}
+                  </MetaChip>
+                </>
               )}
               <span>
                 from “{item.fromTitle}” ({format(item.fromDate, 'MMM d')})
@@ -2059,16 +2263,25 @@ function FollowupRow({
               </>
             ) : (
               <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  disabled={busy}
-                  onClick={onResolve}
-                >
-                  {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
-                  Resolve
-                </Button>
+                {item.linkedTask ? (
+                  // The point of linking is that FINISHING the task clears
+                  // this item — a bare Resolve button here would invite
+                  // double bookkeeping (or worse, resolving by hand while
+                  // the task stays open, un-linked from what actually
+                  // happened). See task-actions.ts's follow-up sync.
+                  <LinkedTaskChip task={item.linkedTask} />
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    onClick={onResolve}
+                  >
+                    {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+                    Resolve
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -2101,6 +2314,18 @@ function FollowupRow({
                   <MessageSquareQuote aria-hidden />
                   {item.responseNote ? 'Edit what they said' : 'What they said'}
                 </Button>
+                {stale ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    onClick={onCloseStale}
+                  >
+                    {busy ? <Loader2 className="animate-spin" aria-hidden /> : <TriangleAlert aria-hidden />}
+                    Close as stale
+                  </Button>
+                ) : null}
               </>
             )}
           </span>

@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
+import { useOptimistic, useState, useTransition } from 'react'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import { CheckCheck, UserRoundCheck, UserRoundX } from 'lucide-react'
@@ -36,41 +35,25 @@ import {
 import { approveUser, rejectUser } from '@/features/admin/actions'
 import type { PendingUser } from '@/features/admin/queries'
 
-function PendingRow({ user }: { user: PendingUser }) {
-  const router = useRouter()
-  const [isPending, startTransition] = useTransition()
+function PendingRow({
+  user,
+  isPending,
+  onApprove,
+  onReject,
+}: {
+  user: PendingUser
+  isPending: boolean
+  onApprove: (user: PendingUser, role: 'admin' | 'member') => void
+  onReject: (user: PendingUser) => void
+}) {
   const [role, setRole] = useState<'admin' | 'member'>('member')
 
   function handleApprove() {
-    startTransition(async () => {
-      try {
-        const res = await approveUser(user.id, role)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success(`${user.name} approved as ${role}`)
-        router.refresh()
-      } catch {
-        toast.error('Something went wrong — try again')
-      }
-    })
+    onApprove(user, role)
   }
 
   function handleReject() {
-    startTransition(async () => {
-      try {
-        const res = await rejectUser(user.id)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success(`${user.name} rejected`)
-        router.refresh()
-      } catch {
-        toast.error('Something went wrong — try again')
-      }
-    })
+    onReject(user)
   }
 
   return (
@@ -147,13 +130,69 @@ function PendingRow({ user }: { user: PendingUser }) {
   )
 }
 
+/**
+ * OPTIMISTIC UPDATES — the decision is the interesting part, not the wait.
+ *
+ * Approving used to mean: await `approveUser`, then `router.refresh()`, then
+ * watch the row finally go. On the dashboard that second step re-ran the
+ * page's entire query batch before anything moved on screen, so a decision
+ * that took an admin a quarter of a second to make took the UI most of a
+ * second to acknowledge — and an admin working through a queue of signups felt
+ * every one of them.
+ *
+ * Now the row leaves the moment it is acted on. Two things make that safe:
+ *
+ * - `router.refresh()` is gone, and is NOT missing. `approveUser`/`rejectUser`
+ *   both end in `revalidateAdminPaths()` (`/admin`, `/people`, `/`), and Next
+ *   ships the re-rendered RSC payload for the current route back in the
+ *   action's own response — so the refresh was always a second, redundant
+ *   render of the same page, not the thing that made the list correct.
+ * - Rollback is automatic and needs no undo bookkeeping. A `useOptimistic`
+ *   overlay only lives as long as its transition; when the action settles the
+ *   overlay drops and the list falls back to whatever the server actually
+ *   sent. Succeeded → the fresh payload already omits the row, so nothing
+ *   visibly changes. Failed → the server list still contains it, so the row
+ *   reappears under the error toast, which is exactly the truth.
+ */
 export function PendingApprovalsCard({ users }: { users: PendingUser[] }) {
+  const [isPending, startTransition] = useTransition()
+  const [visibleUsers, removeOptimistically] = useOptimistic(
+    users,
+    (current: PendingUser[], removedId: string) => current.filter((u) => u.id !== removedId),
+  )
+
+  function decide(user: PendingUser, run: () => Promise<{ ok: boolean; error?: string }>, done: string) {
+    startTransition(async () => {
+      removeOptimistically(user.id)
+      try {
+        const res = await run()
+        if (!res.ok) {
+          toast.error(res.error ?? 'Something went wrong — try again')
+          return
+        }
+        toast.success(done)
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  function handleApprove(user: PendingUser, role: 'admin' | 'member') {
+    decide(user, () => approveUser(user.id, role), `${user.name} approved as ${role}`)
+  }
+
+  function handleReject(user: PendingUser) {
+    decide(user, () => rejectUser(user.id), `${user.name} rejected`)
+  }
+
   return (
-    <Card className={users.length > 0 ? 'ring-primary/30' : undefined}>
+    <Card className={visibleUsers.length > 0 ? 'ring-primary/30' : undefined}>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           Pending approvals
-          {users.length > 0 ? <Badge variant="default">{users.length}</Badge> : null}
+          {visibleUsers.length > 0 ? (
+            <Badge variant="default">{visibleUsers.length}</Badge>
+          ) : null}
         </CardTitle>
         <CardDescription>
           Accounts created by open Google self-signup, waiting on a role and a decision.
@@ -161,7 +200,7 @@ export function PendingApprovalsCard({ users }: { users: PendingUser[] }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {users.length === 0 ? (
+        {visibleUsers.length === 0 ? (
           <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
             <CheckCheck className="size-5 text-muted-foreground/60" aria-hidden />
             <p className="text-sm font-medium">Nothing waiting on you.</p>
@@ -171,8 +210,14 @@ export function PendingApprovalsCard({ users }: { users: PendingUser[] }) {
           </div>
         ) : (
           <ul className="flex flex-col gap-2">
-            {users.map((user) => (
-              <PendingRow key={user.id} user={user} />
+            {visibleUsers.map((user) => (
+              <PendingRow
+                key={user.id}
+                user={user}
+                isPending={isPending}
+                onApprove={handleApprove}
+                onReject={handleReject}
+              />
             ))}
           </ul>
         )}

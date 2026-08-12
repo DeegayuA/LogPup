@@ -37,11 +37,15 @@ import { createTask } from '@/features/sprints/task-actions'
 import {
   matchPersonToAttendee,
   selectCarriedForward,
+  selectUnattributed,
+  findMatchingFollowup,
   filterValidIds,
+  CARRY_STALE_DAYS,
   type AttendeeRef,
   type CarriedForwardEntry,
   type CarriedForwardGroup,
   type FollowupKind,
+  type FollowupMatchCandidate,
   type OpenFollowupItem,
 } from '@/features/meetings/followups'
 import {
@@ -126,6 +130,14 @@ export type FollowupStatus = 'open' | 'resolved'
  * All three are optional — every action here is one click, and the writing
  * is enrichment layered on afterwards.
  */
+/** A linked task's live status, for the "show the task instead of a bare resolve button" UI. */
+export type LinkedTaskView = {
+  id: string
+  title: string
+  status: 'todo' | 'in_progress' | 'done'
+  appSlug: string | null
+}
+
 export type CarriedForwardItem = CarriedForwardEntry & {
   status: FollowupStatus
   resolutionNote: string | null
@@ -136,16 +148,29 @@ export type CarriedForwardItem = CarriedForwardEntry & {
   createdBy: string | null
   /** Set when it was pinned to one specific meeting instead of carrying. */
   targetMeetingId: string | null
+  /** The task that will resolve this item on completion, if one is linked — see linkFollowupToTask. */
+  linkedTask: LinkedTaskView | null
 }
 
 export type CarriedForwardItemGroup = {
   userId: string
   person: string
   items: CarriedForwardItem[]
+  /** How many more open items this person has beyond what `items` shows — see MAX_CARRIED_PER_PERSON. */
+  overflowCount: number
 }
 
-/** Someone a hand-added follow-up can be attributed to. */
+/** Someone a hand-added follow-up can be attributed to, or an unattributed item can be given to. */
 export type FollowupPersonOption = { id: string; name: string }
+
+/** An open follow-up the model heard but couldn't match to a user — surfaced on its own source meeting. */
+export type UnattributedFollowupView = {
+  id: string
+  personName: string
+  text: string
+  kind: FollowupKind
+  createdAt: Date
+}
 
 /**
  * A meeting a hand-added follow-up can be pinned to. `attendeeIds` lets the
@@ -164,6 +189,10 @@ export type MeetingIntel = {
   prep: CarriedForwardItemGroup[]
   /** This meeting's attendees — the people a new follow-up can be given to. */
   people: FollowupPersonOption[]
+  /** Every approved user, for the "Needs attribution" picker's fallback pool beyond this meeting's attendees. */
+  approvedUsers: FollowupPersonOption[]
+  /** This meeting's own open follow-ups the model couldn't attribute to a user — see attributeFollowup. */
+  unattributed: UnattributedFollowupView[]
   /** Later meetings the caller can see, for the optional "link to" picker. */
   upcomingMeetings: FollowupTargetOption[]
   /** Change-detected screen keyframes captured during recording, oldest first. */
@@ -356,6 +385,21 @@ async function insertAutoNotesAndSuggestions(
           meetingTitle: meeting.title,
         })
         if (notification) pendingNotifications.push(notification)
+
+        // Close the loop: an open follow-up owed by this same person that
+        // reads like the same piece of work gets linked to the task that
+        // just addressed it (see findMatchingFollowup). A SEPARATE
+        // try/catch from the one around task creation above — the task and
+        // suggestion row already exist at this point, so a failure here
+        // must not fall through to also filing a manual suggestion card.
+        try {
+          await linkFollowupToTask(assigneeId, item.text, created.data.taskId)
+        } catch (linkError) {
+          console.error(
+            `[meeting-followups] link on auto-assign failed for meeting ${meetingId}:`,
+            linkError,
+          )
+        }
         continue
       } catch (error) {
         // SAFETY: one failed task creation falls back to a manual card
@@ -431,6 +475,7 @@ type FollowupCarryRow = OpenFollowupItem & {
   resolvedAt: Date | null
   createdBy: string | null
   targetMeetingId: string | null
+  resolvedByTaskId: string | null
 }
 
 /**
@@ -479,6 +524,7 @@ async function fetchCarriedFollowups(
       resolvedAt: meetingFollowups.resolvedAt,
       createdBy: meetingFollowups.createdBy,
       targetMeetingId: meetingFollowups.targetMeetingId,
+      resolvedByTaskId: meetingFollowups.resolvedByTaskId,
       sourceMeetingId: meetingFollowups.sourceMeetingId,
       sourceMeetingTitle: meetings.title,
       sourceMeetingStartsAt: meetings.startsAt,
@@ -563,6 +609,71 @@ async function fetchFollowupTargets(
   return [...byId.values()]
 }
 
+/**
+ * This meeting's OWN open follow-ups that the model named someone for but
+ * couldn't resolve to a user (nickname, misspelling, a client contact —
+ * see matchPersonToAttendee). Scoped to sourceMeetingId = this meeting: the
+ * carried-forward query (fetchCarriedFollowups) explicitly excludes a
+ * meeting's own follow-ups from its own carry-in, and rightly so — there is
+ * no person here for one of these to be carried TO. Surfacing them requires
+ * this separate, narrower query instead. No extra entitlement check needed
+ * beyond the caller already being cleared to read THIS meeting (checked once
+ * in getMeetingIntel) — these rows all belong to it.
+ */
+async function fetchUnattributedFollowups(meeting: {
+  id: string
+  title: string
+  startsAt: Date
+}): Promise<UnattributedFollowupView[]> {
+  const rows = await db
+    .select({
+      id: meetingFollowups.id,
+      userId: meetingFollowups.userId,
+      personName: meetingFollowups.personName,
+      text: meetingFollowups.text,
+      kind: meetingFollowups.kind,
+      createdAt: meetingFollowups.createdAt,
+    })
+    .from(meetingFollowups)
+    .where(and(eq(meetingFollowups.sourceMeetingId, meeting.id), eq(meetingFollowups.status, 'open')))
+
+  // Routed through the same pure selectUnattributed the tests cover, rather
+  // than re-deciding "what counts as unattributed" a second time inline —
+  // the `sourceMeetingTitle`/`sourceMeetingStartsAt` fields it wants are
+  // filled from `meeting` since every row here already shares that source.
+  const unattributedIds = new Set(
+    selectUnattributed(
+      rows.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        personName: row.personName,
+        text: row.text,
+        kind: row.kind,
+        sourceMeetingId: meeting.id,
+        sourceMeetingTitle: meeting.title,
+        sourceMeetingStartsAt: meeting.startsAt,
+      })),
+    ).map((item) => item.id),
+  )
+
+  return rows
+    .filter((row) => unattributedIds.has(row.id))
+    .map((row) => ({ id: row.id, personName: row.personName, text: row.text, kind: row.kind, createdAt: row.createdAt }))
+}
+
+/**
+ * The full approved-user roster, for the "Needs attribution" picker's
+ * fallback pool once this meeting's own attendees have been offered first —
+ * the model may have named a client contact or someone who wasn't in this
+ * meeting's attendee list at all.
+ */
+async function fetchApprovedUsers(): Promise<FollowupPersonOption[]> {
+  return db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(and(eq(users.active, true), eq(users.status, 'approved')))
+}
+
 /** Derives person-linked follow-ups from the model's per-person notes and inserts them. */
 async function deriveAndInsertFollowups(
   sourceMeetingId: string,
@@ -603,6 +714,39 @@ async function deriveAndInsertFollowups(
   }
 
   if (rows.length > 0) await db.insert(meetingFollowups).values(rows)
+}
+
+/**
+ * Links an open follow-up owed by `assigneeId` to a task that was just
+ * created FOR them, when one clears findMatchingFollowup's bar (same
+ * person, high text similarity between the follow-up and what the task is
+ * actually about — see followups.ts). Sets `resolvedByTaskId` only — it does
+ * NOT resolve the follow-up itself; that happens when the task reaches
+ * 'done' (task-actions.ts's follow-up sync), which is the whole point:
+ * closing the task is what closes the loop, not accepting the suggestion.
+ *
+ * Called from both places a real task gets created from a suggestion — the
+ * manual accept (acceptTaskSuggestion) and the auto-assign pass
+ * (insertAutoNotesAndSuggestions) — each inside its own try/catch, so a
+ * lookup/write failure here can never undo a task that already exists.
+ */
+async function linkFollowupToTask(
+  assigneeId: string | null,
+  suggestionText: string,
+  taskId: string,
+): Promise<void> {
+  if (!assigneeId) return
+
+  const candidates: FollowupMatchCandidate[] = await db
+    .select({ id: meetingFollowups.id, userId: meetingFollowups.userId, text: meetingFollowups.text })
+    .from(meetingFollowups)
+    .where(and(eq(meetingFollowups.userId, assigneeId), eq(meetingFollowups.status, 'open')))
+  if (candidates.length === 0) return
+
+  const matchId = findMatchingFollowup({ assigneeId, text: suggestionText }, candidates)
+  if (!matchId) return
+
+  await db.update(meetingFollowups).set({ resolvedByTaskId: taskId }).where(eq(meetingFollowups.id, matchId))
 }
 
 /**
@@ -882,6 +1026,7 @@ async function persistMeetingAnalysis(
     const carriedIn = selectCarriedForward(
       openBefore,
       attendees.map((a) => a.id),
+      new Date(),
     )
     await resolveAddressedFollowups(createdBy, { id, title: meeting.title }, carriedIn, transcript, summary)
   } catch (error) {
@@ -1483,10 +1628,44 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     { includeResolvedHere: true },
   )
   const detailById = new Map(carried.map((row) => [row.id, row]))
-  const prep: CarriedForwardItemGroup[] = selectCarriedForward(carried, attendeeIds).map(
+
+  // One clock read, shared by every item's age/staleness below — matches
+  // meeting-notes-model.ts's own "one `now` per render" reasoning, just on
+  // the server side of the same computation.
+  const now = new Date()
+
+  // Batched lookup of every task a carried item is linked to (see
+  // linkFollowupToTask) — one query for the whole set, not one per row, same
+  // pattern as revalidateApps in sprints/task-actions.ts.
+  const linkedTaskIds = [
+    ...new Set(
+      carried
+        .map((row) => row.resolvedByTaskId)
+        .filter((taskId): taskId is string => taskId !== null),
+    ),
+  ]
+  const linkedTaskById = new Map<string, LinkedTaskView>()
+  if (linkedTaskIds.length > 0) {
+    const taskRows = await db
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        status: tasks.status,
+        appSlug: apps.slug,
+      })
+      .from(tasks)
+      .leftJoin(apps, eq(tasks.appId, apps.id))
+      .where(inArray(tasks.id, linkedTaskIds))
+    for (const row of taskRows) {
+      linkedTaskById.set(row.id, { id: row.id, title: row.title, status: row.status, appSlug: row.appSlug })
+    }
+  }
+
+  const prep: CarriedForwardItemGroup[] = selectCarriedForward(carried, attendeeIds, now).map(
     (group) => ({
       userId: group.userId,
       person: group.person,
+      overflowCount: group.overflowCount,
       items: group.items
         .map((item) => {
           const row = detailById.get(item.id)
@@ -1499,6 +1678,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
             resolvedAt: row?.resolvedAt ?? null,
             createdBy: row?.createdBy ?? null,
             targetMeetingId: row?.targetMeetingId ?? null,
+            linkedTask: row?.resolvedByTaskId ? (linkedTaskById.get(row.resolvedByTaskId) ?? null) : null,
           }
         })
         // Still-owed work first; the settled ones are a record, not a to-do.
@@ -1537,6 +1717,8 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
       : null,
     prep,
     people: attendees.map((attendee) => ({ id: attendee.id, name: attendee.name })),
+    approvedUsers: await fetchApprovedUsers(),
+    unattributed: await fetchUnattributedFollowups({ id, title: meeting.title, startsAt: meeting.startsAt }),
     upcomingMeetings: await fetchFollowupTargets(
       { id, startsAt: meeting.startsAt },
       { id: session.user.id, isAdmin },
@@ -1599,6 +1781,13 @@ const reopenFollowupInput = z.object({ followupId: z.uuid() })
 type FollowupWriteContext = {
   user: { id: string; role?: string | null }
   row: typeof meetingFollowups.$inferSelect
+  /**
+   * The source meeting, carried out of the authorization read that had to
+   * happen anyway. Exists so the activity trail can name what changed WITHOUT
+   * quoting the follow-up: `row.text` is transcript-derived and gated behind
+   * canReadMeetingIntel, while activity_log is read by every member.
+   */
+  sourceMeeting: { title: string; appId: string | null }
 }
 
 /**
@@ -1619,7 +1808,7 @@ async function authorizeFollowupWrite(
   if (!row) return err('Not found')
 
   const [sourceMeeting] = await db
-    .select({ createdBy: meetings.createdBy })
+    .select({ createdBy: meetings.createdBy, title: meetings.title, appId: meetings.appId })
     .from(meetings)
     .where(eq(meetings.id, row.sourceMeetingId))
   if (!sourceMeeting) return err('Not found')
@@ -1629,7 +1818,7 @@ async function authorizeFollowupWrite(
   const isSelf = row.userId === session.user.id
   if (!isAdmin && !isCreator && !isSelf) return err(`Not allowed to ${verb} this item`)
 
-  return ok({ user: session.user, row })
+  return ok({ user: session.user, row, sourceMeeting })
 }
 
 /**
@@ -1739,6 +1928,101 @@ export async function reopenFollowup(followupId: string): Promise<ActionResult> 
     revalidatePath('/meetings')
   }
 
+  return ok(undefined)
+}
+
+const closeAsStaleInput = z.object({ followupId: z.uuid() })
+
+/**
+ * One-click close for an item that has been carried past CARRY_STALE_DAYS
+ * with nothing said about it either way — distinct from a normal Resolve
+ * (which claims the item was actually addressed): this claims only that it
+ * is being stopped from carrying forward forever, and says so honestly in
+ * the outcome note rather than pretending it was answered. Same authorizer
+ * as resolve/reopen — no separate permission tier for this being "just" a
+ * cleanup action.
+ */
+export async function closeFollowupAsStale(followupId: string): Promise<ActionResult> {
+  const parsed = closeAsStaleInput.safeParse({ followupId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'close as stale')
+  if (!authorized.ok) return authorized
+  const { user, row } = authorized.data
+  if (row.status === 'resolved') return ok(undefined)
+
+  const ageDays = Math.max(
+    0,
+    Math.floor((Date.now() - row.createdAt.getTime()) / (24 * 60 * 60 * 1000)),
+  )
+  const resolutionNote = `Closed as stale — carried ${ageDays} days with no update`
+
+  await db
+    .update(meetingFollowups)
+    .set({ status: 'resolved', resolvedAt: new Date(), resolutionNote })
+    .where(eq(meetingFollowups.id, row.id))
+
+  await logActivity({
+    actorId: user.id,
+    verb: 'resolved',
+    entityType: 'followup',
+    entityId: row.id,
+    entityLabel: row.text.slice(0, 80),
+    pagePath: '/meetings',
+    detail: '— closed as stale',
+    metadata: { status: { from: row.status, to: 'resolved' }, reason: 'stale' },
+  })
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+const attributeFollowupInput = z.object({ followupId: z.uuid(), userId: z.uuid() })
+
+/**
+ * Gives an unattributed follow-up (see fetchUnattributedFollowups — the
+ * model named someone it couldn't unambiguously resolve to a user) a real
+ * owner. After this, it's an ordinary AI-derived follow-up: normal
+ * carry-forward, resolve, and task-linking all apply from here on.
+ *
+ * Entitlement is canManageMeeting on the item's SOURCE meeting (admin or
+ * that meeting's creator) — same tier as recording/managing that meeting,
+ * not the broader read-entitlement every attendee gets, since this is a
+ * write that changes who the item is about.
+ */
+export async function attributeFollowup(followupId: string, userId: string): Promise<ActionResult> {
+  const parsed = attributeFollowupInput.safeParse({ followupId, userId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const [row] = await db.select().from(meetingFollowups).where(eq(meetingFollowups.id, parsed.data.followupId))
+  if (!row) return err('Not found')
+  if (row.userId !== null) return err('Already attributed to someone')
+
+  const ctx = await canManageMeeting(row.sourceMeetingId)
+  if (!ctx) return err('Not allowed')
+
+  const [person] = await db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(eq(users.id, parsed.data.userId))
+  if (!person) return err('Person not found')
+
+  await db
+    .update(meetingFollowups)
+    .set({ userId: person.id, personName: person.name })
+    .where(eq(meetingFollowups.id, row.id))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'updated',
+    entityType: 'followup',
+    entityId: row.id,
+    entityLabel: row.text.slice(0, 80),
+    pagePath: '/meetings',
+    detail: `attributed to ${person.name}`,
+  })
+
+  revalidatePath('/meetings')
   return ok(undefined)
 }
 
@@ -2367,6 +2651,17 @@ export async function acceptTaskSuggestion(
     // auto one on an otherwise-identical 'accepted' row.
     .set({ status: 'accepted', createdTaskId: result.data.taskId, acceptedBy: session.user.id })
     .where(eq(meetingTaskSuggestions.id, suggestion.id))
+
+  // Close the loop: an open follow-up owed by this task's assignee that
+  // reads like the same piece of work gets linked to it (see
+  // linkFollowupToTask / findMatchingFollowup) — best-effort, wrapped
+  // separately from task creation above so a lookup/write failure here can
+  // never undo a task that was already accepted.
+  try {
+    await linkFollowupToTask(payload.assigneeId, suggestion.text, result.data.taskId)
+  } catch (error) {
+    console.error(`[meeting-followups] link on suggestion accept failed for suggestion ${suggestion.id}:`, error)
+  }
 
   // createTask above already wrote the "created task" trail row — this one
   // records the DISTINCT event (the suggestion being accepted), not a second

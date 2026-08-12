@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.145",
+  "current": "v0.0.146",
   "versions": [
     {
       "version": "v0.0.1",
@@ -869,6 +869,12 @@
       "version": "v0.0.145",
       "date": "2026-08-12",
       "hash": "99fbe9c",
+      "change": "."
+    },
+    {
+      "version": "v0.0.146",
+      "date": "2026-08-12",
+      "hash": "4c74b95",
       "change": "."
     }
   ]

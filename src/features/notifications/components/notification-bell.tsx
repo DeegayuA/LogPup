@@ -1,9 +1,9 @@
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { listNotifications, unreadNotificationCount } from '@/features/notifications/queries'
 import { NotificationBellClient } from '@/features/notifications/components/notification-bell-client'
 
 export async function NotificationBell() {
-  const session = await auth()
+  const session = await getSession()
   if (!session?.user?.id) return null
 
   const [items, unread] = await Promise.all([

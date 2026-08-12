@@ -1,18 +1,29 @@
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { Button } from '@/components/ui/button'
+import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { listMeetings } from '@/features/meetings/queries'
 import { listApps } from '@/features/apps/queries'
 import { listActiveUsers } from '@/features/people/queries'
+import { parseCalendarView, parseFocusedDate } from '@/features/meetings/calendar-view'
 import { StatTile } from '@/features/meetings/components/meeting-chips'
 import { summarizeMeetings } from '@/features/meetings/components/meeting-glance'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingsViews } from '@/features/meetings/components/meetings-views'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 
-export default async function MeetingsPage(props: { searchParams: Promise<{ new?: string }> }) {
-  const [{ new: newParam }, session, allMeetings, apps, activeUsers] = await Promise.all([
+export default async function MeetingsPage(props: {
+  /** `view` and `date` drive the calendar surface — see calendar-view.ts. */
+  searchParams: Promise<{ new?: string; view?: string; date?: string }>
+}) {
+  const [
+    { new: newParam, view: viewParam, date: dateParam },
+    session,
+    allMeetings,
+    apps,
+    activeUsers,
+  ] = await Promise.all([
     props.searchParams,
-    auth(),
+    getSession(),
     listMeetings(),
     listApps(),
     listActiveUsers(),
@@ -29,6 +40,15 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
   // Computed on the server, where reading the clock is free of the hydration
   // and purity constraints the client components live under.
   const overview = summarizeMeetings(upcoming, past, currentUserId, new Date())
+
+  // Today in Asia/Colombo, and the view/date the URL asked for — parsed HERE,
+  // from the awaited searchParams, so the very first server paint is already
+  // the right view on the right week. Sending "today" down as a value rather
+  // than letting each side read its own clock is what stops the highlight
+  // landing on two different squares across hydration.
+  const todayIso = toIsoDateInTimeZone(new Date())
+  const initialView = parseCalendarView(viewParam)
+  const initialDate = parseFocusedDate(dateParam, todayIso)
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -73,6 +93,9 @@ export default async function MeetingsPage(props: { searchParams: Promise<{ new?
         currentUserId={currentUserId}
         isAdmin={isAdmin}
         users={activeUsers}
+        initialView={initialView}
+        initialDate={initialDate}
+        todayIso={todayIso}
       />
     </div>
   )

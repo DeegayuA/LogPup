@@ -341,7 +341,11 @@ export function DateTimeWheelField({
                 defaultMonth={anchor}
                 onSelect={(day) => day && commitDate({ day })}
                 disabled={{ before: startOfToday() }}
-                className="p-0"
+                // Cells stretch to fill the popover (Calendar root is w-full);
+                // the larger --cell-size keeps day buttons a comfortable tap
+                // target instead of the 28px default that left the grid
+                // cramped inside a 22rem popover.
+                className="w-full p-0 [--cell-size:--spacing(9)]"
               />
             </div>
             <div className="flex items-start justify-center gap-2 border-t border-border px-3 py-2.5">

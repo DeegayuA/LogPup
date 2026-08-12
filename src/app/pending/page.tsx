@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { Clock, ShieldX } from 'lucide-react'
-import { auth, signOut } from '@/lib/auth'
+import { signOut } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import {
   Card,
   CardContent,
@@ -23,7 +24,7 @@ export const metadata = { title: 'Pending approval' }
 // pending-approval gate there), so this needs to work as its own minimal
 // page rather than a child of that shell.
 export default async function PendingPage() {
-  const session = await auth()
+  const session = await getSession()
   if (!session?.user) redirect('/sign-in')
 
   // Belt-and-suspenders: the proxy gate is what normally keeps an approved

@@ -65,10 +65,22 @@ export function ActivityFilterBar({
   // carries this sentinel instead and apply() maps it back to ''.
   const ALL = '__all__'
 
+  // `items` is required on the person/app selects: Base UI's <Select.Value>
+  // renders the raw value (a UUID here) unless the Root gets a value → label map.
+  const personItems = [
+    { value: ALL, label: 'All people' },
+    ...people.map((person) => ({ value: person.id, label: person.name })),
+  ]
+  const appItems = [
+    { value: ALL, label: 'All apps' },
+    ...apps.map((app) => ({ value: app.id, label: app.name })),
+  ]
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Select
         value={current.person || ALL}
+        items={personItems}
         onValueChange={(value) => apply({ person: !value || value === ALL ? '' : value })}
       >
         <SelectTrigger size="sm" className="w-40" aria-label="Filter by person">
@@ -103,6 +115,7 @@ export function ActivityFilterBar({
 
       <Select
         value={current.app || ALL}
+        items={appItems}
         onValueChange={(value) => apply({ app: !value || value === ALL ? '' : value })}
       >
         <SelectTrigger size="sm" className="w-40" aria-label="Filter by app">

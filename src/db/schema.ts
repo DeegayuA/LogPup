@@ -322,6 +322,17 @@ export const meetingFollowups = pgTable('meeting_followups', {
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   targetMeetingId: uuid('target_meeting_id')
     .references(() => meetings.id, { onDelete: 'set null' }),
+  // Set when this item was matched (see followups.ts findMatchingFollowup —
+  // same userId, high text similarity) to a task created from a suggestion
+  // that addresses it. Closes the loop the carry-forward system otherwise
+  // never closes on its own: once set, moving that task to 'done' resolves
+  // this row automatically (and moving it back out reopens it) — see
+  // task-actions.ts's follow-up sync, wired into updateTask/moveTaskOnBoard.
+  // onDelete set null (not cascade): deleting the task should not delete the
+  // record that a follow-up existed, only un-link it back to plain manual
+  // resolution.
+  resolvedByTaskId: uuid('resolved_by_task_id')
+    .references(() => tasks.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -547,4 +558,41 @@ export const activityLog = pgTable('activity_log', {
   index('activity_log_entity_idx').on(t.entityType, t.entityId, t.createdAt),
   // Per-person filter on /activity.
   index('activity_log_actor_idx').on(t.actorId, t.createdAt),
+])
+
+// One self-reported progress number per (sprint, person): "I'm at N%",
+// optionally with a sentence of context. The row is CURRENT STATE, upserted
+// in place (see upsertSprintCheckin in sprints/checkin-actions.ts) — an
+// append-only history was rejected because every reader (the standup/meeting
+// prep surface) only ever wants each person's latest answer, and the "who
+// changed what, when" trail already lives in activity_log. `updated_at` is
+// therefore the staleness signal: a check-in from four days ago is itself
+// information at standup.
+//
+// Deliberately stores ONLY the human's number. The computed side — what this
+// person's task board says (computeTaskProgress in sprints/checkins.ts) — is
+// derived at read time, never persisted next to it, so the gap between the
+// two (checkinGap, the signal this feature exists to surface) can't quietly
+// compare a fresh report against a stale snapshot of the board.
+//
+// userId intentionally has no ON DELETE clause: accounts are deactivated,
+// never deleted (same reasoning as activity_log.actor_id), so the join to a
+// name/avatar is always safe. A deleted sprint takes its check-ins with it —
+// they mean nothing without the sprint they report on.
+export const sprintCheckins = pgTable('sprint_checkins', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sprintId: uuid('sprint_id').notNull().references(() => sprints.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  // 0..100, validated at the action boundary. Integer on purpose: nobody
+  // reports "37.5% done" at standup, and whole points keep the gap math and
+  // the UI's tabular-nums rendering exact.
+  percent: integer('percent').notNull(),
+  note: text('note'),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  // THE invariant: one current answer per person per sprint. Also what the
+  // upsert's ON CONFLICT targets, and the access path for every read
+  // (getSprintCheckins / getCheckinsForSprints filter on sprint_id, the
+  // index's leading column).
+  uniqueIndex('sprint_checkins_sprint_user_idx').on(t.sprintId, t.userId),
 ])

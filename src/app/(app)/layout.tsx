@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { Sidebar } from '@/components/shell/sidebar'
 import { Header } from '@/components/shell/header'
 import { AccountMenu } from '@/components/shell/account-menu'
@@ -11,7 +11,7 @@ export default async function AppLayout({
 }: {
   children: React.ReactNode
 }) {
-  const session = await auth()
+  const session = await getSession()
   // Defense in depth: the proxy guard is the primary gate, but its matcher
   // necessarily excludes static-asset paths, so no authed page should rely on
   // it alone.

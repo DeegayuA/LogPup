@@ -46,6 +46,13 @@ describe('activity cursor codec', () => {
     ['no separator', '2026-08-12T10:30:00.000Z'],
     ['bad date', 'yesterday|some-id'],
     ['missing id', '2026-08-12T10:30:00.000Z|'],
+    // Not merely cosmetic: activity_log.id is a Postgres `uuid` column, so a
+    // non-uuid id reaching the query is error 22P02 raised at bind time — a
+    // 500, not an empty page. Rejecting it here is what keeps the "degrades
+    // to page one" contract true.
+    ['non-uuid id', '2026-08-12T10:30:00.000Z|garbage'],
+    ['truncated uuid', '2026-08-12T10:30:00.000Z|22222222-2222-4222-8222-2222222222'],
+    ['uuid with trailing junk', '2026-08-12T10:30:00.000Z|22222222-2222-4222-8222-222222222222x'],
   ])('degrades %s to null instead of crashing', (_name, raw) => {
     expect(decodeActivityCursor(raw as string | undefined)).toBeNull()
   })

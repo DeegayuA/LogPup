@@ -1,33 +1,15 @@
-import Link from 'next/link'
+import { Suspense } from 'react'
 import { format } from 'date-fns'
-import { AtSign } from 'lucide-react'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import {
-  getPersonFollowups,
-  getPersonMeetings,
-  getPersonWorkload,
-  getUserCapacities,
-  listAssignableApps,
-} from '@/features/people/queries'
-import { isoDayOf } from '@/features/people/iso-day'
-import { getActiveSprints, getNextUpcomingSprint } from '@/features/sprints/queries'
-import { listApps } from '@/features/apps/queries'
-import { summarizePortfolio } from '@/features/apps/app-health'
-import { browseHref, parseBrowseParams } from '@/features/apps/browse'
-import { PortfolioSummaryStrip } from '@/features/apps/components/portfolio-summary'
-import { listNotifications, unreadNotificationCount } from '@/features/notifications/queries'
-import { listRecentActivity } from '@/features/activity/queries'
-import { listPendingUsers } from '@/features/admin/queries'
-import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
-import { CapacityHeat } from '@/features/dashboard/components/capacity-heat'
-import { ActiveSprints } from '@/features/dashboard/components/active-sprints'
-import { NotificationsCard } from '@/features/dashboard/components/notifications-card'
-import { RecentActivityCard } from '@/features/dashboard/components/recent-activity-card'
-import { buildMyDayStats } from '@/features/dashboard/my-day-stats'
-import { PersonStatRow } from '@/features/people/components/person-stat-row'
-import { PersonTasksCard } from '@/features/people/components/person-tasks-card'
-import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
-import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
+  MyDayZone,
+  MyDayZoneSkeleton,
+  PortfolioZone,
+  PortfolioZoneSkeleton,
+  TeamZone,
+  TeamZoneSkeleton,
+  UnreadMentionsPill,
+} from '@/features/dashboard/components/dashboard-zones'
 
 function greetingFor(hour: number): string {
   if (hour < 12) return 'Good morning'
@@ -56,68 +38,26 @@ function ZoneLabel({ children }: { children: string }) {
  * pages), then widens to the team (capacity, sprints), then to the whole
  * portfolio (health strip, the activity trail, approvals).
  *
- * ONE Promise.all, ~11 reads, all indexed and independent — same rule as the
- * person page: never serialize what can run together, never N+1. The two
- * admin-only reads ride along as resolved no-ops for members rather than
- * forcing a second await round after the role is known.
+ * THIS FILE IS NOW JUST THE SHELL. It reads one thing — who is signed in —
+ * and hands off to three `<Suspense>` zones that fetch and stream
+ * independently (see features/dashboard/components/dashboard-zones.tsx for
+ * why, and for what each zone reads). The greeting and the page's structure
+ * paint on the first flush; the zones fill in underneath as their own queries
+ * land, in the order the page argues for them.
+ *
+ * The session read is `getSession`, so it costs nothing here — the (app)
+ * layout already paid for it on this request (lib/session.ts).
  */
 export default async function DashboardPage() {
-  const session = await auth()
+  const session = await getSession()
   const user = session?.user
   const isAdmin = user?.role === 'admin'
-
-  const [
-    workload,
-    followups,
-    meetings,
-    unreadMentions,
-    notificationItems,
-    recentActivity,
-    capacities,
-    activeSprints,
-    apps,
-    assignableApps,
-    pendingUsers,
-  ] = await Promise.all([
-    user ? getPersonWorkload(user.id) : null,
-    user ? getPersonFollowups(user.id) : null,
-    user ? getPersonMeetings(user.id) : null,
-    user ? unreadNotificationCount(user.id) : 0,
-    user ? listNotifications(user.id, 8) : [],
-    listRecentActivity(10),
-    getUserCapacities(),
-    getActiveSprints(),
-    listApps(),
-    // Only the admin's inline "Assign to app" control needs the app list —
-    // a member never renders it, so don't pay for the query.
-    isAdmin ? listAssignableApps() : Promise.resolve([]),
-    isAdmin ? listPendingUsers() : Promise.resolve([]),
-  ])
-  // Only needed for the sprints card's empty-but-not-really state, so it's
-  // fetched after we already know whether anything is running now.
-  const nextSprint = activeSprints.length === 0 ? await getNextUpcomingSprint() : null
 
   const now = new Date()
   const firstName = user?.name?.trim().split(/\s+/)[0]
   const greeting = firstName
     ? `${greetingFor(now.getHours())}, ${firstName}`
     : greetingFor(now.getHours())
-
-  const todayIso = workload?.todayIso ?? isoDayOf(now)
-  const meetingsToday =
-    meetings?.upcoming.filter((entry) => isoDayOf(entry.startsAt) === todayIso).length ?? 0
-
-  const myDayStats =
-    workload && followups
-      ? buildMyDayStats({
-          tasks: workload.load,
-          followupsOwed: followups.owed.length,
-          oldestOwedDays: followups.oldestOwedDays,
-          meetingsToday,
-        })
-      : null
-
-  const summary = summarizePortfolio(apps)
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -128,65 +68,31 @@ export default async function DashboardPage() {
             {greeting} · {format(now, 'EEEE, MMMM d')}
           </p>
         </div>
-        {unreadMentions > 0 ? (
-          <Link
-            href="#notifications"
-            className="flex items-center gap-1.5 rounded-full bg-chart-1/15 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-chart-1/25"
-          >
-            <AtSign className="size-3.5 text-chart-1" aria-hidden />
-            {unreadMentions} unread
-          </Link>
+        {user ? (
+          <Suspense fallback={null}>
+            <UnreadMentionsPill userId={user.id} />
+          </Suspense>
         ) : null}
       </header>
 
       {/* ——— My day ——— */}
-      {myDayStats ? (
-        <PersonStatRow
-          stats={myDayStats}
-          className="grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4"
-        />
+      {user ? (
+        <Suspense fallback={<MyDayZoneSkeleton />}>
+          <MyDayZone userId={user.id} userName={user.name ?? 'You'} />
+        </Suspense>
       ) : null}
-
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-        {workload ? (
-          <PersonTasksCard
-            openTasks={workload.openTasks}
-            todayIso={workload.todayIso}
-            doneCount={workload.doneCount}
-            totalCount={workload.totalCount}
-          />
-        ) : null}
-        {followups && user ? (
-          <PersonFollowupsCard followups={followups} personName={user.name ?? 'You'} />
-        ) : null}
-        {meetings ? <PersonMeetingsCard meetings={meetings} /> : null}
-        <div id="notifications" className="scroll-mt-6">
-          <NotificationsCard items={notificationItems} />
-        </div>
-      </div>
 
       {/* ——— Team ——— */}
       <ZoneLabel>Team</ZoneLabel>
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-        <CapacityHeat capacities={capacities} isAdmin={isAdmin} apps={assignableApps} />
-        <ActiveSprints sprints={activeSprints} nextSprint={nextSprint} />
-      </div>
+      <Suspense fallback={<TeamZoneSkeleton />}>
+        <TeamZone isAdmin={isAdmin} />
+      </Suspense>
 
       {/* ——— Portfolio ——— */}
       <ZoneLabel>Portfolio</ZoneLabel>
-      {apps.length > 0 ? (
-        <PortfolioSummaryStrip
-          summary={summary}
-          atRiskHref={browseHref('/apps', parseBrowseParams({}), {
-            risk: 'at-risk',
-            status: 'live',
-          })}
-        />
-      ) : null}
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-        <RecentActivityCard rows={recentActivity} now={now} />
-        {isAdmin && pendingUsers.length > 0 ? <PendingApprovalsCard users={pendingUsers} /> : null}
-      </div>
+      <Suspense fallback={<PortfolioZoneSkeleton />}>
+        <PortfolioZone isAdmin={isAdmin} />
+      </Suspense>
     </div>
   )
 }

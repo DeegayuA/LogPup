@@ -4,7 +4,7 @@ import { format } from 'date-fns'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { auth } from '@/lib/auth'
+import { getSession } from '@/lib/session'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
   appHealth,
@@ -31,6 +31,7 @@ import { getMeetingsForApp } from '@/features/meetings/queries'
 import { Board } from '@/features/sprints/components/board'
 import { Roadmap } from '@/features/sprints/components/roadmap'
 import { SprintSwitcher } from '@/features/sprints/components/sprint-switcher'
+import { SprintCheckins } from '@/features/sprints/components/sprint-checkins'
 import { SprintFormDialog } from '@/features/sprints/components/sprint-form-dialog'
 import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-select'
 import { ExportButton } from '@/features/notion/components/export-button'
@@ -63,7 +64,7 @@ export default async function AppDetailPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const [{ slug }, search] = await Promise.all([props.params, props.searchParams])
-  const [app, session] = await Promise.all([getAppBySlug(slug), auth()])
+  const [app, session] = await Promise.all([getAppBySlug(slug), getSession()])
   if (!app) notFound()
 
   const isAdmin = session?.user?.role === 'admin'
@@ -218,7 +219,22 @@ export default async function AppDetailPage(props: {
           ) : null}
 
           {currentSprint ? (
-            <AppSprintBand sprint={currentSprint} tasks={tasks} today={today} />
+            <>
+              <AppSprintBand sprint={currentSprint} tasks={tasks} today={today} />
+              <SprintCheckins
+                appId={app.id}
+                sprintId={currentSprint.id}
+                currentUser={
+                  session?.user
+                    ? {
+                        id: session.user.id,
+                        name: session.user.name ?? session.user.email,
+                        avatarUrl: session.user.image ?? null,
+                      }
+                    : null
+                }
+              />
+            </>
           ) : (
             <section className="flex flex-col gap-2 rounded-xl border bg-card p-4">
               <h2 className="font-heading text-sm font-semibold">No sprint running</h2>
