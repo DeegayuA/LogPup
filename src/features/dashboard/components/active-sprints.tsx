@@ -66,7 +66,7 @@ export function ActiveSprints({
       <CardContent>
         {sprints.length === 0 && nextSprint ? (
           <Link
-            href={`/apps/${nextSprint.appSlug}?tab=board`}
+            href={`/apps/${nextSprint.appSlug}?tab=roadmap`}
             className="flex flex-col items-center gap-1.5 rounded-lg py-4 text-center transition-colors duration-150 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
           >
             <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
@@ -95,7 +95,7 @@ export function ActiveSprints({
               return (
                 <li key={sprint.sprintId}>
                   <Link
-                    href={`/apps/${sprint.appSlug}?tab=board`}
+                    href={`/apps/${sprint.appSlug}?tab=roadmap`}
                     className="flex flex-col gap-1.5 px-3 py-2.5 transition-colors duration-150 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
                   >
                     <div className="flex items-baseline justify-between gap-2">

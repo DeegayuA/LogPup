@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useMemo, useState, useTransition, type KeyboardEvent } from 'react'
-import { CalendarDays, CornerDownLeft, Loader2, UserRound } from 'lucide-react'
+import { CalendarDays, CornerDownLeft, Flag, Loader2, Text as TextIcon, UserRound } from 'lucide-react'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,9 @@ type ComposerPlan = {
   unresolvedQuery: string | null
   due: string | null
   dueLabel: string | null
+  priority: number | null
+  priorityLabel: string | null
+  description: string | null
 }
 
 /**
@@ -45,6 +48,9 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
     unresolvedQuery: null,
     due: null,
     dueLabel: null,
+    priority: null,
+    priorityLabel: null,
+    description: null,
   }
 
   const intent = parseTaskIntent(text, people, today)
@@ -60,6 +66,9 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
       ambiguousNames: intent.ambiguous.map((p) => p.name),
       due: intent.due,
       dueLabel: intent.dueLabel,
+      priority: intent.priority,
+      priorityLabel: intent.priorityLabel,
+      description: intent.description,
     }
   }
   if (intent.assigneeQuery) return { ...verbatim, unresolvedQuery: intent.assigneeQuery }
@@ -70,6 +79,9 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
     assignee: intent.assignee,
     due: intent.due,
     dueLabel: intent.dueLabel,
+    priority: intent.priority,
+    priorityLabel: intent.priorityLabel,
+    description: intent.description,
   }
 }
 
@@ -136,7 +148,10 @@ export function TaskComposer({
           // resolved to, so honouring the column instead would contradict
           // what the user was just shown.
           assigneeId: plan.assignee?.id ?? patch.assigneeId ?? null,
-          priority: patch.priority ?? 0,
+          // Same precedence as the assignee: a priority typed into the field
+          // was shown in the preview, so it beats the column patch.
+          priority: plan.priority ?? patch.priority ?? 0,
+          description: plan.description ?? undefined,
           status: patch.status ?? 'todo',
           dueDate: plan.due,
         })
@@ -210,6 +225,18 @@ export function TaskComposer({
                   {plan.dueLabel}
                 </span>
               ) : null}
+              {plan.priorityLabel ? (
+                <span className="inline-flex items-center gap-1">
+                  <Flag className="size-3 shrink-0" aria-hidden />
+                  {plan.priorityLabel}
+                </span>
+              ) : null}
+              {plan.description ? (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <TextIcon className="size-3 shrink-0" aria-hidden />
+                  <span className="truncate">{plan.description}</span>
+                </span>
+              ) : null}
               <span className="ml-auto inline-flex shrink-0 items-center gap-1">
                 {isPending ? (
                   <>
@@ -227,7 +254,7 @@ export function TaskComposer({
           </div>
         ) : focused ? (
           <p className="mt-1.5 px-2 text-2xs text-muted-foreground">
-            Try “fix login to shanika friday”
+            Try “fix login @shanika friday high -- 2FA users see a blank screen”
           </p>
         ) : null}
       </div>

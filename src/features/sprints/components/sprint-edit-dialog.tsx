@@ -307,7 +307,7 @@ export function SprintEditDialog({
             <div className="flex items-center gap-2">
               {sprint ? (
                 <Link
-                  href={`/apps/${slug}?sprint=${sprint.id}&tab=board`}
+                  href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
                   className={cn(buttonVariants({ variant: 'outline' }))}
                 >
                   Open board

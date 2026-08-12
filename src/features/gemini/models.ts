@@ -23,11 +23,40 @@ import { LIVE_MODEL_FALLBACK_ORDER } from '@/features/transcription/live-protoco
 export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODEL, LIVE_MODEL_FALLBACK_ORDER }
 
 /**
- * Understanding work — meeting analysis, per-segment audio transcription,
- * follow-up resolution, app descriptions. The default chain callGemini
- * already walks; named here so call sites can say what they mean.
+ * Understanding work — per-segment audio transcription, follow-up
+ * resolution. The default chain callGemini already walks; named here so
+ * call sites can say what they mean.
  */
 export const ANALYSIS_MODELS: readonly string[] = GEMINI_MODEL_FALLBACK_ORDER
+
+/**
+ * The one pass over a whole meeting: reconciling speaker labels across every
+ * segment, reading the captured screens, and writing minutes somebody will
+ * act on.
+ *
+ * It gets the Pro model where the rest of the pipeline gets Flash, because
+ * this is the only call whose output a person actually reads — and it runs
+ * ONCE per meeting against N per-segment transcription calls, so the
+ * expensive tier costs a rounding error of a free key's request budget.
+ * Flash follows as the fallback: a slower write-up beats none, and Pro is a
+ * preview model that can disappear on short notice.
+ */
+export const SYNTHESIS_MODELS: readonly string[] = [
+  'gemini-3.1-pro-preview',
+  ...GEMINI_MODEL_FALLBACK_ORDER,
+]
+
+/**
+ * Short mechanical text work with an obvious right answer — a repo README
+ * turned into a one-line app description, a meeting title from its agenda.
+ * Flash-Lite first: these are the highest-frequency, lowest-stakes calls in
+ * the product, and spending the flagship model on them is what leaves a free
+ * key with nothing left for the meeting write-up that matters.
+ */
+export const QUICK_MODELS: readonly string[] = [
+  'gemini-3.5-flash-lite',
+  ...GEMINI_MODEL_FALLBACK_ORDER,
+]
 
 /**
  * Short interactive answers (the meeting voice assistant): same models as

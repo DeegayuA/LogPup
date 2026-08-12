@@ -1,5 +1,5 @@
 import { cache } from 'react'
-import { and, asc, desc, eq, gt, gte, isNull, lte, or } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, isNull, lte, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { apps, sprints, tasks, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
@@ -150,6 +150,44 @@ export async function getNextUpcomingSprint(): Promise<UpcomingSprintSummary | n
     .limit(1)
 
   return row ?? null
+}
+
+/**
+ * Task counts per sprint for one app, plus the backlog under the `null` key.
+ *
+ * The unified Roadmap needs a count for EVERY bar on the spine, and getBoard
+ * answers for exactly one sprint — which is why the old Board tab could only
+ * show progress for the sprint you had already selected. One grouped query
+ * answers the whole spine instead of N round trips.
+ *
+ * getActiveSprints is not a substitute: it is cross-app, cached, and
+ * deliberately excludes finished sprints, which the spine still has to draw.
+ */
+export type SprintTaskCounts = { todo: number; in_progress: number; done: number }
+
+export async function getSprintTaskCounts(
+  appId: string,
+): Promise<Map<string | null, SprintTaskCounts>> {
+  const rows = await db
+    .select({
+      sprintId: tasks.sprintId,
+      status: tasks.status,
+      count: sql<number>`count(*)`,
+    })
+    .from(tasks)
+    .where(eq(tasks.appId, appId))
+    .groupBy(tasks.sprintId, tasks.status)
+
+  const bySprint = new Map<string | null, SprintTaskCounts>()
+  for (const row of rows) {
+    const counts = bySprint.get(row.sprintId) ?? { todo: 0, in_progress: 0, done: 0 }
+    // `count(*)` comes back as a string through some driver versions; Number()
+    // keeps the arithmetic downstream integer maths rather than string
+    // concatenation.
+    counts[row.status as keyof SprintTaskCounts] = Number(row.count)
+    bySprint.set(row.sprintId, counts)
+  }
+  return bySprint
 }
 
 export async function getBoard(appId: string, sprintId: string | null): Promise<Board> {

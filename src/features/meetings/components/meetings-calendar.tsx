@@ -54,6 +54,7 @@ import { MeetingDetailDialog } from '@/features/meetings/components/meeting-deta
 import { MeetingsAgenda } from '@/features/meetings/components/meetings-agenda'
 import { MeetingsMonthCalendar } from '@/features/meetings/components/meetings-month-calendar'
 import { MeetingsTimeGrid } from '@/features/meetings/components/meetings-time-grid'
+import { MeetingsDayRail } from '@/features/meetings/components/meetings-day-rail'
 import type { MentionUser } from '@/components/mention-textarea'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
@@ -395,15 +396,33 @@ export function MeetingsCalendar({
         />
       ) : (
         <>
-          <MeetingsTimeGrid
-            days={range.days}
-            meetings={inRange}
-            pxPerHour={pxPerHour}
-            todayIso={todayIso}
-            onOpenMeeting={setOpenId}
-            onCreateAt={onCreateAt}
-            onZoomBy={changeZoom}
-          />
+          {/* Day view gets a right rail (mini-month + live-or-next details) on
+              xl and up; the grid itself is untouched and keeps the whole width
+              everywhere else. `items-start` so the rail hugs the top instead
+              of stretching to the grid's full 24-hour height. */}
+          <div className="flex items-start gap-4">
+            <div className="min-w-0 flex-1">
+              <MeetingsTimeGrid
+                days={range.days}
+                meetings={inRange}
+                pxPerHour={pxPerHour}
+                todayIso={todayIso}
+                onOpenMeeting={setOpenId}
+                onCreateAt={onCreateAt}
+                onZoomBy={changeZoom}
+              />
+            </div>
+            {drawnView === 'day' ? (
+              <div className="hidden xl:block">
+                <MeetingsDayRail
+                  meetings={inRange}
+                  focusedDate={focusedDate}
+                  onFocusedDateChange={onFocusedDateChange}
+                  onOpenMeeting={setOpenId}
+                />
+              </div>
+            ) : null}
+          </div>
           <p className="text-xs text-muted-foreground">
             All 24 hours are shown; 08:00–18:00 is emphasised. Select a meeting for its details,
             attendees and notes. Hold Alt (<span className="font-mono">⌥</span>) while scrolling to

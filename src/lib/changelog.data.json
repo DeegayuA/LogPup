@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.163",
+  "current": "v0.0.165",
   "versions": [
     {
       "version": "v0.0.1",
@@ -978,6 +978,18 @@
       "date": "2026-08-12",
       "hash": "eb102f1",
       "change": "docs: attendee recommender implementation plan (A1, 9 tasks)"
+    },
+    {
+      "version": "v0.0.164",
+      "date": "2026-08-12",
+      "hash": "b10cd85",
+      "change": "feat: suggest a meeting title from project and start time"
+    },
+    {
+      "version": "v0.0.165",
+      "date": "2026-08-12",
+      "hash": "b25c584",
+      "change": "."
     }
   ]
 }

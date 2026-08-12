@@ -308,6 +308,10 @@ async function callGeminiCore<T>(
       continue
     }
 
+    // Set when a model on THIS key answered 401/403/429. Only meaningful
+    // once every model has been tried — see the auth/quota branch below.
+    let keyLevelFailure = false
+
     for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
       const model = models[modelIndex]
       const isFallbackPass = modelIndex > 0
@@ -342,14 +346,18 @@ async function callGeminiCore<T>(
       }
 
       if (result.kind === 'auth' || result.kind === 'quota') {
-        sawAuthFailure = true
-        await db
-          .update(geminiKeys)
-          .set({ failCount: sql`${geminiKeys.failCount} + 1`, lastUsedAt: new Date() })
-          .where(eq(geminiKeys.id, key.id))
-        // Key-specific failure — no model on this key will do better.
-        // Break out of the model loop and roll to the next key.
-        break
+        // NOT necessarily key-level, which is why this no longer abandons the
+        // key on the spot. Gemini rate-limits PER MODEL, and the premium
+        // tiers far harder than flash — so a 429, or a 403 from a project
+        // without access to a preview model, on the FIRST entry of a
+        // Pro-first chain says nothing about whether flash would work on the
+        // same key. Breaking here meant one busy Pro model could fail a
+        // meeting write-up outright for someone whose key was perfectly fine.
+        //
+        // The bookkeeping is deferred, not dropped: if no model on this key
+        // succeeds, failCount is bumped once after the loop.
+        keyLevelFailure = true
+        continue
       }
 
       if (result.kind === 'missing') {
@@ -363,6 +371,16 @@ async function callGeminiCore<T>(
       // the loop ends and we roll to the next key below without touching
       // failCount: the key itself isn't at fault.
       sawTransientBusy = true
+    }
+
+    // Every model on this key was refused with an auth/quota error, so the
+    // key really is the problem — bump it here, once, rather than per model.
+    if (keyLevelFailure) {
+      sawAuthFailure = true
+      await db
+        .update(geminiKeys)
+        .set({ failCount: sql`${geminiKeys.failCount} + 1`, lastUsedAt: new Date() })
+        .where(eq(geminiKeys.id, key.id))
     }
   }
 

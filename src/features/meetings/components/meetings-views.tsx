@@ -1,14 +1,20 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useState, useTransition } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { isSameDay } from 'date-fns'
-import { CalendarDays, List } from 'lucide-react'
+import { CalendarDays, List, Loader2, NotebookPen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { HolidayLegend } from '@/components/shared/holiday-icon'
 import { UpcomingMeetingsFiltered } from '@/features/meetings/components/upcoming-filter'
 import { PastMeetingsSection } from '@/features/meetings/components/past-meetings-section'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
+import { createMeeting } from '@/features/meetings/actions'
+import { toast } from 'sonner'
+import {
+  formatBusinessTime,
+  formatBusinessWeekdayDayMonth,
+} from '@/features/people/format-instant'
 import { MeetingsCalendar, useIsWideScreen } from '@/features/meetings/components/meetings-calendar'
 import {
   calendarUrlPatch,
@@ -127,6 +133,51 @@ export function MeetingsViews({
    */
   const [createAt, setCreateAt] = useState<Date | undefined>(undefined)
 
+  /**
+   * QUICK NOTES — an unplanned, note-taking-first meeting.
+   *
+   * "I need to take notes NOW" is a different gesture from scheduling: no
+   * app, no invite list, no form — the meeting is the notebook. One click
+   * creates a real meeting row (appId null, sole attendee: you, starting this
+   * minute) and lands on it with the write-up panel already open, recorder a
+   * click away.
+   *
+   * A REAL meeting row on purpose, not a separate "scratch notes" store: it
+   * shows on every calendar view like anything else (which is the ask), the
+   * whole notes/transcript/follow-ups surface works unchanged, and it can be
+   * edited later into a proper meeting — retitled, moved onto an app, given
+   * attendees — because it never was a second kind of thing.
+   *
+   * `createMeeting`'s Google-invite warning is deliberately swallowed here:
+   * it means "attendees were not emailed", and the only attendee is you.
+   */
+  const [creatingQuickNotes, startQuickNotes] = useTransition()
+
+  function handleQuickNotes() {
+    startQuickNotes(async () => {
+      try {
+        const start = new Date()
+        const end = new Date(start.getTime() + 60 * 60 * 1000)
+        const res = await createMeeting({
+          appId: null,
+          title: `Quick notes — ${formatBusinessWeekdayDayMonth(start)} · ${formatBusinessTime(start)}`,
+          startsAt: start.toISOString(),
+          endsAt: end.toISOString(),
+          attendeeIds: [currentUserId],
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setDay(start)
+        setOpenMeetingId(res.data.meetingId)
+        writeUrl('list', focusedDate)
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
   // The day filter has to reach BOTH halves of the list view. It used to reach
   // only the upcoming half, so the calendar dialog's "Open the write-up,
   // transcript and follow-ups" — the one route from a chip to a meeting's
@@ -179,10 +230,28 @@ export function MeetingsViews({
             )
           })}
         </div>
-        {/* Both the day strip (list view) and the calendar views mark holidays
-            with these icons — one legend covers whichever view is active
-            instead of duplicating it per-view. */}
-        <HolidayLegend />
+        <div className="flex items-center gap-3">
+          {/* The notebook-first path: creates the meeting AND opens its
+              write-up in one click — see handleQuickNotes. */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={creatingQuickNotes}
+            onClick={handleQuickNotes}
+          >
+            {creatingQuickNotes ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : (
+              <NotebookPen aria-hidden />
+            )}
+            {creatingQuickNotes ? 'Opening…' : 'Quick notes'}
+          </Button>
+          {/* Both the day strip (list view) and the calendar views mark holidays
+              with these icons — one legend covers whichever view is active
+              instead of duplicating it per-view. */}
+          <HolidayLegend />
+        </div>
       </div>
 
       {view === 'list' ? (

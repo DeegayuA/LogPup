@@ -11,6 +11,7 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { buildAppUpdate } from '@/features/apps/update-input'
 import { callGemini } from '@/features/gemini/client'
+import { QUICK_MODELS } from '@/features/gemini/models'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
 import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
 
@@ -98,7 +99,13 @@ async function generateFromFacts(
 
   let text: string
   try {
-    ;({ text } = await callGemini(userId, [{ text: prompt }], { responseJson: true }))
+    // A README into one paragraph is mechanical work with an obvious right
+    // answer — the cheap tier first, so the flagship stays available for the
+    // meeting write-up that shares this key's quota.
+    ;({ text } = await callGemini(userId, [{ text: prompt }], {
+      models: QUICK_MODELS,
+      responseJson: true,
+    }))
   } catch (error) {
     // callGemini throws GeminiError with messages already written for users
     // ("No active Gemini API keys — add one in Profile."), so pass it through.

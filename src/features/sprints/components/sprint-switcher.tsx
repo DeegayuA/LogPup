@@ -69,7 +69,7 @@ export function SprintSwitcher({
 
   function handleChange(next: string | null) {
     if (!next || next === value) return
-    // Copy the existing params (e.g. ?tab=board) so switching sprints never
+    // Copy the existing params (e.g. ?tab=roadmap) so switching sprints never
     // clobbers whatever else is in the URL.
     const params = new URLSearchParams(searchParams.toString())
     params.set('sprint', next)

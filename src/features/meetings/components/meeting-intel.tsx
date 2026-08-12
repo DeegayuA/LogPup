@@ -51,6 +51,8 @@ import type { ActionResult } from '@/lib/action-result'
 import type { MentionUser } from '@/components/mention-textarea'
 import { NoteTimeline } from '@/features/meetings/components/note-timeline'
 import { MeetingAssistant } from '@/features/meetings/components/meeting-assistant'
+import { useScreenKeyframes } from '@/features/meetings/components/use-screen-keyframes'
+import { ScreenFilmstrip } from '@/features/meetings/components/screen-filmstrip'
 import {
   bilingualText,
   MetaChip,
@@ -84,6 +86,7 @@ import {
   copyFollowupResponseToNotes,
   deferFollowupReason,
   clearMeetingAiNotes,
+  deleteMeetingKeyframe,
   finalizeMeetingRecording,
   getMeetingIntel,
   noteFollowup,
@@ -118,6 +121,13 @@ import {
   releaseSegment,
 } from '@/features/meetings/segment-store'
 import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
+import { estimateAudioTokens, isApproachingCap } from '@/features/transcription/session-budget'
+import { getRecordingReadiness } from '@/features/gemini/actions'
+import {
+  estimateSessionShare,
+  indicativeHoursPerKey,
+  type RecordingReadiness,
+} from '@/features/gemini/readiness'
 import { useLiveTranscription } from '@/features/transcription/components/use-live-transcription'
 import {
   LiveTranscriptionCostNotice,
@@ -454,6 +464,12 @@ export function MeetingIntelPanel({
   // into the shared live-transcript state and walks the fallback ladder
   // when it degrades.
   const geminiLive = useLiveTranscription(meetingId)
+  // Change-detected screen capture. Idle (and free) for a mic-only recording;
+  // for a shared screen it is what gives the final synthesis pass anything
+  // VISUAL to reason about — the slides and diagrams nobody reads aloud.
+  const keyframes = useScreenKeyframes(meetingId)
+  /** Key health, fetched once the panel opens for someone who can record. */
+  const [readiness, setReadiness] = useState<RecordingReadiness | null>(null)
   // How many chars of the Live session's committed text have already been
   // appended into finalTranscriptRef — the cursor that lets Live output
   // APPEND (like acceptUtterance does) instead of overwriting, so a user's
@@ -520,6 +536,13 @@ export function MeetingIntelPanel({
    *  on" source of truth for code paths that run outside React state. */
   const micStreamRef = useRef<MediaStream | null>(null)
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  /** The shared screen's video track while a screen capture is running — the
+   *  source the keyframe sampler reads. Null for mic-only recordings. */
+  const screenVideoTrackRef = useRef<MediaStreamTrack | null>(null)
+  /** When this meeting's FIRST take started — the origin every keyframe's
+   *  capturedAtMs offset is measured from, so a second take's screens sort
+   *  after the first take's rather than among them. */
+  const recordingEpochRef = useRef<number | null>(null)
   // Chunks for the CURRENT segment only — not the whole meeting. Cutting a
   // segment (see cutSegment) hands these off to an upload and resets this to
   // [], which is what releases a finished segment's memory instead of
@@ -547,6 +570,9 @@ export function MeetingIntelPanel({
   const segmentStartRef = useRef(0)
   // Next segment index to assign — 0-based, matches meetingRecordingSegments.index.
   const segmentIndexRef = useRef(0)
+  /** Highest index this session has ever assigned, +1. Only ever increases —
+   *  unlike `segments`, which finalize empties of everything it consumed. */
+  const segmentHighWaterRef = useRef(0)
   // Base mimeType (codec suffix stripped, e.g. "audio/webm") used to build
   // every segment's Blob — captured once at recording start.
   const mimeBaseRef = useRef('')
@@ -820,6 +846,10 @@ export function MeetingIntelPanel({
     }
     setLiveEngine('none')
     geminiCommittedRef.current = 0
+    // Stops sampling the shared screen the moment the recording ends — the
+    // track itself is stopped below with every other stream.
+    keyframes.stop()
+    screenVideoTrackRef.current = null
     clearFlushTimer()
     pendingUtteranceRef.current = null
     engineInterimRef.current = {}
@@ -844,6 +874,27 @@ export function MeetingIntelPanel({
   }
 
   useEffect(() => cleanupCapture, [])
+
+  // Checked when the panel opens rather than on mount: a page listing thirty
+  // meetings would otherwise fire thirty identical key-health reads for a
+  // line nobody has asked to see yet. Silent on failure — this is advice
+  // about a recording, and failing to fetch advice must not look like a
+  // recording problem.
+  useEffect(() => {
+    if (!open || !canRecord) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await getRecordingReadiness()
+        if (!cancelled && res.ok) setReadiness(res.data)
+      } catch {
+        /* advisory only — leave the line out entirely */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [open, canRecord])
 
   // Arms the viewport gate. Disconnects itself the first time the row is
   // near the screen — this is a one-shot "has it been seen yet", not an
@@ -1308,6 +1359,7 @@ export function MeetingIntelPanel({
     if (chunksRef.current.length === 0) return
     const index = segmentIndexRef.current
     segmentIndexRef.current += 1
+    segmentHighWaterRef.current = Math.max(segmentHighWaterRef.current, index + 1)
     const parts = index === 0 || !headerChunkRef.current
       ? chunksRef.current
       : [headerChunkRef.current, ...chunksRef.current]
@@ -1320,6 +1372,28 @@ export function MeetingIntelPanel({
     // and a slow/unavailable IndexedDB can never delay the recorder.
     void parkSegment(meetingId, index, blob)
     segmentUploadPromisesRef.current.push(uploadSegment(index, blob))
+  }
+
+  /**
+   * Discards one captured screen. Deleted server-side FIRST, then dropped
+   * locally: a frame that vanished from the filmstrip but survived in the
+   * database would still be handed to the model at synthesis time, which is
+   * the opposite of what discarding it means.
+   */
+  async function handleDeleteKeyframe(screenshotId: string) {
+    const res = await deleteMeetingKeyframe(screenshotId)
+    if (!res.ok) {
+      toast.error(res.error)
+      return
+    }
+    // Both surfaces that can show this frame have to forget it: the live
+    // strip's own state, and the fetched intel behind the write-up's strip.
+    keyframes.forget(screenshotId)
+    setIntel((current) =>
+      current
+        ? { ...current, screenshots: current.screenshots.filter((row) => row.id !== screenshotId) }
+        : current,
+    )
   }
 
   function retrySegment(index: number) {
@@ -1343,8 +1417,14 @@ export function MeetingIntelPanel({
       const parked = await loadParkedSegments(meetingId)
       if (cancelled || parked.length === 0) return
       // Never renumber over recovered work — same reasoning as startRecording.
+      // The high-water mark is raised too, so a take started after these have
+      // been transcribed and dropped from the list still numbers past them.
       segmentIndexRef.current = parked.reduce(
         (next, segment) => Math.max(next, segment.index + 1),
+        segmentIndexRef.current,
+      )
+      segmentHighWaterRef.current = Math.max(
+        segmentHighWaterRef.current,
         segmentIndexRef.current,
       )
       for (const segment of parked) {
@@ -1532,12 +1612,16 @@ export function MeetingIntelPanel({
       destinationRef.current = destination
 
       if (wantsScreen) {
-        // Sharing a tab/screen with audio; only the audio tracks are kept.
+        // Sharing a tab/screen with audio. The AUDIO tracks feed the recorder;
+        // the video track is not recorded (a 720p screen recording is ~30-60x
+        // the size of the whole segmented audio path) but it IS sampled for
+        // change-detected keyframes — see useScreenKeyframes.
         const screen = await navigator.mediaDevices.getDisplayMedia({
           video: true,
           audio: true,
         })
         streamsRef.current.push(screen)
+        screenVideoTrackRef.current = screen.getVideoTracks()[0] ?? null
         if (screen.getAudioTracks().length > 0) {
           audioCtx
             .createMediaStreamSource(new MediaStream(screen.getAudioTracks()))
@@ -1550,6 +1634,11 @@ export function MeetingIntelPanel({
           void audioCtx.close().catch(() => undefined)
           audioCtxRef.current = null
           destinationRef.current = null
+          // This early return skips cleanupCapture, so the ref has to be
+          // cleared here too — a stopped, ended track left in it would be
+          // handed to the keyframe sampler by the NEXT recording, which
+          // would then watch a dead share and capture nothing.
+          screenVideoTrackRef.current = null
           toast.error(
             'That share has no audio. Pick a tab and tick “Share tab audio”, or record the mic too.',
           )
@@ -1583,15 +1672,22 @@ export function MeetingIntelPanel({
       segmentUploadPromisesRef.current = []
       mimeBaseRef.current = mimeType.split(';')[0]
       // Continue numbering AFTER anything already recorded for this meeting
-      // rather than restarting at 0. Segment index is the primary key on the
-      // server (upsert on meetingId+index), so restarting the count would
-      // silently overwrite the transcripts of an earlier take — and any
-      // untranscribed segment still sitting here (failed, or recovered from a
-      // previous page load) would lose its slot too. Recording a second time
-      // now appends to the meeting instead of replacing it.
-      segmentIndexRef.current = segmentsRef.current.reduce(
-        (next, segment) => Math.max(next, segment.index + 1),
-        0,
+      // rather than restarting at 0. Segment index is half the primary key on
+      // the server (upsert on meetingId+index), so restarting the count would
+      // silently overwrite an earlier take's transcripts.
+      //
+      // All THREE sources matter, and none is sufficient alone:
+      //  - the server's own high-water mark (intel.nextSegmentIndex), the
+      //    only one that survives a finalize — which drops every consumed
+      //    segment from the list below — or a page reload;
+      //  - segments still sitting here (failed, or recovered from a previous
+      //    page load), which would lose their slot otherwise;
+      //  - this session's own high-water mark, for a second take started
+      //    before the panel has refetched its intel.
+      segmentIndexRef.current = Math.max(
+        intel?.nextSegmentIndex ?? 0,
+        segmentHighWaterRef.current,
+        segmentsRef.current.reduce((next, segment) => Math.max(next, segment.index + 1), 0),
       )
       setFinalizeError(null)
 
@@ -1634,6 +1730,23 @@ export function MeetingIntelPanel({
       recordingRef.current = true
       setSeconds(0)
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
+
+      // What was ON the screen is half of what a shared-screen meeting is
+      // about — a slide, a diagram, a code diff nobody reads aloud. The
+      // capture is change-detected, so a static screen costs nothing, and
+      // finalizeMeetingRecording already knows how to hand the kept frames
+      // to the model alongside the transcript.
+      if (screenVideoTrackRef.current) {
+        // capturedAtMs is an offset from the meeting's FIRST take, not this
+        // one. finalizeMeetingRecording orders every screenshot the meeting
+        // has by capturedAtMs and tells the model they are chronological — so
+        // re-basing at 0 for a second take would interleave take 2's opening
+        // screens among take 1's later ones and hand the model a false order.
+        // The epoch is set once and reused; a fresh page load restarts it,
+        // which is the same limit the transcript offsets already live with.
+        recordingEpochRef.current ??= Date.now()
+        keyframes.start(screenVideoTrackRef.current, recordingEpochRef.current)
+      }
 
       // Reset the live-transcript surface for the new recording, whichever
       // engine ends up feeding it.
@@ -1920,6 +2033,14 @@ export function MeetingIntelPanel({
   // accepted utterance once things go quiet between sentences.
   const currentLeadLang = interimLeaderLang ?? lastWinnerLang
 
+  // What the live strip says about itself. A stopped capture (the share
+  // ended, or uploads kept failing) has to say so: an empty or frozen strip
+  // that still reads "only screens that changed are kept" tells the reader
+  // the screen has been static, which is a different and untrue statement.
+  let liveKeyframeNote = 'Only screens that actually changed are kept.'
+  if (keyframes.stoppedReason) liveKeyframeNote = keyframes.stoppedReason
+  else if (keyframes.atCap) liveKeyframeNote = 'Reached this meeting’s screenshot limit — no more will be kept.'
+
   // One clock read per render, shared by the notes' due-date maths and the
   // follow-up ages below, so two sections of the same panel cannot disagree
   // about what "today" is.
@@ -2191,6 +2312,48 @@ export function MeetingIntelPanel({
 
       {open && canRecord && !recording && !finalizing ? (
         <div className="flex flex-col gap-1">
+          {/* Whether there is anything left to transcribe WITH, before the
+              meeting rather than after it. A key that is out of quota is
+              currently only discoverable by recording an hour and watching
+              every segment fail. */}
+          {readiness ? (
+            <p
+              className={cn(
+                'flex items-start gap-1.5 text-xs',
+                readiness.level === 'ready' ? 'text-muted-foreground' : 'text-foreground',
+              )}
+            >
+              {readiness.level === 'ready' ? (
+                <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-success" aria-hidden />
+              ) : (
+                <TriangleAlert
+                  className={cn(
+                    'mt-0.5 size-3.5 shrink-0',
+                    readiness.level === 'blocked' ? 'text-destructive' : 'text-warning',
+                  )}
+                  aria-hidden
+                />
+              )}
+              <span>
+                {readiness.headline}
+                {readiness.advice ? (
+                  <span className="text-muted-foreground"> {readiness.advice}</span>
+                ) : null}
+                {readiness.level !== 'blocked' ? (
+                  // Order-of-magnitude only, and said so: Google publishes no
+                  // per-key balance, so a confident-looking figure here would
+                  // be invented. "In the region of" is the strongest claim
+                  // the underlying number can carry.
+                  <span className="text-muted-foreground">
+                    {' '}
+                    In the region of{' '}
+                    {Math.round(indicativeHoursPerKey() * readiness.healthyCount)} hours of live
+                    transcription a day, shared with every other AI feature.
+                  </span>
+                ) : null}
+              </span>
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             Audio is processed by Google Gemini using your API key. Make sure attendees consent to
             recording.
@@ -2223,6 +2386,20 @@ export function MeetingIntelPanel({
         </p>
       ) : null}
 
+      {/* What the shared screen showed, as it is captured. Visible DURING the
+          recording rather than only in the write-up, because the one thing a
+          person can still act on mid-meeting is "that slide wasn't worth
+          keeping" — and because a capture nobody can see is indistinguishable
+          from one that silently stopped working. */}
+      {recording ? (
+        <ScreenFilmstrip
+          frames={keyframes.frames}
+          title="Screen captured"
+          note={liveKeyframeNote}
+          onDelete={(id) => void handleDeleteKeyframe(id)}
+        />
+      ) : null}
+
       {/* The live transcript is a first-class surface, not console output: its
           own titled card, so the difference between "committed text" and
           "the engine's provisional guess" is stated once in the header
@@ -2244,12 +2421,41 @@ export function MeetingIntelPanel({
                connected-but-silent socket from masquerading as working
                transcription. The fallback notice renders above the card
                (shared with the Web Speech path), so it is not repeated here. */
-            <div className="border-b border-border px-3 py-1.5">
+            <div className="flex flex-col gap-1 border-b border-border px-3 py-1.5">
               <LiveTranscriptionStatus
                 status={geminiLive.status}
                 notice={null}
                 elapsedMs={seconds * 1000}
               />
+              {/* What this recording has spent so far. Live transcription
+                  bills continuously, so the running total belongs on screen
+                  while it is being spent — not in a report afterwards. */}
+              <p className="text-2xs text-muted-foreground">
+                ~<span className="font-mono tabular-nums">
+                  {estimateAudioTokens(seconds).toLocaleString()}
+                </span>{' '}
+                audio tokens used so far
+                {readiness && readiness.healthyCount > 0 ? (
+                  <>
+                    {' '}
+                    · about{' '}
+                    <span className="font-mono tabular-nums">
+                      {Math.round(estimateSessionShare(seconds, readiness.healthyCount) * 100)}%
+                    </span>{' '}
+                    of a day&rsquo;s rough allowance across{' '}
+                    {readiness.healthyCount === 1 ? 'your key' : `${readiness.healthyCount} keys`}
+                  </>
+                ) : null}
+              </p>
+              {isApproachingCap(seconds * 1000) ? (
+                // The 1-hour cap is a hard stop. Being told five minutes
+                // before is the difference between a planned wrap-up and a
+                // transcript that simply ends.
+                <p className="text-2xs text-warning" role="status">
+                  Live transcription stops at the 1-hour limit in a few minutes. Recording continues
+                  either way, and the segments keep transcribing.
+                </p>
+              ) : null}
             </div>
           ) : null}
           {/* The committed transcript is a TEXTAREA, not a read-only <p>:
@@ -2598,6 +2804,20 @@ export function MeetingIntelPanel({
                         ? 'Confident, clearly-owned action items become real tasks automatically — everything else still needs a click.'
                         : 'Off — every identified task stays a suggestion card for you to review.'}
                     </p>
+                  ) : null}
+                  {/* What was on screen, after the fact. These rows were
+                      already fetched by getMeetingIntel and handed to the
+                      synthesis pass, but nothing rendered them — so the
+                      model could cite a slide the reader had no way to
+                      look at. Hidden while recording, where the live strip
+                      above is the same information, fresher. */}
+                  {!recording ? (
+                    <ScreenFilmstrip
+                      frames={intel?.screenshots ?? []}
+                      title="Screens shared"
+                      note="Captured when the screen changed. The AI read these alongside the transcript."
+                      onDelete={canRecord ? (id) => void handleDeleteKeyframe(id) : undefined}
+                    />
                   ) : null}
                   <NoteTimeline
                     meetingId={meetingId}

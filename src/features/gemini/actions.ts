@@ -8,6 +8,7 @@ import { db } from '@/db'
 import { geminiKeys } from '@/db/schema'
 import { encryptSecret } from '@/lib/crypto'
 import { validateGeminiKey } from '@/features/gemini/client'
+import { assessRecordingReadiness, type RecordingReadiness } from '@/features/gemini/readiness'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
 const MAX_KEYS_PER_USER = 5
@@ -66,6 +67,37 @@ export async function deleteGeminiKey(id: string): Promise<ActionResult> {
     .where(and(eq(geminiKeys.id, parsed.data), eq(geminiKeys.userId, session.user.id)))
   revalidatePath('/profile')
   return ok(undefined)
+}
+
+/**
+ * "Do I have enough left to record this?" — the state of the caller's OWN
+ * keys, as the recorder needs it before a long meeting.
+ *
+ * Reads only health columns (active, failCount); no key material, encrypted
+ * or otherwise, is involved. Scoped to the session user, because a key's
+ * health is exactly as private as the key.
+ *
+ * Deliberately does NOT probe each key with a live call: this runs whenever
+ * a recording panel opens, and spending a request per key to ask "are you
+ * alive" would burn the very quota it is reporting on. failCount is evidence
+ * already collected by every real call the key has served.
+ */
+export async function getRecordingReadiness(): Promise<ActionResult<RecordingReadiness>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const rows = await db
+    .select({
+      id: geminiKeys.id,
+      label: geminiKeys.label,
+      active: geminiKeys.active,
+      failCount: geminiKeys.failCount,
+      lastUsedAt: geminiKeys.lastUsedAt,
+    })
+    .from(geminiKeys)
+    .where(eq(geminiKeys.userId, session.user.id))
+
+  return ok(assessRecordingReadiness(rows))
 }
 
 export async function toggleGeminiKey(id: string, active: boolean): Promise<ActionResult> {

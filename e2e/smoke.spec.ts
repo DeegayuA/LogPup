@@ -112,6 +112,9 @@ test.describe('LogPup smoke', () => {
   test('create a sprint, quick-add a task, drag it to In progress, and it survives reload', async ({
     page,
   }) => {
+    // Deliberately the RETIRED `tab=board` value: Board and Roadmap merged
+    // into one plan surface, and this asserts the legacy alias still lands
+    // people on it rather than bouncing them to Overview.
     await page.goto(`/apps/${APP_SLUG}?tab=board`)
     // Two "New sprint" triggers render before the first sprint exists (the
     // toolbar's SprintFormDialog and the empty-state's) — both open the

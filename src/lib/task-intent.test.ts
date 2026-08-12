@@ -39,6 +39,95 @@ describe('parseTaskIntent', () => {
     expect(intent?.title).toBe('review the PR')
   })
 
+  it('reads a bare trailing first name — "fix login shanika"', () => {
+    const intent = parseTaskIntent('fix login shanika', PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('fix login')
+  })
+
+  it('binds a bare trailing FULL name before falling back to one word', () => {
+    const intent = parseTaskIntent('ship the brief shanika ayasmanthi', PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('ship the brief')
+  })
+
+  it('a bare trailing name still combines with a date', () => {
+    const intent = parseTaskIntent('fix login shanika tomorrow', PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('fix login')
+    expect(intent?.due).toBe('2026-08-12')
+  })
+
+  it('never steals an ordinary trailing noun as an assignee', () => {
+    const intent = parseTaskIntent('fix login page', PEOPLE, TODAY)
+    expect(intent?.assignee).toBeNull()
+    expect(intent?.assigneeQuery).toBeNull()
+    expect(intent?.title).toBe('fix login page')
+  })
+
+  it('bare trailing names get no typo fallback — a misspelling stays in the title', () => {
+    // "shanka" would fuzzy-resolve after "to"/"for"/"@", but a bare last word
+    // has not earned that; guessing wrong here assigns silently.
+    const intent = parseTaskIntent('fix login shanka', PEOPLE, TODAY)
+    expect(intent?.assignee).toBeNull()
+    expect(intent?.title).toBe('fix login shanka')
+  })
+
+  it('reports a bare trailing first name shared by two people as ambiguous', () => {
+    const intent = parseTaskIntent('review the deck sam', PEOPLE, TODAY)
+    expect(intent?.assignee).toBeNull()
+    expect(intent?.ambiguous.map((p) => p.id).sort()).toEqual(['u3', 'u4'])
+    expect(intent?.title).toBe('review the deck')
+  })
+
+  it('parses the full phrase: "@name" mid-sentence, date and priority together', () => {
+    const intent = parseTaskIntent('fix login @shanika today high', PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('fix login')
+    expect(intent?.due).toBe('2026-08-11')
+    expect(intent?.priority).toBe(3)
+    expect(intent?.priorityLabel).toBe('High')
+  })
+
+  it('reads a trailing priority word, with or without "priority" around it', () => {
+    expect(parseTaskIntent('ship the brief urgent', PEOPLE, TODAY)?.priority).toBe(3)
+    expect(parseTaskIntent('audit exports low priority', PEOPLE, TODAY)?.priority).toBe(1)
+    expect(parseTaskIntent('audit exports priority medium', PEOPLE, TODAY)?.priority).toBe(2)
+  })
+
+  it('reads !priority anywhere, for when the word cannot sit at the end', () => {
+    const intent = parseTaskIntent('fix !high the login flow', PEOPLE, TODAY)
+    expect(intent?.priority).toBe(3)
+    expect(intent?.title).toBe('fix the login flow')
+  })
+
+  it('keeps a priority word that is part of the title, not trailing', () => {
+    const intent = parseTaskIntent('fix high latency on checkout', PEOPLE, TODAY)
+    expect(intent?.priority).toBeNull()
+    expect(intent?.title).toContain('high latency')
+  })
+
+  it('splits a description off after " -- ", verbatim and unparsed', () => {
+    const intent = parseTaskIntent(
+      'fix login @shanika high -- 2FA users see a blank screen tomorrow',
+      PEOPLE,
+      TODAY,
+    )
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('fix login')
+    expect(intent?.priority).toBe(3)
+    expect(intent?.description).toBe('2FA users see a blank screen tomorrow')
+    // "tomorrow" lives in the description — it must NOT become the due date.
+    expect(intent?.due).toBeNull()
+  })
+
+  it('never lets a bare name swallow the whole phrase', () => {
+    // One word left after the split is required — a phrase that is ONLY a
+    // name has no task in it.
+    const intent = parseTaskIntent('shanika ayasmanthi', PEOPLE, TODAY)
+    expect(intent?.title).not.toBe('')
+  })
+
   it('resolves tomorrow, weekdays and next-week', () => {
     expect(parseTaskIntent('shanika ping ops tomorrow', PEOPLE, TODAY)?.due).toBe('2026-08-12')
     // Tuesday -> the coming Friday

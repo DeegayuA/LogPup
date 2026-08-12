@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { format } from 'date-fns'
 import { revalidatePath } from 'next/cache'
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from 'drizzle-orm'
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { del, put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
@@ -32,6 +32,11 @@ import {
   GeminiError,
   type GeminiImageInput,
 } from '@/features/gemini/client'
+import { SYNTHESIS_MODELS } from '@/features/gemini/models'
+import {
+  estimateMinutesFromAudioBytes,
+  summaryDepthInstruction,
+} from '@/features/meetings/summary-length'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { updateMeetingNotes } from '@/features/meetings/actions'
 import { logActivity } from '@/features/activity/log'
@@ -235,6 +240,19 @@ export type MeetingIntel = {
    * panel can show it in a "Not tracked" group with a one-click "track this".
    */
   untrackedActions: ActionRow[]
+  /**
+   * The next free recording-segment index for this meeting — one past the
+   * highest already stored.
+   *
+   * The client cannot derive this from its own state. Segment index is half
+   * the primary key transcribeSegment upserts on (meetingId, index), and the
+   * recorder's local list is emptied of every successfully-transcribed
+   * segment once finalize consumes it (and is empty outright after a
+   * reload). Restarting a second take at 0 would therefore upsert straight
+   * over the first take's transcripts — the meeting would lose the recording
+   * it already had, silently, at the moment someone pressed record again.
+   */
+  nextSegmentIndex: number
 }
 
 function asArray<T>(value: unknown): T[] {
@@ -958,6 +976,12 @@ export async function analyzeMeetingAudio(
 
   const audio = formData.get('audio')
   if (!(audio instanceof File) || audio.size === 0) return err('No audio received')
+  // Depth target for the summary, from what was actually recorded (32 kbps
+  // WebM ≈ 240 kB/min). The live transcript is too lossy to size by — the
+  // browser recognizer drops most Sinhala — so recording length is the signal.
+  const summaryDepth = summaryDepthInstruction({
+    minutes: estimateMinutesFromAudioBytes(audio.size),
+  })
   if (audio.size > MAX_AUDIO_BYTES) {
     return err('Recording is over 7MB — use the segmented recording flow for longer meetings')
   }
@@ -1011,7 +1035,7 @@ Return STRICT JSON only, matching exactly:
 {
   "language": "en" | "si" | "bilingual",
   "transcript": "full transcript with speaker labels where identifiable — each phrase kept in the language it was actually spoken in, per the code-switching rules above",
-  "summary": "professional meeting minutes in English (if mainly Sinhala, append a Sinhala section) with three clear parts: Decisions made, Discussion highlights, and Next steps — written for someone who was not in the room, not a raw dump of everything said",
+  "summary": "professional meeting minutes in English (if mainly Sinhala, append a Sinhala section) with three clear parts: Decisions made, Discussion highlights, and Next steps — written for someone who was not in the room, not a raw dump of everything said. ${summaryDepth}",
   "perPerson": [{ "name": "...", "points": ["key things this person said or decided"], "actionItems": ["..."] }],
   "deadlines": [{ "item": "...", "owner": "...", "due": "date or phrase as spoken" }],
   "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
@@ -1492,6 +1516,10 @@ async function finalizeMeetingRecordingInner(
     }
   }
 
+  // Depth target for the summary — here the assembled transcript itself is
+  // the best signal for how much was actually said.
+  const summaryDepth = summaryDepthInstruction({ transcriptChars: combinedTranscript.length })
+
   const prompt = `You are LogPup's meeting analyst for a software team. Below is the FULL transcript of
 the meeting "${meeting.title}"${meeting.agenda ? ` (agenda: ${meeting.agenda})` : ''}, assembled from
 several ~5-minute segments that were each transcribed independently (audio was never sent to you
@@ -1534,7 +1562,7 @@ Return STRICT JSON only, matching exactly:
   "language": "en" | "si" | "bilingual",
   "transcript": "the full transcript above, lightly cleaned up (you may smooth segment-boundary
     artifacts) but never re-translated or condensed — this is the record of what was said",
-  "summary": "professional meeting minutes in English (if mainly Sinhala, append a Sinhala section) with three clear parts: Decisions made, Discussion highlights, and Next steps — written for someone who was not in the room, not a raw dump of everything said",
+  "summary": "professional meeting minutes in English (if mainly Sinhala, append a Sinhala section) with three clear parts: Decisions made, Discussion highlights, and Next steps — written for someone who was not in the room, not a raw dump of everything said. ${summaryDepth}",
   "perPerson": [{ "name": "...", "points": ["key things this person said or decided"], "actionItems": ["..."] }],
   "deadlines": [{ "item": "...", "owner": "...", "due": "date or phrase as spoken" }],
   "terms": [{ "term": "software/technical term used", "explanation": "plain-English explanation", "sinhala": "short සිංහල explanation" }],
@@ -1560,10 +1588,21 @@ listed app clearly fits or when no app lists were given.`
   let raw: string
   let modelUsed: string = DEFAULT_GEMINI_MODEL
   try {
+    // The one pass whose output a person actually reads, and the only one
+    // that has to hold a whole meeting at once — reconciling speaker labels
+    // across every segment and reading the captured screens. It runs once
+    // per meeting, so a Pro-first chain costs a rounding error of the
+    // request budget the per-segment calls already spend.
     ;({ text: raw, model: modelUsed } =
       images.length > 0
-        ? await callGeminiWithImages(session.user.id, [{ text: prompt }], images, { responseJson: true })
-        : await callGemini(session.user.id, [{ text: prompt }], { responseJson: true }))
+        ? await callGeminiWithImages(session.user.id, [{ text: prompt }], images, {
+            models: SYNTHESIS_MODELS,
+            responseJson: true,
+          })
+        : await callGemini(session.user.id, [{ text: prompt }], {
+            models: SYNTHESIS_MODELS,
+            responseJson: true,
+          }))
   } catch (error) {
     // Deliberately NOT falling back to transcript-only notes here (unlike
     // the zero-segments branch above): the segment transcripts are already
@@ -1919,7 +1958,21 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
     autoAssignTasks: meeting.autoAssignTasks,
     suggestions: await fetchTaskSuggestions(id),
     untrackedActions,
+    nextSegmentIndex: await fetchNextSegmentIndex(id),
   })
+}
+
+/**
+ * One past the highest recording-segment index stored for this meeting, or 0
+ * when nothing has been recorded yet. See MeetingIntel.nextSegmentIndex for
+ * why the client cannot work this out for itself.
+ */
+async function fetchNextSegmentIndex(meetingId: string): Promise<number> {
+  const [row] = await db
+    .select({ maxIndex: sql<number | null>`max(${meetingRecordingSegments.index})` })
+    .from(meetingRecordingSegments)
+    .where(eq(meetingRecordingSegments.meetingId, meetingId))
+  return row?.maxIndex === null || row?.maxIndex === undefined ? 0 : Number(row.maxIndex) + 1
 }
 
 /**

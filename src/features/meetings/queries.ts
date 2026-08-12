@@ -93,6 +93,18 @@ export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]
   return attachAttendees(rows)
 }
 
+/** One meeting with its attendees — the PDF export page's header data. */
+export async function getMeetingById(meetingId: string): Promise<MeetingSummary | null> {
+  const rows = await db
+    .select(meetingColumns)
+    .from(meetings)
+    .leftJoin(apps, eq(meetings.appId, apps.id))
+    .where(eq(meetings.id, meetingId))
+
+  const [meeting] = await attachAttendees(rows)
+  return meeting ?? null
+}
+
 export async function getUpcomingMeetingsForUser(
   userId: string,
   days: number,

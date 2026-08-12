@@ -737,7 +737,7 @@ export function RoadmapTimeline({
                     </Button>
                   ) : null}
                   <Link
-                    href={`/apps/${slug}?sprint=${sprint.id}&tab=board`}
+                    href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
                     className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
                   >
                     Board
@@ -816,7 +816,7 @@ function SprintBar({
           <BarBody sprint={sprint} label={label} onEdit={onEdit} onNudge={onNudge} />
         ) : (
           <Link
-            href={`/apps/${slug}?sprint=${sprint.id}&tab=board`}
+            href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
             aria-label={`${label}. Open board.`}
             className="flex h-full min-w-0 flex-1 items-center rounded-md px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >

@@ -137,6 +137,7 @@ export function MeetingDetailDialog({
             // Same rule as every meeting write on the server: an admin, or the
             // person who created it.
             canManage={isAdmin || shown.createdBy === currentUserId}
+            canDelete={isAdmin}
             users={users}
             apps={apps}
             onOpenChange={onOpenChange}
@@ -151,6 +152,7 @@ export function MeetingDetailDialog({
 function MeetingDetailBody({
   meeting,
   canManage,
+  canDelete,
   users,
   apps,
   onOpenChange,
@@ -158,6 +160,8 @@ function MeetingDetailBody({
 }: {
   meeting: MeetingSummary
   canManage: boolean
+  /** Deletion is admin-only — stricter than canManage, see deleteMeeting. */
+  canDelete: boolean
   users: { id: string; name: string }[]
   apps: { id: string; name: string }[]
   onOpenChange: (open: boolean) => void
@@ -446,7 +450,7 @@ function MeetingDetailBody({
             }
           />
         ) : null}
-        {canManage ? (
+        {canDelete ? (
           <AlertDialog>
             <AlertDialogTrigger render={<Button type="button" variant="destructive" size="sm" />}>
               <Trash2Icon /> Delete

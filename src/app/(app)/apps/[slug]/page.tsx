@@ -28,7 +28,19 @@ import { getTeamForApp, listActiveUsers, listAssignableApps } from '@/features/p
 import { getAppContributions } from '@/features/apps/contribution-queries'
 import { AppContributions } from '@/features/apps/components/app-contributions'
 import { TeamPanel } from '@/features/people/components/team-panel'
-import { getBoard, getSprintsForApp } from '@/features/sprints/queries'
+import { LazyDisclosure } from '@/components/shared/lazy-disclosure'
+import {
+  getBoard,
+  getSprintTaskCounts,
+  getSprintsForApp,
+  type SprintTaskCounts,
+} from '@/features/sprints/queries'
+import { getSprintCheckins, type SprintCheckinRow } from '@/features/sprints/checkin-queries'
+import { checkinGap, computeTaskProgress } from '@/features/sprints/checkins'
+import { planGaps, readSprint } from '@/features/sprints/plan-read'
+import { parseZoom } from '@/features/sprints/roadmap-layout'
+import { RoadmapSpine } from '@/features/sprints/components/roadmap-spine'
+import { PlanReadStrip } from '@/features/sprints/components/plan-read-strip'
 import { getMeetingsForApp } from '@/features/meetings/queries'
 import { Board } from '@/features/sprints/components/board'
 import { Roadmap } from '@/features/sprints/components/roadmap'
@@ -153,9 +165,86 @@ export default async function AppDetailPage(props: {
     : (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
       sprints.find((s) => s.status === 'active') ??
       sprints[0]
-  const showBoard = tab === 'board' && (isBacklog || Boolean(selectedSprint))
+  const showBoard = tab === 'roadmap' && (isBacklog || Boolean(selectedSprint))
   const boardSprintId = isBacklog ? null : (selectedSprint?.id ?? null)
-  const board = showBoard ? await getBoard(app.id, boardSprintId) : null
+
+  // The plan's three reads, fetched together. `getBoard` answers for the
+  // SELECTED sprint only, which is why the spine needs its own grouped count
+  // query — the old Board tab could never show progress for a sprint you had
+  // not already opened.
+  const [board, sprintCounts, checkins] = await Promise.all([
+    showBoard ? getBoard(app.id, boardSprintId) : Promise.resolve(null),
+    // Typed empty Map, not a bare `new Map()`: an untyped one infers
+    // Map<any, any> through the ternary, which would quietly make every
+    // `.get()` below `any` and take the counts' type checking with it.
+    tab === 'roadmap'
+      ? getSprintTaskCounts(app.id)
+      : Promise.resolve(new Map<string | null, SprintTaskCounts>()),
+    tab === 'roadmap' && boardSprintId
+      ? getSprintCheckins(boardSprintId)
+      : Promise.resolve([] as SprintCheckinRow[]),
+  ])
+
+  const todayIso = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
+
+  /**
+   * A link to this same plan with `overrides` applied, CARRYING the view you
+   * already had. Picking a different sprint used to rebuild the URL from
+   * scratch, which silently threw away the board's filters (`who`, `q`,
+   * `prio`, `group`, `overdue`) and the timeline scale — so narrowing to one
+   * person's work and then stepping to the next sprint quietly showed you
+   * everybody's again.
+   *
+   * `undefined` in `overrides` removes a param, which is how a value that is
+   * the default (month zoom) keeps the URL clean.
+   */
+  const planHref = (overrides: Record<string, string | undefined> = {}) => {
+    const params = new URLSearchParams({ tab: 'roadmap' })
+    for (const key of ['sprint', 'zoom', 'group', 'q', 'who', 'prio', 'overdue']) {
+      const value = search[key]
+      if (typeof value === 'string' && value) params.set(key, value)
+    }
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value) params.set(key, value)
+      else params.delete(key)
+    }
+    return `/apps/${slug}?${params.toString()}`
+  }
+  const spineZoom = parseZoom(typeof search.zoom === 'string' ? search.zoom : undefined)
+  const spineSprints = sprints.map((sprint) => ({
+    id: sprint.id,
+    name: sprint.name,
+    startDate: sprint.startDate,
+    endDate: sprint.endDate,
+    read: readSprint(
+      sprint,
+      sprintCounts.get(sprint.id) ?? { todo: 0, in_progress: 0, done: 0 },
+      todayIso,
+    ),
+  }))
+
+  const boardTasks = board ? [...board.todo, ...board.in_progress, ...board.done] : []
+  const selectedRead = selectedSprint
+    ? readSprint(
+        selectedSprint,
+        sprintCounts.get(selectedSprint.id) ?? { todo: 0, in_progress: 0, done: 0 },
+        todayIso,
+      )
+    : null
+  // Self-report vs cards, per person, using the same threshold the check-in
+  // card on Overview uses — a second definition of "disagrees" would let the
+  // two surfaces contradict each other about the same person.
+  const progressInput = boardTasks.map((task) => ({
+    assigneeId: task.assignee?.id ?? null,
+    status: task.status,
+  }))
+  const checkinGapCount = checkins.filter((row) => {
+    const gap = checkinGap(row.percent, computeTaskProgress(progressInput, row.userId))
+    // 'unknown' means that person has no cards in this sprint at all — there
+    // is nothing for their report to disagree WITH, so counting it would
+    // flag everyone who checked in before being assigned anything.
+    return gap === 'ahead' || gap === 'behind'
+  }).length
 
   return (
     <div className="flex flex-1 flex-col gap-5 p-6">
@@ -278,17 +367,36 @@ export default async function AppDetailPage(props: {
         </div>
       ) : null}
 
-      {tab === 'board' ? (
+      {tab === 'roadmap' ? (
         <div className="flex flex-col gap-4">
+          {/* THE SPINE. The schedule and the sprint selector are one object —
+              clicking a bar is what changes the board below it. This is the
+              merge: a plan you can read the shape of, with the work inside it
+              on the same screen, instead of a Board tab with no time in it and
+              a Roadmap tab with no work in it. */}
+          {spineSprints.length > 0 ? (
+            <RoadmapSpine
+              sprints={spineSprints}
+              selectedId={isBacklog ? null : (selectedSprint?.id ?? null)}
+              todayIso={todayIso}
+              zoom={spineZoom}
+              hrefFor={(sprintId) => planHref({ sprint: sprintId })}
+              // 'month' is parseZoom's default, so it is written as the
+              // ABSENCE of the param — the canonical link stays clean.
+              zoomHrefFor={(level) => planHref({ zoom: level === 'month' ? undefined : level })}
+            />
+          ) : null}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
+              {/* Kept alongside the spine rather than replaced by it: the bars
+                  are the fast path, but a long-running app accumulates more
+                  sprints than fit on screen, and a list is still the reliable
+                  way to reach an old one. */}
               <SprintSwitcher
                 sprints={sprints}
                 selectedId={isBacklog ? '' : (selectedSprint?.id ?? '')}
               />
-              {/* These links MUST carry tab=board. Without it the tab param
-                  vanished on click and the page bounced back to Overview —
-                  the single most confusing bug on the old detail page. */}
               <Link
                 href={isBacklog ? boardHref(slug) : boardHref(slug, 'backlog')}
                 className={cn(buttonVariants({ variant: isBacklog ? 'default' : 'outline' }))}
@@ -329,6 +437,18 @@ export default async function AppDetailPage(props: {
             </div>
           ) : null}
 
+          {/* The judgement line, between the plan and the work: what this
+              sprint's shape actually means, and the handful of things worth
+              acting on. Each count links to the cards it is about. */}
+          {selectedRead && !isBacklog ? (
+            <PlanReadStrip
+              read={selectedRead}
+              gaps={planGaps(boardTasks)}
+              checkinGapCount={checkinGapCount}
+              boardHrefFor={(params) => planHref(params)}
+            />
+          ) : null}
+
           {isBacklog ? (
             <p className="text-sm text-muted-foreground">
               Backlog — tasks not assigned to any sprint.
@@ -354,10 +474,27 @@ export default async function AppDetailPage(props: {
               {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
             </div>
           )}
+
+          {/* Rescheduling — dragging a sprint's dates, resizing it, editing or
+              deleting it — still lives in the full timeline. It is folded away
+              rather than removed: the spine above answers "how is the plan
+              going", which is what people come here for many times a day, and
+              this answers "change the plan", which is occasional. Two open
+              timelines on one screen would be exactly the duplication this
+              merge exists to remove. */}
+          {sprints.length > 0 ? (
+            // LazyDisclosure, not a bare <details>: the timeline scrolls to
+            // today on mount, and inside a closed <details> that would resolve
+            // against a zero-width box and land on the oldest sprint instead.
+            <LazyDisclosure
+              summary={isAdmin ? 'Adjust the schedule' : 'See the full schedule'}
+              hint={isAdmin ? 'drag to move or resize a sprint' : 'every sprint, with dates'}
+            >
+              <Roadmap sprints={sprints} slug={slug} />
+            </LazyDisclosure>
+          ) : null}
         </div>
       ) : null}
-
-      {tab === 'roadmap' ? <Roadmap sprints={sprints} slug={slug} /> : null}
 
       {tab === 'discussion' ? (
         <AppComments

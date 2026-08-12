@@ -684,7 +684,12 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
 
   const existing = await meetingById(meetingId)
   if (!existing) return err('Meeting not found')
-  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  // Stricter than the edit/reschedule gate ON PURPOSE. Editing is
+  // recoverable — edit it back; deletion takes the meeting's notes, actions
+  // and calendar event with it, so it follows the workspace rule that
+  // destroying things is an admin's call, organiser or not. (Tasks, sprints
+  // and assignments already work this way.)
+  if (session.user.role !== 'admin') return err('Only an admin can delete meetings')
 
   if (existing.googleEventId) {
     // Best-effort: the calendar invite is cleanup, not the source of truth —

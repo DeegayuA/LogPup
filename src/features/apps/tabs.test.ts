@@ -31,7 +31,14 @@ describe('normalizeAppTab', () => {
   })
 
   it('takes the first value when the param repeats', () => {
-    expect(normalizeAppTab(['board', 'settings'], ALL)).toBe('board')
+    expect(normalizeAppTab(['activity', 'settings'], ALL)).toBe('activity')
+  })
+
+  it('sends the retired board tab to the plan it is now part of', () => {
+    // These links are in bookmarks, Slack and the search index. A renamed
+    // section is never a reason to land somebody on Overview.
+    expect(normalizeAppTab('board', ALL)).toBe('roadmap')
+    expect(normalizeAppTab(['board', 'settings'], ALL)).toBe('roadmap')
   })
 })
 
@@ -41,23 +48,33 @@ describe('appTabHref', () => {
   })
 
   it('names every other tab explicitly', () => {
-    expect(appTabHref('ledger', 'board')).toBe('/apps/ledger?tab=board')
+    expect(appTabHref('ledger', 'roadmap')).toBe('/apps/ledger?tab=roadmap')
     expect(appTabHref('ledger', 'activity')).toBe('/apps/ledger?tab=activity')
   })
 })
 
 describe('boardHref', () => {
-  it('always keeps tab=board so the board never bounces to overview', () => {
-    expect(boardHref('ledger')).toBe('/apps/ledger?tab=board')
+  it('always names the tab so the plan never bounces to overview', () => {
+    expect(boardHref('ledger')).toBe('/apps/ledger?tab=roadmap')
   })
 
   it('carries a sprint selection alongside the tab', () => {
-    expect(boardHref('ledger', 'backlog')).toBe('/apps/ledger?tab=board&sprint=backlog')
-    expect(boardHref('ledger', 'abc-123')).toBe('/apps/ledger?tab=board&sprint=abc-123')
+    expect(boardHref('ledger', 'backlog')).toBe('/apps/ledger?tab=roadmap&sprint=backlog')
+    expect(boardHref('ledger', 'abc-123')).toBe('/apps/ledger?tab=roadmap&sprint=abc-123')
+  })
+
+  it('carries the board filter params so a count can link to its own cards', () => {
+    expect(boardHref('ledger', 'abc-123', { who: 'unassigned' })).toBe(
+      '/apps/ledger?tab=roadmap&sprint=abc-123&who=unassigned',
+    )
+    // An empty value is dropped rather than written as `&who=`.
+    expect(boardHref('ledger', 'abc-123', { who: '' })).toBe(
+      '/apps/ledger?tab=roadmap&sprint=abc-123',
+    )
   })
 
   it('ignores an empty sprint id', () => {
-    expect(boardHref('ledger', '')).toBe('/apps/ledger?tab=board')
-    expect(boardHref('ledger', null)).toBe('/apps/ledger?tab=board')
+    expect(boardHref('ledger', '')).toBe('/apps/ledger?tab=roadmap')
+    expect(boardHref('ledger', null)).toBe('/apps/ledger?tab=roadmap')
   })
 })

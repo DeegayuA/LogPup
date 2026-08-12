@@ -122,14 +122,14 @@ export async function universalSearch(q: string): Promise<SearchResults> {
       title: t.title,
       status: t.status,
       appName: t.appName,
-      href: `/apps/${t.appSlug}?tab=board&sprint=${t.sprintId ?? 'backlog'}`,
+      href: `/apps/${t.appSlug}?tab=roadmap&sprint=${t.sprintId ?? 'backlog'}`,
     })),
     sprints: sprintRows.map((s) => ({
       id: s.id,
       name: s.name,
       status: s.status,
       appName: s.appName,
-      href: `/apps/${s.appSlug}?tab=board&sprint=${s.id}`,
+      href: `/apps/${s.appSlug}?tab=roadmap&sprint=${s.id}`,
     })),
     meetings: meetingRows.map((m) => ({
       id: m.id,
@@ -308,7 +308,10 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
     title: taskTitle,
     status: 'todo',
     assigneeId: assignee.id,
-    priority: 0,
+    // The parser reads "high"/"!low"/" -- description" now (task-intent.ts);
+    // the palette honours them the same way the board composer does.
+    priority: intent.priority ?? 0,
+    description: intent.description,
     sortOrder: 0,
     dueDate: intent.due,
   })
@@ -319,6 +322,6 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
     assigneeName: assignee.name,
     appName: app.name,
     appSlug: app.slug,
-    href: `/apps/${app.slug}?sprint=backlog&tab=board`,
+    href: `/apps/${app.slug}?tab=roadmap&sprint=backlog`,
   })
 }

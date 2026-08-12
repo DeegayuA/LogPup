@@ -98,6 +98,7 @@ export function MeetingList({
           meeting={meeting}
           now={now}
           canManage={isAdmin || meeting.createdBy === currentUserId}
+          canDelete={isAdmin}
           currentUserId={currentUserId}
           showAppBadge={showAppBadge}
           users={users}
@@ -204,6 +205,7 @@ function MeetingRow({
   meeting,
   now,
   canManage,
+  canDelete,
   currentUserId,
   showAppBadge,
   users,
@@ -213,6 +215,8 @@ function MeetingRow({
   meeting: MeetingSummary
   now: Date
   canManage: boolean
+  /** Deletion is admin-only — stricter than canManage, see deleteMeeting. */
+  canDelete: boolean
   currentUserId: string
   showAppBadge: boolean
   users: MentionUser[]
@@ -391,7 +395,7 @@ function MeetingRow({
                 }
               />
             ) : null}
-            {canManage ? (
+            {canDelete ? (
               <AlertDialog>
                 <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
                   <Trash2Icon />

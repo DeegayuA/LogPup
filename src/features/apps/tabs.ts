@@ -21,7 +21,6 @@
 
 export const APP_TAB_IDS = [
   'overview',
-  'board',
   'roadmap',
   'discussion',
   'meetings',
@@ -33,13 +32,24 @@ export type AppTabId = (typeof APP_TAB_IDS)[number]
 
 export const APP_TAB_LABEL: Record<AppTabId, string> = {
   overview: 'Overview',
-  board: 'Board',
   roadmap: 'Roadmap',
   discussion: 'Discussion',
   meetings: 'Meetings',
   activity: 'Activity',
   settings: 'Settings',
 }
+
+/**
+ * `?tab=board` used to be its own section. The board is now the lower half of
+ * Roadmap — the schedule and the work inside it on one surface — so the old
+ * value resolves there rather than falling through to Overview.
+ *
+ * This alias is permanent, not a migration step. Links carrying `tab=board`
+ * live in bookmarks, in Slack, in meeting notes and in the search index, and
+ * "the section was renamed" is never a good reason to land somebody on the
+ * wrong page.
+ */
+const LEGACY_TAB_ALIASES: Record<string, AppTabId> = { board: 'roadmap' }
 
 export const DEFAULT_APP_TAB: AppTabId = 'overview'
 
@@ -57,7 +67,8 @@ export function normalizeAppTab(
   available: readonly AppTabId[],
 ): AppTabId {
   const value = Array.isArray(raw) ? raw[0] : raw
-  const match = APP_TAB_IDS.find((id) => id === value)
+  const resolved = value !== undefined ? (LEGACY_TAB_ALIASES[value] ?? value) : value
+  const match = APP_TAB_IDS.find((id) => id === resolved)
   if (match && available.includes(match)) return match
   return DEFAULT_APP_TAB
 }
@@ -76,11 +87,25 @@ export function appTabHref(slug: string, tab: AppTabId): string {
   return tab === DEFAULT_APP_TAB ? base : `${base}?tab=${tab}`
 }
 
-/** Board links (sprint switcher, backlog toggle) must keep `tab=board` in the
- *  URL. Omitting it is what used to bounce people back to Overview the moment
- *  they clicked Backlog. */
-export function boardHref(slug: string, sprint?: string | null): string {
-  const params = new URLSearchParams({ tab: 'board' })
+/**
+ * A link to the plan with one sprint (or `'backlog'`) selected.
+ *
+ * The `tab` param is non-negotiable on these: omitting it is what used to
+ * bounce people back to Overview the moment they clicked Backlog. `extra`
+ * carries the board's own filter params (`who`, `overdue`, `q`, `group`,
+ * `prio`) so a link can open the plan already narrowed to the work it is
+ * talking about — which is what makes the read strip's counts clickable
+ * rather than decorative.
+ */
+export function boardHref(
+  slug: string,
+  sprint?: string | null,
+  extra: Record<string, string> = {},
+): string {
+  const params = new URLSearchParams({ tab: 'roadmap' })
   if (sprint) params.set('sprint', sprint)
+  for (const [key, value] of Object.entries(extra)) {
+    if (value) params.set(key, value)
+  }
   return `/apps/${slug}?${params.toString()}`
 }

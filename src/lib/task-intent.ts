@@ -25,6 +25,11 @@ export type TaskIntent = {
   due: string | null
   dueLabel: string | null
   appQuery: string | null
+  /** The board's scale: 1 Low, 2 Medium, 3 High (see board-view.ts). */
+  priority: number | null
+  priorityLabel: string | null
+  /** Everything after a ` -- ` / ` — ` separator, verbatim and unparsed. */
+  description: string | null
 }
 
 const WEEKDAYS = [
@@ -121,6 +126,70 @@ function extractApp(text: string): { rest: string; app: string | null } {
 const NAME_WORD = String.raw`[\p{L}\p{N}][\p{L}\p{N}.'’-]*`
 
 /**
+ * `@name`, ANYWHERE in the phrase — "fix login @shanika today" as well as
+ * "@shanika fix login". The `@` is the user explicitly flagging a person, so
+ * unlike the bare trailing name it may sit mid-sentence and it earns the full
+ * fuzzy tiers. One token only: `@` has always bound a single word here, and
+ * two would swallow the start of the title ("@sam fix login" → "sam fix").
+ */
+const AT_ANYWHERE = new RegExp(String.raw`(^|\s)@(${NAME_WORD})(?=\s|$)`, 'u')
+
+/**
+ * Everything after ` -- ` (or an em-dash) is the task's DESCRIPTION, verbatim:
+ * "fix login -- users with 2FA get a blank screen after the redirect".
+ * Split off before any other parsing, so a date or a name inside the
+ * description is prose, never an instruction.
+ */
+const DESCRIPTION_SPLIT = /\s+(?:--|—)\s+/
+
+/** Board scale (board-view.ts): 1 Low, 2 Medium, 3 High. Urgent is High. */
+const PRIORITY_WORDS: Record<string, { value: number; label: string }> = {
+  urgent: { value: 3, label: 'High' },
+  high: { value: 3, label: 'High' },
+  medium: { value: 2, label: 'Medium' },
+  med: { value: 2, label: 'Medium' },
+  low: { value: 1, label: 'Low' },
+}
+
+const PRIORITY_KEYS = Object.keys(PRIORITY_WORDS).join('|')
+
+/**
+ * A priority word at the END of the phrase ("fix login high", "ship it,
+ * urgent", "audit low priority"), or `!word` anywhere ("fix !high login").
+ *
+ * End-only for the bare form, same reasoning as the bare trailing name: these
+ * are ordinary English words, and "fix high latency" must keep its "high".
+ * The `!` form is the explicit escape hatch when the word has to sit
+ * elsewhere.
+ */
+const TRAILING_PRIORITY = new RegExp(
+  String.raw`^([\s\S]*\S)[\s,]+(?:priority\s+)?(${PRIORITY_KEYS})(?:\s+priority)?$`,
+  'i',
+)
+const BANG_PRIORITY = new RegExp(String.raw`(^|\s)!(${PRIORITY_KEYS})(?=\s|$)`, 'i')
+
+function extractPriority(text: string): {
+  rest: string
+  priority: number | null
+  priorityLabel: string | null
+} {
+  const bang = BANG_PRIORITY.exec(text)
+  if (bang) {
+    const word = PRIORITY_WORDS[bang[2].toLowerCase()]
+    const rest = (text.slice(0, bang.index) + ' ' + text.slice(bang.index + bang[0].length))
+      .replace(/\s+/g, ' ')
+      .trim()
+    return { rest, priority: word.value, priorityLabel: word.label }
+  }
+  const trailing = TRAILING_PRIORITY.exec(text)
+  if (trailing) {
+    const word = PRIORITY_WORDS[trailing[2].toLowerCase()]
+    return { rest: trailing[1].replace(/,$/, '').trim(), priority: word.value, priorityLabel: word.label }
+  }
+  return { rest: text, priority: null, priorityLabel: null }
+}
+
+/**
  * A recipient written at the END of the phrase: "new task to shanika",
  * "ship the brief for dee", "fix login @sam".
  *
@@ -165,6 +234,39 @@ function takeTrailingAssignee(
 }
 
 /**
+ * A bare name at the END of the phrase — "fix login shanika" — the mirror of
+ * the bare LEADING name that has always worked.
+ *
+ * Deliberately stricter than every other form: the last words of an ordinary
+ * title are usually nouns ("fix login page", "update billing copy"), so this
+ * accepts only an exact full-name or exact first-name hit — no substring, no
+ * typo fallback. A trailing "to"/"for"/"@" is the user *saying* the next word
+ * is a person, and earns the fuzzy tiers; a bare last word proves nothing,
+ * and stealing it from the title on a fuzzy guess would be worse than the
+ * Unassigned it replaces — the preview shows Unassigned as a nudge, but a
+ * wrong assignee reads as success.
+ */
+function takeBareTrailingName(
+  text: string,
+  people: IntentPerson[],
+): { rest: string; query: string } | null {
+  const words = text.split(' ')
+  // Two words first, so "… shanika ayasmanthi" binds the full name rather
+  // than leaving "shanika" stranded in the title.
+  for (const take of [2, 1]) {
+    if (words.length <= take) continue // the title must keep at least one word
+    const candidate = words.slice(-take).join(' ')
+    const q = candidate.toLowerCase()
+    const strict = people.filter((p) => {
+      const name = p.name.toLowerCase()
+      return name === q || name.split(/\s+/)[0] === q
+    })
+    if (strict.length > 0) return { rest: words.slice(0, -take).join(' '), query: candidate }
+  }
+  return null
+}
+
+/**
  * @param raw    what the user typed
  * @param people active users to resolve a name against
  * @param today  reference day for relative dates (injected so tests are stable)
@@ -174,14 +276,19 @@ export function parseTaskIntent(
   people: IntentPerson[],
   today: Date = new Date(),
 ): TaskIntent | null {
-  const text = raw.trim().replace(/\s+/g, ' ')
+  // The description is split off before ANY parsing: a date or a name inside
+  // it is prose describing the task, not an instruction about it.
+  const rawParts = raw.trim().split(DESCRIPTION_SPLIT)
+  const description = rawParts.length > 1 ? rawParts.slice(1).join(' — ').trim() || null : null
+
+  const text = rawParts[0].trim().replace(/\s+/g, ' ')
   if (text.length < 3) return null
 
   let nameQuery: string | null = null
   let body = text
 
-  // 1. "@sam ..." — explicit, wins outright.
-  const at = /^@([\w.'-]+)\s+([\s\S]+)$/.exec(text)
+  // 1. "@sam …" wherever the @ sits — explicit, wins outright.
+  const at = AT_ANYWHERE.exec(text)
   // 2. "assign <title> to <name>" / "task <title> for <name>"
   const command =
     /^(?:assign|create\s+task|add\s+task|task)\s+([\s\S]+?)\s+(?:to|for)\s+([\s\S]+)$/i.exec(text)
@@ -189,8 +296,10 @@ export function parseTaskIntent(
   const colon = /^([\w][\w .'-]{0,40}?)\s*:\s+([\s\S]+)$/.exec(text)
 
   if (at) {
-    nameQuery = at[1]
-    body = at[2]
+    nameQuery = at[2]
+    body = (text.slice(0, at.index) + ' ' + text.slice(at.index + at[0].length))
+      .replace(/\s+/g, ' ')
+      .trim()
   } else if (command) {
     body = command[1]
     nameQuery = command[2]
@@ -216,7 +325,11 @@ export function parseTaskIntent(
   // Dates first: "audit in 3 days" would otherwise be read as app "3 days",
   // and "fix login on monday" as app "monday".
   const withoutDue = extractDue(body, today)
-  let rest = withoutDue.rest
+  // Priority after dates ("fix login today high" peels the date first, which
+  // is what leaves "high" on the end) and before names, so a trailing name
+  // never has to look through a priority word to find itself.
+  const withoutPriority = extractPriority(withoutDue.rest)
+  let rest = withoutPriority.rest
 
   /*
    * Then the trailing recipient — "new task to shanika". Tried once on either
@@ -245,6 +358,18 @@ export function parseTaskIntent(
     }
   }
 
+  // Last resort: a bare name on the end, with no "to"/"for"/"@" announcing
+  // it. Runs after the app hint has been peeled so "fix login shanika on
+  // logpup" resolves both, and only under its strict matcher (see
+  // takeBareTrailingName for why fuzzy is not welcome here).
+  if (!nameQuery) {
+    const bare = takeBareTrailingName(rest, people)
+    if (bare) {
+      nameQuery = bare.query
+      rest = bare.rest
+    }
+  }
+
   const matches = nameQuery ? findPeople(nameQuery, people) : []
   const title = rest.replace(LEADING_FILLER, '').trim()
 
@@ -258,5 +383,8 @@ export function parseTaskIntent(
     due: withoutDue.due,
     dueLabel: withoutDue.label,
     appQuery: withoutApp.app,
+    priority: withoutPriority.priority,
+    priorityLabel: withoutPriority.priorityLabel,
+    description,
   }
 }
