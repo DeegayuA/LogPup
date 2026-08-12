@@ -130,11 +130,22 @@ function applyPatch(rows: Sprint[], patch: RoadmapPatch): Sprint[] {
  *  for a pointer drop, or synthesized from `rows[targetIndex]` for a
  *  keyboard nudge). Returns null when nothing would actually change. */
 function computeReorderSortOrder(rows: Sprint[], sprintId: string, overId: string): number | null {
-  const dragged = rows.find((s) => s.id === sprintId)
-  if (!dragged) return null
+  const fromIndex = rows.findIndex((s) => s.id === sprintId)
+  if (fromIndex === -1) return null
+  const dragged = rows[fromIndex]
+  const overRowIndex = rows.findIndex((s) => s.id === overId)
   const neighbors = rows.filter((s) => s.id !== sprintId)
   const overIndex = neighbors.findIndex((s) => s.id === overId)
-  const targetIndex = overIndex === -1 ? neighbors.length : overIndex
+  // arrayMove semantics, direction-aware. Moving UP, landing "on" a row
+  // takes that row's slot (insert before it). Moving DOWN, the dragged row
+  // vacates its own slot first, so everything below shifts up one — landing
+  // "on" a row means ending up AFTER it. Inserting before `over` in both
+  // directions (what this did originally) made every downward move resolve
+  // to the slot the row already occupied: sortOrder came back unchanged,
+  // this returned null, and Alt+ArrowDown / dragging a row downward were
+  // observable no-ops while upward moves worked.
+  const movingDown = overRowIndex !== -1 && fromIndex < overRowIndex
+  const targetIndex = overIndex === -1 ? neighbors.length : movingDown ? overIndex + 1 : overIndex
   const sortOrder = sortOrderForIndex(neighbors, targetIndex)
   return dragged.sortOrder === sortOrder ? null : sortOrder
 }

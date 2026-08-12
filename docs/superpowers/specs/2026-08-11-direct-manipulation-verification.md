@@ -175,3 +175,42 @@ than changing it. Re-tested live after the fix — results below.
 | Mouse drag between all three columns | **PASS** | Done→In progress (keyboard), In progress→To do and To do→Done via stepped mousedown/mousemove×10/mouseup. Overlay visible throughout, "over the To do column" mid-drag, counts moved 1→0/0→1 correctly each time, no error toast (server write accepted). Caveat: the MCP `drag` tool itself sends a single large move, which dnd-kit's `distance: 8` activation consumes — delta 0, no-op ("this moved to this."). The stepped sequence drives the identical MouseSensor pipeline; only the OS input layer is synthesized. |
 | **DragOverlay NOT clipped at the scroller edge** (the original bug) | **PASS** | Pinned the board's `overflow-x-auto snap-x` scroller to 420px so it truly clips (its own "In progress" column is visibly cut at the right edge). Held a drag mid-gesture: overlay rect x=48..288 vs scroller visible box x=248..668 — 200px of the drag copy renders **outside** the container, `visibility:visible, opacity:1`, position:fixed z-999 portal. Screenshot taken; the To do column also showed its green drop-target highlight during the drag. Cancelled cleanly, layout restored. |
 | Board layout note (pre-existing, not a defect in this branch) | observation | At narrow viewports the board's snap-x container never internally scrolls — it stays content-width (800px) and the **document** scrolls horizontally instead (`html.scrollWidth` 848 vs viewport 500). The overlay fix is structural (body portal) so it is immune either way. |
+
+### Roadmap (dev sprints "test" Aug 11–18, "1222" Aug 13–19, "test 3" Aug 27–Sep 2; every mutation restored)
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| Keyboard nudge: `Right` = +1 day | **PASS** | "1222" Aug 13–19 → Aug 14–20, label updated instantly (debounce preview) |
+| Keyboard nudge: `Shift+Left/Right` = ±1 week | **PASS** | Aug 14–20 → Aug 7–13 → Aug 14–20, exact |
+| Debounced commit persists, no error | **PASS** | after nudges settled + 900ms: dates correct, zero toasts |
+| Edge-resize clamps at the 1-day floor | **PASS** | dragged "1222"'s START handle 12 days right (5 past its end): result **Aug 19 – Aug 19** — clamped to 1 day, never crossed. Persisted (edit dialog re-opened showing 2026-08-19/2026-08-19) |
+| Bar drag shifts dates | **PASS** | stepped drag +7 days → Aug 20–26 committed, no toast; restored via Shift+Left |
+| Live date tooltip during drag | **PASS** | mid-drag (held), a fixed-position floating readout showed "Aug 19 – Aug 25, 2026" tracking the drag |
+| Right-click quick menu, permission-filtered | **PASS** | contextmenu on the row → menu: Edit dates / Mark active / Mark done / Open board / Delete — current status correctly excluded from the Mark items |
+| "Edit dates" dialog (sprint-edit-dialog) | **PASS** | opened from the menu, showed live DB values, saved edits persisted (verified across reload) |
+| `Alt+ArrowUp` reorders up | **PASS** | "1222" moved above "test" |
+| `Alt+ArrowDown` reorders down | **FAIL → fixed → PASS** | see defect below; after the fix "1222" moved below "test 3" |
+| Grip drag reorder (mouse) | **FAIL → fixed → PASS** | same root cause; after the fix a stepped grip drag down produced "1222 is over test 3" → "moved to test 3" → order test, test 3, 1222 |
+| "Sort by date" resets order | **PASS** | toast "Sorted by date", order returned to chronological (test, 1222, test 3) — used twice as the restore mechanism |
+
+#### Defect: rows could never be moved DOWN (keyboard or mouse)
+
+Observed live before the fix: `Alt+ArrowDown` on the middle row was a no-op,
+and a grip drag that dnd-kit itself announced as "1222 is over test 3" →
+"moved to test 3" changed nothing.
+
+Root cause (`roadmap.tsx` `computeReorderSortOrder`): it always inserted the
+dragged row BEFORE `over` in the neighbors list. For any downward move, the
+dragged row's own slot has already been vacated, so "before the row below"
+IS its current slot — `sortOrderForIndex` returned its existing `sortOrder`,
+the function returned null, and the commit was skipped. Upward moves worked,
+downward moves were silently impossible. `computeReorderSortOrder` lives in
+the component, outside the unit-tested geometry module, which is why 504
+green tests never caught it.
+
+Fix: direction-aware target index (arrayMove semantics) — moving down lands
+AFTER `over`, moving up (or arriving from elsewhere) takes `over`'s slot.
+`board.tsx` `handleDragEnd` had the identical insert-before-only pattern for
+within-column card reorders (unreachable to test live with a 1-card board,
+but the same math); fixed the same way. Both re-verified: tsc clean, 504
+tests green, and the roadmap paths re-tested live as above.

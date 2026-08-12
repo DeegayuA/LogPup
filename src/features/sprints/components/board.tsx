@@ -111,7 +111,21 @@ export function Board({
     let targetIndex = neighbors.length
     if (!isColumnDrop) {
       const idx = neighbors.findIndex((t) => t.id === overId)
-      if (idx !== -1) targetIndex = idx
+      if (idx !== -1) {
+        // Direction-aware within a column (arrayMove semantics): moving a
+        // card DOWN vacates its old slot, so landing "on" a card means
+        // ending up after it; moving up (or arriving from another column,
+        // where fromIndex is -1) takes the target card's own slot. Insert-
+        // before-only here made every downward within-column drop resolve
+        // to the card's current slot and silently no-op — the same bug
+        // computeReorderSortOrder had on the roadmap, where it was
+        // observable live (see the verification log).
+        const column = board[targetStatus]
+        const fromIndex = column.findIndex((t) => t.id === taskId)
+        const overIndexInColumn = column.findIndex((t) => t.id === overId)
+        const movingDown = fromIndex !== -1 && fromIndex < overIndexInColumn
+        targetIndex = movingDown ? idx + 1 : idx
+      }
     }
 
     const sortOrder = sortOrderForIndex(neighbors, targetIndex)
