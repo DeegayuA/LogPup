@@ -5,7 +5,10 @@ import { z } from 'zod'
 import { and, count, eq, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, assignments, sprints, tasks, meetings, meetingAttendees, users } from '@/db/schema'
+import {
+  apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAttendeeRecommendations,
+  users,
+} from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { hashPassword } from '@/lib/password'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
@@ -40,6 +43,7 @@ export async function clearTestData(
   }
 
   // Delete children before parents to respect foreign keys; users are preserved.
+  await db.delete(meetingAttendeeRecommendations)
   await db.delete(meetingAttendees)
   await db.delete(meetings)
   await db.delete(tasks)

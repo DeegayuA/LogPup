@@ -171,6 +171,25 @@ describe('buildIcs', () => {
     expect(attendeeLines[1]).toContain('mailto:alan@example.com')
   })
 
+  it('marks an optional attendee ROLE=OPT-PARTICIPANT and leaves required attendees alone', () => {
+    const attendeeLines = lines(
+      buildIcs({
+        ...base,
+        attendees: [
+          { name: 'Grace Hopper', email: 'grace@example.com', optional: true },
+          { name: 'Alan Turing', email: 'alan@example.com', optional: false },
+          { name: 'Ada King', email: 'ada.king@example.com' },
+        ],
+      }),
+    ).filter((l) => l.startsWith('ATTENDEE'))
+    expect(attendeeLines[0]).toContain('ROLE=OPT-PARTICIPANT')
+    expect(attendeeLines[0]).not.toContain('ROLE=REQ-PARTICIPANT')
+    expect(attendeeLines[1]).toContain('ROLE=REQ-PARTICIPANT')
+    // `optional` omitted entirely (no invite-list flag written yet) still
+    // renders as required — the RFC 5545 default and today's only behaviour.
+    expect(attendeeLines[2]).toContain('ROLE=REQ-PARTICIPANT')
+  })
+
   it('handles a meeting with no attendees', () => {
     const out = lines(buildIcs({ ...base, attendees: [] }))
     expect(out.filter((l) => l.startsWith('ATTENDEE'))).toHaveLength(0)

@@ -139,13 +139,19 @@ function canManageMeeting(
   return session.user.role === 'admin' || meeting.createdBy === session.user.id
 }
 
-async function attendeeEmails(attendeeIds: string[]): Promise<string[]> {
-  if (attendeeIds.length === 0) return []
+/** A candidate for the Google Calendar attendee list: who, and required/optional. */
+type AttendeeRef = { userId: string; optional: boolean }
+
+async function attendeeEmails(
+  attendees: AttendeeRef[],
+): Promise<{ email: string; optional: boolean }[]> {
+  if (attendees.length === 0) return []
   const rows = await db
-    .select({ email: users.email })
+    .select({ id: users.id, email: users.email })
     .from(users)
-    .where(inArray(users.id, attendeeIds))
-  return rows.map((r) => r.email)
+    .where(inArray(users.id, attendees.map((a) => a.userId)))
+  const optionalByUserId = new Map(attendees.map((a) => [a.userId, a.optional]))
+  return rows.map((r) => ({ email: r.email, optional: optionalByUserId.get(r.id) ?? false }))
 }
 
 /**
@@ -163,7 +169,7 @@ async function syncCalendarInvite(
     endsAt: Date
     createdBy: string
   },
-  attendeeIds: string[],
+  attendees: AttendeeRef[],
 ): Promise<{ reason?: string }> {
   const [creator] = await db
     .select({ googleRefreshToken: users.googleRefreshToken })
@@ -174,7 +180,7 @@ async function syncCalendarInvite(
   }
 
   try {
-    const emails = await attendeeEmails(attendeeIds)
+    const emails = await attendeeEmails(attendees)
     const { eventId } = await createCalendarEvent({
       refreshToken: creator.googleRefreshToken,
       title: meeting.title,
@@ -293,7 +299,10 @@ export async function createMeeting(
       endsAt: new Date(endsAt),
       createdBy: session.user.id,
     },
-    attendeeIds,
+    // createMeeting doesn't yet collect a per-attendee optional flag (the
+    // invite-list UI work is a later task) — every row it inserts above is
+    // optional:false by column default, so the calendar invite matches.
+    attendeeIds.map((userId) => ({ userId, optional: false })),
   )
   const calendarWarning = reason ? inviteWarning(reason) : undefined
 
@@ -335,14 +344,11 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
   // this can't read a trashed meeting's attendees (see MEETING_CHILD_TABLES
   // in src/db/live.ts).
   const attendeeRows = await db
-    .select({ userId: meetingAttendees.userId })
+    .select({ userId: meetingAttendees.userId, optional: meetingAttendees.optional })
     .from(meetingAttendees)
     .where(eq(meetingAttendees.meetingId, meetingId))
 
-  const { reason } = await syncCalendarInvite(
-    existing,
-    attendeeRows.map((r) => r.userId),
-  )
+  const { reason } = await syncCalendarInvite(existing, attendeeRows)
   if (reason) return err(retryFailedMessage(reason))
 
   await logActivity({

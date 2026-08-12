@@ -176,6 +176,13 @@
       "when": 1786518385468,
       "tag": "0025_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786540839930,
+      "tag": "0026_attendee_recommendations",
+      "breakpoints": true
     }
   ]
 }

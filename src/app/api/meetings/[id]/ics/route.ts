@@ -63,7 +63,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     // cannot pull in a trashed meeting's attendees (see MEETING_CHILD_TABLES
     // in src/db/live.ts).
     db
-      .select({ name: users.name, email: users.email })
+      .select({ name: users.name, email: users.email, optional: meetingAttendees.optional })
       .from(meetingAttendees)
       .innerJoin(users, eq(meetingAttendees.userId, users.id))
       .where(eq(meetingAttendees.meetingId, meeting.id)),
