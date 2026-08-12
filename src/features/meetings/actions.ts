@@ -65,8 +65,11 @@ const ICS_FALLBACK_HINT = 'Use “Add to calendar” on the meeting to get the i
 
 const inviteWarning = (reason: string) =>
   `Meeting saved. Google didn’t email the invites — ${reason}. ${ICS_FALLBACK_HINT}`
+// No ICS_FALLBACK_HINT here: this message's only surface (add-to-calendar's
+// retry toast) always renders a "Download invite" action button, so spelling
+// the fallback out in prose next to that button just triples the toast.
 const retryFailedMessage = (reason: string) =>
-  `Google didn’t send the invites — ${reason}. ${ICS_FALLBACK_HINT}`
+  `Google didn’t send the invites — ${reason}.`
 const moveWarning = (reason: string) =>
   `Moved here, but the Google Calendar event still shows the old time — ${reason}. ${ICS_FALLBACK_HINT}`
 

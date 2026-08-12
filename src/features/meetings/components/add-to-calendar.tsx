@@ -77,8 +77,9 @@ export function AddToCalendarMenu({
       try {
         const res = await retryCalendarInvite(meeting.id)
         if (!res.ok) {
+          // The action button IS the fallback instruction — no description
+          // repeating it in prose (the toast was three redundant sentences).
           toast.error(res.error, {
-            description: 'Download the invite file instead — it works in every calendar app.',
             action: { label: 'Download invite', onClick: downloadIcs },
             duration: 10_000,
           })
@@ -88,7 +89,6 @@ export function AddToCalendarMenu({
         router.refresh()
       } catch {
         toast.error('Google Calendar could not be reached', {
-          description: 'Download the invite file instead — it works in every calendar app.',
           action: { label: 'Download invite', onClick: downloadIcs },
           duration: 10_000,
         })
