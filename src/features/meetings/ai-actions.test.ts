@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { meetingNoteSegments, meetingScreenshots, meetings } from '@/db/schema'
+import { meetingNoteSegments, meetingScreenshots, meetingTaskSuggestions, meetings, tasks } from '@/db/schema'
 
 // deleteMeetingKeyframe and deleteNoteSegment are soft-delete (D3): the row
 // is marked deletedAt/deletedBy, never removed. Same mocked-action idiom as
@@ -35,13 +35,16 @@ vi.mock('@/features/notifications/notify', () => ({
 }))
 vi.mock('@/features/sprints/task-actions', () => ({ createTask: vi.fn() }))
 
-// Three distinct tables get read across these two actions: `meetingScreenshots`
+// Distinct tables get read across these three actions: `meetingScreenshots`
 // (deleteMeetingKeyframe's own row), `meetingNoteSegments` (deleteNoteSegment's
-// own row), and `meetings` (both go through canManageMeeting). Queues are
-// consumed in call order per table.
+// own row), `meetingTaskSuggestions` and `tasks` (undoAutoAcceptedSuggestion),
+// and `meetings` (all three go through canManageMeeting). Queues are consumed
+// in call order per table.
 let meetingQueue: unknown[][] = []
 let screenshotQueue: unknown[][] = []
 let segmentQueue: unknown[][] = []
+let suggestionQueue: unknown[][] = []
+let taskQueue: unknown[][] = []
 let updateReturningQueue: unknown[][] = []
 
 vi.mock('@/db', () => ({
@@ -52,26 +55,35 @@ vi.mock('@/db', () => ({
           if (table === meetings) return meetingQueue.shift() ?? []
           if (table === meetingScreenshots) return screenshotQueue.shift() ?? []
           if (table === meetingNoteSegments) return segmentQueue.shift() ?? []
+          if (table === meetingTaskSuggestions) return suggestionQueue.shift() ?? []
+          if (table === tasks) return taskQueue.shift() ?? []
           return []
         },
       }),
     }),
     update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({
-        where: () => ({
-          returning: async () => {
-            writeSpy(table, values)
-            return updateReturningQueue.shift() ?? []
-          },
-        }),
+        // writeSpy fires here, not inside .returning(), so a write is
+        // recorded even for a caller (undoAutoAcceptedSuggestion's
+        // meetingTaskSuggestions update) that never chains .returning() at
+        // all and just awaits the .where(...) call directly.
+        where: () => {
+          writeSpy(table, values)
+          return { returning: async () => updateReturningQueue.shift() ?? [] }
+        },
       }),
     }),
     delete: deleteSpy,
   },
 }))
 
-const { deleteMeetingKeyframe, deleteNoteSegment, keyframeDeleteLabel, noteSegmentDeleteLabel } =
-  await import('./ai-actions')
+const {
+  deleteMeetingKeyframe,
+  deleteNoteSegment,
+  undoAutoAcceptedSuggestion,
+  keyframeDeleteLabel,
+  noteSegmentDeleteLabel,
+} = await import('./ai-actions')
 
 const MEETING_ID = '44444444-4444-4444-8444-444444444444'
 const SCREENSHOT_ID = '55555555-5555-4555-8555-555555555555'
@@ -93,6 +105,8 @@ beforeEach(() => {
   meetingQueue = []
   screenshotQueue = []
   segmentQueue = []
+  suggestionQueue = []
+  taskQueue = []
   updateReturningQueue = []
 })
 
@@ -202,6 +216,100 @@ describe('deleteNoteSegment', () => {
         verb: 'deleted',
         entityLabel: 'a note segment in Sprint planning',
       }),
+    )
+  })
+})
+
+// undoAutoAcceptedSuggestion is the sixth conversion (not one of the five
+// named in the brief, but a real db.delete(tasks) call this file also had —
+// `tasks` is a soft-deleted table, so leaving it hard-deleted would have
+// kept check 4 red for this whole file). Same soft-delete rigor as the other
+// five: authorization rejection, the double-guard no-op, and the happy path
+// — which here also has to prove the meetingTaskSuggestions state reset
+// (status back to 'open', createdTaskId cleared) still happens alongside the
+// soft delete.
+const SUGGESTION_ID = '77777777-7777-4777-8777-777777777777'
+const TASK_ID = '88888888-8888-4888-8888-888888888888'
+const APP_ID = 'app-1'
+
+function baseSuggestion(overrides: Record<string, unknown> = {}) {
+  return {
+    id: SUGGESTION_ID,
+    meetingId: MEETING_ID,
+    status: 'accepted',
+    acceptedBy: null,
+    createdTaskId: TASK_ID,
+    text: 'Fix the flaky test',
+    suggestedUserId: 'assignee-1',
+    suggestedDueDate: null,
+    ...overrides,
+  }
+}
+
+// Matches what suggestionToTaskPayload (notes.ts) reconstructs from
+// baseSuggestion() above, so canUndoAutoAssign sees the task as untouched
+// since the auto-assign pass created it — i.e. eligible for undo.
+function baseTask(overrides: Record<string, unknown> = {}) {
+  return {
+    id: TASK_ID,
+    status: 'todo',
+    title: 'Fix the flaky test',
+    assigneeId: 'assignee-1',
+    dueDate: null,
+    ...overrides,
+  }
+}
+
+describe('undoAutoAcceptedSuggestion', () => {
+  it('rejects a caller who is neither the meeting creator nor an admin, and writes nothing', async () => {
+    asOther()
+    suggestionQueue = [[baseSuggestion()]]
+    meetingQueue = [[baseMeeting({ appId: APP_ID })]]
+    const res = await undoAutoAcceptedSuggestion(SUGGESTION_ID)
+    expect(res).toEqual({ ok: false, error: 'Not allowed' })
+    expect(writeSpy).not.toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(logActivityMock).not.toHaveBeenCalled()
+  })
+
+  it('a second undo of an already-trashed task returns err and does no further write', async () => {
+    asCreator()
+    suggestionQueue = [[baseSuggestion()]]
+    meetingQueue = [[baseMeeting({ appId: APP_ID })]]
+    taskQueue = [[baseTask()]]
+    // isNull(deletedAt) guard matched nothing — already trashed.
+    updateReturningQueue = [[]]
+
+    const res = await undoAutoAcceptedSuggestion(SUGGESTION_ID)
+
+    expect(res).toEqual({ ok: false, error: 'That task no longer exists' })
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(logActivityMock).not.toHaveBeenCalled()
+  })
+
+  it('soft-deletes the auto-created task and resets the suggestion back to a manual card', async () => {
+    asCreator()
+    suggestionQueue = [[baseSuggestion()]]
+    meetingQueue = [[baseMeeting({ appId: APP_ID })]]
+    taskQueue = [[baseTask()]]
+    updateReturningQueue = [[{ id: TASK_ID }]]
+
+    const res = await undoAutoAcceptedSuggestion(SUGGESTION_ID)
+
+    expect(res).toEqual({ ok: true, data: undefined })
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(writeSpy).toHaveBeenCalledWith(
+      tasks,
+      expect.objectContaining({ deletedAt: expect.any(Date), deletedBy: CREATOR_ID }),
+    )
+    expect(writeSpy).toHaveBeenCalledWith(meetingTaskSuggestions, {
+      status: 'open',
+      createdTaskId: null,
+      acceptedBy: null,
+    })
+    expect(logActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ verb: 'reopened', entityType: 'suggestion', entityId: SUGGESTION_ID }),
     )
   })
 })

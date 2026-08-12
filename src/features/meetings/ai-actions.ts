@@ -2290,7 +2290,7 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
     entityId: segment.meetingId,
     entityLabel: noteSegmentDeleteLabel(ctx.meeting.title),
     pagePath: '/meetings',
-    detail: 'a note segment',
+    detail: 'deleted a note',
   })
 
   revalidatePath('/meetings')

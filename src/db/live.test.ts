@@ -134,15 +134,27 @@ describe('check 1: raw .from()/join() reads of a soft-deleted table', () => {
     (e) => !allowlistSet.has(e.relPath) && (RAW_FROM_RE.test(e.text) || RAW_JOIN_RE.test(e.text)),
   )
 
-  it.each(offenders)('$relPath', ({ relPath }) => {
-    throw new Error(
-      `${relPath}: reads meetings/tasks/sprints/meetingNoteSegments/meetingScreenshots directly via `
-      + `.from()/leftJoin()/innerJoin()/rightJoin(). Use liveMeetings/liveTasks/liveSprints/`
-      + `liveNoteSegments/liveScreenshots from '@/db/live' instead (or liveMeetingsAs(name)/etc. if the `
-      + `query needs a second reference). If this is a genuine, reviewed exception, add '${relPath}' to `
-      + 'ALLOWLIST in src/db/live.test.ts with a // why comment.',
-    )
-  })
+  // A describe() whose only test is it.each(offenders) registers ZERO tests
+  // once offenders is empty, and vitest fails the whole FILE with "No test
+  // found in suite" — so a fully-converted check could never show green.
+  // Registering one explicit passing test for the empty case keeps every
+  // offender message verbatim (Task 4's conversion worklist) while letting
+  // this check actually reach PASS.
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders.map((o) => o.relPath)).toEqual([])
+    })
+  } else {
+    it.each(offenders)('$relPath', ({ relPath }) => {
+      throw new Error(
+        `${relPath}: reads meetings/tasks/sprints/meetingNoteSegments/meetingScreenshots directly via `
+        + `.from()/leftJoin()/innerJoin()/rightJoin(). Use liveMeetings/liveTasks/liveSprints/`
+        + `liveNoteSegments/liveScreenshots from '@/db/live' instead (or liveMeetingsAs(name)/etc. if the `
+        + `query needs a second reference). If this is a genuine, reviewed exception, add '${relPath}' to `
+        + 'ALLOWLIST in src/db/live.test.ts with a // why comment.',
+      )
+    })
+  }
 })
 
 // Check 2 -------------------------------------------------------------------
@@ -150,14 +162,23 @@ describe('check 1: raw .from()/join() reads of a soft-deleted table', () => {
 describe('check 2: alias() of a soft-deleted table', () => {
   const offenders = entries.filter((e) => !allowlistSet.has(e.relPath) && ALIAS_RE.test(e.text))
 
-  it.each(offenders)('$relPath', ({ relPath }) => {
-    throw new Error(
-      `${relPath}: calls alias() directly on meetings/tasks/sprints/meetingNoteSegments/meetingScreenshots. `
-      + "Alias the live subquery instead — e.g. liveTasksAs('some_name') from '@/db/live' — so a self-join "
-      + "or multi-reference still excludes soft-deleted rows. If this is a genuine, reviewed exception, add "
-      + `'${relPath}' to ALLOWLIST in src/db/live.test.ts with a // why comment.`,
-    )
-  })
+  // See check 1's comment: registers one passing test for the empty case so
+  // this check can reach PASS instead of vitest failing the file with
+  // "No test found in suite" once offenders is empty.
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders.map((o) => o.relPath)).toEqual([])
+    })
+  } else {
+    it.each(offenders)('$relPath', ({ relPath }) => {
+      throw new Error(
+        `${relPath}: calls alias() directly on meetings/tasks/sprints/meetingNoteSegments/meetingScreenshots. `
+        + "Alias the live subquery instead — e.g. liveTasksAs('some_name') from '@/db/live' — so a self-join "
+        + "or multi-reference still excludes soft-deleted rows. If this is a genuine, reviewed exception, add "
+        + `'${relPath}' to ALLOWLIST in src/db/live.test.ts with a // why comment.`,
+      )
+    })
+  }
 })
 
 // Check 3 -------------------------------------------------------------------
@@ -167,16 +188,25 @@ describe('check 3: meeting child table read without joining liveMeetings', () =>
     (e) => !allowlistSet.has(e.relPath) && CHILD_FROM_RE.test(e.text) && !e.text.includes('liveMeetings'),
   )
 
-  it.each(offenders)('$relPath', ({ relPath }) => {
-    throw new Error(
-      `${relPath}: reads a meeting child table (${MEETING_CHILD_TABLES.join(', ')}) via .from() without `
-      + 'also importing/using liveMeetings from \'@/db/live\'. A trashed meeting\'s children are '
-      + 'live-iff-the-meeting-is-live (no deletedAt of their own) — join against liveMeetings (e.g. '
-      + '.innerJoin(liveMeetings, eq(child.meetingId, liveMeetings.id))) so children of a soft-deleted '
-      + `meeting stop being readable. If this is a genuine, reviewed exception, add '${relPath}' to `
-      + 'ALLOWLIST in src/db/live.test.ts with a // why comment.',
-    )
-  })
+  // See check 1's comment: registers one passing test for the empty case so
+  // this check can reach PASS instead of vitest failing the file with
+  // "No test found in suite" once offenders is empty.
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders.map((o) => o.relPath)).toEqual([])
+    })
+  } else {
+    it.each(offenders)('$relPath', ({ relPath }) => {
+      throw new Error(
+        `${relPath}: reads a meeting child table (${MEETING_CHILD_TABLES.join(', ')}) via .from() without `
+        + 'also importing/using liveMeetings from \'@/db/live\'. A trashed meeting\'s children are '
+        + 'live-iff-the-meeting-is-live (no deletedAt of their own) — join against liveMeetings (e.g. '
+        + '.innerJoin(liveMeetings, eq(child.meetingId, liveMeetings.id))) so children of a soft-deleted '
+        + `meeting stop being readable. If this is a genuine, reviewed exception, add '${relPath}' to `
+        + 'ALLOWLIST in src/db/live.test.ts with a // why comment.',
+      )
+    })
+  }
 })
 
 // Check 4 ---------------------------------------------------------------
@@ -256,14 +286,23 @@ function check4MatchIndexes(entry: FileEntry): number[] {
 describe('check 4: db.delete(...) confined to trash/cleanup/key-revoke sites', () => {
   const offenders = entries.filter((e) => check4MatchIndexes(e).length > 0)
 
-  it.each(offenders)('$relPath', ({ relPath }) => {
-    throw new Error(
-      `${relPath}: calls db.delete(...) outside the allowed sites (src/features/admin/trash-actions.ts, `
-      + "clearTestData in src/features/admin/actions.ts, deleteGeminiKey in src/features/gemini/actions.ts, "
-      + 'or a scripts/ file). A soft-deleted table must be marked deleted (set deletedAt/deletedBy) instead '
-      + `of hard-deleted — see src/db/live.ts. (${relPath})`,
-    )
-  })
+  // See check 1's comment: registers one passing test for the empty case so
+  // this check can reach PASS instead of vitest failing the file with
+  // "No test found in suite" once offenders is empty.
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders.map((o) => o.relPath)).toEqual([])
+    })
+  } else {
+    it.each(offenders)('$relPath', ({ relPath }) => {
+      throw new Error(
+        `${relPath}: calls db.delete(...) outside the allowed sites (src/features/admin/trash-actions.ts, `
+        + "clearTestData in src/features/admin/actions.ts, deleteGeminiKey in src/features/gemini/actions.ts, "
+        + 'or a scripts/ file). A soft-deleted table must be marked deleted (set deletedAt/deletedBy) instead '
+        + `of hard-deleted — see src/db/live.ts. (${relPath})`,
+      )
+    })
+  }
 })
 
 // Check 5 ---------------------------------------------------------------
@@ -289,14 +328,23 @@ describe('check 5: every schema table with a deletedAt column is in SOFT_TABLES'
 
   const missing = tablesWithDeletedAt.filter((t) => !softTableSqlNames.has(t.sqlName))
 
-  it.each(missing)('schema.$exportName ($sqlName) is missing from SOFT_TABLES', ({ exportName, sqlName }) => {
-    throw new Error(
-      `schema.${exportName} (SQL table "${sqlName}") has a deletedAt column but is not registered in `
-      + `SOFT_TABLES in src/db/live.ts. Add a liveOf(${exportName}, 'live_${sqlName}') export plus a `
-      + 'matching SOFT_TABLES entry, the same way meetings/tasks/sprints/meetingNoteSegments/'
-      + 'meetingScreenshots are wired up.',
-    )
-  })
+  // See check 1's comment: registers one passing test for the empty case so
+  // this doesn't fail the file with "No test found in suite" once nothing is
+  // missing (as it already isn't today).
+  if (missing.length === 0) {
+    it('no missing tables', () => {
+      expect(missing.map((m) => m.exportName)).toEqual([])
+    })
+  } else {
+    it.each(missing)('schema.$exportName ($sqlName) is missing from SOFT_TABLES', ({ exportName, sqlName }) => {
+      throw new Error(
+        `schema.${exportName} (SQL table "${sqlName}") has a deletedAt column but is not registered in `
+        + `SOFT_TABLES in src/db/live.ts. Add a liveOf(${exportName}, 'live_${sqlName}') export plus a `
+        + 'matching SOFT_TABLES entry, the same way meetings/tasks/sprints/meetingNoteSegments/'
+        + 'meetingScreenshots are wired up.',
+      )
+    })
+  }
 
   it('SOFT_TABLES has no stale entries for tables that no longer have deletedAt', () => {
     const currentNames = new Set(tablesWithDeletedAt.map((t) => t.sqlName))
@@ -313,12 +361,21 @@ describe('check 6: isNull(...sprintId) backlog predicate confined to backlog.ts'
 
   const offenders = entries.filter((e) => e.relPath !== BACKLOG_PATH && SPRINT_ID_ISNULL_RE.test(e.text))
 
-  it.each(offenders)('$relPath', ({ relPath }) => {
-    throw new Error(
-      `${relPath}: uses isNull(...sprintId) (the "task has no sprint = backlog" predicate) outside `
-      + `${BACKLOG_PATH}. Move this predicate into a shared helper exported from backlog.ts and import it `
-      + 'here instead of reimplementing it inline, so the backlog definition stays in one place as it picks '
-      + 'up the soft-delete filter.',
-    )
-  })
+  // See check 1's comment: registers one passing test for the empty case so
+  // this check can reach PASS instead of vitest failing the file with
+  // "No test found in suite" once offenders is empty.
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders.map((o) => o.relPath)).toEqual([])
+    })
+  } else {
+    it.each(offenders)('$relPath', ({ relPath }) => {
+      throw new Error(
+        `${relPath}: uses isNull(...sprintId) (the "task has no sprint = backlog" predicate) outside `
+        + `${BACKLOG_PATH}. Move this predicate into a shared helper exported from backlog.ts and import it `
+        + 'here instead of reimplementing it inline, so the backlog definition stays in one place as it picks '
+        + 'up the soft-delete filter.',
+      )
+    })
+  }
 })
