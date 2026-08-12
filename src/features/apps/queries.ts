@@ -3,7 +3,8 @@ import { and, asc, count, eq, getTableColumns, gte, isNotNull, lt, max, ne, sql,
 import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
 import { db } from '@/db'
-import { appComments, apps, assignments, meetings, sprints, tasks, users } from '@/db/schema'
+import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { appComments, apps, assignments, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
   appHealth,
@@ -134,42 +135,42 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
         .innerJoin(users, eq(assignments.userId, users.id)),
       db
         .select({
-          appId: tasks.appId,
-          todo: countWhere(eq(tasks.status, 'todo')),
-          inProgress: countWhere(eq(tasks.status, 'in_progress')),
-          done: countWhere(eq(tasks.status, 'done')),
+          appId: liveTasks.appId,
+          todo: countWhere(eq(liveTasks.status, 'todo')),
+          inProgress: countWhere(eq(liveTasks.status, 'in_progress')),
+          done: countWhere(eq(liveTasks.status, 'done')),
           // An overdue task is one that is NOT done and whose due date has
           // already passed. `tasks.due_date` is a plain calendar day, so this
           // compares against today-in-Colombo rather than a UTC instant.
           overdue: countWhere(
-            and(ne(tasks.status, 'done'), isNotNull(tasks.dueDate), lt(tasks.dueDate, today)),
+            and(ne(liveTasks.status, 'done'), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),
           ),
-          lastCreatedAt: max(tasks.createdAt),
+          lastCreatedAt: max(liveTasks.createdAt),
         })
-        .from(tasks)
-        .groupBy(tasks.appId),
+        .from(liveTasks)
+        .groupBy(liveTasks.appId),
       db
         .select({
-          appId: sprints.appId,
-          id: sprints.id,
-          name: sprints.name,
-          startDate: sprints.startDate,
-          endDate: sprints.endDate,
-          status: sprints.status,
+          appId: liveSprints.appId,
+          id: liveSprints.id,
+          name: liveSprints.name,
+          startDate: liveSprints.startDate,
+          endDate: liveSprints.endDate,
+          status: liveSprints.status,
         })
-        .from(sprints),
+        .from(liveSprints),
       db
         .select({
-          appId: meetings.appId,
+          appId: liveMeetings.appId,
           total: count(),
           thisWeek: countWhere(
-            and(gte(meetings.startsAt, weekStart), lt(meetings.startsAt, weekEnd)),
+            and(gte(liveMeetings.startsAt, weekStart), lt(liveMeetings.startsAt, weekEnd)),
           ),
-          lastCreatedAt: max(meetings.createdAt),
+          lastCreatedAt: max(liveMeetings.createdAt),
         })
-        .from(meetings)
-        .where(isNotNull(meetings.appId))
-        .groupBy(meetings.appId),
+        .from(liveMeetings)
+        .where(isNotNull(liveMeetings.appId))
+        .groupBy(liveMeetings.appId),
       db
         .select({
           appId: appComments.appId,
@@ -352,20 +353,20 @@ export async function getAppCounts(appId: string): Promise<AppCounts> {
   const [taskRows, meetingRows, commentRows] = await Promise.all([
     db
       .select({
-        todo: countWhere(eq(tasks.status, 'todo')),
-        inProgress: countWhere(eq(tasks.status, 'in_progress')),
-        done: countWhere(eq(tasks.status, 'done')),
+        todo: countWhere(eq(liveTasks.status, 'todo')),
+        inProgress: countWhere(eq(liveTasks.status, 'in_progress')),
+        done: countWhere(eq(liveTasks.status, 'done')),
         overdue: countWhere(
-          and(ne(tasks.status, 'done'), isNotNull(tasks.dueDate), lt(tasks.dueDate, today)),
+          and(ne(liveTasks.status, 'done'), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),
         ),
-        lastCreatedAt: max(tasks.createdAt),
+        lastCreatedAt: max(liveTasks.createdAt),
       })
-      .from(tasks)
-      .where(eq(tasks.appId, appId)),
+      .from(liveTasks)
+      .where(eq(liveTasks.appId, appId)),
     db
-      .select({ total: count(), lastCreatedAt: max(meetings.createdAt) })
-      .from(meetings)
-      .where(eq(meetings.appId, appId)),
+      .select({ total: count(), lastCreatedAt: max(liveMeetings.createdAt) })
+      .from(liveMeetings)
+      .where(eq(liveMeetings.appId, appId)),
     db
       .select({ total: count(), lastCreatedAt: max(appComments.createdAt) })
       .from(appComments)

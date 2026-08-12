@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
+import { liveMeetings } from '@/db/live'
 import { meetingAttendees, meetings } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -27,9 +28,9 @@ export async function respondToMeeting(
 
   // Grab the title up front so the activity row can name the meeting.
   const [meeting] = await db
-    .select({ title: meetings.title })
-    .from(meetings)
-    .where(eq(meetings.id, meetingId))
+    .select({ title: liveMeetings.title })
+    .from(liveMeetings)
+    .where(eq(liveMeetings.id, meetingId))
 
   const result = await db
     .update(meetingAttendees)
@@ -63,9 +64,9 @@ export async function setMeetingLink(meetingId: string, url: string): Promise<Ac
   if (!parsed.success) return err(MEETING_URL_ERROR)
 
   const [meeting] = await db
-    .select({ createdBy: meetings.createdBy, title: meetings.title })
-    .from(meetings)
-    .where(eq(meetings.id, meetingId))
+    .select({ createdBy: liveMeetings.createdBy, title: liveMeetings.title })
+    .from(liveMeetings)
+    .where(eq(liveMeetings.id, meetingId))
   if (!meeting) return err('Meeting not found')
   if (meeting.createdBy !== session.user.id && session.user.role !== 'admin') {
     return err('Only the organizer can set the link')

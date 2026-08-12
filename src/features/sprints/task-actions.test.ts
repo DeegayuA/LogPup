@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { tasks } from '@/db/schema'
+import { liveTasks } from '@/db/live'
 
 // deleteTask is soft-delete (D3): the row is marked deletedAt/deletedBy,
 // never removed. Same mocked-action idiom as
@@ -22,7 +23,10 @@ vi.mock('@/db', () => ({
   db: {
     select: () => ({
       from: (table: unknown) => ({
-        where: async () => (table === tasks ? taskQueue.shift() ?? [] : []),
+        // taskById (deleteTask's read) goes through liveTasks (D4) — the
+        // write below is still the raw `tasks` table, which is what
+        // writeSpy asserts against.
+        where: async () => (table === liveTasks ? taskQueue.shift() ?? [] : []),
       }),
     }),
     update: (table: unknown) => ({

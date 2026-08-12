@@ -1,7 +1,18 @@
 import { cache } from 'react'
-import { and, count, desc, eq } from 'drizzle-orm'
+import { and, count, desc, eq, isNotNull, isNull, or } from 'drizzle-orm'
 import { db } from '@/db'
+import { liveMeetings } from '@/db/live'
 import { notifications, users } from '@/db/schema'
+
+// A notification's meetingId is nullable (mentions never carry one; meeting
+// invites/moves do) — so a trashed meeting must hide only the notifications
+// tied to it, never the ones that were never about a meeting at all. Left
+// joining liveMeetings and requiring "no meetingId at all" OR "the meeting
+// it names is still live" is what keeps both halves true at once.
+const notificationMeetingIsLiveOrAbsent = or(
+  isNull(notifications.meetingId),
+  isNotNull(liveMeetings.id),
+)
 
 export type NotificationItem = {
   id: string
@@ -48,7 +59,8 @@ export const listNotifications = cache(async function listNotifications(
     })
     .from(notifications)
     .leftJoin(users, eq(users.id, notifications.actorId))
-    .where(eq(notifications.userId, userId))
+    .leftJoin(liveMeetings, eq(notifications.meetingId, liveMeetings.id))
+    .where(and(eq(notifications.userId, userId), notificationMeetingIsLiveOrAbsent))
     .orderBy(desc(notifications.createdAt))
     .limit(limit)
 })
@@ -59,6 +71,13 @@ export const unreadNotificationCount = cache(async function unreadNotificationCo
   const [row] = await db
     .select({ value: count() })
     .from(notifications)
-    .where(and(eq(notifications.userId, userId), eq(notifications.read, false)))
+    .leftJoin(liveMeetings, eq(notifications.meetingId, liveMeetings.id))
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.read, false),
+        notificationMeetingIsLiveOrAbsent,
+      ),
+    )
   return row?.value ?? 0
 })

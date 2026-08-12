@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, sprintCheckins, sprints } from '@/db/schema'
+import { liveSprints } from '@/db/live'
+import { apps, sprintCheckins } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -58,9 +59,9 @@ export async function upsertSprintCheckin(
   // Existence check doubles as the appId lookup revalidation needs — a
   // random UUID would otherwise surface as an FK violation in the catch.
   const [sprint] = await db
-    .select({ appId: sprints.appId, name: sprints.name })
-    .from(sprints)
-    .where(eq(sprints.id, parsed.data.sprintId))
+    .select({ appId: liveSprints.appId, name: liveSprints.name })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, parsed.data.sprintId))
   if (!sprint) return err('Sprint not found')
 
   // '' from a cleared textarea means "no note", not a note of empty string —

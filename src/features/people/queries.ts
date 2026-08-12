@@ -2,15 +2,13 @@ import { cache } from 'react'
 import { and, asc, desc, eq, gt, gte, ilike, isNull, lte, ne, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
+import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import {
   apps,
   assignmentHistory,
   assignments,
   meetingAttendees,
   meetingFollowups,
-  meetings,
-  sprints,
-  tasks,
   users,
 } from '@/db/schema'
 import { summarizeAllocations } from '@/features/people/allocation'
@@ -381,11 +379,11 @@ export async function getPersonActivity(userId: string): Promise<PersonActivity>
   const fromIso = isoDayAdd(toIso, -(ACTIVITY_WEEKS * 7 - 1))
   const since = new Date(`${isoDayAdd(fromIso, -1)}T00:00:00.000Z`)
 
-  const day = sql<string>`to_char((${tasks.createdAt} at time zone 'UTC') at time zone ${LK_TZ_SQL}, 'YYYY-MM-DD')`
+  const day = sql<string>`to_char((${liveTasks.createdAt} at time zone 'UTC') at time zone ${LK_TZ_SQL}, 'YYYY-MM-DD')`
   const rows = await db
     .select({ day, count: sql<number>`count(*)::int` })
-    .from(tasks)
-    .where(and(eq(tasks.assigneeId, userId), gte(tasks.createdAt, since)))
+    .from(liveTasks)
+    .where(and(eq(liveTasks.assigneeId, userId), gte(liveTasks.createdAt, since)))
     .groupBy(day)
 
   const days = buildActivitySeries(rows, fromIso, toIso)
@@ -497,34 +495,41 @@ export type PersonWorkload = {
 export const getPersonWorkload = cache(async function getPersonWorkload(userId: string): Promise<PersonWorkload> {
   const todayIso = isoDayOf(new Date())
 
-  const [openTasks, counts] = await Promise.all([
+  const [openTaskRows, counts] = await Promise.all([
     db
       .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        priority: tasks.priority,
-        dueDate: tasks.dueDate,
-        createdAt: tasks.createdAt,
+        id: liveTasks.id,
+        title: liveTasks.title,
+        status: liveTasks.status,
+        priority: liveTasks.priority,
+        dueDate: liveTasks.dueDate,
+        createdAt: liveTasks.createdAt,
         appName: apps.name,
         appSlug: apps.slug,
-        sprintName: sprints.name,
+        sprintName: liveSprints.name,
       })
-      .from(tasks)
-      .innerJoin(apps, eq(tasks.appId, apps.id))
+      .from(liveTasks)
+      .innerJoin(apps, eq(liveTasks.appId, apps.id))
       // Left: a task in the backlog has no sprint, and dropping those would
       // hide exactly the work nobody has scheduled yet.
-      .leftJoin(sprints, eq(tasks.sprintId, sprints.id))
-      .where(and(eq(tasks.assigneeId, userId), ne(tasks.status, 'done')))
-      .orderBy(asc(tasks.dueDate), desc(tasks.priority)),
+      .leftJoin(liveSprints, eq(liveTasks.sprintId, liveSprints.id))
+      .where(and(eq(liveTasks.assigneeId, userId), ne(liveTasks.status, 'done')))
+      .orderBy(asc(liveTasks.dueDate), desc(liveTasks.priority)),
     db
       .select({
         total: sql<number>`count(*)::int`,
-        done: sql<number>`count(*) filter (where ${tasks.status} = 'done')::int`,
+        done: sql<number>`count(*) filter (where ${liveTasks.status} = 'done')::int`,
       })
-      .from(tasks)
-      .where(eq(tasks.assigneeId, userId)),
+      .from(liveTasks)
+      .where(eq(liveTasks.assigneeId, userId)),
   ])
+
+  // drizzle-orm's column types collapse to `never` once a query leftJoins
+  // two `.as()` subqueries together (liveTasks + liveSprints here) — a
+  // type-inference gap in this drizzle-orm version, not a runtime one (see
+  // the same note in sprints/queries.ts). Recast to the shape actually
+  // selected above, which is exactly PersonTaskRow.
+  const openTasks = openTaskRows as PersonTaskRow[]
 
   return {
     openTasks,
@@ -562,14 +567,17 @@ export const getPersonFollowups = cache(async function getPersonFollowups(userId
       personName: meetingFollowups.personName,
       createdById: meetingFollowups.createdBy,
       createdByName: creator.name,
-      meetingId: meetings.id,
-      meetingTitle: meetings.title,
-      meetingStartsAt: meetings.startsAt,
+      meetingId: liveMeetings.id,
+      meetingTitle: liveMeetings.title,
+      meetingStartsAt: liveMeetings.startsAt,
       responseNote: meetingFollowups.responseNote,
       deferReason: meetingFollowups.deferReason,
     })
     .from(meetingFollowups)
-    .innerJoin(meetings, eq(meetingFollowups.sourceMeetingId, meetings.id))
+    // meetingFollowups has no deletedAt of its own — live iff its source
+    // meeting is live (see MEETING_CHILD_TABLES in src/db/live.ts). An inner
+    // join against liveMeetings is what drops a trashed meeting's follow-ups.
+    .innerJoin(liveMeetings, eq(meetingFollowups.sourceMeetingId, liveMeetings.id))
     // Left joins throughout: userId is null when the AI couldn't match the
     // spoken name to exactly one attendee, and createdBy is null for every
     // AI-derived row. Inner joins here would drop precisely those items.
@@ -581,7 +589,7 @@ export const getPersonFollowups = cache(async function getPersonFollowups(userId
         or(eq(meetingFollowups.userId, userId), eq(meetingFollowups.createdBy, userId)),
       ),
     )
-    .orderBy(asc(meetings.startsAt))
+    .orderBy(asc(liveMeetings.startsAt))
 
   const todayIso = isoDayOf(new Date())
   const split = splitPersonFollowups(
@@ -619,26 +627,28 @@ export const getPersonMeetings = cache(async function getPersonMeetings(userId: 
 
   const rows = await db
     .select({
-      id: meetings.id,
-      title: meetings.title,
-      startsAt: meetings.startsAt,
-      endsAt: meetings.endsAt,
-      meetingUrl: meetings.meetingUrl,
+      id: liveMeetings.id,
+      title: liveMeetings.title,
+      startsAt: liveMeetings.startsAt,
+      endsAt: liveMeetings.endsAt,
+      meetingUrl: liveMeetings.meetingUrl,
       appName: apps.name,
       appSlug: apps.slug,
       response: meetingAttendees.response,
     })
     .from(meetingAttendees)
-    .innerJoin(meetings, eq(meetingAttendees.meetingId, meetings.id))
-    .leftJoin(apps, eq(meetings.appId, apps.id))
+    // meetingAttendees has no deletedAt of its own — live iff its meeting is
+    // live (see MEETING_CHILD_TABLES in src/db/live.ts).
+    .innerJoin(liveMeetings, eq(meetingAttendees.meetingId, liveMeetings.id))
+    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
     .where(
       and(
         eq(meetingAttendees.userId, userId),
-        gte(meetings.startsAt, from),
-        lte(meetings.startsAt, until),
+        gte(liveMeetings.startsAt, from),
+        lte(liveMeetings.startsAt, until),
       ),
     )
-    .orderBy(asc(meetings.startsAt))
+    .orderBy(asc(liveMeetings.startsAt))
 
   return { ...splitPersonMeetings(rows, now), now }
 })

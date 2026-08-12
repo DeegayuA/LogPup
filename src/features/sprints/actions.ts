@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { and, count, desc, eq, isNull, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
+import { liveSprints, liveTasks } from '@/db/live'
 import { apps, sprints, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -154,7 +155,7 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
   if (!parsed.success) return err(parsed.error.issues[0].message)
   if (Object.keys(parsed.data).length === 0) return err('Nothing to update')
 
-  const [existing] = await db.select().from(sprints).where(eq(sprints.id, sprintId))
+  const [existing] = await db.select().from(liveSprints).where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   const startDate = parsed.data.startDate ?? existing.startDate
@@ -219,9 +220,9 @@ export async function deleteSprint(
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
-    .select({ appId: sprints.appId, name: sprints.name })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId, name: liveSprints.name })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   // COUNT in SQL, over LIVE tasks only. The only thing this number is for is
@@ -230,8 +231,8 @@ export async function deleteSprint(
   // single integer.
   const [attached] = await db
     .select({ total: count() })
-    .from(tasks)
-    .where(and(eq(tasks.sprintId, sprintId), isNull(tasks.deletedAt)))
+    .from(liveTasks)
+    .where(eq(liveTasks.sprintId, sprintId))
 
   let marked: { id: string }[]
   try {
@@ -298,15 +299,15 @@ export async function listSprintOptions(appId: string): Promise<ActionResult<Spr
 
   const rows = await db
     .select({
-      id: sprints.id,
-      name: sprints.name,
-      status: sprints.status,
-      startDate: sprints.startDate,
-      endDate: sprints.endDate,
+      id: liveSprints.id,
+      name: liveSprints.name,
+      status: liveSprints.status,
+      startDate: liveSprints.startDate,
+      endDate: liveSprints.endDate,
     })
-    .from(sprints)
-    .where(eq(sprints.appId, appId))
-    .orderBy(desc(sprints.startDate))
+    .from(liveSprints)
+    .where(eq(liveSprints.appId, appId))
+    .orderBy(desc(liveSprints.startDate))
 
   return ok(rows)
 }
@@ -321,9 +322,9 @@ export async function updateSprintStatus(
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
-    .select({ appId: sprints.appId, name: sprints.name, status: sprints.status })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId, name: liveSprints.name, status: liveSprints.status })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   try {

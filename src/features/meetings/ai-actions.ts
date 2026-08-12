@@ -7,6 +7,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
+import { liveMeetings, liveNoteSegments, liveScreenshots, liveTasks, liveTasksAs } from '@/db/live'
 import {
   apps,
   meetingAiNotes,
@@ -60,6 +61,7 @@ import {
 } from '@/features/meetings/notes'
 import { concatenateSegments } from '@/features/meetings/recording-segments'
 import { formatCapturedAt, MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
+import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
 
 // Legacy single-shot path (analyzeMeetingAudio, below): the whole recording
 // as one inline-base64 upload. Superseded for live recordings by the
@@ -391,6 +393,10 @@ async function insertAutoNotesAndSuggestions(
  * actually an attendee. Anything that returns intel — for THIS meeting or for
  * the earlier meeting the prep questions are pulled from — has to pass this.
  */
+// `meeting` must already have been resolved through liveMeetings by the
+// caller (every call site below does) — this function trusts meeting.id is
+// live rather than re-checking it, so a trashed meeting has to be turned
+// away before it ever reaches here.
 export async function canReadMeetingIntel(
   user: { id: string; role?: string | null },
   meeting: { id: string; createdBy: string },
@@ -405,15 +411,24 @@ export async function canReadMeetingIntel(
   return Boolean(attendee)
 }
 
+// Gate function: every write in this file resolves the meeting through here
+// first (or through getMeetingIntel/getMeetingNoteTimeline's own liveMeetings
+// read for the read-side gates below), so a trashed meeting reads as "not
+// found"/"not allowed" instead of remaining mutable through its own gate.
 export async function canManageMeeting(meetingId: string) {
   const session = await auth()
   if (!session?.user) return null
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, meetingId))
   if (!meeting) return null
   const allowed = session.user.role === 'admin' || meeting.createdBy === session.user.id
   return allowed ? { session, meeting } : null
 }
 
+// meetingAttendees has no deletedAt of its own — live iff its meeting is
+// live (see MEETING_CHILD_TABLES in src/db/live.ts). Every caller below
+// passes a meetingId already resolved through liveMeetings (canManageMeeting
+// or a direct liveMeetings read), so this can't read a trashed meeting's
+// attendees.
 async function fetchAttendees(meetingId: string): Promise<AttendeeRef[]> {
   const rows = await db
     .select({ id: users.id, name: users.name })
@@ -480,14 +495,18 @@ async function fetchCarriedFollowups(
       createdBy: meetingFollowups.createdBy,
       targetMeetingId: meetingFollowups.targetMeetingId,
       sourceMeetingId: meetingFollowups.sourceMeetingId,
-      sourceMeetingTitle: meetings.title,
-      sourceMeetingStartsAt: meetings.startsAt,
+      sourceMeetingTitle: liveMeetings.title,
+      sourceMeetingStartsAt: liveMeetings.startsAt,
     })
     .from(meetingFollowups)
-    .innerJoin(meetings, eq(meetingFollowups.sourceMeetingId, meetings.id))
+    // A follow-up's source meeting must be live for its text to surface
+    // here at all — a trashed source meeting's follow-ups disappear from
+    // every future meeting's prep, the same way an inner join to a hard-
+    // deleted meeting always would have.
+    .innerJoin(liveMeetings, eq(meetingFollowups.sourceMeetingId, liveMeetings.id))
     .leftJoin(
       meetingAttendees,
-      and(eq(meetingAttendees.meetingId, meetings.id), eq(meetingAttendees.userId, caller.id)),
+      and(eq(meetingAttendees.meetingId, liveMeetings.id), eq(meetingAttendees.userId, caller.id)),
     )
     .where(
       and(
@@ -503,12 +522,12 @@ async function fetchCarriedFollowups(
           and(
             isNull(meetingFollowups.targetMeetingId),
             ne(meetingFollowups.sourceMeetingId, meeting.id),
-            lt(meetings.startsAt, meeting.startsAt),
+            lt(liveMeetings.startsAt, meeting.startsAt),
           ),
         ),
         caller.isAdmin
           ? undefined
-          : or(eq(meetings.createdBy, caller.id), isNotNull(meetingAttendees.userId)),
+          : or(eq(liveMeetings.createdBy, caller.id), isNotNull(meetingAttendees.userId)),
       ),
     )
   return rows
@@ -532,23 +551,23 @@ async function fetchFollowupTargets(
 
   const rows = await db
     .select({
-      id: meetings.id,
-      title: meetings.title,
-      startsAt: meetings.startsAt,
+      id: liveMeetings.id,
+      title: liveMeetings.title,
+      startsAt: liveMeetings.startsAt,
       attendeeId: meetingAttendees.userId,
     })
-    .from(meetings)
-    .innerJoin(meetingAttendees, eq(meetingAttendees.meetingId, meetings.id))
+    .from(liveMeetings)
+    .innerJoin(meetingAttendees, eq(meetingAttendees.meetingId, liveMeetings.id))
     .where(
       and(
-        gt(meetings.startsAt, meeting.startsAt),
-        ne(meetings.id, meeting.id),
+        gt(liveMeetings.startsAt, meeting.startsAt),
+        ne(liveMeetings.id, meeting.id),
         caller.isAdmin
           ? undefined
-          : or(eq(meetings.createdBy, caller.id), inArray(meetings.id, callerMeetingIds)),
+          : or(eq(liveMeetings.createdBy, caller.id), inArray(liveMeetings.id, callerMeetingIds)),
       ),
     )
-    .orderBy(meetings.startsAt)
+    .orderBy(liveMeetings.startsAt)
 
   const byId = new Map<string, FollowupTargetOption>()
   for (const row of rows) {
@@ -1175,12 +1194,12 @@ async function finalizeMeetingRecordingInner(
   // one bad Blob fetch drops just that frame, never the whole analysis.
   const screenshotRows = await db
     .select({
-      blobPathname: meetingScreenshots.blobPathname,
-      capturedAtMs: meetingScreenshots.capturedAtMs,
+      blobPathname: liveScreenshots.blobPathname,
+      capturedAtMs: liveScreenshots.capturedAtMs,
     })
-    .from(meetingScreenshots)
-    .where(eq(meetingScreenshots.meetingId, id))
-    .orderBy(meetingScreenshots.capturedAtMs)
+    .from(liveScreenshots)
+    .where(eq(liveScreenshots.meetingId, id))
+    .orderBy(liveScreenshots.capturedAtMs)
 
   const images: GeminiImageInput[] = []
   for (const row of screenshotRows) {
@@ -1368,9 +1387,9 @@ export async function uploadMeetingKeyframe(
   // LIVE frames only: a trashed keyframe still has a row (soft-deleted, not
   // gone) and must not count against the cap for new captures.
   const existing = await db
-    .select({ id: meetingScreenshots.id })
-    .from(meetingScreenshots)
-    .where(and(eq(meetingScreenshots.meetingId, id), isNull(meetingScreenshots.deletedAt)))
+    .select({ id: liveScreenshots.id })
+    .from(liveScreenshots)
+    .where(eq(liveScreenshots.meetingId, id))
   if (existing.length >= MAX_KEYFRAMES_PER_MEETING) {
     return err(`Reached the ${MAX_KEYFRAMES_PER_MEETING}-screenshot cap for this meeting`)
   }
@@ -1427,8 +1446,8 @@ export async function deleteMeetingKeyframe(screenshotId: string): Promise<Actio
 
   const [row] = await db
     .select()
-    .from(meetingScreenshots)
-    .where(eq(meetingScreenshots.id, parsed.data))
+    .from(liveScreenshots)
+    .where(eq(liveScreenshots.id, parsed.data))
   if (!row) return err('Not found')
 
   const ctx = await canManageMeeting(row.meetingId)
@@ -1463,7 +1482,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   if (!idParsed.success) return err(idParsed.error.issues[0].message)
   const id = idParsed.data
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, id))
   if (!meeting) return err('Meeting not found')
 
   // Meeting intel can contain a full transcript — restrict reads to people
@@ -1530,16 +1549,16 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
 
   const screenshotRows = await db
     .select({
-      id: meetingScreenshots.id,
-      blobPathname: meetingScreenshots.blobPathname,
-      capturedAtMs: meetingScreenshots.capturedAtMs,
-      width: meetingScreenshots.width,
-      height: meetingScreenshots.height,
-      byteSize: meetingScreenshots.byteSize,
+      id: liveScreenshots.id,
+      blobPathname: liveScreenshots.blobPathname,
+      capturedAtMs: liveScreenshots.capturedAtMs,
+      width: liveScreenshots.width,
+      height: liveScreenshots.height,
+      byteSize: liveScreenshots.byteSize,
     })
-    .from(meetingScreenshots)
-    .where(eq(meetingScreenshots.meetingId, id))
-    .orderBy(meetingScreenshots.capturedAtMs)
+    .from(liveScreenshots)
+    .where(eq(liveScreenshots.meetingId, id))
+    .orderBy(liveScreenshots.capturedAtMs)
 
   return ok({
     notes: notesRow
@@ -1640,9 +1659,9 @@ async function authorizeFollowupWrite(
   if (!row) return err('Not found')
 
   const [sourceMeeting] = await db
-    .select({ createdBy: meetings.createdBy })
-    .from(meetings)
-    .where(eq(meetings.id, row.sourceMeetingId))
+    .select({ createdBy: liveMeetings.createdBy })
+    .from(liveMeetings)
+    .where(eq(liveMeetings.id, row.sourceMeetingId))
   if (!sourceMeeting) return err('Not found')
 
   const isAdmin = session.user.role === 'admin'
@@ -1683,8 +1702,8 @@ export async function resolveFollowup(
   if (parsed.data.meetingId) {
     const [contextMeeting] = await db
       .select()
-      .from(meetings)
-      .where(eq(meetings.id, parsed.data.meetingId))
+      .from(liveMeetings)
+      .where(eq(liveMeetings.id, parsed.data.meetingId))
     if (!contextMeeting) return err('Not found')
     if (!(await canReadMeetingIntel(user, contextMeeting))) return err('Not available')
     resolvedInMeetingId = contextMeeting.id
@@ -1856,7 +1875,7 @@ export async function addFollowup(input: {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, parsed.data.meetingId))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, parsed.data.meetingId))
   if (!meeting) return err('Meeting not found')
   if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
 
@@ -1883,8 +1902,8 @@ export async function addFollowup(input: {
   if (parsed.data.targetMeetingId) {
     const [target] = await db
       .select()
-      .from(meetings)
-      .where(eq(meetings.id, parsed.data.targetMeetingId))
+      .from(liveMeetings)
+      .where(eq(liveMeetings.id, parsed.data.targetMeetingId))
     if (!target) return err('That meeting no longer exists')
     if (!(await canReadMeetingIntel(session.user, target))) return err('Not available')
     const [going] = await db
@@ -1957,8 +1976,8 @@ export async function copyFollowupResponseToNotes(
 
   const [contextMeeting] = await db
     .select()
-    .from(meetings)
-    .where(eq(meetings.id, parsed.data.meetingId))
+    .from(liveMeetings)
+    .where(eq(liveMeetings.id, parsed.data.meetingId))
   if (!contextMeeting) return err('Meeting not found')
   if (!(await canReadMeetingIntel(user, contextMeeting))) return err('Not available')
 
@@ -2024,7 +2043,11 @@ export type NoteTimelineData = {
 const speakerUsers = alias(users, 'note_speaker_users')
 const authorUsers = alias(users, 'note_author_users')
 const suggestedUsers = alias(users, 'note_suggested_users')
-const suggestionTasks = alias(tasks, 'note_suggestion_tasks')
+// A fixed subquery object can't appear twice in one statement, and `tasks`
+// is one of the soft-deleted tables — liveTasksAs mints a fresh aliased
+// liveTasks subquery instead of aliasing the raw table, so a suggestion
+// whose created task was later trashed doesn't still show it as live here.
+const suggestionTasks = liveTasksAs('note_suggestion_tasks')
 const suggestionApps = alias(apps, 'note_suggestion_apps')
 
 /**
@@ -2041,7 +2064,7 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
   if (!idParsed.success) return err(idParsed.error.issues[0].message)
   const id = idParsed.data
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, id))
   if (!meeting) return err('Meeting not found')
   if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
 
@@ -2049,27 +2072,29 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
 
   const segmentRows = await db
     .select({
-      id: meetingNoteSegments.id,
-      source: meetingNoteSegments.source,
-      speakerId: meetingNoteSegments.speakerId,
+      id: liveNoteSegments.id,
+      source: liveNoteSegments.source,
+      speakerId: liveNoteSegments.speakerId,
       speakerName: speakerUsers.name,
-      speakerLabel: meetingNoteSegments.speakerLabel,
-      content: meetingNoteSegments.content,
-      startedAtMs: meetingNoteSegments.startedAtMs,
+      speakerLabel: liveNoteSegments.speakerLabel,
+      content: liveNoteSegments.content,
+      startedAtMs: liveNoteSegments.startedAtMs,
       createdByName: authorUsers.name,
-      createdAt: meetingNoteSegments.createdAt,
+      createdAt: liveNoteSegments.createdAt,
     })
-    .from(meetingNoteSegments)
-    .leftJoin(speakerUsers, eq(meetingNoteSegments.speakerId, speakerUsers.id))
-    .innerJoin(authorUsers, eq(meetingNoteSegments.createdBy, authorUsers.id))
-    .where(eq(meetingNoteSegments.meetingId, id))
+    .from(liveNoteSegments)
+    .leftJoin(speakerUsers, eq(liveNoteSegments.speakerId, speakerUsers.id))
+    .innerJoin(authorUsers, eq(liveNoteSegments.createdBy, authorUsers.id))
+    .where(eq(liveNoteSegments.meetingId, id))
 
-  // No segments yet — the legacy `meetings.notes` blob (pre-dating this
-  // feature) still renders as a read-only first entry rather than vanishing;
-  // it becomes a real segment the first time someone edits notes here (see
-  // addTypedNoteSegment).
+  // No LIVE segments — but the legacy `meetings.notes` blob (pre-dating this
+  // feature) only renders as a read-only first entry when NO segment has
+  // EVER existed for this meeting (see legacy-notes.ts): trashing the last
+  // segment must not resurrect it. The raw-table probe is only reached when
+  // segmentRows is already empty, so this stays a single extra query on the
+  // rare path rather than one on every load.
   const segments: NoteSegmentView[] =
-    segmentRows.length === 0 && meeting.notes
+    segmentRows.length === 0 && meeting.notes && !(await haveNoteSegmentsEverExisted(id))
       ? [
           {
             id: 'legacy',
@@ -2156,12 +2181,11 @@ export async function addTypedNoteSegment(meetingId: string, content: string): P
   if (!ctx) return err('Not allowed')
   const { session, meeting } = ctx
 
-  const [existing] = await db
-    .select({ id: meetingNoteSegments.id })
-    .from(meetingNoteSegments)
-    .where(eq(meetingNoteSegments.meetingId, meeting.id))
-    .limit(1)
-  if (!existing && meeting.notes) {
+  // Same raw-table "ever existed" probe as getMeetingNoteTimeline (see
+  // legacy-notes.ts) — if a segment existed and was since trashed, the
+  // legacy blob must not be migrated in again as a duplicate.
+  const everExisted = await haveNoteSegmentsEverExisted(meeting.id)
+  if (!everExisted && meeting.notes) {
     await db.insert(meetingNoteSegments).values({
       meetingId: meeting.id,
       source: 'typed',
@@ -2227,8 +2251,8 @@ export async function editNoteSegment(segmentId: string, content: string): Promi
 
   const [segment] = await db
     .select()
-    .from(meetingNoteSegments)
-    .where(eq(meetingNoteSegments.id, parsed.data.segmentId))
+    .from(liveNoteSegments)
+    .where(eq(liveNoteSegments.id, parsed.data.segmentId))
   if (!segment) return err('Not found')
   if (segment.source === 'voice') return err('The recorded transcript can’t be edited')
 
@@ -2269,7 +2293,7 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
   const parsed = idInput.safeParse(segmentId)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const [segment] = await db.select().from(meetingNoteSegments).where(eq(meetingNoteSegments.id, parsed.data))
+  const [segment] = await db.select().from(liveNoteSegments).where(eq(liveNoteSegments.id, parsed.data))
   if (!segment) return err('Not found')
   if (segment.source === 'voice') return err('The recorded transcript can’t be deleted')
 
@@ -2497,7 +2521,7 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
   const { meeting } = ctx
   if (!meeting.appId) return err('Not allowed')
 
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, suggestion.createdTaskId))
+  const [task] = await db.select().from(liveTasks).where(eq(liveTasks.id, suggestion.createdTaskId))
   if (!task) return err('That task no longer exists')
 
   const original = suggestionToTaskPayload(

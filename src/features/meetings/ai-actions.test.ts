@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { meetingNoteSegments, meetingScreenshots, meetingTaskSuggestions, meetings, tasks } from '@/db/schema'
+import { meetingNoteSegments, meetingScreenshots, meetingTaskSuggestions, tasks } from '@/db/schema'
+import { liveMeetings, liveNoteSegments, liveScreenshots, liveTasks } from '@/db/live'
 
 // deleteMeetingKeyframe and deleteNoteSegment are soft-delete (D3): the row
 // is marked deletedAt/deletedBy, never removed. Same mocked-action idiom as
@@ -38,8 +39,9 @@ vi.mock('@/features/sprints/task-actions', () => ({ createTask: vi.fn() }))
 // Distinct tables get read across these three actions: `meetingScreenshots`
 // (deleteMeetingKeyframe's own row), `meetingNoteSegments` (deleteNoteSegment's
 // own row), `meetingTaskSuggestions` and `tasks` (undoAutoAcceptedSuggestion),
-// and `meetings` (all three go through canManageMeeting). Queues are consumed
-// in call order per table.
+// and `meetings` (all three go through canManageMeeting) — the last three
+// reads go through the live subqueries as of D4 (see the mock below). Queues
+// are consumed in call order per table.
 let meetingQueue: unknown[][] = []
 let screenshotQueue: unknown[][] = []
 let segmentQueue: unknown[][] = []
@@ -51,12 +53,19 @@ vi.mock('@/db', () => ({
   db: {
     select: () => ({
       from: (table: unknown) => ({
+        // Reads go through the live subqueries (D4: canManageMeeting via
+        // liveMeetings, deleteMeetingKeyframe/uploadMeetingKeyframe via
+        // liveScreenshots, deleteNoteSegment via liveNoteSegments,
+        // undoAutoAcceptedSuggestion's task lookup via liveTasks) —
+        // meetingTaskSuggestions isn't itself soft-deleted, so it stays the
+        // raw table. Writes below still use the raw tables, which is what
+        // writeSpy asserts against.
         where: async () => {
-          if (table === meetings) return meetingQueue.shift() ?? []
-          if (table === meetingScreenshots) return screenshotQueue.shift() ?? []
-          if (table === meetingNoteSegments) return segmentQueue.shift() ?? []
+          if (table === liveMeetings) return meetingQueue.shift() ?? []
+          if (table === liveScreenshots) return screenshotQueue.shift() ?? []
+          if (table === liveNoteSegments) return segmentQueue.shift() ?? []
           if (table === meetingTaskSuggestions) return suggestionQueue.shift() ?? []
-          if (table === tasks) return taskQueue.shift() ?? []
+          if (table === liveTasks) return taskQueue.shift() ?? []
           return []
         },
       }),

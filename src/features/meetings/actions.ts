@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
+import { liveMeetings } from '@/db/live'
 import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -99,8 +100,12 @@ function isForeignKeyViolation(error: unknown): boolean {
   return false
 }
 
+// Gate function: every write below (retryCalendarInvite, rescheduleMeeting,
+// updateMeetingNotes, deleteMeeting) resolves the meeting through here first,
+// so reading via liveMeetings is what makes a trashed meeting 404 as "not
+// found" instead of still being mutable through its own gate.
 async function meetingById(meetingId: string) {
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, meetingId))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, meetingId))
   return meeting ?? null
 }
 
@@ -321,6 +326,10 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
   if (!canManageMeeting(session, existing)) return err('Not allowed')
   if (existing.googleEventId) return err('Meeting already has a calendar invite')
 
+  // meetingAttendees has no deletedAt of its own — `existing` above was
+  // already resolved through the liveMeetings-backed meetingById gate, so
+  // this can't read a trashed meeting's attendees (see MEETING_CHILD_TABLES
+  // in src/db/live.ts).
   const attendeeRows = await db
     .select({ userId: meetingAttendees.userId })
     .from(meetingAttendees)
@@ -414,6 +423,8 @@ export async function rescheduleMeeting(
   // as the invite notification in createMeeting: a notification failure must
   // not fail a move that has already been written.
   try {
+    // Same reasoning as retryCalendarInvite: `existing` came from the
+    // liveMeetings-backed meetingById gate above.
     const attendeeRows = await db
       .select({ userId: meetingAttendees.userId })
       .from(meetingAttendees)

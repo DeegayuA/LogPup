@@ -4,12 +4,14 @@ import { z } from 'zod'
 import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, sprints, tasks } from '@/db/schema'
+import { liveSprints, liveTasks } from '@/db/live'
+import { apps, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
+import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
@@ -161,7 +163,7 @@ function isForeignKeyViolation(error: unknown): boolean {
 }
 
 async function taskById(taskId: string) {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId))
+  const [task] = await db.select().from(liveTasks).where(eq(liveTasks.id, taskId))
   return task ?? null
 }
 
@@ -194,9 +196,9 @@ async function revalidateApp(appId: string) {
  */
 async function sprintIsInApp(sprintId: string, appId: string): Promise<boolean> {
   const [row] = await db
-    .select({ id: sprints.id })
-    .from(sprints)
-    .where(and(eq(sprints.id, sprintId), eq(sprints.appId, appId)))
+    .select({ id: liveSprints.id })
+    .from(liveSprints)
+    .where(and(eq(liveSprints.id, sprintId), eq(liveSprints.appId, appId)))
   return row !== undefined
 }
 
@@ -222,13 +224,16 @@ async function nextRankFor(
   // instead of O(column size) — a 400-task backlog would otherwise ship 400
   // numbers over the wire to compute one.
   const [row] = await db
-    .select({ highest: max(tasks.sortOrder) })
-    .from(tasks)
+    .select({ highest: max(liveTasks.sortOrder) })
+    .from(liveTasks)
+    // Backlog rule (no sprint, or the sprint is trashed) lives in
+    // backlog.ts, shared with getBoard's own query in sprints/queries.ts.
+    .leftJoin(liveSprints, backlogJoinCondition)
     .where(
       and(
-        eq(tasks.appId, appId),
-        sprintId === null ? isNull(tasks.sprintId) : eq(tasks.sprintId, sprintId),
-        eq(tasks.status, status),
+        eq(liveTasks.appId, appId),
+        sprintOrBacklogCondition(sprintId),
+        eq(liveTasks.status, status),
       ),
     )
   // `max()` over no rows is SQL NULL — an empty column, which rankForAppend
@@ -496,9 +501,9 @@ export async function bulkUpdateTasks(
   if (Object.keys(patch).length === 0) return err('Nothing to update')
 
   const rows = await db
-    .select({ id: tasks.id, appId: tasks.appId, assigneeId: tasks.assigneeId })
-    .from(tasks)
-    .where(inArray(tasks.id, taskIds))
+    .select({ id: liveTasks.id, appId: liveTasks.appId, assigneeId: liveTasks.assigneeId })
+    .from(liveTasks)
+    .where(inArray(liveTasks.id, taskIds))
   if (rows.length === 0) return err('No tasks found')
 
   const permitted = rows.filter((row) =>
@@ -514,9 +519,9 @@ export async function bulkUpdateTasks(
   let allowed = permitted
   if (typeof patch.sprintId === 'string') {
     const [sprint] = await db
-      .select({ appId: sprints.appId })
-      .from(sprints)
-      .where(eq(sprints.id, patch.sprintId))
+      .select({ appId: liveSprints.appId })
+      .from(liveSprints)
+      .where(eq(liveSprints.id, patch.sprintId))
     if (!sprint) return err('Sprint not found')
     allowed = permitted.filter((row) => row.appId === sprint.appId)
     if (allowed.length === 0) return err('That sprint belongs to a different app')

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sprints, tasks } from '@/db/schema'
+import { liveSprints, liveTasks } from '@/db/live'
 
 // deleteSprint is soft-delete (D3): the sprint row is marked deletedAt/
 // deletedBy, never removed — and because that no longer fires the old
@@ -39,9 +40,12 @@ vi.mock('@/db', () => ({
   db: {
     select: () => ({
       from: (table: unknown) => ({
+        // deleteSprint's reads go through liveSprints/liveTasks (D4); its
+        // writes below are still the raw sprints/tasks tables, which is
+        // what writeSpy asserts against.
         where: async () => {
-          if (table === sprints) return sprintQueue.shift() ?? []
-          if (table === tasks) return taskCountQueue.shift() ?? []
+          if (table === liveSprints) return sprintQueue.shift() ?? []
+          if (table === liveTasks) return taskCountQueue.shift() ?? []
           return []
         },
       }),

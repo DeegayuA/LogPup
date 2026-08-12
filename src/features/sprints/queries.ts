@@ -1,10 +1,15 @@
 import { cache } from 'react'
-import { and, asc, desc, eq, gt, gte, isNull, lte, or } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, lte, or } from 'drizzle-orm'
 import { db } from '@/db'
-import { apps, sprints, tasks, users } from '@/db/schema'
+import { liveSprints, liveTasks } from '@/db/live'
+import { apps, sprints, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
+import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
 import type { TaskStatus } from '@/features/sprints/board-view'
 
+// Row shape only (typeof ...$inferSelect) — the actual reads below go
+// through liveSprints/liveTasks (src/db/live.ts), never `sprints`/`tasks`
+// directly.
 export type Sprint = typeof sprints.$inferSelect
 
 export type TaskWithAssignee = {
@@ -62,9 +67,9 @@ export type UpcomingSprintSummary = {
 export async function getSprintsForApp(appId: string): Promise<Sprint[]> {
   return db
     .select()
-    .from(sprints)
-    .where(eq(sprints.appId, appId))
-    .orderBy(desc(sprints.startDate))
+    .from(liveSprints)
+    .where(eq(liveSprints.appId, appId))
+    .orderBy(desc(liveSprints.startDate))
 }
 
 /**
@@ -81,28 +86,49 @@ export const getActiveSprints = cache(async function getActiveSprints(): Promise
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
   const rows = await db
     .select({
-      sprintId: sprints.id,
-      sprintName: sprints.name,
+      sprintId: liveSprints.id,
+      sprintName: liveSprints.name,
       appName: apps.name,
       appSlug: apps.slug,
-      startDate: sprints.startDate,
-      endDate: sprints.endDate,
-      status: sprints.status,
-      taskStatus: tasks.status,
+      startDate: liveSprints.startDate,
+      endDate: liveSprints.endDate,
+      status: liveSprints.status,
+      taskStatus: liveTasks.status,
     })
-    .from(sprints)
-    .innerJoin(apps, eq(sprints.appId, apps.id))
-    .leftJoin(tasks, eq(tasks.sprintId, sprints.id))
+    .from(liveSprints)
+    .innerJoin(apps, eq(liveSprints.appId, apps.id))
+    .leftJoin(liveTasks, eq(liveTasks.sprintId, liveSprints.id))
     .where(
       or(
-        eq(sprints.status, 'active'),
-        and(eq(sprints.status, 'planned'), lte(sprints.startDate, today), gte(sprints.endDate, today)),
+        eq(liveSprints.status, 'active'),
+        and(
+          eq(liveSprints.status, 'planned'),
+          lte(liveSprints.startDate, today),
+          gte(liveSprints.endDate, today),
+        ),
       ),
     )
-    .orderBy(asc(sprints.startDate))
+    .orderBy(asc(liveSprints.startDate))
+
+  // drizzle-orm's column types collapse to `never` once a query leftJoins
+  // two `.as()` subqueries together (liveSprints + liveTasks here) — a
+  // type-inference gap in this drizzle-orm version, not a runtime one: the
+  // generated SQL and the actual row shape are exactly what's selected above
+  // (see backlog.test.ts's toSQL() assertion on the same join shape).
+  // Recast to the shape the select object above actually produces.
+  const typedRows = rows as {
+    sprintId: string
+    sprintName: string
+    appName: string
+    appSlug: string
+    startDate: string
+    endDate: string
+    status: 'planned' | 'active' | 'done'
+    taskStatus: TaskStatus | null
+  }[]
 
   const bySprint = new Map<string, ActiveSprintSummary>()
-  for (const row of rows) {
+  for (const row of typedRows) {
     let entry = bySprint.get(row.sprintId)
     if (!entry) {
       entry = {
@@ -137,16 +163,16 @@ export async function getNextUpcomingSprint(): Promise<UpcomingSprintSummary | n
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
   const [row] = await db
     .select({
-      sprintId: sprints.id,
-      sprintName: sprints.name,
+      sprintId: liveSprints.id,
+      sprintName: liveSprints.name,
       appName: apps.name,
       appSlug: apps.slug,
-      startDate: sprints.startDate,
+      startDate: liveSprints.startDate,
     })
-    .from(sprints)
-    .innerJoin(apps, eq(sprints.appId, apps.id))
-    .where(gt(sprints.startDate, today))
-    .orderBy(asc(sprints.startDate))
+    .from(liveSprints)
+    .innerJoin(apps, eq(liveSprints.appId, apps.id))
+    .where(gt(liveSprints.startDate, today))
+    .orderBy(asc(liveSprints.startDate))
     .limit(1)
 
   return row ?? null
@@ -155,28 +181,26 @@ export async function getNextUpcomingSprint(): Promise<UpcomingSprintSummary | n
 export async function getBoard(appId: string, sprintId: string | null): Promise<Board> {
   const rows = await db
     .select({
-      id: tasks.id,
-      title: tasks.title,
-      description: tasks.description,
-      status: tasks.status,
-      priority: tasks.priority,
-      sortOrder: tasks.sortOrder,
-      sprintId: tasks.sprintId,
-      dueDate: tasks.dueDate,
-      createdAt: tasks.createdAt,
+      id: liveTasks.id,
+      title: liveTasks.title,
+      description: liveTasks.description,
+      status: liveTasks.status,
+      priority: liveTasks.priority,
+      sortOrder: liveTasks.sortOrder,
+      sprintId: liveTasks.sprintId,
+      dueDate: liveTasks.dueDate,
+      createdAt: liveTasks.createdAt,
       assigneeId: users.id,
       assigneeName: users.name,
       assigneeAvatarUrl: users.avatarUrl,
     })
-    .from(tasks)
-    .leftJoin(users, eq(tasks.assigneeId, users.id))
-    .where(
-      and(
-        eq(tasks.appId, appId),
-        // null sprintId means the app's backlog: tasks not assigned to any sprint.
-        sprintId === null ? isNull(tasks.sprintId) : eq(tasks.sprintId, sprintId),
-      ),
-    )
+    .from(liveTasks)
+    .leftJoin(users, eq(liveTasks.assigneeId, users.id))
+    // Backlog rule (no sprint, or the sprint is trashed) lives in
+    // backlog.ts — this join + sprintOrBacklogCondition is what that file's
+    // "composable select builder" is for.
+    .leftJoin(liveSprints, backlogJoinCondition)
+    .where(and(eq(liveTasks.appId, appId), sprintOrBacklogCondition(sprintId)))
     // THREE keys, not one. `sort_order` defaults to 0 and writers outside the
     // board (the ⌘K quick-add) insert without a rank, so ties are the normal
     // case, not an edge case — `ORDER BY sort_order` alone returns tied rows
@@ -184,10 +208,30 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
     // reshuffles itself between two renders of identical data. `created_at`
     // then `id` make the order total. Mirrors compareRanked in task-rank.ts,
     // which the client applies to its optimistic copy for the same reason.
-    .orderBy(asc(tasks.sortOrder), asc(tasks.createdAt), asc(tasks.id))
+    .orderBy(asc(liveTasks.sortOrder), asc(liveTasks.createdAt), asc(liveTasks.id))
+
+  // Same drizzle-orm subquery-leftJoin-subquery type-inference gap as
+  // getActiveSprints above (see the comment there) — this query leftJoins
+  // liveSprints (a second `.as()` subquery) purely for the backlog
+  // predicate and never selects a column off it, but every selected column
+  // still collapses to `never`. Recast to the shape actually selected.
+  const typedRows = rows as {
+    id: string
+    title: string
+    description: string | null
+    status: TaskStatus
+    priority: number
+    sortOrder: number
+    sprintId: string | null
+    dueDate: string | null
+    createdAt: Date
+    assigneeId: string | null
+    assigneeName: string | null
+    assigneeAvatarUrl: string | null
+  }[]
 
   const board: Board = { todo: [], in_progress: [], done: [] }
-  for (const row of rows) {
+  for (const row of typedRows) {
     board[row.status].push({
       id: row.id,
       title: row.title,

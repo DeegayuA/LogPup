@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
-import { apps, meetingAttendees, meetings, users } from '@/db/schema'
+import { liveMeetings } from '@/db/live'
+import { apps, meetingAttendees, users } from '@/db/schema'
 
 export type MeetingAttendee = {
   id: string
@@ -26,18 +27,18 @@ export type MeetingSummary = {
 }
 
 const meetingColumns = {
-  id: meetings.id,
-  title: meetings.title,
-  appId: meetings.appId,
+  id: liveMeetings.id,
+  title: liveMeetings.title,
+  appId: liveMeetings.appId,
   appName: apps.name,
   appSlug: apps.slug,
-  startsAt: meetings.startsAt,
-  endsAt: meetings.endsAt,
-  agenda: meetings.agenda,
-  notes: meetings.notes,
-  meetingUrl: meetings.meetingUrl,
-  googleEventId: meetings.googleEventId,
-  createdBy: meetings.createdBy,
+  startsAt: liveMeetings.startsAt,
+  endsAt: liveMeetings.endsAt,
+  agenda: liveMeetings.agenda,
+  notes: liveMeetings.notes,
+  meetingUrl: liveMeetings.meetingUrl,
+  googleEventId: liveMeetings.googleEventId,
+  createdBy: liveMeetings.createdBy,
 }
 
 /**
@@ -50,6 +51,11 @@ async function attachAttendees(
 ): Promise<MeetingSummary[]> {
   if (rows.length === 0) return []
 
+  // meetingAttendees has no deletedAt of its own — live iff its meeting is
+  // live. `rows` here already came from a liveMeetings-scoped query (see
+  // listMeetings/getMeetingsForApp/getUpcomingMeetingsForUser below), so
+  // scoping to `rows.map((r) => r.id)` cannot pull in a trashed meeting's
+  // attendees (see MEETING_CHILD_TABLES in src/db/live.ts).
   const attendeeRows = await db
     .select({
       meetingId: meetingAttendees.meetingId,
@@ -75,9 +81,9 @@ async function attachAttendees(
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
-    .from(meetings)
-    .leftJoin(apps, eq(meetings.appId, apps.id))
-    .orderBy(desc(meetings.startsAt))
+    .from(liveMeetings)
+    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
+    .orderBy(desc(liveMeetings.startsAt))
 
   return attachAttendees(rows)
 }
@@ -85,10 +91,10 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
 export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
-    .from(meetings)
-    .leftJoin(apps, eq(meetings.appId, apps.id))
-    .where(eq(meetings.appId, appId))
-    .orderBy(desc(meetings.startsAt))
+    .from(liveMeetings)
+    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
+    .where(eq(liveMeetings.appId, appId))
+    .orderBy(desc(liveMeetings.startsAt))
 
   return attachAttendees(rows)
 }
@@ -101,19 +107,21 @@ export async function getUpcomingMeetingsForUser(
   const until = new Date(now)
   until.setDate(until.getDate() + days)
 
+  // meetingAttendees has no deletedAt of its own — live iff its meeting is
+  // live (see MEETING_CHILD_TABLES in src/db/live.ts).
   const rows = await db
     .select(meetingColumns)
     .from(meetingAttendees)
-    .innerJoin(meetings, eq(meetingAttendees.meetingId, meetings.id))
-    .leftJoin(apps, eq(meetings.appId, apps.id))
+    .innerJoin(liveMeetings, eq(meetingAttendees.meetingId, liveMeetings.id))
+    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
     .where(
       and(
         eq(meetingAttendees.userId, userId),
-        gte(meetings.startsAt, now),
-        lte(meetings.startsAt, until),
+        gte(liveMeetings.startsAt, now),
+        lte(liveMeetings.startsAt, until),
       ),
     )
-    .orderBy(asc(meetings.startsAt))
+    .orderBy(asc(liveMeetings.startsAt))
 
   return attachAttendees(rows)
 }
