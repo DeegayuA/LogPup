@@ -8,6 +8,8 @@ import {
   type ScoreContext,
   type ScoredCandidate,
   type Tier,
+  type ReasonCode,
+  type CaveatCode,
 } from './attendee-score'
 
 // ---------------------------------------------------------------------------
@@ -256,6 +258,42 @@ describe('E1 — open follow-ups', () => {
     expect(scored.scoreDet).toBe(0)
     expect(scored.tier).toBe('skip')
   })
+
+  it('I5 (review round 1 regression): items from DIFFERENT source meetings are never attributed to one meeting', () => {
+    // Reproduced by the reviewer: items from Vela Weekly, Orbit Retro and
+    // Client Sync all rendered as "Owes 3 open item(s) from Vela Weekly (11
+    // Aug)" — disprovable by opening either of the other two meetings. Each
+    // source meeting now gets its own, individually truthful reason line.
+    const facts = baseFacts({
+      followups: [
+        { id: 'f1', humanAdded: true, kind: 'question', sourceMeetingTitle: 'Vela Weekly', sourceMeetingStartsAt: daysBefore(1), attribution: 'resolved', resolvedInThisMeeting: false, text: 'confirm the SLA wording' },
+        { id: 'f2', humanAdded: true, kind: 'question', sourceMeetingTitle: 'Orbit Retro', sourceMeetingStartsAt: daysBefore(10), attribution: 'resolved', resolvedInThisMeeting: false, text: 'follow up with the vendor' },
+        { id: 'f3', humanAdded: true, kind: 'question', sourceMeetingTitle: 'Client Sync', sourceMeetingStartsAt: daysBefore(20), attribution: 'resolved', resolvedInThisMeeting: false, text: 'send the revised quote' },
+      ],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null }))
+    const openReasons = scored.reasons.filter((r) => r.code === 'followup_open')
+    expect(openReasons).toHaveLength(3) // one per distinct source meeting
+    const bySource = new Map(openReasons.map((r) => [r.en, r]))
+    const velaLine = [...bySource.keys()].find((en) => en.includes('Vela Weekly'))
+    const orbitLine = [...bySource.keys()].find((en) => en.includes('Orbit Retro'))
+    const clientLine = [...bySource.keys()].find((en) => en.includes('Client Sync'))
+    expect(velaLine).toBeTruthy()
+    expect(orbitLine).toBeTruthy()
+    expect(clientLine).toBeTruthy()
+    // Every meeting's own line cites only its own item — never another meeting's text.
+    expect(velaLine).toContain('confirm the SLA wording')
+    expect(velaLine).not.toContain('follow up with the vendor')
+    expect(velaLine).not.toContain('send the revised quote')
+    expect(orbitLine).toContain('follow up with the vendor')
+    expect(orbitLine).not.toContain('confirm the SLA wording')
+    expect(clientLine).toContain('send the revised quote')
+    // Each line reports its OWN count (1), never the total across all sources.
+    for (const r of openReasons) expect(r.en).toMatch(/Owes 1 open item/)
+    // Family total is still 30 (recency-decayed 12+12+12, capped) and lives on exactly one line.
+    expect(scored.scoreDet).toBe(30)
+    expect(openReasons.filter((r) => r.points > 0)).toHaveLength(1)
+  })
 })
 
 describe('E1b — pinned follow-up (hard override, not points)', () => {
@@ -360,12 +398,24 @@ describe('E3 — role/topic match', () => {
     expect(scored.hardEvidenceCount).toBe(0)
   })
 
-  it('tech-tag-only hit (no role match) scores 3', () => {
+  it('tech-tag-only hit (no role match) scores 3 with an honest, role-free reason', () => {
+    // I6 (review round 1): this branch used to reuse `role_topic`'s "...their
+    // role is {role}." template with `role` set to the APP NAME (there is no
+    // candidate role to cite for a techTag hit), rendering "their role is
+    // Vela." — a falsehood the old assertion (scoreDet===3 only) never read
+    // far enough to catch. `role_topic_tech` gets its own honest template.
     const facts = baseFacts({ roleTokens: ['Finance'] })
     const ctx = baseCtx({ meetingAgenda: 'A quick chat about react and the release date.', appTechTags: ['react'] })
     const scored = scoreCandidate(facts, ctx)
     expect(scored.scoreDet).toBe(3)
     expect(scored.hardEvidenceCount).toBe(0)
+    const reason = scored.reasons.find((r) => r.code === 'role_topic_tech')
+    expect(reason).toBeTruthy()
+    expect(reason?.en).toContain('Vela')
+    expect(reason?.en).not.toMatch(/their role is Vela/i)
+    expect(reason?.en.toLowerCase()).not.toContain('role')
+    // The old, wrong 'role_topic' code must never fire for a tech-tag-only hit.
+    expect(scored.reasons.some((r) => r.code === 'role_topic')).toBe(false)
   })
 
   it('no hit contributes 0, never a penalty', () => {
@@ -401,7 +451,7 @@ describe('E3 — role/topic match', () => {
     expect(scored.caveats.some((c) => c.code === 'thin_evidence')).toBe(true)
   })
 
-  it('an inferred app applies the x0.6 confidence multiplier', () => {
+  it('an inferred app applies the x0.6 confidence multiplier, and prefixes the reason "Inferred:"', () => {
     const facts = baseFacts({ roleTokens: ['UI/UX Designer'] })
     const ctx = baseCtx({
       meetingAgenda: 'Review the checkout flow mockups before launch.',
@@ -410,6 +460,29 @@ describe('E3 — role/topic match', () => {
     const scored = scoreCandidate(facts, ctx)
     expect(scored.scoreDet).toBe(8) // round(14*0.6)
     expect(scored.caveats.some((c) => c.code === 'inferred_app')).toBe(true)
+    // M5 (review round 1): spec ("Degradation", NO appId) says every E2/E3/E6
+    // reason under a low-confidence inferred app is prefixed "inferred:" verbatim.
+    const roleTopicReason = scored.reasons.find((r) => r.code === 'role_topic')
+    expect(roleTopicReason?.en.startsWith('Inferred:')).toBe(true)
+  })
+
+  it('I4 (review round 1): the required floor does NOT fire off an INFERRED app', () => {
+    // Reproduced by the reviewer: appIdInferred true + designer role + 'mockups'
+    // in the agenda + 5% allocation floored REQUIRED off just 9 det points. The
+    // x0.6 multiplier exists precisely because an inferred app is a guess; the
+    // strongest, least-overridable tier in the ledger must not ignore that.
+    const facts = baseFacts({ roleTokens: ['UI/UX Designer'], assignment: { allocationPct: 5 } })
+    const ctx = baseCtx({
+      meetingAgenda: 'Review the checkout flow mockups before launch.',
+      appIdInferred: true,
+    })
+    const scored = scoreCandidate(facts, ctx)
+    // E3: round(14*0.6)=8 (still a primary hit, just not floored to required).
+    // E6: the 5% allocation band (2) also scaled by the same inferred factor: round(2*0.6)=1.
+    expect(scored.scoreDet).toBe(9)
+    expect(scored.tier).not.toBe('required')
+    // Still floored to AT LEAST optional via R5's ordinary allocation floor.
+    expect(scored.tier).toBe('optional')
   })
 })
 
@@ -459,6 +532,29 @@ describe('E4 — discussion points', () => {
     const scored = scoreCandidate(baseFacts(), baseCtx({ appId: null }))
     expect(scored.scoreDet).toBe(0)
   })
+
+  it('C2 (review round 1 regression): a negative points value from the unvalidated jsonb source never drives scoreDet negative', () => {
+    // meeting_ai_notes.perPerson is bare, untyped jsonb — the ONLY family
+    // input with no natural floor. Pre-fix, `Math.min(3, m.points)` capped
+    // only the top, so `points: -5` produced -10 det points on a reason
+    // object carrying negative `points`.
+    const facts = baseFacts({
+      discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: -5 }],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null }))
+    expect(scored.scoreDet).toBe(0)
+    expect(scored.scoreDet).toBeGreaterThanOrEqual(0)
+    for (const r of scored.reasons) expect(r.points).toBeGreaterThanOrEqual(0)
+  })
+
+  it('I2 (review round 1): is UNAVAILABLE (0, no penalty) when the series has fewer than 2 established occurrences', () => {
+    const facts = baseFacts({
+      discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 3 }],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null, seriesOccurrenceCount: 1 }))
+    expect(scored.scoreDet).toBe(0)
+    expect(scored.tier).toBe('skip')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -479,23 +575,76 @@ describe('E5 — voice participation', () => {
   })
 
   it('a Sinhala-heavy transcript scores identically to an English one for the same turn count', () => {
-    // The fixtures below differ only in what the (unmodeled) underlying utterance
-    // TEXT would have looked like — this module never reads any string length or
-    // content for E5, only integer turn counts, so there is nothing in the type
-    // even capable of leaking a character-count difference into the score.
+    // V2 (review round 1): the original fixtures here were BYTE-IDENTICAL
+    // object literals, so this only ever asserted f(x) === f(x) — it would
+    // have passed against a fully character-based implementation too. The
+    // scoring TYPE (VoiceMeetingEvidence) carries no raw utterance text at
+    // all — only integer turn counts — so the strongest available runtime
+    // proof is: vary every available STRING field (meeting title) between a
+    // genuinely long Sinhala one and a short English one, a ~2.5x length gap
+    // in the same direction a code-switched Sinhala/English pair would
+    // produce, while holding every numeric turn field exactly equal, and
+    // confirm the score does not move.
     const englishLike = baseFacts({
       voiceMeetings: [
-        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 9, resolvedTurnsTotal: 31, resolvedSpeakerCount: 4 },
+        {
+          meetingId: 'm1',
+          meetingTitle: 'Standup',
+          meetingStartsAt: daysBefore(1),
+          candidateTurns: 9,
+          resolvedTurnsTotal: 31,
+          resolvedSpeakerCount: 4,
+        },
       ],
     })
     const sinhalaLike = baseFacts({
       voiceMeetings: [
-        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 9, resolvedTurnsTotal: 31, resolvedSpeakerCount: 4 },
+        {
+          meetingId: 'm1',
+          meetingTitle: 'සඳුදා උදෑසන කණ්ඩායම් සාකච්ඡාව සහ සතියේ සැලසුම් සමාලෝචනය',
+          meetingStartsAt: daysBefore(1),
+          candidateTurns: 9,
+          resolvedTurnsTotal: 31,
+          resolvedSpeakerCount: 4,
+        },
       ],
     })
     const a = scoreCandidate(englishLike, baseCtx({ appId: null }))
     const b = scoreCandidate(sinhalaLike, baseCtx({ appId: null }))
     expect(a.scoreDet).toBe(b.scoreDet)
+    expect(a.scoreDet).toBe(8)
+  })
+
+  it('C1 (review round 1 regression): adding a second, genuinely-attended recording never DEMOTES the family', () => {
+    // Reproduced by the reviewer against the pre-fix weighted-average implementation:
+    // two human follow-ups (24 det, 2 hard evidence) + one recording at 15/30 turns
+    // over 3 speakers (band 8) scored 32 -> required. Adding a SECOND real
+    // recording at 2/40 turns over 4 speakers (band 2) dragged the weighted
+    // AVERAGE down to 29 -> optional — taking part in more of the series demoted
+    // the candidate. Fixed to take the BEST band across kept meetings; this test
+    // pins that fix.
+    const followups = [
+      { id: 'f1', humanAdded: true, kind: 'question' as const, sourceMeetingTitle: 'Vela Weekly', sourceMeetingStartsAt: daysBefore(1), attribution: 'resolved' as const, resolvedInThisMeeting: false, text: 'confirm the SLA wording' },
+      { id: 'f2', humanAdded: true, kind: 'question' as const, sourceMeetingTitle: 'Vela Weekly', sourceMeetingStartsAt: daysBefore(1), attribution: 'resolved' as const, resolvedInThisMeeting: false, text: 'check the invoice export' },
+    ]
+    const oneRecording = baseFacts({
+      followups,
+      voiceMeetings: [
+        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 },
+      ],
+    })
+    const twoRecordings = baseFacts({
+      followups,
+      voiceMeetings: [
+        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 },
+        { meetingId: 'm2', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(3), candidateTurns: 2, resolvedTurnsTotal: 40, resolvedSpeakerCount: 4 },
+      ],
+    })
+    const before = scoreCandidate(oneRecording, baseCtx({ appId: null }))
+    const after = scoreCandidate(twoRecordings, baseCtx({ appId: null }))
+    expect(before.scoreDet).toBe(32)
+    expect(after.scoreDet).toBe(32) // NOT 29 — the second, weaker-but-real recording must not lower the total
+    expect(tierRank[after.tier]).toBeGreaterThanOrEqual(tierRank[before.tier])
   })
 
   it('an unresolved speaker meeting is UNAVAILABLE for that candidate, not scored as zero', () => {
@@ -540,6 +689,16 @@ describe('E5 — voice participation', () => {
     const scored = scoreCandidate(facts, baseCtx({ appId: null }))
     expect(scored.hardEvidenceCount).toBe(0)
   })
+
+  it('I2 (review round 1): is UNAVAILABLE (0, no penalty) when the series has fewer than 2 established occurrences', () => {
+    const facts = baseFacts({
+      voiceMeetings: [
+        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 },
+      ],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null, seriesOccurrenceCount: 1 }))
+    expect(scored.scoreDet).toBe(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -583,6 +742,25 @@ describe('E6 — ownership (lead + allocation)', () => {
   it('is UNAVAILABLE when the meeting has no app', () => {
     const scored = scoreCandidate(baseFacts({ isLead: true, assignment: { allocationPct: 60 } }), baseCtx({ appId: null }))
     expect(scored.scoreDet).toBe(0)
+  })
+
+  it('I1 (review round 1 regression): removing an assignment row never RAISES scoreDet', () => {
+    // Reproduced by the reviewer against the pre-fix `else if`: a Tech Lead
+    // assigned to Vela at 10% scored 2 (the allocation band); DELETING that
+    // assignment (heuristic alone) scored 3 — removing evidence raised the
+    // score. Fixed by making the allocation band and the heuristic
+    // independently additive.
+    const withAssignment = scoreCandidate(
+      baseFacts({ leadAllowlistRoleHeuristic: true, assignment: { allocationPct: 10 }, roleTokens: ['Tech Lead'] }),
+      baseCtx(),
+    )
+    const withoutAssignment = scoreCandidate(
+      baseFacts({ leadAllowlistRoleHeuristic: true, assignment: null, roleTokens: ['Tech Lead'] }),
+      baseCtx(),
+    )
+    expect(withAssignment.scoreDet).toBe(5) // 2 (allocation band) + 3 (heuristic)
+    expect(withoutAssignment.scoreDet).toBe(3) // heuristic alone
+    expect(withoutAssignment.scoreDet).toBeLessThanOrEqual(withAssignment.scoreDet)
   })
 })
 
@@ -648,6 +826,23 @@ describe('A1 — Gemini relevance', () => {
     expect(scored.scoreTotal).toBe(0)
     expect(scored.caveats.some((c) => c.code === 'ai_unavailable')).toBe(true)
   })
+
+  it('I3 (review round 1 regression): contributes 0 when the agenda does not qualify, even if aiRelevance IS populated', () => {
+    // Reproduced by the reviewer: agenda null + title '1:1' + E7=2 + A1=10 =>
+    // scoreTotal 12 => OPTIONAL — the AI created a Google-Calendar-visible
+    // invite in exactly the state the spec says it must never speak in ("A1
+    // is not called at all and contributes 0"). This can happen honestly
+    // (e.g. a stale cached A1 result from before the agenda was cleared), so
+    // the scorer itself — not just the caller — must refuse to credit it.
+    const facts = baseFacts({
+      attendance: { occurrences: 6, attended: 2 }, // E7 band 2
+      aiRelevance: { points: 10, agendaQuote: 'x', evidenceQuote: 'y', evidenceId: null },
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null, meetingTitle: '1:1', meetingAgenda: null }))
+    expect(scored.scoreTotal).toBe(2) // E7 only — A1 refused
+    expect(scored.tier).toBe('skip')
+    expect(scored.reasons.some((r) => r.code === 'agenda_match')).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -711,13 +906,20 @@ describe('tiering thresholds — exact edges', () => {
     expect(scored.tier).toBe('required')
   })
 
+  // V5 (review round 1): these two used to construct `aiRelevance.points: 3`
+  // and `4` — values `AiRelevanceEvidence`'s own doc says are IMPOSSIBLE
+  // (Task 5's validator only ever produces score 0|1|2 x 5 = 0, 5, or 10).
+  // Rebuilt on legal A1 values, using E4 point-count instead of an illegal
+  // A1 value to hit the exact totals.
+
   it('scoreTotal exactly 11, no hard evidence -> skip', () => {
-    // E4: one meeting at 3 points, full recency -> 3*2*1.0=6. E7: band 2 (ratio in [0.25,0.5)).
-    // A1: 3. Total = 6+2+3 = 11.
+    // E4: one meeting at 3 points, full recency -> 3*2*1.0=6. E7: band 0
+    // (ratio 0, still >=2 occurrences so the family is available). A1: 5
+    // (a legal score-1 result). Total = 6+0+5 = 11.
     const facts = baseFacts({
       discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 3 }],
-      attendance: { occurrences: 6, attended: 2 },
-      aiRelevance: { points: 3, agendaQuote: 'x', evidenceQuote: 'y', evidenceId: null },
+      attendance: { occurrences: 6, attended: 0 },
+      aiRelevance: { points: 5, agendaQuote: 'x', evidenceQuote: 'y', evidenceId: null },
     })
     const scored = scoreCandidate(facts, baseCtx({ appId: null }))
     expect(scored.hardEvidenceCount).toBe(0)
@@ -726,11 +928,12 @@ describe('tiering thresholds — exact edges', () => {
   })
 
   it('scoreTotal exactly 12, no hard evidence -> optional', () => {
-    // Same as above but A1: 4. Total = 6+2+4 = 12.
+    // E4: one meeting at 1 point, full recency -> 1*2*1.0=2. E7: band 0.
+    // A1: 10 (a legal score-2 result). Total = 2+0+10 = 12.
     const facts = baseFacts({
-      discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 3 }],
-      attendance: { occurrences: 6, attended: 2 },
-      aiRelevance: { points: 4, agendaQuote: 'x', evidenceQuote: 'y', evidenceId: null },
+      discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 1 }],
+      attendance: { occurrences: 6, attended: 0 },
+      aiRelevance: { points: 10, agendaQuote: 'x', evidenceQuote: 'y', evidenceId: null },
     })
     const scored = scoreCandidate(facts, baseCtx({ appId: null }))
     expect(scored.hardEvidenceCount).toBe(0)
@@ -846,19 +1049,36 @@ describe('R8 ceiling — no appId, no app inferred', () => {
 // ---------------------------------------------------------------------------
 
 describe('invariant — removing evidence never raises tier', () => {
+  // V1 (review round 1): the original fixture had exactly ONE followup, ONE
+  // discussionMeeting and ONE voiceMeeting, so every ablation here emptied a
+  // whole array — which can never distinguish "sum/average over N items" from
+  // "sum/average over N-1 items" for N=1, and is exactly why the C1 defect
+  // (E5's weighted average going DOWN when a second, real recording was
+  // added) shipped green. Every array below now carries >=2 elements, and
+  // the ablation list removes ONE element at a time in addition to emptying
+  // the whole array.
   function kitchenSink(): CandidateFacts {
     return baseFacts({
       roleTokens: ['UI/UX Designer'],
       isOrganizer: false,
       followups: [
         { id: 'f1', humanAdded: true, kind: 'action', sourceMeetingTitle: 'Vela Weekly', sourceMeetingStartsAt: daysBefore(1), attribution: 'resolved', resolvedInThisMeeting: false, text: 'x' },
+        { id: 'f2', humanAdded: true, kind: 'question', sourceMeetingTitle: 'Vela Weekly', sourceMeetingStartsAt: daysBefore(1), attribution: 'resolved', resolvedInThisMeeting: false, text: 'y' },
       ],
       pinnedFollowups: [],
       openTasks: [{ id: 't1', inProgress: true }, { id: 't2', inProgress: false }],
       runningSprint: { name: 'Sprint 12', endDate: daysBefore(-7), openTaskCount: 1 },
-      discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 2 }],
+      discussionMeetings: [
+        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 2 },
+        { meetingId: 'm3', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(3), points: 1 },
+      ],
+      // Two DIFFERENT bands on purpose (8 and 4) — this is what the C1 fix
+      // (best-band, not weighted-average) is actually being exercised against:
+      // removing the higher-band meeting must lower the family; removing the
+      // lower-band one must never change it.
       voiceMeetings: [
-        { meetingId: 'm2', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 },
+        { meetingId: 'm2', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 }, // band 8
+        { meetingId: 'm4', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(3), candidateTurns: 2, resolvedTurnsTotal: 40, resolvedSpeakerCount: 4 }, // band 2
       ],
       isLead: true,
       assignment: { allocationPct: 60 },
@@ -872,11 +1092,16 @@ describe('invariant — removing evidence never raises tier', () => {
   const ctx = baseCtx({ meetingAgenda: 'Review the checkout flow mockups before launch.' })
 
   const ablations: Array<[string, (f: CandidateFacts) => CandidateFacts]> = [
-    ['remove followups', (f) => ({ ...f, followups: [] })],
-    ['remove openTasks', (f) => ({ ...f, openTasks: [], runningSprint: null })],
+    ['remove followups (whole array)', (f) => ({ ...f, followups: [] })],
+    ['remove ONE of two followups', (f) => ({ ...f, followups: f.followups.slice(1) })],
+    ['remove openTasks (whole array)', (f) => ({ ...f, openTasks: [], runningSprint: null })],
+    ['remove ONE of two openTasks', (f) => ({ ...f, openTasks: f.openTasks.slice(1) })],
     ['remove roleTokens (E3)', (f) => ({ ...f, roleTokens: [] })],
-    ['remove discussionMeetings', (f) => ({ ...f, discussionMeetings: [] })],
-    ['remove voiceMeetings', (f) => ({ ...f, voiceMeetings: [] })],
+    ['remove discussionMeetings (whole array)', (f) => ({ ...f, discussionMeetings: [] })],
+    ['remove ONE of two discussionMeetings (the higher-points one)', (f) => ({ ...f, discussionMeetings: f.discussionMeetings.slice(1) })],
+    ['remove voiceMeetings (whole array)', (f) => ({ ...f, voiceMeetings: [] })],
+    ['remove ONE of two voiceMeetings (the higher-band one — C1 regression)', (f) => ({ ...f, voiceMeetings: f.voiceMeetings.slice(1) })],
+    ['remove ONE of two voiceMeetings (the LOWER-band one)', (f) => ({ ...f, voiceMeetings: f.voiceMeetings.slice(0, 1) })],
     ['remove isLead', (f) => ({ ...f, isLead: false })],
     ['remove assignment', (f) => ({ ...f, assignment: null })],
     ['remove attendance', (f) => ({ ...f, attendance: null })],
@@ -891,24 +1116,35 @@ describe('invariant — removing evidence never raises tier', () => {
   })
 
   for (const [label, ablate] of ablations) {
-    it(`${label}: tier never increases, and every contribution stays >= 0`, () => {
+    it(`${label}: tier never increases, scoreDet/scoreTotal never increase, and every contribution stays >= 0`, () => {
       const before = scoreCandidate(kitchenSink(), ctx)
       const after = scoreCandidate(ablate(kitchenSink()), ctx)
       expect(tierRank[after.tier]).toBeLessThanOrEqual(tierRank[before.tier])
+      expect(after.scoreDet).toBeLessThanOrEqual(before.scoreDet)
+      expect(after.scoreTotal).toBeLessThanOrEqual(before.scoreTotal)
       expect(after.scoreDet).toBeGreaterThanOrEqual(0)
       expect(after.scoreTotal).toBeGreaterThanOrEqual(0)
       for (const r of after.reasons) expect(r.points).toBeGreaterThanOrEqual(0)
     })
   }
 
+  it('removing the higher-band voice meeting strictly lowers E5 (C1 regression, direct)', () => {
+    const full = scoreCandidate(kitchenSink(), ctx)
+    const withoutHighBand = scoreCandidate({ ...kitchenSink(), voiceMeetings: kitchenSink().voiceMeetings.slice(1) }, ctx)
+    expect(withoutHighBand.scoreDet).toBeLessThan(full.scoreDet)
+  })
+
   it('removing ALL evidence from every family individually, in sequence, is monotonically non-increasing', () => {
     let facts = kitchenSink()
     let prevRank = tierRank[scoreCandidate(facts, ctx).tier]
+    let prevDet = scoreCandidate(facts, ctx).scoreDet
     for (const [, ablate] of ablations) {
       facts = ablate(facts)
-      const rank = tierRank[scoreCandidate(facts, ctx).tier]
-      expect(rank).toBeLessThanOrEqual(prevRank)
-      prevRank = rank
+      const scored = scoreCandidate(facts, ctx)
+      expect(tierRank[scored.tier]).toBeLessThanOrEqual(prevRank)
+      expect(scored.scoreDet).toBeLessThanOrEqual(prevDet)
+      prevRank = tierRank[scored.tier]
+      prevDet = scored.scoreDet
     }
   })
 })
@@ -953,13 +1189,65 @@ describe('abstain mode', () => {
     expect(run.scored.find((c) => c.userId === 'u2')?.tier).toBe('required')
   })
 
-  it('makes no negative statement: nobody in the run carries a negative reason template', () => {
+  it('makes no negative statement: every reason has non-negative points and no banned phrasing, even for the skipped stray', () => {
+    // V3 (review round 1): the original assertion here (`reasons.length +
+    // caveats.length >= 0`) is true for every possible input — it never
+    // failed no matter what the run produced. Assert something a real defect
+    // could actually trip: no reason ever carries negative points, and no
+    // rendered text (reason OR caveat, in en) uses the banned vague/
+    // confidence phrasing this ledger has no vocabulary for.
     const organizer = scoreCandidate(baseFacts({ userId: 'org', isOrganizer: true }), baseCtx({ appId: null }))
-    const stray = scoreCandidate(baseFacts({ userId: 'u2' }), baseCtx({ appId: null }))
+    const stray = scoreCandidate(
+      baseFacts({ userId: 'u2', discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 3 }] }),
+      baseCtx({ appId: null }),
+    )
     const run = tierAll([organizer, stray], baseCtx({ appId: null }))
+    expect(run.scored.find((c) => c.userId === 'u2')?.tier).toBe('skip')
     for (const c of run.scored) {
-      expect(c.reasons.length + c.caveats.length).toBeGreaterThanOrEqual(0) // structurally cannot be negative-worded; see REASON_TEMPLATES lint
+      for (const r of c.reasons) {
+        expect(r.points).toBeGreaterThanOrEqual(0)
+        for (const phrase of BANNED_PHRASES) expect(r.en.toLowerCase()).not.toContain(phrase)
+      }
+      for (const cv of c.caveats) {
+        for (const phrase of BANNED_PHRASES) expect(cv.en.toLowerCase()).not.toContain(phrase)
+      }
     }
+  })
+
+  it('V6 (review round 1): tierAll flags requiredOverflow when more than 8 land in required', () => {
+    // 9 candidates each pinned to this meeting — a hard override (always
+    // required) that ALSO counts as hard evidence, so 9 distinct
+    // hard-evidence candidates keeps the run out of abstain mode.
+    const nine = Array.from({ length: 9 }, (_, i) =>
+      scoreCandidate(
+        baseFacts({
+          userId: `u${i}`,
+          pinnedFollowups: [{ id: `p${i}`, text: 'x', pinnedByName: 'Nuwan', pinnedOnDate: daysBefore(1) }],
+        }),
+        baseCtx({ appId: null }),
+      ),
+    )
+    const run = tierAll(nine, baseCtx({ appId: null }))
+    expect(run.abstained).toBe(false)
+    expect(run.requiredCount).toBe(9)
+    expect(run.requiredOverflow).toBe(true)
+    // R10 is a warning only — never an automatic demotion.
+    expect(run.scored.every((c) => c.tier === 'required')).toBe(true)
+  })
+
+  it('requiredOverflow is false at exactly 8 required', () => {
+    const eight = Array.from({ length: 8 }, (_, i) =>
+      scoreCandidate(
+        baseFacts({
+          userId: `u${i}`,
+          pinnedFollowups: [{ id: `p${i}`, text: 'x', pinnedByName: 'Nuwan', pinnedOnDate: daysBefore(1) }],
+        }),
+        baseCtx({ appId: null }),
+      ),
+    )
+    const run = tierAll(eight, baseCtx({ appId: null }))
+    expect(run.requiredCount).toBe(8)
+    expect(run.requiredOverflow).toBe(false)
   })
 
   it('is the default (modal) path when only one candidate has hard evidence', () => {
@@ -1021,6 +1309,32 @@ describe('degradation — no transcripts', () => {
     const scored = scoreCandidate(baseFacts(), baseCtx({ appId: null }))
     expect(scored.scoreDet).toBe(0)
     expect(scored.tier).toBe('skip')
+  })
+})
+
+describe('no_series caveat', () => {
+  it('M4 (review round 1 regression): fires even when NO series was inferred at all (seriesTitle null)', () => {
+    // Previously gated on `ctx.seriesTitle` being truthy, which suppressed
+    // this caveat EXACTLY in the case that most needs the explanation: no
+    // series exists, so `seriesOccurrenceCount` is 0 and `seriesTitle` is
+    // null — and the caveat vanished instead of explaining why E4/E5/E7 are
+    // all silently zero.
+    const scored = scoreCandidate(baseFacts(), baseCtx({ appId: null, seriesTitle: null, seriesOccurrenceCount: 0 }))
+    const caveat = scored.caveats.find((c) => c.code === 'no_series')
+    expect(caveat).toBeTruthy()
+    expect(caveat?.en).toContain('0')
+  })
+
+  it('still fires with a thin (1-occurrence) established series, citing the real title', () => {
+    const scored = scoreCandidate(baseFacts(), baseCtx({ appId: null, seriesTitle: 'Vela Weekly', seriesOccurrenceCount: 1 }))
+    const caveat = scored.caveats.find((c) => c.code === 'no_series')
+    expect(caveat?.en).toContain('Vela Weekly')
+    expect(caveat?.en).toContain('1')
+  })
+
+  it('does NOT fire once the series is established (>= 2 occurrences)', () => {
+    const scored = scoreCandidate(baseFacts(), baseCtx({ appId: null, seriesTitle: 'Vela Weekly', seriesOccurrenceCount: 2 }))
+    expect(scored.caveats.some((c) => c.code === 'no_series')).toBe(false)
   })
 })
 
@@ -1095,19 +1409,56 @@ describe('REASON_TEMPLATES (lint)', () => {
     expect(offenders).toEqual([])
   })
 
-  it('never uses a banned vague/confidence phrase, in en or si', () => {
+  it('never uses a banned vague/confidence phrase, in en OR si', () => {
+    // M1 (review round 1): this loop only ever checked `t.en` despite its own
+    // title claiming "in en or si" — the Sinhala half of the table was never
+    // linted for the banned English phrases (which, transliterated or left
+    // in Latin script inline, could still leak in).
     const offenders: string[] = []
     for (const t of REASON_TEMPLATES) {
-      for (const phrase of BANNED_PHRASES) {
-        if (t.en.toLowerCase().includes(phrase)) offenders.push(`${t.code}: "${phrase}" in en`)
+      for (const [lang, text] of [['en', t.en], ['si', t.si]] as const) {
+        for (const phrase of BANNED_PHRASES) {
+          if (text.toLowerCase().includes(phrase)) offenders.push(`${t.code} (${lang}): "${phrase}"`)
+        }
       }
     }
     expect(offenders).toEqual([])
   })
 
-  it('covers every ReasonCode the scorer can emit (no stray/missing codes)', () => {
-    const codes = REASON_TEMPLATES.map((t) => t.code)
-    expect(new Set(codes).size).toBe(codes.length) // no duplicates
+  it('covers exactly the ReasonCode union — no stray, no missing (compile-time exhaustive)', () => {
+    // V4 (review round 1): the old assertion only checked for DUPLICATES
+    // within REASON_TEMPLATES' own code list, which can never catch a code
+    // declared in the `ReasonCode` union with no template at all (or vice
+    // versa) — `followup_redacted` and `conflict` are real ReasonCode values
+    // this module never emits itself (redaction projector / calendar-conflict
+    // orchestrator own those), but they still need a template entry, and this
+    // object literal makes the check compile-time exhaustive: adding a new
+    // ReasonCode without an entry here is a TS error, not a silent gap.
+    const exhaustive: Record<ReasonCode, true> = {
+      followup_pinned: true,
+      followup_open: true,
+      followup_answered_here: true,
+      followup_redacted: true,
+      task_open: true,
+      task_sprint: true,
+      role_topic: true,
+      role_topic_tech: true,
+      discussed: true,
+      spoke: true,
+      lead: true,
+      allocated: true,
+      lead_role_heuristic: true,
+      attended: true,
+      previous_occurrence: true,
+      already_invited: true,
+      agenda_match: true,
+      organizer: true,
+      opted_in: true,
+      conflict: true,
+    }
+    const allCodes = Object.keys(exhaustive).sort()
+    const templateCodes = [...new Set(REASON_TEMPLATES.map((t) => t.code))].sort()
+    expect(templateCodes).toEqual(allCodes)
   })
 
   it('every template has non-empty en and si text', () => {
@@ -1119,14 +1470,47 @@ describe('REASON_TEMPLATES (lint)', () => {
 })
 
 describe('CAVEAT_TEMPLATES (lint)', () => {
-  it('never uses a banned vague/confidence phrase, in en', () => {
+  it('every template contains a NUMBER, a PROPER NOUN placeholder, or a DATE (en and si)', () => {
+    // M2 (review round 1): CAVEAT_TEMPLATES previously never got this lint at
+    // all (only REASON_TEMPLATES did) — `ai_unavailable` shipped with no such
+    // placeholder. The spec says "every line" carries a number/proper-noun/
+    // date, not "every reason line".
     const offenders: string[] = []
     for (const t of CAVEAT_TEMPLATES) {
-      for (const phrase of BANNED_PHRASES) {
-        if (t.en.toLowerCase().includes(phrase)) offenders.push(`${t.code}: "${phrase}"`)
+      for (const [lang, text] of [['en', t.en], ['si', t.si]] as const) {
+        const placeholders = templatePlaceholders(text)
+        const ok = placeholders.some((p) => NUMBER_PLACEHOLDERS.has(p) || PROPER_NOUN_PLACEHOLDERS.has(p) || DATE_PLACEHOLDERS.has(p))
+        if (!ok) offenders.push(`${t.code} (${lang}): "${text}"`)
       }
     }
     expect(offenders).toEqual([])
+  })
+
+  it('never uses a banned vague/confidence phrase, in en OR si', () => {
+    const offenders: string[] = []
+    for (const t of CAVEAT_TEMPLATES) {
+      for (const [lang, text] of [['en', t.en], ['si', t.si]] as const) {
+        for (const phrase of BANNED_PHRASES) {
+          if (text.toLowerCase().includes(phrase)) offenders.push(`${t.code} (${lang}): "${phrase}"`)
+        }
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('covers exactly the CaveatCode union — no stray, no missing (compile-time exhaustive)', () => {
+    const exhaustive: Record<CaveatCode, true> = {
+      inferred_app: true,
+      ai_unavailable: true,
+      thin_evidence: true,
+      no_series: true,
+      new_person: true,
+      speaker_unresolved: true,
+      returner: true,
+    }
+    const allCodes = Object.keys(exhaustive).sort()
+    const templateCodes = [...new Set(CAVEAT_TEMPLATES.map((t) => t.code))].sort()
+    expect(templateCodes).toEqual(allCodes)
   })
 
   it('every template has non-empty en and si text', () => {

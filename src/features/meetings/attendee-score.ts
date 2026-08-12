@@ -44,6 +44,7 @@ export type ReasonCode =
   | 'task_open'
   | 'task_sprint'
   | 'role_topic'
+  | 'role_topic_tech'
   | 'discussed'
   | 'spoke'
   | 'lead'
@@ -88,6 +89,23 @@ export type ScoredCandidate = {
   tier: Tier
   reasons: Reason[]
   caveats: Caveat[]
+  /** Structured floor/override flags (added in review round 1, M7) — lets
+   *  `tierAll`'s ABSTAIN-mode reconciliation read actual facts instead of
+   *  pattern-matching `reasons`/`caveats` codes, which would silently break
+   *  the moment a future display layer suppresses or renames a reason for
+   *  presentation (the spec itself asks for exactly that: `allocated`
+   *  "always rendered last and de-emphasised"). */
+  floors: {
+    /** R7: organizer, or a follow-up pinned to this meeting — always
+     *  required, beats every floor and ceiling. */
+    hardOverride: boolean
+    /** R5: any condition that floors the minimum tier to `optional`
+     *  (allocation, leadId, hardEvidence>=1, new person, existing attendee
+     *  row, previous-occurrence attendee, self opt-in, returner). Excludes
+     *  the tiny-pool floor, which is a pool-level fact from
+     *  `ScoreContext.poolSize`, not a per-candidate one. */
+    softFloor: boolean
+  }
 }
 
 export type RecommendationRun = {
@@ -364,6 +382,14 @@ const REQUIRED_MIN_SCORE_DET = 30
 const OPTIONAL_MIN_SCORE_TOTAL = 12
 const NEW_PERSON_DAYS = 21
 
+/** M6 (review round 1): every template that interpolates a `{role}`
+ *  placeholder previously fell back to the literal string `'their role'` when
+ *  `roleTokens` was empty — which, substituted into "Their role, {role}, is
+ *  on..." or "...their role is {role}.", rendered the self-contradicting
+ *  "Their role, their role, is on Vela's leadership allowlist." Use a
+ *  distinct fallback everywhere a role token is missing. */
+const FALLBACK_ROLE = 'an unspecified role'
+
 const TIER_RANK: Record<Tier, number> = { skip: 0, optional: 1, required: 2 }
 
 function maxTier(a: Tier, b: Tier): Tier {
@@ -420,6 +446,16 @@ export const REASON_TEMPLATES: ReasonTemplate[] = [
     code: 'role_topic',
     en: "Agenda says '{quote}'; their role is {role}.",
     si: "න්‍යාය පත්‍රයේ සඳහන් වන්නේ '{quote}'; ඔවුන්ගේ භූමිකාව {role} වේ.",
+  },
+  {
+    // I6 (review round 1): the tech-tag-only E3 fallback used to reuse
+    // `role_topic`'s "...their role is {role}." template with `role` set to
+    // the APP NAME (there is no candidate role to cite — a techTag match is
+    // role-independent by construction), rendering nonsense like "their role
+    // is Vela." This branch gets its own honest template instead.
+    code: 'role_topic_tech',
+    en: "Agenda mentions '{quote}', part of {appName}'s tech stack.",
+    si: "න්‍යාය පත්‍රයේ '{quote}' සඳහන් වේ, එය {appName} හි තාක්ෂණික තොගයේ කොටසකි.",
   },
   {
     code: 'discussed',
@@ -490,14 +526,17 @@ export const CAVEAT_TEMPLATES: CaveatTemplate[] = [
     si: '{appName} මෙම මාලාවේ පෙර අවස්ථා වලින් අනුමාන කරන ලදී — රැස්වීම මතම සකසා නැත.',
   },
   {
+    // M2 (review round 1): gained a proper-noun placeholder — every entry in
+    // this table is now held to the same NUMBER/PROPER-NOUN/DATE lint as
+    // REASON_TEMPLATES, and this one previously carried none.
     code: 'ai_unavailable',
-    en: 'AI relevance scoring was unavailable for this run — the deterministic score is unaffected.',
-    si: 'මෙම ධාවනය සඳහා AI අදාළත්ව ලකුණු ලබාගත නොහැකි විය — නිශ්චිත ලකුණු බලපෑමට ලක් නොවේ.',
+    en: 'AI relevance scoring was unavailable for {meetingTitle} — the deterministic score is unaffected.',
+    si: '{meetingTitle} සඳහා AI අදාළත්ව ලකුණු ලබාගත නොහැකි විය — නිශ්චිත ලකුණු බලපෑමට ලක් නොවේ.',
   },
   {
     code: 'thin_evidence',
-    en: 'LogPup does not have enough agenda or title text to match roles for this meeting.',
-    si: 'මෙම රැස්වීම සඳහා භූමිකා ගැලපීමට ප්‍රමාණවත් න්‍යාය පත්‍ර හෝ මාතෘකා පෙළක් LogPup සතුව නැත.',
+    en: 'LogPup does not have enough agenda or title text to match roles for {meetingTitle}.',
+    si: '{meetingTitle} සඳහා භූමිකා ගැලපීමට ප්‍රමාණවත් න්‍යාය පත්‍ර හෝ මාතෘකා පෙළක් LogPup සතුව නැත.',
   },
   {
     code: 'no_series',
@@ -627,9 +666,16 @@ type FamilyResult = { points: number; reasons: Reason[]; hardEvidence: number }
 function scoreFollowups(facts: CandidateFacts, ctx: ScoreContext): FamilyResult {
   let raw = 0
   let hardEvidence = 0
-  const ids: string[] = []
   const answeredHereIds: string[] = []
-  const cite: { text: string; meetingTitle: string; meetingDate: Date }[] = []
+  // I5 (review round 1): grouped by source meeting, not lumped into one
+  // citation — the previous version cited every item's count under the
+  // SINGLE most-recent item's meeting/date, so items from Vela Weekly, Orbit
+  // Retro and Client Sync all rendered as "Owes 3 open item(s) from Vela
+  // Weekly (11 Aug)", which is false for two of the three. Grouping key is
+  // title+timestamp (not a stored meeting id — `FollowupEvidenceItem` has
+  // none), which is safe here: every item sharing a title AND an exact
+  // millisecond `sourceMeetingStartsAt` genuinely came from one meeting.
+  const byMeeting = new Map<string, { title: string; date: Date; items: { id: string; text: string }[] }>()
 
   for (const item of facts.followups) {
     const base = (item.humanAdded ? 12 : 6) + (item.kind === 'action' ? 2 : 0)
@@ -638,8 +684,13 @@ function scoreFollowups(facts: CandidateFacts, ctx: ScoreContext): FamilyResult 
     const retroFactor = ctx.surface === 'retro' && item.resolvedInThisMeeting ? 1.25 : 1
     raw += base * recency * orphanFactor * retroFactor
 
-    ids.push(item.id)
-    cite.push({ text: item.text, meetingTitle: item.sourceMeetingTitle, meetingDate: item.sourceMeetingStartsAt })
+    const key = `${item.sourceMeetingTitle}__${item.sourceMeetingStartsAt.getTime()}`
+    let group = byMeeting.get(key)
+    if (!group) {
+      group = { title: item.sourceMeetingTitle, date: item.sourceMeetingStartsAt, items: [] }
+      byMeeting.set(key, group)
+    }
+    group.items.push({ id: item.id, text: item.text })
 
     const isHard = item.attribution === 'resolved' || (item.attribution === 'orphan' && item.humanAdded)
     if (isHard) hardEvidence += 1
@@ -649,16 +700,23 @@ function scoreFollowups(facts: CandidateFacts, ctx: ScoreContext): FamilyResult 
   const capped = Math.round(Math.min(FAMILY_CAPS.E1, raw))
   const reasons: Reason[] = []
   if (facts.followups.length > 0) {
-    const sorted = [...cite].sort((a, b) => b.meetingDate.getTime() - a.meetingDate.getTime())
-    const top = sorted.slice(0, 2)
-    reasons.push(
-      renderReason('followup_open', capped, { ids }, {
-        count: facts.followups.length,
-        sourceTitle: top[0]?.meetingTitle ?? '',
-        sourceDate: top[0] ? fmtDayMonth(top[0].meetingDate) : '',
-        items: top.map((c) => `'${c.text}'`).join(', '),
-      }),
-    )
+    // Most-recent group first; it alone carries the family's real point
+    // total (the already-established "primary reason carries the family
+    // total, the rest are 0-point informational lines" pattern used
+    // throughout this module) — every group's count/date/items are still
+    // individually true of ONLY that meeting.
+    const groups = [...byMeeting.values()].sort((a, b) => b.date.getTime() - a.date.getTime())
+    groups.forEach((group, i) => {
+      const top = group.items.slice(0, 2)
+      reasons.push(
+        renderReason('followup_open', i === 0 ? capped : 0, { ids: group.items.map((it) => it.id) }, {
+          count: group.items.length,
+          sourceTitle: group.title,
+          sourceDate: fmtDayMonth(group.date),
+          items: top.map((it) => `'${it.text}'`).join(', '),
+        }),
+      )
+    })
   }
   if (answeredHereIds.length > 0) {
     reasons.push(renderReason('followup_answered_here', 0, { ids: answeredHereIds }, { count: answeredHereIds.length }))
@@ -727,7 +785,7 @@ function scoreTopic(facts: CandidateFacts, ctx: ScoreContext): TopicResult {
 
   const inferredFactor = ctx.appIdInferred ? 0.6 : 1
   const match = matchAgendaTopic(topicText, facts.roleTokens)
-  const role = facts.roleTokens[0] ?? 'their role'
+  const role = facts.roleTokens[0] ?? FALLBACK_ROLE
 
   if (match.hit === 'primary') {
     const pts = Math.round(14 * inferredFactor)
@@ -752,10 +810,11 @@ function scoreTopic(facts: CandidateFacts, ctx: ScoreContext): TopicResult {
 
   const techTag = findTechTagHit(topicText, ctx.appTechTags)
   if (techTag) {
+    // I6: own template — a techTag hit has no candidate role to cite at all.
     const pts = Math.round(3 * inferredFactor)
     return {
       points: pts,
-      reasons: [renderReason('role_topic', pts, { ids: [] }, { quote: techTag, role: ctx.appName ?? role })],
+      reasons: [renderReason('role_topic_tech', pts, { ids: [] }, { quote: techTag, appName: ctx.appName ?? 'their app' })],
       hardEvidence: 0,
       hitType: 'tech',
       thinEvidence: false,
@@ -766,13 +825,22 @@ function scoreTopic(facts: CandidateFacts, ctx: ScoreContext): TopicResult {
 }
 
 function scoreDiscussion(facts: CandidateFacts, ctx: ScoreContext): FamilyResult {
+  // I2: E4 is a series signal — a series with fewer than 2 established occurrences
+  // is UNAVAILABLE for it (spec "Series rule"), the same way E2/E3/E6 are hard-
+  // zeroed on `appId === null` regardless of what the caller populated.
+  if (ctx.seriesOccurrenceCount < 2) return { points: 0, reasons: [], hardEvidence: 0 }
   if (facts.discussionMeetings.length === 0) return { points: 0, reasons: [], hardEvidence: 0 }
 
   let raw = 0
   let citedPoints = 0
   const ids: string[] = []
   for (const m of facts.discussionMeetings) {
-    const pts = Math.min(3, m.points)
+    // C2: meeting_ai_notes.perPerson is bare, untyped jsonb (schema.ts has no
+    // $type<>() on it) — unvalidated model output, and the only family input
+    // with no natural floor. A negative `points` value (a malformed/adversarial
+    // row) must never drive scoreDet negative; clamp BOTH ends, not just the
+    // spec's upper cap of 3.
+    const pts = Math.max(0, Math.min(3, m.points))
     const recency = e4e5Recency(daysBetween(m.meetingStartsAt, ctx.meetingDay))
     raw += pts * 2 * recency
     citedPoints += pts
@@ -790,33 +858,54 @@ function scoreDiscussion(facts: CandidateFacts, ctx: ScoreContext): FamilyResult
   return { points: capped, reasons, hardEvidence: 0 }
 }
 
+/**
+ * C1 (review round 1): a weighted AVERAGE across kept meetings meant that
+ * adding a genuinely-attended-but-lower-engagement recording could LOWER
+ * this family's total — e.g. two human follow-ups (24 det pts, hard
+ * evidence) + one recording at 15/30 turns over 3 speakers (band 8) scored
+ * 32 -> required; adding a second, real recording at 2/40 turns over 4
+ * speakers (band 2) dragged the WEIGHTED AVERAGE down to 29 -> optional.
+ * Taking part in more of the series demoted the candidate. Pooling turns
+ * (Σturns/Σresolved) was evaluated too and is still non-monotone at band
+ * edges for the same reason: any denominator-based combination can go down
+ * when you add a real numerator/denominator pair whose ratio sits below the
+ * running average/pooled ratio.
+ *
+ * FIX (a DELIBERATE DEVIATION from the spec's literal "Averaged over kept
+ * meetings" — flagged here for the spec to be amended): take the BEST band
+ * across kept meetings, never the average. `max` over a set of non-negative
+ * values is monotone non-decreasing as you add or remove elements, which is
+ * exactly the invariant "no signal may ever subtract" requires, and that
+ * invariant is stated as outranking every other rule in this ledger.
+ */
 function scoreVoice(facts: CandidateFacts, ctx: ScoreContext): FamilyResult {
-  let weightedSum = 0
-  let weightTotal = 0
+  // I2: series signal — unavailable below 2 established occurrences.
+  if (ctx.seriesOccurrenceCount < 2) return { points: 0, reasons: [], hardEvidence: 0 }
+
+  let bestBand = 0
   const ids: string[] = []
   let candidateTurnsTotal = 0
   let resolvedTurnsTotalSum = 0
 
   for (const m of facts.voiceMeetings) {
     if (m.resolvedTurnsTotal <= 0 || m.resolvedSpeakerCount <= 0) continue
-    const weight = e4e5Recency(daysBetween(m.meetingStartsAt, ctx.meetingDay))
-    if (weight <= 0) continue
+    const withinWindow = e4e5Recency(daysBetween(m.meetingStartsAt, ctx.meetingDay)) > 0
+    if (!withinWindow) continue
 
     const share = m.candidateTurns / m.resolvedTurnsTotal
     const expected = 1 / m.resolvedSpeakerCount
     const ratio = expected > 0 ? share / expected : 0
     const band = ratio >= 0.75 ? 8 : ratio >= 0.35 ? 4 : 2
 
-    weightedSum += band * weight
-    weightTotal += weight
+    if (band > bestBand) bestBand = band
     ids.push(m.meetingId)
     candidateTurnsTotal += m.candidateTurns
     resolvedTurnsTotalSum += m.resolvedTurnsTotal
   }
 
-  if (weightTotal === 0) return { points: 0, reasons: [], hardEvidence: 0 }
+  if (ids.length === 0) return { points: 0, reasons: [], hardEvidence: 0 }
 
-  const capped = Math.round(Math.min(FAMILY_CAPS.E5, weightedSum / weightTotal))
+  const capped = Math.min(FAMILY_CAPS.E5, bestBand)
   const reasons = [
     renderReason('spoke', capped, { ids }, {
       candidateTurns: candidateTurnsTotal,
@@ -847,13 +936,23 @@ function scoreOwnership(facts: CandidateFacts, ctx: ScoreContext): FamilyResult 
     const pts = Math.round(band * inferredFactor)
     total += pts
     reasons.push(renderReason('allocated', pts, { ids: [] }, { appName: ctx.appName ?? 'their app', pct }))
-  } else if (!facts.isLead && facts.leadAllowlistRoleHeuristic) {
+  }
+
+  // I1 (review round 1): this used to be an `else if`, so the heuristic (+3)
+  // only ever appeared when NO allocation row existed — meaning an assignment
+  // at the lowest band (2 pts) scored LESS than deleting that same assignment
+  // and falling back to the heuristic alone (3 pts). Removing evidence must
+  // never raise a score. Making the two terms independently ADDITIVE (both
+  // still capped at FAMILY_CAPS.E6 below) removes the swap entirely: this
+  // term's presence/absence now depends ONLY on `leadAllowlistRoleHeuristic`
+  // itself, never on whether `assignment` happens to also be populated.
+  if (!facts.isLead && facts.leadAllowlistRoleHeuristic) {
     const pts = Math.round(3 * inferredFactor)
     total += pts
     reasons.push(
       renderReason('lead_role_heuristic', pts, { ids: [] }, {
         appName: ctx.appName ?? 'their app',
-        role: facts.roleTokens[0] ?? 'their role',
+        role: facts.roleTokens[0] ?? FALLBACK_ROLE,
       }),
     )
   }
@@ -896,14 +995,22 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
   reasons.push(...pinned.reasons)
   hardEvidenceCount += pinned.hardEvidence
 
+  // M5 (review round 1): spec ("Degradation", NO appId) says every E2/E3/E6
+  // reason under a LOW-CONFIDENCE inferred app is prefixed "inferred:" — this
+  // was previously only surfaced as a separate `inferred_app` caveat, never
+  // on the reason lines themselves. Applied below to each family's reasons.
+  const inferredPrefix = ctx.appId !== null && ctx.appIdInferred === true
+  const withInferredPrefix = (r: Reason): Reason =>
+    inferredPrefix ? { ...r, en: `Inferred: ${r.en}`, si: `අනුමානය: ${r.si}` } : r
+
   const e2 = scoreTasks(facts, ctx)
-  reasons.push(...e2.reasons)
+  reasons.push(...e2.reasons.map(withInferredPrefix))
   hardEvidenceCount += e2.hardEvidence
 
   const e3 = scoreTopic(facts, ctx)
-  reasons.push(...e3.reasons)
+  reasons.push(...e3.reasons.map(withInferredPrefix))
   hardEvidenceCount += e3.hardEvidence
-  if (e3.thinEvidence) caveats.push(renderCaveat('thin_evidence', {}))
+  if (e3.thinEvidence) caveats.push(renderCaveat('thin_evidence', { meetingTitle: ctx.meetingTitle }))
 
   const e4 = scoreDiscussion(facts, ctx)
   reasons.push(...e4.reasons)
@@ -920,25 +1027,46 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
   }
 
   const e6 = scoreOwnership(facts, ctx)
-  reasons.push(...e6.reasons)
+  reasons.push(...e6.reasons.map(withInferredPrefix))
 
   const e7 = scoreAttendance(facts, ctx)
   reasons.push(...e7.reasons)
 
-  if (ctx.seriesTitle && ctx.seriesOccurrenceCount < 2) {
-    caveats.push(renderCaveat('no_series', { seriesTitle: ctx.seriesTitle, count: ctx.seriesOccurrenceCount }))
+  // M4 (review round 1): previously gated on `ctx.seriesTitle` being truthy,
+  // which suppressed this caveat EXACTLY when there is no series at all —
+  // the case that most needs the explanation. Gate on the occurrence count
+  // alone; fall back to the meeting's own title when no series title exists.
+  if (ctx.seriesOccurrenceCount < 2) {
+    caveats.push(
+      renderCaveat('no_series', { seriesTitle: ctx.seriesTitle ?? ctx.meetingTitle, count: ctx.seriesOccurrenceCount }),
+    )
   }
   if (ctx.appId !== null && ctx.appIdInferred) {
     caveats.push(renderCaveat('inferred_app', { appName: ctx.appName ?? 'the app' }))
   }
   if (ctx.aiUnavailable) {
-    caveats.push(renderCaveat('ai_unavailable', {}))
+    // M2: give this caveat a proper-noun placeholder too, per the same lint
+    // every REASON_TEMPLATES entry is held to.
+    caveats.push(renderCaveat('ai_unavailable', { meetingTitle: ctx.meetingTitle }))
   }
 
-  const scoreDet = Math.min(90, e1.points + e2.points + e3.points + e4.points + e5.points + e6.points + e7.points)
+  const scoreDet = Math.max(
+    0,
+    Math.min(90, e1.points + e2.points + e3.points + e4.points + e5.points + e6.points + e7.points),
+  )
 
+  // I3 (review round 1): A1 must not be credited when the agenda itself
+  // doesn't qualify (spec A1: "Runs ONLY when meetings.agenda is non-empty
+  // after trim AND tokenizes to >=3 non-stopword words; otherwise the model
+  // is not called at all"). This was previously ungated here, so a caller
+  // that still handed over a populated (already-validated) `aiRelevance` —
+  // e.g. a stale cache entry from before the agenda was cleared — could
+  // credit points the AI was never supposed to have been asked to produce.
+  // Deliberately checks the AGENDA ALONE (not `${title} ${agenda}}`, unlike
+  // E3's fallback), matching the spec's literal gate.
+  const agendaQualifies = meaningfulTokenCount(ctx.meetingAgenda ?? '') >= 3
   let a1Points = 0
-  if (!ctx.aiUnavailable && facts.aiRelevance) {
+  if (!ctx.aiUnavailable && agendaQualifies && facts.aiRelevance) {
     a1Points = Math.max(0, Math.min(FAMILY_CAPS.A1, Math.round(facts.aiRelevance.points)))
     if (a1Points > 0) {
       reasons.push(
@@ -949,7 +1077,7 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
       )
     }
   }
-  const scoreTotal = Math.min(100, scoreDet + a1Points)
+  const scoreTotal = Math.max(0, Math.min(100, scoreDet + a1Points))
 
   if (facts.isOrganizer) reasons.push(renderReason('organizer', 0, { ids: [] }, { meetingTitle: ctx.meetingTitle }))
   if (facts.selfOptIn) reasons.push(renderReason('opted_in', 0, { ids: [] }, { seriesTitle: ctx.seriesTitle ?? ctx.meetingTitle }))
@@ -994,9 +1122,16 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
   ]
   if (floors.some(Boolean)) tier = maxTier(tier, 'optional')
 
-  // ---- R6: E3 required floor — primary role/topic hit + assigned to the app. ----
+  // ---- R6: E3 required floor — primary role/topic hit + assigned to the app.
+  // I4 (review round 1): excludes an INFERRED app. This is the strongest,
+  // least-overridable tier in the whole ledger (it beats R2-R4's arithmetic
+  // outright), and the x0.6 confidence multiplier exists PRECISELY because an
+  // inferred app is a guess — a floor that ignores its own confidence signal
+  // could required someone off a low-confidence app match with as little as
+  // 9 det points (14*0.6 rounded, plus a floor). An inferred-app primary hit
+  // still floors to `optional` via R5's ordinary allocation/lead checks. ----
   const assignedToApp = ctx.appId !== null && (facts.assignment !== null || facts.isLead)
-  if (ctx.appId !== null && e3.hitType === 'primary' && assignedToApp) {
+  if (ctx.appId !== null && !ctx.appIdInferred && e3.hitType === 'primary' && assignedToApp) {
     tier = 'required'
   }
 
@@ -1016,32 +1151,51 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
 
   reasons.sort((a, b) => b.points - a.points)
 
-  return { userId: facts.userId, scoreDet, scoreTotal, hardEvidenceCount, tier, reasons, caveats }
+  // M7 (review round 1): `tierAll`'s ABSTAIN-mode reconciliation used to
+  // re-derive "is this candidate hard-overridden / floor-qualified" by
+  // pattern-matching specific `reasons`/`caveats` codes — correct today, but
+  // silently fragile: the spec's own "always render `allocated` last and
+  // de-emphasised" instruction is exactly the kind of future display-layer
+  // change (suppressing/reordering/renaming a reason for presentation) that
+  // would quietly break the match and change who gets pre-filled in abstain
+  // mode. Pass the actual booleans through instead, computed from the same
+  // `floors` array and `facts` used for the real (non-abstain) R5/R7 logic
+  // above, so ABSTAIN mode never has to reverse-engineer them from text.
+  const hardOverride = facts.isOrganizer || pinned.forcedRequired
+  const softFloor = floors.some(Boolean)
+
+  return {
+    userId: facts.userId,
+    scoreDet,
+    scoreTotal,
+    hardEvidenceCount,
+    tier,
+    reasons,
+    caveats,
+    floors: { hardOverride, softFloor },
+  }
 }
 
 // ---------------------------------------------------------------------------
 // tierAll
 // ---------------------------------------------------------------------------
 
-/** Reason codes that, if present, mean this candidate's tier came from a hard
- *  override (R7) — survives ABSTAIN mode unchanged. Deliberately narrow: the
- *  spec's abstain description names exactly "organizer required" and nothing
- *  else as surviving at the required tier, so R6 (E3 required floor) is
- *  intentionally NOT included here — one primary role/topic hit is still only
- *  one candidate's worth of evidence, which is exactly the situation abstain
- *  exists to be honest about. */
-const ABSTAIN_OVERRIDE_CODES = new Set<ReasonCode>(['organizer', 'followup_pinned'])
-
-/** Reason/caveat codes that mean this candidate is at least "assigned to the
- *  app" or otherwise floor-qualified (R5) — these survive ABSTAIN mode as
- *  `optional`, matching the spec's "everyone eligible and assigned to the app
- *  pre-filled optional". Deliberately EXCLUDES `lead_role_heuristic` (spec:
- *  "no floor") and every pure-arithmetic reason (task_open, role_topic,
- *  discussed, spoke, attended, agenda_match) — those reflect scoring-mode
- *  evidence, not the structural floors abstain mode is built to honor. */
-const ABSTAIN_FLOOR_REASON_CODES = new Set<ReasonCode>(['lead', 'allocated', 'opted_in', 'previous_occurrence', 'already_invited'])
-const ABSTAIN_FLOOR_CAVEAT_CODES = new Set<CaveatCode>(['new_person', 'returner'])
-
+/**
+ * M7 (review round 1): ABSTAIN-mode reconciliation used to re-derive "was
+ * this candidate hard-overridden / floor-qualified" by pattern-matching
+ * `reasons`/`caveats` codes — replaced with the structured
+ * `ScoredCandidate.floors` flags `scoreCandidate` now computes directly from
+ * `facts`, so a future display-layer change to the reason lines (the spec
+ * itself asks for `allocated` to be "rendered last and de-emphasised") can
+ * never silently change who gets pre-filled in abstain mode.
+ *
+ * The override/floor SEMANTICS are unchanged from round 1: `hardOverride`
+ * (organizer or a pinned follow-up) survives ABSTAIN as `required`;
+ * `softFloor` (any R5 floor) survives as `optional`; everything else — every
+ * pure-arithmetic family (task_open, role_topic, discussed, spoke, attended,
+ * agenda_match) and the deliberately-unfloored `lead_role_heuristic` — is
+ * `skip`, exactly as before.
+ */
 export function tierAll(scored: ScoredCandidate[], ctx: ScoreContext): RecommendationRun {
   const hardEvidenceCandidates = new Set(scored.filter((c) => c.hardEvidenceCount >= 1).map((c) => c.userId))
   const abstained = hardEvidenceCandidates.size < 2
@@ -1050,13 +1204,8 @@ export function tierAll(scored: ScoredCandidate[], ctx: ScoreContext): Recommend
   if (abstained) {
     const tinyPool = ctx.poolSize <= 4
     finalScored = scored.map((c) => {
-      const hasOverride = c.reasons.some((r) => ABSTAIN_OVERRIDE_CODES.has(r.code))
-      if (hasOverride) return { ...c, tier: 'required' as Tier }
-      const hasFloor =
-        tinyPool ||
-        c.hardEvidenceCount >= 1 ||
-        c.reasons.some((r) => ABSTAIN_FLOOR_REASON_CODES.has(r.code)) ||
-        c.caveats.some((cv) => ABSTAIN_FLOOR_CAVEAT_CODES.has(cv.code))
+      if (c.floors.hardOverride) return { ...c, tier: 'required' as Tier }
+      const hasFloor = tinyPool || c.floors.softFloor
       return { ...c, tier: (hasFloor ? 'optional' : 'skip') as Tier }
     })
   } else {
