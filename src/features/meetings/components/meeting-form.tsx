@@ -185,6 +185,11 @@ export function MeetingForm({
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() => emptyState(defaultAppId))
+  // Which app's teamForApp call is in flight — drives the loading line in
+  // the attendees block. Rendered only while it matches form.appId, so a
+  // stale fetch (the user already moved to another app or "No app") never
+  // shows a loading line for a selection it no longer belongs to.
+  const [pendingTeamAppId, setPendingTeamAppId] = useState<string | null>(null)
   // `quickAdd` is what is being typed; `settled` trails it by the debounce and
   // is the only thing the (re-parsed) preview reads, so parsing never runs on
   // a half-typed word.
@@ -253,7 +258,6 @@ export function MeetingForm({
       document.getElementById('meeting-quick-add')?.focus()
       return
     }
-    const named = new Set(intent.attendees.map((a) => a.id))
     setForm((f) => ({
       ...f,
       title: intent.title.slice(0, 120),
@@ -265,12 +269,13 @@ export function MeetingForm({
       start: intent.startsAt ?? f.start,
       end: intent.endsAt ?? f.end,
       meetingUrl: intent.meetingUrl ?? f.meetingUrl,
-      attendeeIds:
-        named.size > 0
-          ? Array.from(new Set([...f.attendeeIds, ...named]))
-          : f.attendeeIds,
-      // Same promotion as the auto-fill effect: named people become manual.
-      prefilledIds: f.prefilledIds.filter((id) => !named.has(id)),
+      // Same merge as the auto-fill effect: named people become manual, and
+      // re-pointing the app withdraws the previous app's team prefill.
+      ...applyQuickAddAttendees(
+        f,
+        intent.attendees.map((a) => a.id),
+        intent.appId !== null && intent.appId !== f.appId,
+      ),
     }))
   }
 
@@ -291,6 +296,7 @@ export function MeetingForm({
    * re-pointed the form at a different app.
    */
   async function prefillTeam(appId: string) {
+    setPendingTeamAppId(appId)
     try {
       const team = await teamForApp(appId)
       setForm((f) => {
@@ -302,19 +308,23 @@ export function MeetingForm({
       })
     } catch {
       toast.error('Could not load the team for that app')
+    } finally {
+      // Only the fetch that set the marker may clear it — a slow response
+      // for a superseded app must not hide the loading line of the current
+      // one's still-running fetch.
+      setPendingTeamAppId((current) => (current === appId ? null : current))
     }
   }
 
   function handleAppChange(appId: string) {
-    if (!appId) {
-      // "No app" needs no fetch: the team suggestion simply retracts, and
-      // manually-picked people stay (see attendee-prefill.ts for why the
-      // prefill follows the app instead of lingering).
-      setForm((f) => ({ ...f, appId, ...applyTeamPrefill(f, [], []) }))
-      return
-    }
-    setForm((f) => ({ ...f, appId }))
-    void prefillTeam(appId)
+    // The old team suggestion is withdrawn the moment the app changes — not
+    // when (or if) the new team arrives. Waiting for the response to do the
+    // swap shows the previous app's team on the new app during the fetch,
+    // and strands it there for good if the fetch fails (only a toast would
+    // say anything). Manually-picked people stay either way; "No app" just
+    // ends here with nothing to fetch.
+    setForm((f) => ({ ...f, appId, ...applyTeamPrefill(f, [], []) }))
+    if (appId) void prefillTeam(appId)
   }
 
   function toggleAttendee(id: string) {
@@ -543,6 +553,20 @@ export function MeetingForm({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>Attendees</Label>
+            {/* The prefill edits this list without the user touching it, so
+                it says what it is doing: a loading line while the team is
+                fetched, then a provenance line while any suggestion is
+                present. aria-live because the chips themselves appear
+                silently to a screen reader — this is the announcement. */}
+            <div aria-live="polite">
+              {pendingTeamAppId !== null && pendingTeamAppId === form.appId ? (
+                <p className="text-xs text-muted-foreground">Adding this app’s team…</p>
+              ) : form.prefilledIds.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Suggested from the app’s team — remove anyone not needed.
+                </p>
+              ) : null}
+            </div>
             {selectedAttendees.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {selectedAttendees.map((u) => (

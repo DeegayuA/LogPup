@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import {
   AppWindow,
   CalendarDays,
@@ -153,6 +154,22 @@ export default function SignInPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Google's OAuth review looks for the privacy policy to be reachable
+            from wherever consent starts, not only from the marketing page —
+            and a signed-out visitor who lands here directly gets the same
+            route out to what LogPup is and what it does with their data. */}
+        <nav className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          <Link href="/home" className="hover:text-foreground">
+            About LogPup
+          </Link>
+          <Link href="/privacy" className="hover:text-foreground">
+            Privacy Policy
+          </Link>
+          <Link href="/terms" className="hover:text-foreground">
+            Terms of Service
+          </Link>
+        </nav>
       </div>
     </main>
   )

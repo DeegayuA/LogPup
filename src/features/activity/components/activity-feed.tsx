@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { format, formatDistanceToNow } from 'date-fns'
+import { formatBusinessTime } from '@/features/people/format-instant'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { activityPhrase, groupActivityByDay } from '@/features/activity/format'
@@ -86,7 +87,12 @@ export function ActivityFeed({
           </h3>
           <ul className="flex flex-col divide-y divide-border">
             {group.rows.map((row) => (
-              <FeedRow key={row.id} row={row} timeLabel={format(row.createdAt, 'h:mm a')} />
+              // formatBusinessTime, NOT date-fns format: this renders on the
+              // server, where format() resolves in the server's zone (UTC on
+              // Vercel) while the day header above it is bucketed in
+              // Asia/Colombo — so a 3 AM Colombo event would file under
+              // "Today" and print "9:30 PM". See features/people/format-instant.ts.
+              <FeedRow key={row.id} row={row} timeLabel={formatBusinessTime(row.createdAt)} />
             ))}
           </ul>
         </section>

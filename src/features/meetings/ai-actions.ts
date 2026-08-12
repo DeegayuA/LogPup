@@ -214,6 +214,10 @@ type ActionItemOut = {
   suggestedDueDate: string | null
   /** The model's own 0–1 estimate for this item, or null if it gave none — see shouldAutoAssign. */
   confidence: number | null
+  /** App NAME the model routed this item to (from the attendee app lists in
+   *  the prompt), or null. Resolved to an id server-side ONLY via
+   *  resolveSuggestedAppId — the raw name never reaches a query. */
+  suggestedApp: string | null
 }
 
 /** Defensive parse of the model's speakerSegments — drops anything without real text. */
@@ -245,6 +249,12 @@ function asActionItems(value: unknown): ActionItemOut[] {
         typeof row.confidence === 'number' && Number.isFinite(row.confidence)
           ? row.confidence
           : null,
+      // Absent on older analyses and on the live-transcript fallback — null
+      // there keeps every pre-routing behaviour byte-for-byte.
+      suggestedApp:
+        typeof row.suggestedApp === 'string' && row.suggestedApp.trim()
+          ? row.suggestedApp.trim()
+          : null,
     }))
     .filter((row): row is ActionItemOut => row.text.length > 0)
 }
@@ -273,6 +283,9 @@ async function insertAutoNotesAndSuggestions(
   speakerSegments: SpeakerSegmentOut[],
   actionItems: ActionItemOut[],
   attendees: AttendeeRef[],
+  /** The attendees' app union the prompt offered — see fetchAttendeeAppLists.
+   *  [] disables routing outright (every item falls back to meeting.appId). */
+  appOptions: AppOption[],
 ): Promise<{ cappedCount: number }> {
   const meetingId = meeting.id
   const createdBy = recorder.id
@@ -308,6 +321,12 @@ async function insertAutoNotesAndSuggestions(
   const resolvedItems = actionItems.map((item) => ({
     item,
     resolvedUserId: resolveSpeakerUserId(item.suggestedAssigneeLabel, mappingRows, attendees),
+    // App routing: the model returned an app NAME (or null) from the lists
+    // the prompt offered; resolveSuggestedAppId is deterministic — exact
+    // match, then unambiguous case-insensitive — and gives null rather than
+    // guess. Null routes exactly like before routing existed: the meeting's
+    // own app, or a card the accepter has to place.
+    resolvedAppId: resolveSuggestedAppId(item.suggestedApp, appOptions),
   }))
 
   // SAFETY: never auto-assign to someone who isn't an approved user. One
@@ -330,10 +349,13 @@ async function insertAutoNotesAndSuggestions(
         )
       : new Set<string>()
 
-  const candidates: AutoAssignCandidate[] = resolvedItems.map(({ resolvedUserId }) => ({
+  const candidates: AutoAssignCandidate[] = resolvedItems.map(({ resolvedUserId, resolvedAppId }) => ({
     confidence: null, // placeholder — replaced below once zipped with its item
     resolvedUserId: resolvedUserId && approvedIds.has(resolvedUserId) ? resolvedUserId : null,
-    hasApp: meeting.appId !== null,
+    // "Somewhere to file it" now includes a confidently-routed app, so a
+    // meeting spanning several projects can auto-assign into the right one —
+    // an unrouted item still needs the meeting's own app, exactly as before.
+    hasApp: (resolvedAppId ?? meeting.appId) !== null,
   }))
   resolvedItems.forEach(({ item }, index) => {
     candidates[index].confidence = item.confidence
@@ -351,7 +373,7 @@ async function insertAutoNotesAndSuggestions(
   const pendingNotifications: AutoAssignNotificationPayload[] = []
 
   for (let index = 0; index < resolvedItems.length; index += 1) {
-    const { item, resolvedUserId } = resolvedItems[index]
+    const { item, resolvedUserId, resolvedAppId } = resolvedItems[index]
     const decision = decisions[index]
     if (decision.capped) cappedCount += 1
 
@@ -360,10 +382,13 @@ async function insertAutoNotesAndSuggestions(
       // partitionAutoAssign only marks autoAccept for candidates that
       // passed shouldAutoAssign.
       const assigneeId = candidates[index].resolvedUserId as string
+      // Non-null by the same argument — hasApp above is exactly this
+      // expression, and shouldAutoAssign requires it.
+      const targetAppId = (resolvedAppId ?? meeting.appId) as string
       try {
         const payload = suggestionToTaskPayload(
           { text: item.text, suggestedUserId: assigneeId, suggestedDueDate: item.suggestedDueDate },
-          { appId: meeting.appId as string, sprintId: null },
+          { appId: targetAppId, sprintId: null },
         )
         const created = await createTask(payload)
         if (!created.ok) throw new Error(created.error)
@@ -373,6 +398,7 @@ async function insertAutoNotesAndSuggestions(
           text: item.text,
           suggestedUserId: assigneeId,
           suggestedDueDate: item.suggestedDueDate,
+          suggestedAppId: resolvedAppId,
           status: 'accepted',
           createdTaskId: created.data.taskId,
           acceptedBy: null, // null = auto-accepted, see schema.ts's comment on this column
@@ -416,6 +442,7 @@ async function insertAutoNotesAndSuggestions(
       text: item.text,
       suggestedUserId: resolvedUserId,
       suggestedDueDate: item.suggestedDueDate,
+      suggestedAppId: resolvedAppId,
       status: 'open',
     })
   }
@@ -467,6 +494,69 @@ async function fetchAttendees(meetingId: string): Promise<AttendeeRef[]> {
     .innerJoin(users, eq(meetingAttendees.userId, users.id))
     .where(eq(meetingAttendees.meetingId, meetingId))
   return rows
+}
+
+/**
+ * The apps each attendee works on — their live `assignments`, plus any app
+ * where they still hold a not-done task (someone mid-handover has tasks but
+ * no assignment row, and the meeting will still ask them about that app).
+ * Two batched queries however many attendees there are.
+ *
+ * This is the app-routing vocabulary for one analysis pass: the prompt shows
+ * the model exactly these names per attendee, and resolveSuggestedAppId
+ * resolves the model's answer against the same union — so a suggestion can
+ * only ever route to an app that was actually on offer.
+ */
+async function fetchAttendeeAppLists(attendeeIds: string[]): Promise<Map<string, AppOption[]>> {
+  const byUser = new Map<string, AppOption[]>()
+  if (attendeeIds.length === 0) return byUser
+
+  const assignmentRows = await db
+    .select({ userId: assignments.userId, id: apps.id, name: apps.name })
+    .from(assignments)
+    .innerJoin(apps, eq(assignments.appId, apps.id))
+    .where(inArray(assignments.userId, attendeeIds))
+
+  const taskRows = await db
+    .select({ userId: tasks.assigneeId, id: apps.id, name: apps.name })
+    .from(tasks)
+    .innerJoin(apps, eq(tasks.appId, apps.id))
+    .where(and(inArray(tasks.assigneeId, attendeeIds), ne(tasks.status, 'done')))
+
+  for (const row of [...assignmentRows, ...taskRows]) {
+    if (!row.userId) continue
+    const list = byUser.get(row.userId) ?? []
+    if (!list.some((app) => app.id === row.id)) list.push({ id: row.id, name: row.name })
+    if (!byUser.has(row.userId)) byUser.set(row.userId, list)
+  }
+  for (const list of byUser.values()) list.sort((a, b) => a.name.localeCompare(b.name))
+  return byUser
+}
+
+/** Deduped union of every attendee's apps — what resolveSuggestedAppId matches against. */
+function unionAppOptions(byUser: Map<string, AppOption[]>): AppOption[] {
+  const byId = new Map<string, AppOption>()
+  for (const list of byUser.values()) {
+    for (const app of list) byId.set(app.id, app)
+  }
+  return [...byId.values()]
+}
+
+/**
+ * The prompt block that tells the model which apps it may route action items
+ * to. Empty string when nobody has any — the JSON spec's suggestedApp field
+ * still exists either way, and asActionItems turns its absence into null.
+ */
+function attendeeAppsPromptBlock(
+  attendees: AttendeeRef[],
+  appsByUser: Map<string, AppOption[]>,
+): string {
+  if (unionAppOptions(appsByUser).length === 0) return ''
+  const lines = attendees.map((attendee) => {
+    const names = (appsByUser.get(attendee.id) ?? []).map((app) => app.name)
+    return `- ${attendee.name}: ${names.length > 0 ? names.join(', ') : '(none)'}`
+  })
+  return `\nApps (projects) each attendee works on — the only valid values for "suggestedApp" below:\n${lines.join('\n')}\n`
 }
 
 type FollowupCarryRow = OpenFollowupItem & {
@@ -2031,8 +2121,8 @@ export async function attributeFollowup(followupId: string, userId: string): Pro
     entityType: 'followup',
     entityId: row.id,
     // Meeting title, not row.text — see resolveFollowup.
-    entityLabel: sourceMeeting.title,
-    appId: sourceMeeting.appId,
+    entityLabel: ctx.meeting.title,
+    appId: ctx.meeting.appId,
     pagePath: '/meetings',
     detail: `a follow-up, attributed to ${person.name}`,
   })
