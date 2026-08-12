@@ -208,6 +208,32 @@ downward moves were silently impossible. `computeReorderSortOrder` lives in
 the component, outside the unit-tested geometry module, which is why 504
 green tests never caught it.
 
+### Inline edit, touch, calendar (round 2 continued)
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| Sprint inline rename: dbl-click opens, Esc cancels | **PASS** | editor opened with current name, typed junk, Esc → editor closed, name unchanged, no toast |
+| Sprint inline rename: F2 opens, Enter saves | **PASS** | F2 → editor, "1222"→"1222x", Enter → toast "Sprint renamed"; renamed back the same way |
+| Task-card inline rename opens without tripping the card dialog | **PASS** | dbl-click on the title opened the editor, task dialog did NOT open, Esc closed it (save path shares the same `InlineRename` verified on the sprint) |
+| Task-card right-click quick menu, filtered | **PASS** | Move to (current column excluded), priorities (current excluded), Assign to each teammate / Unassign, Delete (admin) |
+| Touch: plain swipe does NOT start a drag | **PASS** | touch-emulated viewport; touchstart + immediate moves (40ms, well inside the 200ms hold): no overlay, no announcement, and the touchmoves were NOT preventDefaulted — native scrolling stays free |
+| Touch: 200ms long-press lifts, drag owns the gesture | **PASS** | touchstart + 280ms hold, no movement: overlay appeared + announcement; the next touchmove WAS preventDefaulted (drag blocks scroll); touchend dropped as a no-op on itself |
+| Calendar: click empty day opens the form prefilled | **PASS** | the click target is the cell's `aria-hidden` filler div (deliberately mouse/touch-only, so it is invisible to the a11y tree — the devtools click tool cannot address it; drove a mousedown/mouseup/click sequence at its coordinates instead). "New meeting" dialog opened with **Thu, Aug 20** prefilled in both start and end |
+| Calendar: chip drag to another day | **PASS — with a confession** | see below |
+| Non-admin sees no drag affordances | **NOT TESTED** | the only local identity is the admin dev-login; obtaining a non-admin session would mean creating or altering accounts in the shared dev DB |
+
+#### Confession: one real meeting was moved and restored
+
+The planned no-op test (drag out and back to the same day) missed on the
+return leg — the drop resolved one row down and moved the real meeting
+"test" from Aug 18 to Aug 25. It was immediately dragged back with the drop
+highlight confirmed on "Tuesday, August 18" before release; the toast
+"Moved to Tue, Aug 18 · 7:40 PM" confirms it is back on its exact original
+day and time (day-drop preserves time-of-day). Net state: identical; two
+reschedule writes occurred in between. The mishap did fully exercise the
+feature: DragOverlay chip, per-cell ring drop highlight tracking the
+pointer, server write + toast, duration preserved.
+
 Fix: direction-aware target index (arrayMove semantics) — moving down lands
 AFTER `over`, moving up (or arriving from elsewhere) takes `over`'s slot.
 `board.tsx` `handleDragEnd` had the identical insert-before-only pattern for
