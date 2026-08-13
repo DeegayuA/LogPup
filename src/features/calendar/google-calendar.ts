@@ -1,4 +1,4 @@
-import { google } from 'googleapis'
+import { google, calendar_v3 } from 'googleapis'
 
 function client(refreshToken: string) {
   const oauth2 = new google.auth.OAuth2(
@@ -7,6 +7,38 @@ function client(refreshToken: string) {
   )
   oauth2.setCredentials({ refresh_token: refreshToken })
   return google.calendar({ version: 'v3', auth: oauth2 })
+}
+
+/**
+ * The `conferenceData` fragment that asks Google to mint a Meet room, keyed
+ * by `requestId` so a retried insert with the same id returns the same room
+ * instead of minting a second one. Pulled out as a pure function (rather than
+ * inlined in the request body below) purely so the shape can be asserted in
+ * a test without an actual network call.
+ */
+export function buildConferenceDataRequest(requestId: string): calendar_v3.Schema$ConferenceData {
+  return {
+    createRequest: {
+      requestId,
+      conferenceSolutionKey: { type: 'hangoutsMeet' },
+    },
+  }
+}
+
+/**
+ * Reads the Meet link back off a created/patched event. `hangoutLink` is the
+ * flat convenience copy; the `entryPoints` walk is the documented location.
+ * Both are checked because Google has moved this between the two across API
+ * revisions. Pulled out as a pure function so the read-back logic is
+ * testable against a handful of representative event shapes without a live
+ * Calendar event to point it at.
+ */
+export function extractMeetLink(event: calendar_v3.Schema$Event): string | null {
+  return (
+    event.hangoutLink ??
+    event.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri ??
+    null
+  )
 }
 
 export async function createCalendarEvent(opts: {
@@ -42,28 +74,11 @@ export async function createCalendarEvent(opts: {
       end: { dateTime: opts.endsAt.toISOString() },
       attendees: opts.attendeeEmails.map(({ email, optional }) => ({ email, optional })),
       ...(opts.withMeet
-        ? {
-            conferenceData: {
-              createRequest: {
-                // Idempotency key for the conference, not decoration: a retry
-                // of the same insert with the same id returns the same room
-                // instead of minting a second one.
-                requestId: crypto.randomUUID(),
-                conferenceSolutionKey: { type: 'hangoutsMeet' },
-              },
-            },
-          }
+        ? { conferenceData: buildConferenceDataRequest(crypto.randomUUID()) }
         : {}),
     },
   })
-  // hangoutLink is the flat convenience copy; the entryPoints walk is the
-  // documented location. Both are checked because Google has moved this
-  // between the two across API revisions.
-  const meetLink =
-    res.data.hangoutLink ??
-    res.data.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri ??
-    null
-  return { eventId: res.data.id!, meetLink }
+  return { eventId: res.data.id!, meetLink: extractMeetLink(res.data) }
 }
 
 /**
@@ -96,17 +111,26 @@ export async function updateCalendarEventTime(opts: {
  * anywhere, which is why "calendar invite failed" survived so many attempts to
  * fix it.
  *
- * The two reasons that actually happen with an unverified Google Cloud app
- * requesting the sensitive `calendar.events` scope:
+ * Three reasons actually happen, and they need three different fixes — so
+ * they must not collapse into the same message:
  *
  *   invalid_grant — the refresh token is dead. A project still in "Testing"
  *     publishing status has its refresh tokens expired by Google after 7 days,
  *     so a token that was issued correctly stops working a week later. Also
- *     covers a grant revoked from the user's Google account page.
+ *     covers a grant revoked from the user's Google account page. Fixed by
+ *     the user re-connecting Google.
+ *   accessNotConfigured / SERVICE_DISABLED — the token and scope are both
+ *     fine, but nobody has ever turned the Calendar API on for this Google
+ *     Cloud project. Also a 403, but re-consenting does nothing for it — only
+ *     an admin flipping it on in Cloud Console does. Caught this in a live
+ *     test against a real refresh token: googleapis reports it via
+ *     `response.data.error.errors[0].reason` (classic format) *and*
+ *     `response.data.error.details[].reason` (ErrorInfo format), never on
+ *     the error object itself.
  *   insufficient scopes / 403 — consent was given, but not for Calendar.
  *     Google's granular consent screen lets someone approve sign-in while
  *     leaving the Calendar checkbox unticked, which yields a perfectly valid
- *     token that cannot touch the calendar.
+ *     token that cannot touch the calendar. Fixed by re-consenting.
  *
  * Never returns anything derived from the token itself.
  */
@@ -116,18 +140,42 @@ export function describeCalendarError(error: unknown): string {
         code?: unknown
         status?: unknown
         message?: unknown
-        response?: { data?: { error?: unknown; error_description?: unknown } }
-        errors?: { reason?: unknown }[]
+        response?: {
+          data?: {
+            error?:
+              | string
+              | { errors?: { reason?: unknown }[]; details?: { reason?: unknown }[] }
+            error_description?: unknown
+          }
+        }
       }
     | undefined
 
-  const oauthError = typeof e?.response?.data?.error === 'string' ? e.response.data.error : ''
+  const responseError = e?.response?.data?.error
+  const oauthError = typeof responseError === 'string' ? responseError : ''
   const message = typeof e?.message === 'string' ? e.message : ''
   const status = typeof e?.code === 'number' ? e.code : typeof e?.status === 'number' ? e.status : 0
-  const reason = e?.errors?.[0]?.reason
+  // googleapis nests the actual failure reason inside response.data.error —
+  // never on the error object itself, despite that being where an earlier
+  // version of this function looked, which meant this check could never
+  // match a real response and every 403 fell through to the generic
+  // "insufficient scopes" message below regardless of its real cause.
+  const nestedError = typeof responseError === 'object' ? responseError : undefined
+  const reason = nestedError?.errors?.[0]?.reason
+  const detailReason = nestedError?.details?.[0]?.reason
 
   if (oauthError === 'invalid_grant' || message.includes('invalid_grant')) {
     return 'the organiser’s Google connection has expired — sign out and back in with Google to renew it'
+  }
+  // Checked before the generic 403 branch below: both are 403s, but only one
+  // of them is fixed by re-consenting.
+  if (
+    reason === 'accessNotConfigured' ||
+    detailReason === 'SERVICE_DISABLED' ||
+    message.toLowerCase().includes('has not been used in project') ||
+    message.toLowerCase().includes('it is disabled')
+  ) {
+    return 'the Google Calendar API is disabled for LogPup’s Google Cloud project — an admin needs to enable it in Google Cloud Console before Meet links can be created'
   }
   if (
     status === 403 ||
