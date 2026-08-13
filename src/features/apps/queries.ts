@@ -44,6 +44,12 @@ export type AppStats = {
 export type AppPortfolioEntry = typeof apps.$inferSelect & {
   leadName: string | null
   leadAvatarUrl: string | null
+  // Left-joined the same way as lead, even though pm_id is NOT NULL at the
+  // column level: soft deletes mean the user row itself is never gone, but a
+  // left join is the same defensive shape the lead columns already use and
+  // costs nothing extra.
+  pmName: string | null
+  pmAvatarUrl: string | null
   members: AppMember[]
   stats: AppStats
   health: AppHealth
@@ -109,6 +115,7 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
   const weekEnd = addDays(weekStart, 7)
 
   const lead = alias(users, 'lead')
+  const pm = alias(users, 'pm')
 
   const [appRows, memberRows, taskRows, sprintRows, meetingRows, commentRows] =
     await Promise.all([
@@ -117,10 +124,13 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
           ...getTableColumns(apps),
           leadName: lead.name,
           leadAvatarUrl: lead.avatarUrl,
+          pmName: pm.name,
+          pmAvatarUrl: pm.avatarUrl,
         })
         .from(apps)
         // Left join: an app whose lead row was deleted must still list.
         .leftJoin(lead, eq(apps.leadId, lead.id))
+        .leftJoin(pm, eq(apps.pmId, pm.id))
         .orderBy(asc(apps.name)),
       db
         .select({
@@ -293,22 +303,26 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
 })
 
 /**
- * One app by slug, with its lead resolved. The lead's NAME is the thing the
- * header actually shows, and looking it up by scanning `listActiveUsers()`
- * (what the page used to do) quietly fails for a lead who has since been
- * deactivated — the app then renders as having no lead at all, which is a
- * different and wrong statement.
+ * One app by slug, with its lead and PM both resolved. Their NAMEs are what
+ * the header actually shows, and looking them up by scanning
+ * `listActiveUsers()` (what the page used to do for the lead) quietly fails
+ * for someone who has since been deactivated — the app then renders as
+ * having no lead/PM at all, which is a different and wrong statement.
  */
 export async function getAppBySlug(slug: string) {
   const lead = alias(users, 'lead')
+  const pm = alias(users, 'pm')
   const [app] = await db
     .select({
       ...getTableColumns(apps),
       leadName: lead.name,
       leadAvatarUrl: lead.avatarUrl,
+      pmName: pm.name,
+      pmAvatarUrl: pm.avatarUrl,
     })
     .from(apps)
     .leftJoin(lead, eq(apps.leadId, lead.id))
+    .leftJoin(pm, eq(apps.pmId, pm.id))
     .where(eq(apps.slug, slug))
   return app ?? null
 }

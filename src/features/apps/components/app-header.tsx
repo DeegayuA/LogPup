@@ -44,6 +44,7 @@ export function AppHeader({
   repoUrl,
   techTags,
   leadName,
+  pmName,
   health,
   tasks,
   memberCount,
@@ -58,6 +59,7 @@ export function AppHeader({
   repoUrl: string | null
   techTags: string[]
   leadName: string | null
+  pmName: string | null
   health: AppHealth
   tasks: AppTaskCounts
   memberCount: number
@@ -89,6 +91,13 @@ export function AppHeader({
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span className="font-mono">/{slug}</span>
+            <span aria-hidden>·</span>
+            <span>
+              PM{' '}
+              <span className={pmName ? 'font-medium text-foreground' : undefined}>
+                {pmName ?? 'not set'}
+              </span>
+            </span>
             <span aria-hidden>·</span>
             <span>
               Lead{' '}

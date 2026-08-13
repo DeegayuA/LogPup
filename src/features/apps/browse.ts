@@ -159,6 +159,7 @@ export type BrowsableApp = {
   techTags: string[]
   members: readonly { name: string }[]
   leadName?: string | null
+  pmName?: string | null
   health: AppHealth
   stats: {
     tasks: AppTaskCounts
@@ -173,10 +174,10 @@ export function statusMatches(status: AppStatus, filter: AppStatusFilter): boole
 
 /**
  * Free-text match across everything a person might actually type: the app's
- * name and slug, its description, its tech tags, its lead, and the names of
- * the people on it. The old browser searched name/slug/tags only, so "who is
- * Priya working on" and "the one about invoices" both came back empty even
- * though the answer was on screen.
+ * name and slug, its description, its tech tags, its PM and lead, and the
+ * names of the people on it. The old browser searched name/slug/tags only, so
+ * "who is Priya working on" and "the one about invoices" both came back empty
+ * even though the answer was on screen.
  */
 export function queryMatches(app: BrowsableApp, q: string): boolean {
   const needle = q.trim().toLowerCase()
@@ -186,6 +187,7 @@ export function queryMatches(app: BrowsableApp, q: string): boolean {
     app.slug,
     app.description ?? '',
     app.leadName ?? '',
+    app.pmName ?? '',
     ...app.techTags,
     ...app.members.map((member) => member.name),
   ]

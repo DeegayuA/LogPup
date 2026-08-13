@@ -81,6 +81,12 @@ export const apps = pgTable('apps', {
   repoUrl: text('repo_url'),
   techTags: text('tech_tags').array().notNull().default([]),
   leadId: uuid('lead_id').references(() => users.id),
+  // Project manager. Unlike leadId, this is required — every app must have
+  // one (enforced both by this NOT NULL and by the create/update zod schemas
+  // in features/apps/create-input.ts / update-input.ts). Migration 0033
+  // added it nullable, backfilled it from lead_id, then locked it NOT NULL —
+  // safe because every app already had a lead at that point.
+  pmId: uuid('pm_id').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 

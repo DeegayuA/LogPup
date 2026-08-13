@@ -4,26 +4,18 @@ import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps } from '@/db/schema'
+import { apps, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { managesApp } from '@/features/apps/project-manager'
 import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
-import { buildAppUpdate } from '@/features/apps/update-input'
+import { appCreateInput } from '@/features/apps/create-input'
+import { buildAppUpdate, summarizeAppChanges } from '@/features/apps/update-input'
 import { callGemini } from '@/features/gemini/client'
 import { QUICK_MODELS } from '@/features/gemini/models'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
 import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
-
-const appInput = z.object({
-  name: z.string().min(2).max(80),
-  description: z.string().max(500).optional(),
-  repoUrl: z.union([z.url(), z.literal('')]).optional(),
-  techTags: z.array(z.string().min(1)).max(10).default([]),
-  status: z.enum(['active', 'paused', 'archived']).default('active'),
-  leadId: z.uuid().optional(),
-})
 
 async function requireAdmin() {
   const session = await auth()
@@ -31,13 +23,22 @@ async function requireAdmin() {
   return session
 }
 
+/** Same per-file helper other actions modules keep (see people/actions.ts,
+ *  admin/trash-actions.ts) rather than a shared export — these files are all
+ *  `'use server'`, where every export must be an async function, so a shared
+ *  plain helper would need its own non-action module for one query. */
+async function nameForUser(userId: string): Promise<string | null> {
+  const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId))
+  return user?.name ?? null
+}
+
 // Hard ceiling on the generated text. The description column is validated at
-// 500 characters (appInput above), and a model that overshoots would otherwise
-// hand the admin a description that only fails on save — so we ask for far less
-// than the limit and still trim to it.
+// 500 characters (appCreateInput in create-input.ts), and a model that
+// overshoots would otherwise hand the admin a description that only fails on
+// save — so we ask for far less than the limit and still trim to it.
 const DESCRIPTION_CHAR_LIMIT = 500
 
-/** Mirrors the `techTags` ceiling on appInput above. */
+/** Mirrors the `techTags` ceiling on appCreateInput in create-input.ts. */
 const MAX_GENERATED_TAGS = 10
 
 export type GeneratedApp = {
@@ -241,7 +242,7 @@ export async function generateAppFromRepo(
 export async function createApp(input: unknown): Promise<ActionResult<{ slug: string }>> {
   const session = await requireAdmin()
   if (!session) return err('Admins only')
-  const parsed = appInput.safeParse(input)
+  const parsed = appCreateInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
   const slug = slugify(parsed.data.name)
 
@@ -273,6 +274,13 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
       .insert(apps)
       .values({ ...parsed.data, repoUrl: parsed.data.repoUrl || null, slug })
       .returning({ id: apps.id })
+    // The initial PM assignment — the other half of "keep history" alongside
+    // updateApp's PM/lead-change logging below. This is an append-only audit
+    // trail (activity_log), not an as-of index: it answers "who was made PM,
+    // by whom, and when", not "who was PM on 12 June" from one query. See
+    // summarizeAppChanges in update-input.ts for the fuller version of this
+    // note.
+    const pmName = await nameForUser(parsed.data.pmId)
     await logActivity({
       actorId: session.user.id,
       verb: 'created',
@@ -282,6 +290,8 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
       appId: created.id,
       appName: parsed.data.name,
       pagePath: `/apps/${slug}`,
+      detail: `with ${pmName ?? 'an unknown member'} as PM`,
+      metadata: { pmId: { from: null, to: parsed.data.pmId } },
     })
   } catch (error) {
     console.error('[apps] createApp failed:', error)
@@ -311,7 +321,13 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   if (!result.ok) return err(result.error)
 
   const [app] = await db
-    .select({ slug: apps.slug, name: apps.name, status: apps.status })
+    .select({
+      slug: apps.slug,
+      name: apps.name,
+      status: apps.status,
+      leadId: apps.leadId,
+      pmId: apps.pmId,
+    })
     .from(apps)
     .where(eq(apps.id, parsedId.data))
   if (!app) return err('App not found')
@@ -323,8 +339,25 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
     return err('Could not save the changes — try again')
   }
   const name = typeof result.set.name === 'string' ? result.set.name : app.name
-  const newStatus = typeof result.set.status === 'string' ? result.set.status : null
-  const statusChanged = newStatus !== null && newStatus !== app.status
+
+  // Names are only worth a query when the id they belong to actually changed
+  // — the common save (nothing here touched) must not pay for two lookups it
+  // will then throw away, and summarizeAppChanges already no-ops when the
+  // value is unchanged.
+  const pmName =
+    typeof result.set.pmId === 'string' && result.set.pmId !== app.pmId
+      ? await nameForUser(result.set.pmId)
+      : null
+  const leadName =
+    typeof result.set.leadId === 'string' && result.set.leadId !== app.leadId
+      ? await nameForUser(result.set.leadId)
+      : null
+
+  const { detail, metadata } = summarizeAppChanges(
+    { status: app.status, leadId: app.leadId, pmId: app.pmId },
+    result.set,
+    { pmName, leadName },
+  )
   await logActivity({
     actorId: session.user.id,
     verb: 'updated',
@@ -334,8 +367,8 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
     appId: parsedId.data,
     appName: name,
     pagePath: `/apps/${app.slug}`,
-    detail: statusChanged ? `status to ${newStatus}` : null,
-    metadata: statusChanged ? { status: { from: app.status, to: newStatus } } : null,
+    detail,
+    metadata,
   })
   revalidatePath('/apps')
   revalidatePath(`/apps/${app.slug}`)

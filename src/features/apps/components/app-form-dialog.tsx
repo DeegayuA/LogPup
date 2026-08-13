@@ -68,6 +68,10 @@ type FormState = {
   status: Status
   /** `NO_LEAD` sentinel or a user id — never an empty string. */
   leadId: string
+  /** A user id, or '' meaning "not chosen yet". Unlike leadId there is no
+   *  sentinel for "none" — the PM is required, so '' is only ever a
+   *  transient state that handleSubmit refuses to send. */
+  pmId: string
 }
 
 type FieldErrors = Partial<Record<keyof FormState, string>>
@@ -79,6 +83,7 @@ const emptyState: FormState = {
   techTags: [],
   status: 'active',
   leadId: NO_LEAD,
+  pmId: '',
 }
 
 export type AppFormInitialValues = {
@@ -88,6 +93,10 @@ export type AppFormInitialValues = {
   techTags: string[]
   status: Status
   leadId?: string | null
+  /** Always present in practice — apps.pm_id is NOT NULL — but not typed as
+   *  such here so a caller that forgets to select it fails loudly (an empty
+   *  select) rather than the type system assuming a value that isn't there. */
+  pmId: string
 }
 
 function toFormState(values?: AppFormInitialValues): FormState {
@@ -99,6 +108,7 @@ function toFormState(values?: AppFormInitialValues): FormState {
     techTags: [...values.techTags],
     status: values.status,
     leadId: values.leadId ?? NO_LEAD,
+    pmId: values.pmId,
   }
 }
 
@@ -157,8 +167,11 @@ export function AppFormDialog({
    * suggestion pool. Fetched once server-side by the page — never refetched
    * client-side, so typing never triggers a network call. */
   workspaceTechTags?: string[]
-  /** Candidates for the Lead select. Empty just hides the field — the lead is
-   * optional, and a picker with nothing in it is worse than no picker. */
+  /** Candidates for the Lead and PM selects. Lead just hides its field when
+   * this is empty — the lead is optional, and a picker with nothing in it is
+   * worse than no picker. The PM select has no such escape hatch: it is
+   * required, so it stays rendered (empty) even then rather than making a
+   * required field impossible to reach. */
   activeUsers?: ActiveUser[]
   /** Overrides the default "New app" / "Edit app" button, so a page can put
    * this behind its own toolbar control without a second dialog. */
@@ -201,6 +214,21 @@ export function AppFormDialog({
       ...(orphanLeadId ? [{ value: orphanLeadId, label: 'Former member' }] : []),
     ],
     [activeUsers, orphanLeadId],
+  )
+
+  // Same orphan-preservation reasoning as leadId above, minus the "No PM"
+  // entry — the PM select never offers a way to clear the field.
+  const orphanPmId =
+    initialValues?.pmId && !activeUsers.some((user) => user.id === initialValues.pmId)
+      ? initialValues.pmId
+      : null
+
+  const pmItems = useMemo(
+    () => [
+      ...activeUsers.map((user) => ({ value: user.id, label: user.name })),
+      ...(orphanPmId ? [{ value: orphanPmId, label: 'Former member' }] : []),
+    ],
+    [activeUsers, orphanPmId],
   )
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -311,6 +339,13 @@ export function AppFormDialog({
       setErrors((e) => ({ ...e, repoUrl: urlError }))
       return
     }
+    // Client-side half of "PM is required" — the server's appCreateInput /
+    // appUpdateInput schemas are the half that actually enforces it; this is
+    // just what stops an obviously-doomed request from leaving the browser.
+    if (!form.pmId) {
+      setErrors((e) => ({ ...e, pmId: 'Choose a PM' }))
+      return
+    }
     startTransition(async () => {
       try {
         const res = isEdit
@@ -327,6 +362,7 @@ export function AppFormDialog({
               // Explicit null (not undefined) so "no lead" actually CLEARS the
               // column — buildAppUpdate only touches keys that are present.
               leadId: form.leadId === NO_LEAD ? null : form.leadId,
+              pmId: form.pmId,
             })
           : await createApp({
               name: form.name,
@@ -335,6 +371,7 @@ export function AppFormDialog({
               techTags: form.techTags,
               status: form.status,
               leadId: form.leadId === NO_LEAD ? undefined : form.leadId,
+              pmId: form.pmId,
             })
         if (!res.ok) {
           const field = identifyField(res.error)
@@ -567,6 +604,52 @@ export function AppFormDialog({
               error={errors.techTags}
               knownTags={knownTechTags}
             />
+          </div>
+          {/* Required — every app must have a PM, from the moment it's
+              created. No "No PM" item (unlike Lead below): there is nothing
+              equivalent to send, so the field simply stays unfilled and
+              blocks submit (see handleSubmit) until something is chosen. */}
+          <div className="flex flex-col gap-1.5">
+            <Label id="app-pm-label" htmlFor="app-pm">
+              PM <span aria-hidden="true" className="text-destructive">*</span>
+            </Label>
+            <Select
+              // `|| null` puts Base UI into its native placeholder state
+              // (styled via `data-placeholder` on the trigger) instead of
+              // trying to render the label for the empty-string sentinel,
+              // which has no matching item.
+              value={form.pmId || null}
+              items={pmItems}
+              onValueChange={(value) => setField('pmId', (value as string) ?? '')}
+            >
+              <SelectTrigger
+                id="app-pm"
+                aria-labelledby="app-pm-label"
+                aria-invalid={Boolean(errors.pmId)}
+                aria-describedby={errors.pmId ? 'app-pm-error' : undefined}
+                className="w-full hover:border-ring/40"
+              >
+                <SelectValue placeholder="Choose a PM…" />
+              </SelectTrigger>
+              <SelectContent>
+                {activeUsers.map((user) => (
+                  <SelectItem key={user.id} value={user.id}>
+                    {user.name}
+                  </SelectItem>
+                ))}
+                {/* Listed, not hidden — same reasoning as the Lead select's
+                    orphan entry below: a value with no item in the list is a
+                    value the user cannot keep selected. */}
+                {orphanPmId ? (
+                  <SelectItem value={orphanPmId}>Former member</SelectItem>
+                ) : null}
+              </SelectContent>
+            </Select>
+            {errors.pmId ? (
+              <p id="app-pm-error" role="alert" className="text-xs text-destructive">
+                {errors.pmId}
+              </p>
+            ) : null}
           </div>
           {/* The lead is the most prominent name on every app card, but until
               now it could only be changed from the Admin page's table — so the

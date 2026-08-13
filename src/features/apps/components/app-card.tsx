@@ -245,15 +245,31 @@ export function AppCard({ app, today }: { app: AppPortfolioEntry; today: string 
           ) : (
             <span className="text-2xs text-muted-foreground">Nobody assigned</span>
           )}
-          <span className="truncate text-2xs text-muted-foreground">
-            {app.leadName ? (
-              <>
-                Lead · <span className="font-medium text-foreground">{app.leadName}</span>
-              </>
-            ) : (
-              'No lead'
-            )}
-          </span>
+          {/* Two labelled lines rather than one combined string — "PM · Jane ·
+              Lead · Jane" reads as a single run-on the moment one person
+              holds both roles (the common case right now: every app was
+              backfilled with pm = lead), and a shared prefix invites
+              misreading which name belongs to which role. */}
+          <div className="flex flex-col items-end gap-0.5 text-2xs text-muted-foreground">
+            <span className="truncate">
+              {app.pmName ? (
+                <>
+                  PM · <span className="font-medium text-foreground">{app.pmName}</span>
+                </>
+              ) : (
+                'No PM'
+              )}
+            </span>
+            <span className="truncate">
+              {app.leadName ? (
+                <>
+                  Lead · <span className="font-medium text-foreground">{app.leadName}</span>
+                </>
+              ) : (
+                'No lead'
+              )}
+            </span>
+          </div>
         </div>
       </article>
     </Link>

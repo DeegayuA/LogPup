@@ -76,6 +76,25 @@ export function AppsTable({
     })
   }
 
+  // No NO_PM sentinel to match, unlike handleLeadChange above: the PM is
+  // required, so this select never offers (and never has to translate) a
+  // "clear it" option.
+  function handlePmChange(appId: string, pmId: string) {
+    startTransition(async () => {
+      try {
+        const res = await updateApp(appId, { pmId })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('PM updated')
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
   function handleArchive(appId: string) {
     startTransition(async () => {
       try {
@@ -99,13 +118,14 @@ export function AppsTable({
           <TableHead>App</TableHead>
           <TableHead>Status</TableHead>
           <TableHead>Lead</TableHead>
+          <TableHead>PM</TableHead>
           <TableHead className="w-0" />
         </TableRow>
       </TableHeader>
       <TableBody>
         {apps.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={4} className="py-8">
+            <TableCell colSpan={5} className="py-8">
               <div className="flex flex-col items-center gap-1 text-center">
                 <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
                 <p className="text-sm font-medium">No apps yet.</p>
@@ -149,6 +169,35 @@ export function AppsTable({
                     <SelectItem value={NO_LEAD}>No lead</SelectItem>
                     {app.leadId && !activeUsers.some((user) => user.id === app.leadId) ? (
                       <SelectItem value={app.leadId}>Current lead — deactivated</SelectItem>
+                    ) : null}
+                    {activeUsers.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {user.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell>
+                <Select
+                  value={app.pmId}
+                  disabled={isPending}
+                  onValueChange={(value) => value && handlePmChange(app.id, value)}
+                >
+                  <SelectTrigger size="sm" aria-label={`PM for ${app.name}`}>
+                    {/* Same Base UI pitfall as the Lead select above — see its
+                        comment. No "No PM" branch here: the PM is required, so
+                        the only two labels are a real name or the deactivated
+                        fallback. */}
+                    <SelectValue>
+                      {(value: string) =>
+                        activeUsers.find((user) => user.id === value)?.name ?? 'PM — deactivated'
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {!activeUsers.some((user) => user.id === app.pmId) ? (
+                      <SelectItem value={app.pmId}>Current PM — deactivated</SelectItem>
                     ) : null}
                     {activeUsers.map((user) => (
                       <SelectItem key={user.id} value={user.id}>

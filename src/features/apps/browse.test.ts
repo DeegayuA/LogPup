@@ -127,6 +127,7 @@ describe('queryMatches', () => {
     techTags: ['Next.js'],
     members: [{ name: 'Priya Fernando' }],
     leadName: 'Nuwan Silva',
+    pmName: 'Kavindu Perera',
   })
 
   it('matches an empty query', () => {
@@ -138,10 +139,11 @@ describe('queryMatches', () => {
     expect(queryMatches(target, 'next.js')).toBe(true)
   })
 
-  it('matches description, lead and team member names', () => {
+  it('matches description, lead, PM and team member names', () => {
     expect(queryMatches(target, 'invoicing')).toBe(true)
     expect(queryMatches(target, 'priya')).toBe(true)
     expect(queryMatches(target, 'nuwan')).toBe(true)
+    expect(queryMatches(target, 'kavindu')).toBe(true)
   })
 
   it('rejects a miss', () => {

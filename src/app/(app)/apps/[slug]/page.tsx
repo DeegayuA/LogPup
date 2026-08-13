@@ -264,6 +264,7 @@ export default async function AppDetailPage(props: {
         repoUrl={app.repoUrl}
         techTags={app.techTags}
         leadName={app.leadName}
+        pmName={app.pmName}
         health={health}
         tasks={tasks}
         memberCount={team.length}
@@ -280,6 +281,7 @@ export default async function AppDetailPage(props: {
                 techTags: app.techTags,
                 status: app.status,
                 leadId: app.leadId,
+                pmId: app.pmId,
               }}
               workspaceTechTags={workspaceTechTags}
               activeUsers={activeUsers}
@@ -562,7 +564,7 @@ export default async function AppDetailPage(props: {
           <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
             <h2 className="font-heading text-sm font-semibold">App details</h2>
             <p className="text-sm text-muted-foreground">
-              Name, description, repo, tech tags, lead and status. Changes apply
+              Name, description, repo, tech tags, PM, lead and status. Changes apply
               immediately and the app&apos;s address stays <code className="font-mono">/apps/{slug}</code>.
             </p>
             <div className="pt-1">
@@ -575,6 +577,7 @@ export default async function AppDetailPage(props: {
                   techTags: app.techTags,
                   status: app.status,
                   leadId: app.leadId,
+                  pmId: app.pmId,
                 }}
                 workspaceTechTags={workspaceTechTags}
                 activeUsers={activeUsers}
