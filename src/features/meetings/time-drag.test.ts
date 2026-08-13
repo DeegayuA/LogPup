@@ -3,6 +3,7 @@ import { DEFAULT_PX_PER_HOUR } from './calendar-grid'
 import {
   MIN_MEETING_MINUTES,
   SNAP_MINUTES,
+  dragCreateRange,
   draggedMinutes,
   isRealMove,
   isRealResize,
@@ -235,5 +236,63 @@ describe('isRealResize', () => {
   it('accepts a resize that actually changed the start or end', () => {
     const after = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: -30 })
     expect(isRealResize({ startsAt: START, endsAt: END }, after)).toBe(true)
+  })
+})
+
+describe('dragCreateRange', () => {
+  // 60px/hour: one pixel is one minute, so the arithmetic below is legible.
+  const PX = 60
+
+  it('anchors the press to the slot it landed in, floored', () => {
+    // Pressed at 10:20 (620px) — that is the 10:15 slot, not 10:30.
+    const range = dragCreateRange({ anchorPx: 620, pointerPx: 620, pxPerHour: PX })
+    expect(range.startMinutes).toBe(615)
+    expect(range.endMinutes).toBe(615 + MIN_MEETING_MINUTES)
+  })
+
+  it('shows a minimum-length ghost before the drag has travelled', () => {
+    const range = dragCreateRange({ anchorPx: 600, pointerPx: 603, pxPerHour: PX })
+    expect(range).toEqual({ startMinutes: 600, endMinutes: 600 + MIN_MEETING_MINUTES })
+  })
+
+  it('grows the end as the pointer drags down, snapped to the quarter hour', () => {
+    expect(dragCreateRange({ anchorPx: 600, pointerPx: 660, pxPerHour: PX })).toEqual({
+      startMinutes: 600,
+      endMinutes: 660,
+    })
+    // 40 raw minutes of travel rounds to 45 — the ghost lands on the snap
+    // grid, never on 10:40.
+    expect(dragCreateRange({ anchorPx: 600, pointerPx: 640, pxPerHour: PX }).endMinutes).toBe(645)
+  })
+
+  it('grows upward from the anchor when dragged up, never inverted', () => {
+    const range = dragCreateRange({ anchorPx: 600, pointerPx: 540, pxPerHour: PX })
+    expect(range).toEqual({ startMinutes: 540, endMinutes: 600 })
+  })
+
+  it('converts pixels against the zoom the way draggedMinutes does', () => {
+    // 120px/hour: the same 60px of travel is only half an hour.
+    const range = dragCreateRange({ anchorPx: 1200, pointerPx: 1260, pxPerHour: 120 })
+    expect(range).toEqual({ startMinutes: 600, endMinutes: 630 })
+  })
+
+  it('clamps at the top of the day without collapsing below the floor', () => {
+    // Pressed in the first slot and dragged far above the grid: both ends
+    // clamp to 0, and the range must re-grow downward, not vanish.
+    const range = dragCreateRange({ anchorPx: 3, pointerPx: -200, pxPerHour: PX })
+    expect(range).toEqual({ startMinutes: 0, endMinutes: MIN_MEETING_MINUTES })
+  })
+
+  it('clamps the end to midnight', () => {
+    const range = dragCreateRange({ anchorPx: 1439, pointerPx: 2000, pxPerHour: PX })
+    expect(range.startMinutes).toBe(1425)
+    expect(range.endMinutes).toBe(1440)
+  })
+
+  it('refuses to produce NaN geometry from a nonsensical scale', () => {
+    expect(dragCreateRange({ anchorPx: 100, pointerPx: 200, pxPerHour: 0 })).toEqual({
+      startMinutes: 0,
+      endMinutes: MIN_MEETING_MINUTES,
+    })
   })
 })

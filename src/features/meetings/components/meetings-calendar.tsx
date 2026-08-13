@@ -151,7 +151,7 @@ export function MeetingsCalendar({
   onOpenMeetingInList?: (meeting: MeetingSummary) => void
   openMeetingId?: string
   /** An empty calendar slot was clicked — open a create dialog at that instant. */
-  onCreateAt?: (start: Date) => void
+  onCreateAt?: (start: Date, end?: Date) => void
 }) {
   const isWide = useIsWideScreen()
   const [openId, setOpenId] = useState<string | null>(null)

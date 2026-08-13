@@ -138,25 +138,60 @@ export function MeetingDetailDialog({
   if (meeting && meeting !== lastMeeting) setLastMeeting(meeting)
   const shown = meeting ?? lastMeeting
 
+  // The meeting the header's Edit was pressed on. Held HERE, not in the body:
+  // Edit closes this dialog first (see the comment on the button), and state
+  // kept inside the popup's content would unmount along with it, taking the
+  // form down before it ever opened.
+  const [editing, setEditing] = useState<MeetingSummary | null>(null)
+
   return (
-    <Dialog open={meeting !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
-        {shown ? (
-          <MeetingDetailBody
-            meeting={shown}
-            // Same rule as every meeting write on the server: an admin, or the
-            // person who created it.
-            canManage={isAdmin || shown.createdBy === currentUserId}
-            canDelete={isAdmin}
-            users={users}
-            apps={apps}
-            onOpenChange={onOpenChange}
-            onOpenInList={onOpenInList}
-            onOpenNotes={onOpenNotes}
-          />
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    <>
+      <Dialog open={meeting !== null} onOpenChange={onOpenChange}>
+        <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+          {shown ? (
+            <MeetingDetailBody
+              meeting={shown}
+              // Same rule as every meeting write on the server: an admin, or the
+              // person who created it.
+              canManage={isAdmin || shown.createdBy === currentUserId}
+              canDelete={isAdmin}
+              apps={apps}
+              onOpenChange={onOpenChange}
+              onOpenInList={onOpenInList}
+              onOpenNotes={onOpenNotes}
+              onEdit={setEditing}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* The edit form, a SIBLING of the popup rather than a child of it — the
+          same close-one-open-the-other hand-off `onOpenNotes` documents above,
+          and for the same reason: stacked dialogs share a focus trap and a
+          scroll lock. Keyed on the meeting so editing a different one later
+          mounts a form seeded from that meeting, not left-over state. */}
+      {editing ? (
+        <MeetingForm
+          key={editing.id}
+          apps={apps}
+          activeUsers={users}
+          editing={{
+            id: editing.id,
+            appId: editing.appId,
+            title: editing.title,
+            startsAt: editing.startsAt,
+            endsAt: editing.endsAt,
+            agenda: editing.agenda,
+            meetingUrl: editing.meetingUrl,
+            attendeeIds: editing.attendees.map((attendee) => attendee.id),
+          }}
+          defaultOpen
+          onOpenChange={(next) => {
+            if (!next) setEditing(null)
+          }}
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -164,21 +199,22 @@ function MeetingDetailBody({
   meeting,
   canManage,
   canDelete,
-  users,
   apps,
   onOpenChange,
   onOpenInList,
   onOpenNotes,
+  onEdit,
 }: {
   meeting: MeetingSummary
   canManage: boolean
   /** Deletion is admin-only — stricter than canManage, see deleteMeeting. */
   canDelete: boolean
-  users: { id: string; name: string }[]
   apps: { id: string; name: string }[]
   onOpenChange: (open: boolean) => void
   onOpenInList?: (meeting: MeetingSummary) => void
   onOpenNotes?: (meetingId: string) => void
+  /** Hands the meeting up so the edit form can outlive this popup's close. */
+  onEdit: (meeting: MeetingSummary) => void
 }) {
   const fieldId = useId()
   const [isPending, startTransition] = useTransition()
@@ -255,7 +291,30 @@ function MeetingDetailBody({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{meeting.title}</DialogTitle>
+        {/* Title row with Edit in the top-right corner — where every editor
+            puts it, instead of buried in the footer under the reschedule form.
+            It changes everything the reschedule form below does not: title,
+            app, agenda, link, attendees. `pr-10` clears the dialog's own X,
+            which floats over this corner. Closing this popup BEFORE opening
+            the form keeps the two dialogs from stacking — the same rule the
+            `onOpenNotes` hand-off documents. */}
+        <div className="flex items-start justify-between gap-2 pr-10">
+          <DialogTitle>{meeting.title}</DialogTitle>
+          {canManage ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={() => {
+                onOpenChange(false)
+                onEdit(meeting)
+              }}
+            >
+              <PencilIcon aria-hidden /> Edit
+            </Button>
+          ) : null}
+        </div>
         <DialogDescription>
           {format(meeting.startsAt, 'EEEE, MMMM d, yyyy')}
           {' · '}
@@ -473,31 +532,8 @@ function MeetingDetailBody({
       ) : null}
 
       <DialogFooter className="sm:justify-between">
-        {/* The reschedule form above moves a meeting in time; this changes
-            everything else about it — title, app, agenda, link, attendees.
-            Both are behind the same `canManage` gate, so an admin or the
-            organiser gets the full set rather than "move it or delete it". */}
-        {canManage ? (
-          <MeetingForm
-            apps={apps}
-            activeUsers={users}
-            editing={{
-              id: meeting.id,
-              appId: meeting.appId,
-              title: meeting.title,
-              startsAt: meeting.startsAt,
-              endsAt: meeting.endsAt,
-              agenda: meeting.agenda,
-              meetingUrl: meeting.meetingUrl,
-              attendeeIds: meeting.attendees.map((attendee) => attendee.id),
-            }}
-            trigger={
-              <Button type="button" variant="outline" size="sm">
-                <PencilIcon /> Edit
-              </Button>
-            }
-          />
-        ) : null}
+        {/* Editing moved to the header's top-right corner — the footer keeps
+            only the destructive exit (left) and the plain one (right). */}
         {canDelete ? (
           <AlertDialog>
             <AlertDialogTrigger render={<Button type="button" variant="destructive" size="sm" />}>

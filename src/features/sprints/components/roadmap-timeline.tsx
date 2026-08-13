@@ -754,12 +754,22 @@ export function RoadmapTimeline({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-baseline gap-3">
+        <div className="flex flex-wrap items-baseline gap-3">
           <h2 className="font-heading text-lg leading-none font-semibold">Roadmap</h2>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {ordered.length} {ordered.length === 1 ? 'sprint' : 'sprints'} · {totalRows}{' '}
             {totalRows === 1 ? 'track' : 'tracks'}
           </span>
+          {/* The pointer story in one glance, where the index list below puts
+              its own ("Drag a grip to reorder…"). The paragraph under this
+              header keeps the keyboard teaching; this line exists because a
+              bar of solid colour says nothing about being draggable until
+              something short and always-visible says so. */}
+          {isAdmin ? (
+            <span className="text-xs text-muted-foreground">
+              Drag to move · edges resize · click to edit
+            </span>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -794,7 +804,7 @@ export function RoadmapTimeline({
 
       <p className="text-xs text-muted-foreground">
         {isAdmin
-          ? 'Drag a bar to move a sprint, or drag either edge to change its start or end — everything snaps to whole days. With a keyboard: tab to a bar and use ← →  to move it, or tab to its start/end handle to change that date. Hold shift for a week at a time. Press enter on a bar to edit everything at once.'
+          ? 'Everything snaps to whole days. With a keyboard: tab to a bar and use ← →  to move it, or tab to its start/end handle to change that date. Hold shift for a week at a time. Press enter on a bar to edit everything at once.'
           : 'Select a sprint to open its board. Only admins can reschedule sprints.'}
       </p>
 
@@ -862,7 +872,7 @@ export function RoadmapTimeline({
                   zoom={zoom}
                   slug={slug}
                   isAdmin={isAdmin}
-                  isDragging={activeDrag?.sprintId === sprint.id}
+                  dragKind={activeDrag?.sprintId === sprint.id ? activeDrag.kind : null}
                   onEdit={openEditor}
                   onNudge={nudge}
                 />
@@ -963,7 +973,7 @@ function SprintBar({
   zoom,
   slug,
   isAdmin,
-  isDragging,
+  dragKind,
   onEdit,
   onNudge,
 }: {
@@ -974,16 +984,28 @@ function SprintBar({
   zoom: Zoom
   slug: string
   isAdmin: boolean
-  isDragging: boolean
+  /** Which drag this bar is currently in, or null. The KIND matters, not just
+   *  the fact of a drag: the date chip anchors to the edge being moved, and a
+   *  resize names one date where a move names two. */
+  dragKind: DragKind | null
   onEdit: (sprint: Sprint) => void
   onNudge: (sprint: Sprint, kind: DragKind, event: KeyboardEvent) => void
 }) {
+  const isDragging = dragKind !== null
   const geometry = barGeometry({ id: sprint.id, ...range }, axis, zoom)
   const label = `${sprint.name}, ${formatRange(range)}, ${STATUS_LABEL[sprint.status]}`
 
   return (
     <li
-      className="absolute"
+      className={cn(
+        'absolute',
+        // No transition while dragging: the bar must track the pointer, and a
+        // width transition on a resize looks like lag, not polish. Off the
+        // drag path it smooths keyboard nudges and failure snap-backs. It
+        // lives HERE because left and width are set on this <li> — on the
+        // inner div it would transition properties that never change.
+        !isDragging && 'transition-[left,width] duration-150 motion-reduce:transition-none',
+      )}
       style={{
         top: row * ROW_HEIGHT + (ROW_HEIGHT - BAR_HEIGHT) / 2,
         left: geometry.left,
@@ -997,9 +1019,11 @@ function SprintBar({
         className={cn(
           'group/bar relative flex h-full items-center rounded-md ring-1 ring-inset ring-foreground/10',
           STATUS_BAR[sprint.status],
-          // No transition while dragging: the bar must track the pointer, and
-          // a width transition on a resize looks like lag, not polish.
-          !isDragging && 'transition-[left,width] duration-150 motion-reduce:transition-none',
+          // Hover says "this is an object you can pick up": the ring firms
+          // and a small shadow lifts it. Ring and shadow are both box-shadow,
+          // so one transitioned property covers both — never transition-all.
+          'transition-shadow duration-150 motion-reduce:transition-none',
+          !isDragging && 'hover:shadow-sm hover:ring-foreground/25',
           isDragging && 'z-10 shadow-md',
         )}
       >
@@ -1031,14 +1055,30 @@ function SprintBar({
           smoothly enough that you cannot tell which day an edge has landed
           on, especially at month and quarter zoom where a day is 8 or 3
           pixels. Positioned above the bar so the cursor never covers it, and
-          aria-hidden because dnd-kit is already speaking the same thing.
+          anchored to the edge being dragged — an end-resize chip sitting at
+          the far LEFT of a quarter-long bar is off screen from the cursor.
+          A resize names only the date that is moving (plus the length, which
+          is what a resize changes); a move names the whole range. Both read
+          straight off `range`, which is the parent's previewRange — the same
+          pure-function derivation handleDragEnd commits, so the chip can
+          never promise dates the drop won't write. aria-hidden because
+          dnd-kit is already speaking the same thing.
         */}
-        {isDragging ? (
+        {dragKind ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute -top-6 left-0 whitespace-nowrap rounded-md border bg-popover px-1.5 py-0.5 font-mono text-2xs tabular-nums text-popover-foreground shadow-md"
+            className={cn(
+              'pointer-events-none absolute -top-6 whitespace-nowrap rounded-md border bg-popover px-1.5 py-0.5 font-mono text-2xs tabular-nums text-popover-foreground shadow-md',
+              dragKind === 'end' ? 'right-0' : 'left-0',
+            )}
           >
-            {formatRange(range)} · {inclusiveDayCount(range.startDate, range.endDate)}d
+            {dragKind === 'move'
+              ? formatRange(range)
+              : format(
+                  parseIso(dragKind === 'start' ? range.startDate : range.endDate),
+                  'MMM d',
+                )}{' '}
+            · {inclusiveDayCount(range.startDate, range.endDate)}d
           </span>
         ) : null}
       </div>
@@ -1140,12 +1180,34 @@ function ResizeHandle({
         onNudge(sprint, kind, event)
       }}
       className={cn(
-        'h-full w-2.5 shrink-0 cursor-ew-resize rounded-md outline-none',
+        // 10px wide — comfortably past the 8px floor for a pointer target on
+        // its own, and on coarse pointers globals.css expands every <button>
+        // to a 44px hit area besides.
+        'flex h-full w-2.5 shrink-0 cursor-ew-resize items-center justify-center rounded-md outline-none',
         'bg-foreground/0 transition-colors duration-150 motion-reduce:transition-none',
         'hover:bg-foreground/25 group-hover/bar:bg-foreground/15',
         'focus-visible:bg-foreground/25 focus-visible:ring-2 focus-visible:ring-ring',
       )}
-    />
+    >
+      {/*
+        The grip made visible. Until the pointer (or focus) is on the bar the
+        handle is an invisible strip, and an edge nobody can see is an edge
+        nobody drags — the whole resize feature was going unfound. A short
+        vertical pill in the bar's own text colour appears on hover or when
+        anything in the bar has focus, so keyboard users get told the handles
+        exist too. currentColor keeps it legible on every status: foreground
+        on the pale planned/done fills, primary-foreground on the solid
+        active fill.
+      */}
+      <span
+        aria-hidden
+        className={cn(
+          'pointer-events-none h-3.5 w-0.5 rounded-full bg-current opacity-0',
+          'transition-opacity duration-150 motion-reduce:transition-none',
+          'group-hover/bar:opacity-70 group-focus-within/bar:opacity-70',
+        )}
+      />
+    </button>
   )
 }
 

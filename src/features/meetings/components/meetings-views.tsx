@@ -132,7 +132,9 @@ export function MeetingsViews({
    * without it, clicking 3 PM after 2 PM would reopen the dialog still holding
    * 2 PM. Keying on the instant makes each slot a fresh form.
    */
-  const [createAt, setCreateAt] = useState<Date | undefined>(undefined)
+  // start + optional end: the time grid's drag-to-create hands in a full
+  // range; the per-slot + button only knows its start.
+  const [createAt, setCreateAt] = useState<{ start: Date; end?: Date } | undefined>(undefined)
 
   /**
    * QUICK NOTES — an unplanned, note-taking-first meeting.
@@ -315,7 +317,7 @@ export function MeetingsViews({
             writeUrl('list', focusedDate)
           }}
           onOpenMeetingInList={openMeetingInList}
-          onCreateAt={setCreateAt}
+          onCreateAt={(start, end) => setCreateAt({ start, end })}
         />
       )}
 
@@ -323,10 +325,11 @@ export function MeetingsViews({
           each slot mounts a form seeded with its own time (see createAt). */}
       {createAt ? (
         <MeetingForm
-          key={createAt.toISOString()}
+          key={createAt.start.toISOString()}
           apps={apps}
           activeUsers={users}
-          defaultStart={createAt}
+          defaultStart={createAt.start}
+          defaultEnd={createAt.end}
           defaultOpen
           onOpenChange={(next) => {
             if (!next) setCreateAt(undefined)

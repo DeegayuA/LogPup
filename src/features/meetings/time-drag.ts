@@ -8,6 +8,8 @@
  * unit-testing, and it must not need a DOM to be tested.
  */
 
+import { MINUTES_PER_DAY } from './calendar-grid'
+
 /**
  * Drags land on a quarter hour. Free-form dragging produces times like 10:07
  * that nobody meant and every calendar in the world rounds away; 15 minutes
@@ -163,4 +165,71 @@ export function isRealResize(
     before.startsAt.getTime() !== after.startsAt.getTime() ||
     before.endsAt.getTime() !== after.endsAt.getTime()
   )
+}
+
+/**
+ * The ghost window for a DRAG-TO-CREATE on empty grid, in minutes from the
+ * day's midnight — the third gesture, and the only one with no meeting to
+ * start from, so unlike the move/resize helpers it works in day-minutes
+ * rather than `Date`s and leaves the instant conversion to the caller, who
+ * owns the day window.
+ *
+ * The PRESS anchors the range to the slot it landed in — floored, not
+ * rounded, because pressing at 10:20 means "the 10:15 slot", and rounding up
+ * would anchor a slot the pointer never touched. The DRAG then grows the
+ * range through `draggedMinutes`, the same pixel→minute conversion move and
+ * resize use, so the ghost cannot disagree with what those gestures would
+ * paint at the same zoom.
+ *
+ * Dragging UP grows the range above the anchor instead of inverting it, and
+ * the result is never shorter than `MIN_MEETING_MINUTES` nor outside the day
+ * — the same floor and the same never-inverted rule as the resize clamps,
+ * because releasing the ghost creates a meeting those rules must already
+ * hold for.
+ */
+export function dragCreateRange(input: {
+  /** Pixel offset of the initial press, measured from the day column's top. */
+  anchorPx: number
+  /** Pixel offset of the pointer now, same origin. */
+  pointerPx: number
+  pxPerHour: number
+  snapMinutes?: number
+  dayMinutes?: number
+}): { startMinutes: number; endMinutes: number } {
+  const {
+    anchorPx,
+    pointerPx,
+    pxPerHour,
+    snapMinutes = SNAP_MINUTES,
+    dayMinutes = MINUTES_PER_DAY,
+  } = input
+  // Same "nonsense scale means no movement" rule as draggedMinutes: a bad
+  // pxPerHour or press offset anchors the day's first slot instead of
+  // producing NaN geometry.
+  const scaleOk = Number.isFinite(anchorPx) && Number.isFinite(pxPerHour) && pxPerHour > 0
+  const grain = snapMinutes > 0 ? snapMinutes : MIN_MEETING_MINUTES
+  const rawAnchor = scaleOk ? (anchorPx * 60) / pxPerHour : 0
+  // Floored into its slot, then kept far enough above midnight that the
+  // minimum-length ghost still fits below the anchor.
+  const anchor = Math.min(
+    Math.max(Math.floor(rawAnchor / grain) * grain, 0),
+    Math.max(dayMinutes - grain, 0),
+  )
+  const delta = scaleOk ? draggedMinutes(pointerPx - anchorPx, pxPerHour, snapMinutes) : 0
+
+  // Below the anchor the press point is the START; above it, the END. The
+  // anchor never moves — only the edge under the pointer does, exactly as a
+  // resize moves one edge and pins the other.
+  const startMinutes = Math.max(delta >= 0 ? anchor : anchor + delta, 0)
+  const endMinutes = Math.min(
+    delta >= 0 ? anchor + Math.max(delta, MIN_MEETING_MINUTES) : anchor,
+    dayMinutes,
+  )
+  if (endMinutes - startMinutes >= MIN_MEETING_MINUTES) return { startMinutes, endMinutes }
+  // The day-edge clamps can shave the range under the floor (press the first
+  // slot and drag up: both ends land on 0). Re-grow inward, never outward.
+  if (startMinutes <= 0) {
+    return { startMinutes: 0, endMinutes: Math.min(MIN_MEETING_MINUTES, dayMinutes) }
+  }
+  return { startMinutes: Math.max(endMinutes - MIN_MEETING_MINUTES, 0), endMinutes }
 }

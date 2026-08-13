@@ -79,7 +79,7 @@ type FormState = {
   prefilledIds: string[]
 }
 
-function emptyState(defaultAppId?: string, startAt?: Date): FormState {
+function emptyState(defaultAppId?: string, startAt?: Date, endAt?: Date): FormState {
   // A slot the person clicked is already an exact time — round only the
   // "right now" default, which is never on a step boundary. Callers that
   // only know a DAY (the month grid's empty-cell click) put a sensible time
@@ -89,7 +89,9 @@ function emptyState(defaultAppId?: string, startAt?: Date): FormState {
     appId: defaultAppId ?? '',
     title: '',
     start,
-    end: addHours(start, 1),
+    // A drag-created range hands in its own end; a click only knows a start,
+    // and an hour is the default the wheel already teaches.
+    end: endAt && endAt > start ? endAt : addHours(start, 1),
     agenda: '',
     meetingUrl: '',
     attendeeIds: [],
@@ -207,6 +209,7 @@ export function MeetingForm({
   activeUsers,
   defaultAppId,
   defaultStart,
+  defaultEnd,
   trigger,
   defaultOpen,
   onOpenChange: onOpenChangeProp,
@@ -218,6 +221,8 @@ export function MeetingForm({
   /** Pre-fill the start time (and, one hour later, the end) — set when a
    *  calendar slot or day cell is what opened this. */
   defaultStart?: Date
+  /** Drag-created ranges carry their own end; clicks leave it to the 1h default. */
+  defaultEnd?: Date
   /** Omit for a caller that opens this form itself with no visible trigger of
    *  its own — the calendar mounts one keyed `MeetingForm` for the slot that
    *  was clicked and passes `defaultOpen` instead. */
@@ -232,7 +237,7 @@ export function MeetingForm({
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() =>
-    editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart),
+    editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart, defaultEnd),
   )
   // Which app's teamForApp call is in flight — drives the loading line in
   // the attendees block. Rendered only while it matches form.appId, so a
@@ -301,7 +306,7 @@ export function MeetingForm({
       // creating, and the meeting as it currently stands when editing — so
       // abandoning an edit and reopening never resurrects the half-typed
       // version that was walked away from.
-      setForm(editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart))
+      setForm(editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart, defaultEnd))
       setQuickAdd('')
       setSettled('')
       setWithMeet(false)

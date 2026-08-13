@@ -31,6 +31,16 @@
  *    input only; the keyboard route to the same edit is the meeting's own
  *    edit dialog (Starts/Ends fields), the same relationship the sprint
  *    roadmap's bars have to their edit dialog.
+ *  - DRAG TO CREATE. Press on empty grid and drag: a ghost block grows under
+ *    the pointer, snapped to the same quarter hour, and releasing opens the
+ *    create dialog prefilled with that range. Below the sensors' activation
+ *    distance nothing activates, so a plain click still belongs to the hour
+ *    cell's + button, unchanged.
+ *  - A LIVE PREVIEW for every gesture. A time chip rides the moving edge
+ *    showing the would-be start–end, and a resize re-draws the block at its
+ *    would-be geometry as it snaps. The preview is computed by the SAME pure
+ *    functions the drop commits with (time-drag.ts), so it can never promise
+ *    a time the release then refuses.
  *
  * ── THE Z-TIER LADDER ─────────────────────────────────────────────────────
  * Written out once, here, because every layer in this file is either sticky or
@@ -79,6 +89,8 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core'
 import { PlusIcon } from 'lucide-react'
 import { format } from 'date-fns'
@@ -109,8 +121,10 @@ import {
 import { laneFraction, overlapMap } from '@/features/meetings/calendar-overlap'
 import { isoDayInstant, isoToDisplayDate } from '@/features/meetings/calendar-view'
 import { chipTone } from '@/features/meetings/components/meetings-month-calendar'
+import { meetingColorKey } from '@/features/meetings/event-color'
 import { rescheduleMeeting } from '@/features/meetings/actions'
 import {
+  dragCreateRange,
   draggedMinutes,
   isRealMove,
   isRealResize,
@@ -157,6 +171,49 @@ type DragData = {
   sourceIso: string
   kind: DragKind
 }
+
+/** The active gesture's would-be window — one for the whole grid, since one
+ *  pointer can only drag one thing. Derived in `handleDragMove` by the SAME
+ *  pure functions `handleDragEnd` commits with, so the preview is a
+ *  rehearsal of the write, never a parallel calculation that can disagree
+ *  with it. */
+type DragPreview = {
+  meetingId: string
+  /** The column the gesture started in — which block copy shows the preview,
+   *  since a midnight-crossing meeting is drawn once per day it touches. */
+  sourceIso: string
+  kind: DragKind
+  startsAt: Date
+  endsAt: Date
+}
+
+/** What the dragged block should render RIGHT NOW: chip text always; a
+ *  gesture-scoped `top`/`height` override only for a resize, where nothing
+ *  else would move on screen (a move already translates the whole block). */
+type BlockPreview = {
+  label: string
+  /** Which edge the gesture is moving — where the chip floats. */
+  edge: 'start' | 'end'
+  top?: number
+  height?: number
+}
+
+/** The drag-to-create ghost, kept in the pure minute domain the math works
+ *  in — converted to instants only at the edges (chip text, release). */
+type CreateDraft = {
+  iso: string
+  startMinutes: number
+  endMinutes: number
+  /** Which edge the pointer is growing — where the chip floats. */
+  edge: 'start' | 'end'
+}
+
+/** The pointer half of drag-to-create, shared across all day columns — each
+ *  handler reads which day it fired on back off the column's `data-iso`. */
+type CreateGestureHandlers = Pick<
+  React.DOMAttributes<HTMLDivElement>,
+  'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onClickCapture'
+>
 
 /** One meeting's slice of one day, with everything that does NOT depend on the
  *  zoom or the clock resolved once: the midnight clipping, and the labels. */
@@ -212,17 +269,23 @@ function DayDropColumn({
   iso,
   dayLabel,
   height,
+  createGesture,
   children,
 }: {
   iso: string
   dayLabel: string
   height: number
+  /** Drag-to-create's pointer handlers — one shared set, told which day it
+   *  fired on by the `data-iso` below rather than by seven closures. */
+  createGesture: CreateGestureHandlers
   children: React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: iso })
   return (
     <div
       ref={setNodeRef}
+      data-iso={iso}
+      {...createGesture}
       /* The one programmatic tie between a column and the day it draws:
          the header above it is a sibling grid item, so it cannot label
          this by proximity alone. */
@@ -258,8 +321,11 @@ export function MeetingsTimeGrid({
   pxPerHour: number
   todayIso: string
   onOpenMeeting: (meetingId: string) => void
-  /** Clicking an empty hour asks the caller to open a create dialog at that instant. */
-  onCreateAt?: (start: Date) => void
+  /** Clicking an empty hour asks the caller to open a create dialog at that
+   *  instant. A DRAG across empty grid also hands over the dragged end —
+   *  optional, so an existing single-argument caller keeps compiling and
+   *  simply falls back to its default duration. */
+  onCreateAt?: (start: Date, end?: Date) => void
   /** Alt + wheel hands a signed pixel delta back to the toolbar, which owns
    *  the clamping and the stored preference. */
   onZoomBy: (deltaPx: number) => void
@@ -289,6 +355,81 @@ export function MeetingsTimeGrid({
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
   )
+
+  /* THE LIVE PREVIEW for move and resize. Before this, a drag gave nothing
+     back until the pointer let go — the user resized blind and only saw the
+     result on release. The preview window is recomputed on every drag move
+     by the exact functions the drop will commit with, and because those
+     already snap to SNAP_MINUTES, the bail-out in the setter means the grid
+     re-renders once per snap-boundary crossing, not once per pixel. */
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
+
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      const data = event.active.data.current as Partial<DragData> | undefined
+      if (!data?.meetingId || !data.sourceIso || !data.kind) return
+      const meeting = visibleMeetings.find((m) => m.id === data.meetingId)
+      if (!meeting) return
+      // The chip appears the moment the gesture activates, showing the
+      // CURRENT window — the first drag-move replaces it as soon as the
+      // pointer crosses a snap boundary.
+      setDragPreview({
+        meetingId: meeting.id,
+        sourceIso: data.sourceIso,
+        kind: data.kind,
+        startsAt: meeting.startsAt,
+        endsAt: meeting.endsAt,
+      })
+    },
+    [visibleMeetings],
+  )
+
+  const handleDragMove = useCallback(
+    (event: DragMoveEvent) => {
+      const data = event.active.data.current as Partial<DragData> | undefined
+      const sourceIso = data?.sourceIso
+      const meetingId = data?.meetingId
+      const kind = data?.kind
+      if (!sourceIso || !meetingId || !kind) return
+      const meeting = visibleMeetings.find((m) => m.id === meetingId)
+      if (!meeting) return
+
+      // The SAME math as handleDragEnd, delta conversion and all — the
+      // preview is a rehearsal of the commit, never a parallel calculation.
+      const minuteDelta = draggedMinutes(event.delta.y, pxPerHour)
+      const before = { startsAt: meeting.startsAt, endsAt: meeting.endsAt }
+      let next: { startsAt: Date; endsAt: Date }
+      if (kind === 'resize-start') {
+        next = resizeMeetingStartByDrag({ ...before, minuteDelta })
+      } else if (kind === 'resize-end') {
+        next = resizeMeetingEndByDrag({ ...before, minuteDelta })
+      } else {
+        // No drop target yet means the pointer is over the gutter or the
+        // headers — preview the move within its own column, the closest
+        // thing to the "cancel" that dropping there would be.
+        const targetIso = event.over ? String(event.over.id) : sourceIso
+        next = moveMeetingByDrag({
+          ...before,
+          dayDelta: days.indexOf(targetIso) - days.indexOf(sourceIso),
+          minuteDelta,
+          gridStartHour: GRID_START_HOUR,
+          gridEndHour: GRID_END_HOUR,
+        })
+      }
+      setDragPreview((prev) =>
+        prev &&
+        prev.meetingId === meetingId &&
+        prev.kind === kind &&
+        prev.startsAt.getTime() === next.startsAt.getTime() &&
+        prev.endsAt.getTime() === next.endsAt.getTime()
+          ? prev
+          : { meetingId, sourceIso, kind, startsAt: next.startsAt, endsAt: next.endsAt },
+      )
+    },
+    [days, pxPerHour, visibleMeetings],
+  )
+
+  const handleDragCancel = useCallback(() => setDragPreview(null), [])
 
   /* The write path for BOTH gestures — a moved block and a resized edge both
      end as "this meeting's window is now X" — so there is exactly one place
@@ -324,6 +465,9 @@ export function MeetingsTimeGrid({
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
+      // Cleared unconditionally, before any early return below: whatever the
+      // drop decides, the gesture is over and the preview must not outlive it.
+      setDragPreview(null)
       const data = event.active.data.current as Partial<DragData> | undefined
       const sourceIso = data?.sourceIso
       const meetingId = data?.meetingId
@@ -371,6 +515,150 @@ export function MeetingsTimeGrid({
       commitReschedule(meetingId, next)
     },
     [days, pxPerHour, visibleMeetings, commitReschedule],
+  )
+
+  /* ── DRAG TO CREATE ──────────────────────────────────────────────────────
+     Press on empty grid, drag, release: a ghost block grows under the
+     pointer and the release opens the create dialog with that range. Raw
+     pointer events rather than another dnd-kit draggable, because there is
+     nothing to drag — no element exists until the gesture invents one.
+
+     The bookkeeping lives in a ref, not state: the press point, pointer id
+     and column element are gesture plumbing the render never reads. Only
+     the ghost's minute range is state. Touch is deliberately not claimed —
+     the columns keep their default touch-action so a finger still scrolls
+     the grid, and the browser's pointercancel cleanly abandons any draft. */
+  const createGestureRef = useRef<{
+    iso: string
+    columnEl: HTMLElement
+    pointerId: number
+    anchorPx: number
+    active: boolean
+  } | null>(null)
+  /* Set when a create-drag activates: pointer capture retargets the eventual
+     click to the column, but should an engine decline the capture, the click
+     would land on the + button underneath and open a second, hour-snapped
+     dialog on top of the drag's own. The capture-phase guard below eats it. */
+  const suppressClickRef = useRef(false)
+  const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null)
+
+  const handleCreatePointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      suppressClickRef.current = false
+      if (!onCreateAt) return
+      // Primary button, primary pointer: a right-click or a second finger
+      // is never the start of a create gesture.
+      if (event.button !== 0 || !event.isPrimary) return
+      // A press on a meeting block (or its resize handles) belongs to the
+      // dnd-kit move/resize gestures — only genuinely empty grid creates.
+      if ((event.target as HTMLElement).closest('[data-grid-block]')) return
+      const columnEl = event.currentTarget
+      const iso = columnEl.dataset.iso
+      if (!iso) return
+      createGestureRef.current = {
+        iso,
+        columnEl,
+        pointerId: event.pointerId,
+        anchorPx: event.clientY - columnEl.getBoundingClientRect().top,
+        active: false,
+      }
+    },
+    [onCreateAt],
+  )
+
+  const handleCreatePointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const gesture = createGestureRef.current
+      if (!gesture || event.pointerId !== gesture.pointerId) return
+      // A release that happened outside the column (nothing is captured
+      // before activation) never reached the pointerup handler, so the ref
+      // can be stale — a move with no button held is that ghost gesture,
+      // not a live one, and a mouse reuses its pointer id forever.
+      if ((event.buttons & 1) === 0) {
+        createGestureRef.current = null
+        return
+      }
+      const pointerPx = event.clientY - gesture.columnEl.getBoundingClientRect().top
+      if (!gesture.active) {
+        // Same travel threshold as the shared PointerSensor: below it this
+        // is still a plain click on its way to the hour cell's + button.
+        if (Math.abs(pointerPx - gesture.anchorPx) < DRAG_ACTIVATION_DISTANCE) return
+        gesture.active = true
+        suppressClickRef.current = true
+        // Keep every further event for this pointer on the column even when
+        // the cursor leaves it — the same insurance ResizeHandle documents —
+        // which also retargets the click away from the + button underneath.
+        gesture.columnEl.setPointerCapture(event.pointerId)
+      }
+      const range = dragCreateRange({ anchorPx: gesture.anchorPx, pointerPx, pxPerHour })
+      const edge: CreateDraft['edge'] = pointerPx < gesture.anchorPx ? 'start' : 'end'
+      // Snapped, so this bails out on every move that stayed inside the same
+      // quarter hour — the grid re-renders per snap crossing, not per pixel.
+      setCreateDraft((prev) =>
+        prev &&
+        prev.iso === gesture.iso &&
+        prev.startMinutes === range.startMinutes &&
+        prev.endMinutes === range.endMinutes &&
+        prev.edge === edge
+          ? prev
+          : { iso: gesture.iso, edge, ...range },
+      )
+    },
+    [pxPerHour],
+  )
+
+  const handleCreatePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const gesture = createGestureRef.current
+      if (!gesture || event.pointerId !== gesture.pointerId) return
+      createGestureRef.current = null
+      // Sub-threshold: a plain click, and the + button underneath owns it.
+      if (!gesture.active) return
+      setCreateDraft(null)
+      // Recomputed from the release point rather than read from state — the
+      // same call the last pointermove made, so the dialog's range and the
+      // last ghost drawn can never disagree.
+      const range = dragCreateRange({
+        anchorPx: gesture.anchorPx,
+        pointerPx: event.clientY - gesture.columnEl.getBoundingClientRect().top,
+        pxPerHour,
+      })
+      const window = dayWindow(gesture.iso)
+      onCreateAt?.(
+        new Date(window.startMs + range.startMinutes * 60_000),
+        new Date(window.startMs + range.endMinutes * 60_000),
+      )
+    },
+    [onCreateAt, pxPerHour],
+  )
+
+  const handleCreatePointerCancel = useCallback(() => {
+    createGestureRef.current = null
+    setCreateDraft(null)
+  }, [])
+
+  const handleCreateClickCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }, [])
+
+  const createGesture = useMemo<CreateGestureHandlers>(
+    () => ({
+      onPointerDown: handleCreatePointerDown,
+      onPointerMove: handleCreatePointerMove,
+      onPointerUp: handleCreatePointerUp,
+      onPointerCancel: handleCreatePointerCancel,
+      onClickCapture: handleCreateClickCapture,
+    }),
+    [
+      handleCreatePointerDown,
+      handleCreatePointerMove,
+      handleCreatePointerUp,
+      handleCreatePointerCancel,
+      handleCreateClickCapture,
+    ],
   )
 
   /* Two passes, deliberately. The day window, the midnight clipping and every
@@ -515,7 +803,13 @@ export function MeetingsTimeGrid({
        each column means a drag that crosses columns is a single gesture, and
        dnd-kit measures against the same scroll offset the blocks are
        positioned in. */
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragMove={handleDragMove}
+      onDragCancel={handleDragCancel}
+      onDragEnd={handleDragEnd}
+    >
     <div
       ref={scrollRef}
       /* Focusable and named, so arrow keys, Page Up/Down and Home/End scroll it
@@ -590,6 +884,7 @@ export function MeetingsTimeGrid({
             iso={column.iso}
             dayLabel={column.dayLabel}
             height={bodyHeight}
+            createGesture={createGesture}
           >
             <HourCells
               hours={hours}
@@ -618,9 +913,20 @@ export function MeetingsTimeGrid({
                   isPast={state === 'past'}
                   scrollMarginTop={eventScrollMarginTop}
                   onOpen={onOpenMeeting}
+                  preview={
+                    dragPreview &&
+                    dragPreview.meetingId === block.slice.meeting.id &&
+                    dragPreview.sourceIso === column.iso
+                      ? buildBlockPreview(dragPreview, column.window, pxPerHour)
+                      : null
+                  }
                 />
               )
             })}
+
+            {createDraft && createDraft.iso === column.iso ? (
+              <CreateGhost draft={createDraft} window={column.window} pxPerHour={pxPerHour} />
+            ) : null}
           </DayDropColumn>
         ))}
       </div>
@@ -939,6 +1245,11 @@ const DayHeader = memo(function DayHeader({ iso, isToday }: { iso: string; isTod
  * shared `PointerSensor` means a plain click anywhere on the block, including
  * on a handle's thin strip, still opens the meeting rather than registering
  * as a zero-length resize.
+ *
+ * While a gesture is live, `preview` carries the would-be window: a resize
+ * re-draws this block at the previewed geometry (a move already translates
+ * it), and either way a `TimeRangeChip` floats at the moving edge with the
+ * would-be times — so nobody drags blind and finds out on release.
  */
 const TimeGridEvent = memo(function TimeGridEvent({
   block,
@@ -948,6 +1259,7 @@ const TimeGridEvent = memo(function TimeGridEvent({
   isPast,
   scrollMarginTop,
   onOpen,
+  preview,
 }: {
   block: TimedBlock
   /** `Wed 12 Aug` — the column's day, so a block announced on its own says
@@ -959,10 +1271,16 @@ const TimeGridEvent = memo(function TimeGridEvent({
   isPast: boolean
   scrollMarginTop: number
   onOpen: (meetingId: string) => void
+  /** Non-null only while THIS block is the one being dragged — the live
+   *  would-be window, chip and (for a resize) geometry. See `DragPreview`. */
+  preview: BlockPreview | null
 }) {
   const { slice } = block
   const { meeting, continuesBefore, continuesAfter } = slice
-  const isCompact = block.height < COMPACT_BLOCK_PX
+  /* Judged against the PREVIEWED height while a resize is live, so the text
+     reflows exactly as it will once the resize commits — the inner wrapper's
+     overflow-hidden clips whatever a shrinking box can no longer fit. */
+  const isCompact = (preview?.height ?? block.height) < COMPACT_BLOCK_PX
 
   /* The id carries the DAY as well as the meeting: a meeting crossing
      midnight is drawn as two blocks, and dnd-kit ids must be unique or the
@@ -980,19 +1298,29 @@ const TimeGridEvent = memo(function TimeGridEvent({
       onClick={() => onOpen(meeting.id)}
       {...listeners}
       {...attributes}
+      data-grid-block=""
       style={{
-        top: block.top,
-        height: block.height,
+        /* A live RESIZE overrides the committed geometry with the preview's
+           — computed by the same clipToDay → eventGeometry pipeline the
+           commit will run, and gone the moment the gesture ends, so a
+           failed reschedule still reverts to the committed box. No
+           transition covers top/height: the preview snaps when the time
+           snaps, positional rather than animated, and there is nothing
+           here for prefers-reduced-motion to object to. */
+        top: preview?.top ?? block.top,
+        height: preview?.height ?? block.height,
         left: `calc(${block.leftPct}% + 2px)`,
         width: `calc(${block.widthPct}% - 4px)`,
-        /* Translated, never re-laid-out, while dragging: `top` is the
-           committed time and must not move until the write lands, or a
-           failed reschedule would leave the block at the dropped position
-           with the database still holding the old one. */
+        /* MOVES are translated, never re-laid-out: `top` stays the
+           committed time until the write lands, or a failed reschedule
+           would leave the block at the dropped position with the database
+           still holding the old one. */
         transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
         /* Above every other block, so the dragged one is never posted behind
-           a neighbour it is passing over. */
-        zIndex: isDragging ? 30 : undefined,
+           a neighbour it is passing over — and the same for a resize in
+           progress, whose `isDragging` belongs to the handle, not to this
+           button, and whose chip must float above the neighbours too. */
+        zIndex: isDragging || preview ? 30 : undefined,
         /* Dragging is a pointer gesture; without this the browser claims the
            vertical drag for scrolling on touch and the block never moves. */
         touchAction: 'none',
@@ -1019,7 +1347,9 @@ const TimeGridEvent = memo(function TimeGridEvent({
         'transition-[background-color,box-shadow] duration-150 motion-reduce:transition-none',
         'hover:brightness-95 hover:shadow-sm',
         'focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        chipTone(isPast, isLive, meeting.appId),
+        // Same people, same hue — the week grid and the month grid agree on
+        // what a color means (see meetingColorKey).
+        chipTone(isPast, isLive, meetingColorKey(meeting)),
         // A cut edge is square and runs flush into the grid boundary; a real
         // edge is rounded and sits inside it. That contrast is the whole
         // visible signal that a meeting continues onto the next day — the
@@ -1077,6 +1407,7 @@ const TimeGridEvent = memo(function TimeGridEvent({
         ) : null}
       </span>
       {!continuesAfter ? <ResizeHandle meetingId={meeting.id} dayIso={dayIso} edge="end" /> : null}
+      {preview ? <TimeRangeChip label={preview.label} edge={preview.edge} /> : null}
     </button>
   )
 })
@@ -1156,6 +1487,104 @@ function ResizeHandle({
         edge === 'start' ? 'top-0' : 'bottom-0',
       )}
     />
+  )
+}
+
+/**
+ * The dragged block's live rendering, from the preview window — through the
+ * SAME `clipToDay` → `eventGeometry` pipeline that `buildShape`/`packBlocks`
+ * will run on the committed times, so what the preview draws is what the
+ * drop will paint: minimum-height clamp, midnight clipping and all.
+ */
+function buildBlockPreview(
+  preview: DragPreview,
+  window: DayWindow,
+  pxPerHour: number,
+): BlockPreview {
+  const label = timeRangeLabel(preview.startsAt, preview.endsAt)
+  if (preview.kind === 'move') {
+    // dnd-kit already translates the whole block under the pointer — only
+    // the chip is added, riding the block's top edge as it goes.
+    return { label, edge: 'start' }
+  }
+  const edge = preview.kind === 'resize-end' ? 'end' : 'start'
+  const segment = clipToDay(preview.startsAt.getTime(), preview.endsAt.getTime(), window)
+  // Unreachable in practice — a resize never leaves its own day — but a
+  // vanished segment must mean "no geometry override", never a crash.
+  if (!segment) return { label, edge }
+  const { top, height } = eventGeometry(segment.startMinutes, segment.endMinutes, pxPerHour)
+  return { label, edge, top, height }
+}
+
+/** `1:45 – 2:30 PM` — the drag chip's text. Both ends go through the same
+ *  Colombo-pinned `formatBusinessTime` as every other time this grid draws;
+ *  a meridiem both ends share is said once, so the chip stays narrow under
+ *  a moving pointer. */
+function timeRangeLabel(startsAt: Date, endsAt: Date): string {
+  const start = formatBusinessTime(startsAt)
+  const end = formatBusinessTime(endsAt)
+  const meridiem = start.slice(-3)
+  return `${end.endsWith(meridiem) ? start.slice(0, -3) : start} – ${end}`
+}
+
+/**
+ * The would-be time range, floated just past the edge a gesture is moving.
+ *
+ * `pointer-events-none` is the load-bearing part: the chip trails the
+ * pointer by design, and a hit-testable element under a held-down pointer
+ * would steal the very events the drag is made of. Popover tokens rather
+ * than card ones, so it reads as a transient layer over the grid — and
+ * stays legible on it — in both themes. No transition: the preview is
+ * positional, it snaps when the time snaps.
+ */
+function TimeRangeChip({ label, edge }: { label: string; edge: 'start' | 'end' }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'pointer-events-none absolute left-1 z-30 rounded-md border border-border bg-popover px-1.5 py-0.5',
+        'font-mono text-2xs tabular-nums whitespace-nowrap text-popover-foreground shadow-sm',
+        edge === 'start' ? 'bottom-full mb-1' : 'top-full mt-1',
+      )}
+    >
+      {label}
+    </span>
+  )
+}
+
+/**
+ * The drag-to-create ghost: the meeting that WOULD exist if the pointer let
+ * go right now. Dashed and primary-tinted so it reads as intent rather than
+ * as a block someone already scheduled, and `pointer-events-none` for the
+ * same reason as the chip — it lives directly under a held-down pointer.
+ * Geometry goes through the same `eventGeometry` as a real block, so the
+ * ghost and the meeting it becomes land on identical pixels.
+ */
+function CreateGhost({
+  draft,
+  window,
+  pxPerHour,
+}: {
+  draft: CreateDraft
+  window: DayWindow
+  pxPerHour: number
+}) {
+  const { top, height } = eventGeometry(draft.startMinutes, draft.endMinutes, pxPerHour)
+  const label = timeRangeLabel(
+    new Date(window.startMs + draft.startMinutes * 60_000),
+    new Date(window.startMs + draft.endMinutes * 60_000),
+  )
+  return (
+    <div
+      aria-hidden
+      /* z-20 beats the blocks' z-10: a ghost crossing an existing meeting
+         must stay visible, or the gesture goes blind at exactly the moment
+         a conflict is worth seeing. */
+      className="pointer-events-none absolute inset-x-0.5 z-20 rounded-sm border border-dashed border-primary/60 bg-primary/10"
+      style={{ top, height }}
+    >
+      <TimeRangeChip label={label} edge={draft.edge} />
+    </div>
   )
 }
 
