@@ -698,3 +698,34 @@ export const sprintCheckins = pgTable('sprint_checkins', {
   // index's leading column).
   uniqueIndex('sprint_checkins_sprint_user_idx').on(t.sprintId, t.userId),
 ])
+
+// One row per person per DAY — what they did, and how much of what they set
+// out to do they got through. Deliberately NOT sprintCheckins: that table is
+// uniquely indexed (sprint_id, user_id), so it holds one overwritten row per
+// person per SPRINT answering "how far through this sprint am I". It carries
+// no day-by-day history and is unreachable for anyone not on a sprint.
+//
+// Not soft-deletable and there is no delete action: a day is corrected by
+// editing it. That is what keeps this table out of SOFT_TABLES in
+// src/db/live.ts and out of live.test.ts's enforcement scan.
+export const dailyWorklogs = pgTable('daily_worklogs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // A calendar day in Asia/Colombo, not an instant — see resolveWorkDay in
+  // src/features/worklog/worklog-day.ts. A UTC-derived day would file an
+  // evening entry under the wrong date for half the working week.
+  day: date('day').notNull(),
+  // 0..100, validated at the action boundary. Means "of what I planned
+  // today", self-scored: it has to stay meaningful on a day of meetings,
+  // review and debugging that closed no ticket.
+  percent: integer('percent').notNull(),
+  note: text('note'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  // THE invariant: one answer per person per day. Also the upsert's
+  // ON CONFLICT target and the access path for the personal history read.
+  uniqueIndex('daily_worklogs_user_day_idx').on(t.userId, t.day),
+  // The team view reads a day range across everybody.
+  index('daily_worklogs_day_idx').on(t.day),
+])

@@ -12,6 +12,11 @@ export const ACTIVITY_ENTITY_TYPES = [
   'comment',
   'followup',
   'suggestion',
+  // The daily work-done log. entityId is the AUTHOR's user id rather than the
+  // row's, because a work log is answered once per person per day and the
+  // thing a reader wants to click through to is that person's log, not one
+  // day's row in isolation.
+  'worklog',
 ] as const
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number]

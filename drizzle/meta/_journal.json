@@ -197,6 +197,13 @@
       "when": 1786559503693,
       "tag": "0028_attendee_recommendations",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1786600000000,
+      "tag": "0031_daily_worklogs",
+      "breakpoints": true
     }
   ]
 }
