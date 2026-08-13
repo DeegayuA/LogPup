@@ -163,6 +163,9 @@ export function MeetingsMonthCalendar({
   // month renders a hundred chips, and a hundred mounted dialogs is a hundred
   // fetch effects waiting to fire.
   const [notesId, setNotesId] = useState<string | null>(null)
+  // Set only by the notes popup's "Edit meeting", so the detail dialog can
+  // open straight into the form rather than making somebody click Edit again.
+  const [editId, setEditId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [newMeetingDay, setNewMeetingDay] = useState<Date | null>(null)
   const [, startTransition] = useTransition()
@@ -419,7 +422,7 @@ export function MeetingsMonthCalendar({
                           entry={entry}
                           now={now}
                           draggable={canManage(entry.meeting)}
-                          onOpen={setOpenId}
+                          onOpen={setNotesId}
                         />
                       ),
                     )}
@@ -476,6 +479,7 @@ export function MeetingsMonthCalendar({
         }}
         onOpenInList={onOpenMeetingInList ?? (onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined)}
         onOpenNotes={setNotesId}
+        editMeetingId={editId}
       />
 
       {/* Reading a past meeting's write-up without leaving the month. Mounted
@@ -490,6 +494,13 @@ export function MeetingsMonthCalendar({
           open
           onOpenChange={(next) => {
             if (!next) setNotesId(null)
+          }}
+          // Notes → edit in one click: the detail dialog owns the edit form,
+          // so this hands it the same meeting rather than making somebody
+          // close this and find the chip again.
+          onEditMeeting={(id) => {
+            setEditId(id)
+            setOpenId(id)
           }}
           onOpenFullMeeting={
             onOpenMeetingInList || onSelectDay

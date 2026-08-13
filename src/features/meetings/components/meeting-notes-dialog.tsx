@@ -2,7 +2,16 @@
 
 import { useEffect, useState, type ReactElement } from 'react'
 import { format } from 'date-fns'
-import { AlertCircle, FileDown, List, ListChecks, NotebookPen, RotateCcw, Sparkles } from 'lucide-react'
+import {
+  AlertCircle,
+  FileDown,
+  List,
+  ListChecks,
+  NotebookPen,
+  Pencil,
+  RotateCcw,
+  Sparkles,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -58,6 +67,7 @@ export function MeetingNotesDialog({
   open,
   onOpenChange,
   onOpenFullMeeting,
+  onEditMeeting,
 }: {
   meetingId: string
   meetingTitle: string
@@ -72,6 +82,14 @@ export function MeetingNotesDialog({
   /** Controlled mode. Leave undefined to let the trigger own the open state. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /**
+   * Opens the meeting's editable view (the detail dialog) directly — the
+   * "I've read it, now change it" exit. This dialog itself stays read-only:
+   * every write needs context a chip popup doesn't carry (see the header
+   * note), so editing is one deliberate click away rather than half-offered
+   * here.
+   */
+  onEditMeeting?: (meetingId: string) => void
   /**
    * Jumps to the full meeting (write-up, transcript, follow-ups, recorder) —
    * the same hand-off the calendar's detail dialog makes. Without it the
@@ -268,6 +286,21 @@ export function MeetingNotesDialog({
 
         <DialogFooter className="sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
+            {/* First and default: reading a meeting and then wanting to change
+                it is the common next step, and it used to mean closing this,
+                finding the chip again and opening a different dialog. */}
+            {onEditMeeting ? (
+              <Button
+                size="sm"
+                type="button"
+                onClick={() => {
+                  onEditMeeting(meetingId)
+                  handleOpenChange(false)
+                }}
+              >
+                <Pencil aria-hidden /> Edit meeting
+              </Button>
+            ) : null}
             {onOpenFullMeeting ? (
               <Button
                 variant="outline"

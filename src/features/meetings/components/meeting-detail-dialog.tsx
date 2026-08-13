@@ -106,6 +106,7 @@ export function MeetingDetailDialog({
   onOpenChange,
   onOpenInList,
   onOpenNotes,
+  editMeetingId,
   users = [],
   apps = [],
 }: {
@@ -123,6 +124,12 @@ export function MeetingDetailDialog({
    * having both panels on screen is worth.
    */
   onOpenNotes?: (meetingId: string) => void
+  /**
+   * Open straight into the edit form for this meeting id — set by the notes
+   * popup's "Edit meeting", which promises the form rather than one more
+   * panel to click through. Ignored when it doesn't match the open meeting.
+   */
+  editMeetingId?: string | null
   /**
    * Attendee pool and app list for the edit dialog. Both optional and both
    * defaulting to empty, because a caller that has neither should still get a
@@ -143,6 +150,18 @@ export function MeetingDetailDialog({
   // kept inside the popup's content would unmount along with it, taking the
   // form down before it ever opened.
   const [editing, setEditing] = useState<MeetingSummary | null>(null)
+
+  // "Edit meeting" in the notes popup means the FORM, not another stop on the
+  // way to it. The caller opens this dialog with editMeetingId set to the same
+  // meeting; that seeds `editing` once, so the form is what appears. Compared
+  // against the last id acted on rather than a boolean, so closing the form
+  // leaves the detail panel open behind it (the normal Edit behaviour) rather
+  // than immediately re-opening the form.
+  const [lastEditRequest, setLastEditRequest] = useState<string | null>(null)
+  if (editMeetingId && editMeetingId !== lastEditRequest) {
+    setLastEditRequest(editMeetingId)
+    if (meeting && meeting.id === editMeetingId) setEditing(meeting)
+  }
 
   return (
     <>

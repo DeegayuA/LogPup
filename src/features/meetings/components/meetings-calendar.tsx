@@ -158,6 +158,9 @@ export function MeetingsCalendar({
   // One write-up popup for the whole view, pointed at whichever meeting asked
   // for it — see the same note in the month grid.
   const [notesId, setNotesId] = useState<string | null>(null)
+  // Set only by the notes popup's "Edit meeting", so the detail dialog can
+  // open straight into the form rather than making somebody click Edit again.
+  const [editId, setEditId] = useState<string | null>(null)
   const [pxPerHour, setPxPerHour] = useState(DEFAULT_PX_PER_HOUR)
 
   // The stored zoom, read once after mount. It cannot be read during render:
@@ -415,7 +418,7 @@ export function MeetingsCalendar({
                 meetings={inRange}
                 pxPerHour={pxPerHour}
                 todayIso={todayIso}
-                onOpenMeeting={setOpenId}
+                onOpenMeeting={setNotesId}
                 onCreateAt={onCreateAt}
                 onZoomBy={changeZoom}
               />
@@ -426,14 +429,14 @@ export function MeetingsCalendar({
                   meetings={inRange}
                   focusedDate={focusedDate}
                   onFocusedDateChange={onFocusedDateChange}
-                  onOpenMeeting={setOpenId}
+                  onOpenMeeting={setNotesId}
                 />
               </div>
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            All 24 hours are shown; 08:00–18:00 is emphasised. Select a meeting for its details,
-            attendees and notes. Hold Alt (<span className="font-mono">⌥</span>) while scrolling to
+            All 24 hours are shown; 08:00–18:00 is emphasised. Select a meeting to read its notes —
+            editing, attendees and rescheduling are one click further in. Hold Alt (<span className="font-mono">⌥</span>) while scrolling to
             zoom, or use the hour-height buttons above — Ctrl and{' '}
             <span className="font-mono">⌘</span> are left to the browser&rsquo;s own page zoom.
           </p>
@@ -451,6 +454,7 @@ export function MeetingsCalendar({
         }}
         onOpenInList={onOpenMeetingInList ?? (onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined)}
         onOpenNotes={setNotesId}
+        editMeetingId={editId}
       />
 
       {/* The write-up, read from the calendar itself — see the month grid. */}
@@ -462,6 +466,13 @@ export function MeetingsCalendar({
           open
           onOpenChange={(next) => {
             if (!next) setNotesId(null)
+          }}
+          // Hands the same meeting straight to the detail dialog, which owns
+          // the edit form — so notes → edit is one click, not a re-hunt for
+          // the chip.
+          onEditMeeting={(id) => {
+            setEditId(id)
+            setOpenId(id)
           }}
           onOpenFullMeeting={
             onOpenMeetingInList || onSelectDay
