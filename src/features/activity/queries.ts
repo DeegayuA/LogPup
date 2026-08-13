@@ -26,7 +26,17 @@ export async function listActivity(options: {
       entityId: activityLog.entityId,
       entityLabel: activityLog.entityLabel,
       appId: activityLog.appId,
-      appName: activityLog.appName,
+      // Same COALESCE, and for the same two reasons, as listActivityApps below:
+      // roughly 31 call sites record an appId with NO app_name (no name was in
+      // scope at the write — see the task actions), while a since-deleted app
+      // has a name only on the log row. Preferring the LIVE name also means a
+      // renamed app reads under what it is called now.
+      //
+      // The feed leans on this harder than it looks: /activity colours each
+      // row's rail node by product, and only colours a row whose product is
+      // ALSO named in text (WCAG 1.4.1). Without this join those id-but-no-name
+      // rows would lose both their label and their hue.
+      appName: sql<string | null>`coalesce(${apps.name}, ${activityLog.appName})`,
       pagePath: activityLog.pagePath,
       detail: activityLog.detail,
       metadata: activityLog.metadata,
@@ -34,6 +44,9 @@ export async function listActivity(options: {
     })
     .from(activityLog)
     .innerJoin(users, eq(activityLog.actorId, users.id))
+    // LEFT, not inner: app_id has no foreign key (a log row must survive its
+    // app's deletion), and most rows have no app at all.
+    .leftJoin(apps, eq(activityLog.appId, apps.id))
     .where(activityConditions(options.filters ?? {}, options.cursor))
     .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
     .limit(options.limit + 1)

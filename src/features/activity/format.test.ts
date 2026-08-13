@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { activityPhrase, groupActivityByDay } from './format'
+import {
+  activityDaySummary,
+  activityPhrase,
+  activityPhraseParts,
+  groupActivityByDay,
+  groupActivityBursts,
+} from './format'
 import type { ActivityRow } from './types'
 
 function row(overrides: Partial<ActivityRow>): ActivityRow {
@@ -73,5 +79,126 @@ describe('groupActivityByDay', () => {
 
   it('returns no groups for no rows', () => {
     expect(groupActivityByDay([], now)).toEqual([])
+  })
+})
+
+describe('activityPhraseParts', () => {
+  it('keeps verb and entity type separable so the type can be a filter link', () => {
+    expect(activityPhraseParts({ verb: 'moved', entityType: 'task' })).toEqual({
+      verb: 'moved',
+      entityType: 'task',
+    })
+  })
+
+  it('has no type to link for a comment — the label is the thing commented on', () => {
+    expect(activityPhraseParts({ verb: 'commented', entityType: 'comment' })).toEqual({
+      verb: 'commented on',
+      entityType: null,
+    })
+  })
+
+  it('stays consistent with activityPhrase for every shape', () => {
+    for (const input of [
+      { verb: 'moved', entityType: 'task' },
+      { verb: 'commented', entityType: 'comment' },
+      { verb: 'archived', entityType: 'app' },
+    ]) {
+      const parts = activityPhraseParts(input)
+      const joined = parts.entityType ? `${parts.verb} ${parts.entityType}` : parts.verb
+      expect(joined).toBe(activityPhrase(input))
+    }
+  })
+})
+
+describe('activityDaySummary', () => {
+  it('counts changes and DISTINCT people', () => {
+    expect(
+      activityDaySummary([
+        row({ id: 'a', actorId: 'u1' }),
+        row({ id: 'b', actorId: 'u1' }),
+        row({ id: 'c', actorId: 'u2' }),
+      ]),
+    ).toEqual({ changes: 3, people: 2 })
+  })
+
+  it('is zero for an empty day', () => {
+    expect(activityDaySummary([])).toEqual({ changes: 0, people: 0 })
+  })
+})
+
+describe('groupActivityBursts', () => {
+  it('collapses a consecutive run by one actor on one entity', () => {
+    const entries = groupActivityBursts([
+      row({ id: 'a', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+      row({ id: 'b', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+      row({ id: 'c', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+    ])
+    expect(entries).toHaveLength(1)
+    expect(entries[0].kind).toBe('burst')
+    expect(entries[0].kind === 'burst' && entries[0].rows.map((r) => r.id)).toEqual([
+      'a',
+      'b',
+      'c',
+    ])
+  })
+
+  it('does NOT collapse the same actor across different entities', () => {
+    const entries = groupActivityBursts([
+      row({ id: 'a', actorId: 'u1', entityType: 'task', entityId: 't1' }),
+      row({ id: 'b', actorId: 'u1', entityType: 'task', entityId: 't2' }),
+    ])
+    expect(entries.map((e) => e.kind)).toEqual(['event', 'event'])
+  })
+
+  it('does NOT collapse the same entity across different actors', () => {
+    const entries = groupActivityBursts([
+      row({ id: 'a', actorId: 'u1', entityType: 'task', entityId: 't1' }),
+      row({ id: 'b', actorId: 'u2', entityType: 'task', entityId: 't1' }),
+    ])
+    expect(entries.map((e) => e.kind)).toEqual(['event', 'event'])
+  })
+
+  it('does NOT collapse the same id under different entity types', () => {
+    const entries = groupActivityBursts([
+      row({ id: 'a', actorId: 'u1', entityType: 'task', entityId: 'x' }),
+      row({ id: 'b', actorId: 'u1', entityType: 'comment', entityId: 'x' }),
+    ])
+    expect(entries.map((e) => e.kind)).toEqual(['event', 'event'])
+  })
+
+  it('breaks a run when someone else changes something in the middle', () => {
+    const entries = groupActivityBursts([
+      row({ id: 'a', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+      row({ id: 'b', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+      row({ id: 'c', actorId: 'u2', entityType: 'meeting', entityId: 'm1' }),
+      row({ id: 'd', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+      row({ id: 'e', actorId: 'u1', entityType: 'meeting', entityId: 'm1' }),
+    ])
+    expect(entries.map((e) => e.kind)).toEqual(['burst', 'event', 'burst'])
+    expect(entries.map((e) => e.key)).toEqual(['a', 'c', 'd'])
+  })
+
+  it('leaves a run of one as an ordinary event', () => {
+    const entries = groupActivityBursts([row({ id: 'a' })])
+    expect(entries).toEqual([{ kind: 'event', key: 'a', row: row({ id: 'a' }) }])
+  })
+
+  it('preserves stream order and loses no row', () => {
+    const rows = [
+      row({ id: 'a', actorId: 'u1', entityId: 'e1' }),
+      row({ id: 'b', actorId: 'u1', entityId: 'e1' }),
+      row({ id: 'c', actorId: 'u2', entityId: 'e2' }),
+      row({ id: 'd', actorId: 'u3', entityId: 'e3' }),
+      row({ id: 'e', actorId: 'u3', entityId: 'e3' }),
+      row({ id: 'f', actorId: 'u3', entityId: 'e3' }),
+    ]
+    const flattened = groupActivityBursts(rows).flatMap((entry) =>
+      entry.kind === 'event' ? [entry.row] : entry.rows,
+    )
+    expect(flattened.map((r) => r.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+  })
+
+  it('returns no entries for no rows', () => {
+    expect(groupActivityBursts([])).toEqual([])
   })
 })
