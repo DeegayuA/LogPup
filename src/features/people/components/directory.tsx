@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronRight, PawPrint, Phone, Search, ShieldCheck } from 'lucide-react'
+import { ChevronRight, PawPrint, Search, ShieldCheck } from 'lucide-react'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { telHref } from '@/lib/phone'
+import { ContactButtons } from '@/components/contact-buttons'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import type { UserCapacity } from '@/features/people/queries'
 
@@ -250,7 +250,14 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
                     {breakdown.slice(0, 2).map((b, i) => (
                       <span key={b.appName}>
                         {i > 0 ? ' · ' : ''}
-                        {b.appName}{' '}
+                        {b.appName}
+                        {/* The PER-PROJECT role — the same person is a
+                            manager on one app and a reviewer on another,
+                            so the role belongs to the pairing, not the
+                            person. */}
+                        {b.role ? (
+                          <span className="text-muted-foreground/80"> — {b.role}</span>
+                        ) : null}{' '}
                         <span className="font-mono tabular-nums">{b.allocationPct}%</span>
                       </span>
                     ))}
@@ -265,17 +272,14 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
               <div className="w-40 shrink-0">
                 <CapacityBar totalPct={totalPct} />
               </div>
-              {user.phone ? (
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  className="relative z-10 shrink-0"
-                  render={<a href={telHref(user.phone)} />}
-                >
-                  <Phone aria-hidden />
-                  <span className="sr-only">Call {user.name} on {user.phone}</span>
-                </Button>
-              ) : null}
+              {/* relative z-10 lifts the anchors above the row's
+                  stretched-link overlay, same as the old call button. */}
+              <ContactButtons
+                name={user.name}
+                phone={user.phone}
+                context={breakdown[0]?.appName}
+                className="relative z-10"
+              />
               <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" aria-hidden />
             </li>
           ))}

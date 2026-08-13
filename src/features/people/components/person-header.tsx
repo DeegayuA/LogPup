@@ -1,10 +1,10 @@
 import Link from 'next/link'
-import { ArrowLeft, Mail, Phone, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Mail, MessageCircle, Phone, ShieldCheck } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatBusinessMonthYear } from '@/features/people/format-instant'
-import { telHref } from '@/lib/phone'
+import { telHref, waHref } from '@/lib/phone'
 import type { PersonOverview } from '@/features/people/queries'
 
 /**
@@ -106,6 +106,11 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
                     render={<Link href={`/apps/${entry.slug}`} />}
                   >
                     {entry.appName}
+                    {/* Per-project role: the same person can be a manager on
+                        one app and a reviewer on another. */}
+                    {entry.role ? (
+                      <span className="text-muted-foreground">· {entry.role}</span>
+                    ) : null}
                     <span className="font-mono tabular-nums text-muted-foreground">
                       {entry.allocationPct}%
                     </span>
@@ -119,13 +124,25 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
         </div>
 
         {user.phone ? (
-          <Button variant="outline" size="sm" render={<a href={telHref(user.phone)} />}>
-            <Phone aria-hidden />
-            <span className="hidden font-mono sm:inline">{user.phone}</span>
-            <span className="sr-only">
-              Call {user.name} on {user.phone}
-            </span>
-          </Button>
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" render={<a href={telHref(user.phone)} />}>
+              <Phone aria-hidden />
+              <span className="hidden font-mono sm:inline">{user.phone}</span>
+              <span className="sr-only">
+                Call {user.name} on {user.phone}
+              </span>
+            </Button>
+            {/* Opens a blank chat — from a person's own page there is no one
+                project to prefill about, and choosing wrongly is worse than
+                letting them type. The prefilled variant lives on project
+                surfaces (TeamPanel, Contributions), where the context is
+                known. */}
+            <Button variant="outline" size="sm" render={<a href={waHref(user.phone)} target="_blank" rel="noreferrer" />}>
+              <MessageCircle aria-hidden />
+              WhatsApp
+              <span className="sr-only">Message {user.name} on WhatsApp</span>
+            </Button>
+          </div>
         ) : null}
       </div>
     </header>

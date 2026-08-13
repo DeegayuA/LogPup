@@ -105,6 +105,7 @@ import {
   type ActionRow,
 } from '@/features/meetings/components/meeting-notes-model'
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
+import { managesApp } from '@/features/apps/project-manager'
 // Re-exported below (not just imported) — existing callers, including this
 // file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
 // './ai-actions'. The implementation itself lives in note-labels.ts, a
@@ -555,9 +556,12 @@ async function insertAutoNotesAndSuggestions(
 // away before it ever reaches here.
 export async function canReadMeetingIntel(
   user: { id: string; role?: string | null },
-  meeting: { id: string; createdBy: string },
+  meeting: { id: string; createdBy: string; appId?: string | null },
 ): Promise<boolean> {
   if (user.role === 'admin' || meeting.createdBy === user.id) return true
+  // The app's project manager reads their project's meetings without having
+  // to be on every invite — running the project is their job.
+  if (await managesApp(user.id, meeting.appId)) return true
   const [attendee] = await db
     .select({ userId: meetingAttendees.userId })
     .from(meetingAttendees)
@@ -576,7 +580,13 @@ export async function canManageMeeting(meetingId: string) {
   if (!session?.user) return null
   const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, meetingId))
   if (!meeting) return null
-  const allowed = session.user.role === 'admin' || meeting.createdBy === session.user.id
+  // Admin, the creator, or the app's PROJECT MANAGER: the PM manages
+  // everything in their project and its meetings (see project-manager.ts);
+  // the lead/architect stay reviewers and are deliberately not here.
+  const allowed =
+    session.user.role === 'admin' ||
+    meeting.createdBy === session.user.id ||
+    (await managesApp(session.user.id, meeting.appId))
   return allowed ? { session, meeting } : null
 }
 

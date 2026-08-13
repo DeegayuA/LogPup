@@ -350,11 +350,17 @@ export default async function AppDetailPage(props: {
             </section>
           )}
 
-          <TeamPanel appId={app.id} team={team} activeUsers={activeUsers} isAdmin={isAdmin} />
+          <TeamPanel
+            appId={app.id}
+            appName={app.name}
+            team={team}
+            activeUsers={activeUsers}
+            isAdmin={isAdmin}
+          />
 
           {/* Directly under Team on purpose: Team is the plan (who is on this,
               at what allocation), this is the record of what came of it. */}
-          <AppContributions contributions={contributions} />
+          <AppContributions contributions={contributions} appName={app.name} />
 
           <section className="flex flex-col gap-3">
             <div className="flex items-baseline justify-between gap-3">

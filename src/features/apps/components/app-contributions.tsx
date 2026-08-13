@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { CheckCircle2, CircleDot, Sparkles, UsersRound } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { ContactButtons } from '@/components/contact-buttons'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import type { AppContribution } from '@/features/apps/contribution-queries'
@@ -52,7 +53,14 @@ function Stat({
  * (getAppActivity), already on this page: same trail, so the two cannot
  * disagree.
  */
-export function AppContributions({ contributions }: { contributions: AppContribution[] }) {
+export function AppContributions({
+  contributions,
+  appName,
+}: {
+  contributions: AppContribution[]
+  /** Prefills the WhatsApp message with which project this is about. */
+  appName?: string
+}) {
   return (
     <Card>
       <CardHeader>
@@ -118,6 +126,7 @@ export function AppContributions({ contributions }: { contributions: AppContribu
                         'No activity yet'
                       )}
                     </span>
+                    <ContactButtons name={person.name} phone={person.phone} context={appName} />
                   </div>
                 </li>
               )

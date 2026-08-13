@@ -57,6 +57,8 @@ export type TeamMember = {
   name: string
   email: string
   avatarUrl: string | null
+  /** Contact number for the call/WhatsApp cluster — teammate-visible by design. */
+  phone: string | null
   role: string
   allocationPct: number
 }
@@ -137,6 +139,7 @@ export async function getTeamForApp(appId: string): Promise<TeamMember[]> {
       name: users.name,
       email: users.email,
       avatarUrl: users.avatarUrl,
+      phone: users.phone,
       role: assignments.role,
       allocationPct: assignments.allocationPct,
     })

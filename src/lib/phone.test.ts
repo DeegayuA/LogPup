@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePhone, telHref } from './phone'
+import { normalizePhone, telHref, waHref } from './phone'
 
 describe('normalizePhone', () => {
   it('accepts the shapes people type', () => {
@@ -29,5 +29,26 @@ describe('telHref', () => {
 
   it('keeps a leading + only when one was typed', () => {
     expect(telHref('0712345678')).toBe('tel:0712345678')
+  })
+})
+
+describe('waHref', () => {
+  it('converts a local Sri Lankan number to international digits', () => {
+    expect(waHref('071 234 5678')).toBe('https://wa.me/94712345678')
+  })
+
+  it('uses a +country number as its digits', () => {
+    expect(waHref('+94 71 234 5678')).toBe('https://wa.me/94712345678')
+  })
+
+  it('prefills the chat when a message is given — the automated send', () => {
+    expect(waHref('0712345678', 'About the SCADA sprint')).toBe(
+      'https://wa.me/94712345678?text=About%20the%20SCADA%20sprint',
+    )
+  })
+
+  it('opens an empty chat without a message — the manual one', () => {
+    expect(waHref('0712345678')).not.toContain('?text=')
+    expect(waHref('0712345678', '   ')).not.toContain('?text=')
   })
 })

@@ -9,6 +9,8 @@ export type AppContribution = {
   userId: string
   name: string
   avatarUrl: string | null
+  /** Contact number for the call/WhatsApp cluster — teammate-visible by design. */
+  phone: string | null
   role: string
   allocationPct: number
   tasksDone: number
@@ -55,6 +57,7 @@ export const getAppContributions = cache(async function getAppContributions(
         allocationPct: assignments.allocationPct,
         name: users.name,
         avatarUrl: users.avatarUrl,
+        phone: users.phone,
       })
       .from(assignments)
       .innerJoin(users, eq(users.id, assignments.userId))
@@ -94,6 +97,7 @@ export const getAppContributions = cache(async function getAppContributions(
         userId: member.userId,
         name: member.name,
         avatarUrl: member.avatarUrl,
+        phone: member.phone,
         role: member.role,
         allocationPct: member.allocationPct,
         tasksDone: taskCounts?.done ?? 0,

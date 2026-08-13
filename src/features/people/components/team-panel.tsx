@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { ContactButtons } from '@/components/contact-buttons'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -23,11 +24,14 @@ import type { ActiveUser, TeamMember } from '@/features/people/queries'
 
 export function TeamPanel({
   appId,
+  appName,
   team,
   activeUsers,
   isAdmin,
 }: {
   appId: string
+  /** Prefills the WhatsApp message with which project this is about. */
+  appName?: string
   team: TeamMember[]
   activeUsers: ActiveUser[]
   isAdmin: boolean
@@ -104,6 +108,7 @@ export function TeamPanel({
                   {member.allocationPct}%
                 </span>
               </div>
+              <ContactButtons name={member.name} phone={member.phone} context={appName} />
               {isAdmin ? (
                 <div className="flex shrink-0 items-center gap-0.5">
                   <AssignDialog

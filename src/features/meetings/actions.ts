@@ -34,6 +34,7 @@ import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
 import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
+import { managesApp } from '@/features/apps/project-manager'
 
 /**
  * The editable shape of a meeting, shared by create and update so the two can
@@ -160,11 +161,17 @@ async function revalidateMeetingPaths(appId: string | null) {
   revalidateAdmin()
 }
 
-function canManageMeeting(
+// Async now: the third branch reads the caller's assignment on the meeting's
+// app. Every call site MUST await — an un-awaited call returns a Promise,
+// which is truthy, which is "always allowed".
+async function canManageMeeting(
   session: { user: { id: string; role: string } },
-  meeting: { createdBy: string },
-): boolean {
-  return session.user.role === 'admin' || meeting.createdBy === session.user.id
+  meeting: { createdBy: string; appId?: string | null },
+): Promise<boolean> {
+  if (session.user.role === 'admin' || meeting.createdBy === session.user.id) return true
+  // The app's PROJECT MANAGER manages its meetings (see project-manager.ts);
+  // leads/architects stay reviewers and are deliberately not here.
+  return managesApp(session.user.id, meeting.appId)
 }
 
 /** A candidate for the Google Calendar attendee list: who, and required/optional. */
@@ -387,7 +394,7 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
 
   const existing = await meetingById(meetingId)
   if (!existing) return err('Meeting not found')
-  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  if (!(await canManageMeeting(session, existing))) return err('Not allowed')
   if (existing.googleEventId) return err('Meeting already has a calendar invite')
 
   // meetingAttendees has no deletedAt of its own — `existing` above was
@@ -442,7 +449,7 @@ export async function rescheduleMeeting(
 
   const existing = await meetingById(parsed.data.meetingId)
   if (!existing) return err('Meeting not found')
-  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  if (!(await canManageMeeting(session, existing))) return err('Not allowed')
 
   const nextStart = new Date(parsed.data.startsAt)
   const nextEnd = new Date(parsed.data.endsAt)
@@ -543,7 +550,7 @@ export async function updateMeeting(
 
   const existing = await meetingById(parsed.data.meetingId)
   if (!existing) return err('Meeting not found')
-  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  if (!(await canManageMeeting(session, existing))) return err('Not allowed')
 
   const { meetingId, appId, title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
   // Same dedup as createMeeting: the picker can hand back the same id twice,
@@ -777,7 +784,7 @@ export async function setMeetingApp(meetingId: string, appId: string | null): Pr
 
   const existing = await meetingById(parsed.data.meetingId)
   if (!existing) return err('Meeting not found')
-  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  if (!(await canManageMeeting(session, existing))) return err('Not allowed')
 
   const nextAppId = parsed.data.appId
   // Re-picking the app it is already filed under is a no-op, not an activity
@@ -820,7 +827,7 @@ export async function updateMeetingNotes(meetingId: string, notes: string): Prom
 
   const existing = await meetingById(meetingId)
   if (!existing) return err('Meeting not found')
-  if (!canManageMeeting(session, existing)) return err('Not allowed')
+  if (!(await canManageMeeting(session, existing))) return err('Not allowed')
 
   await db.update(meetings).set({ notes: notes || null }).where(eq(meetings.id, meetingId))
 

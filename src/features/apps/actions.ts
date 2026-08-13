@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { apps } from '@/db/schema'
 import { auth } from '@/lib/auth'
+import { managesApp } from '@/features/apps/project-manager'
 import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -291,14 +292,20 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
 }
 
 export async function updateApp(appId: string, input: unknown): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  // Admin OR the app's project manager: the PM manages everything in their
+  // project (see project-manager.ts). Editing is the widest thing they need;
+  // create/delete stay admin-only via requireAdmin below.
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
   // Every other action in the codebase validates the id shape before it
   // reaches the DB; this one used to pass the raw string through, so a
   // malformed id surfaced as a driver-level rejection rather than an error
   // the caller could render.
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
+  if (session.user.role !== 'admin' && !(await managesApp(session.user.id, parsedId.data))) {
+    return err('Only an admin or this project’s manager can edit it')
+  }
 
   const result = buildAppUpdate(input)
   if (!result.ok) return err(result.error)
