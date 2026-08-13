@@ -463,9 +463,15 @@ export const REASON_TEMPLATES: ReasonTemplate[] = [
     si: 'අතීත {seriesTitle} රැස්වීම් {count}ක AI සටහන්වල නම් සඳහන් වේ (සාකච්ඡා ලකුණු {points}ක්).',
   },
   {
+    // I1 (review round 2): the old template summed turns/total ACROSS every
+    // kept meeting while the score itself came from a single best meeting
+    // (round 1's fix) — the rendered numbers no longer recomputed to the
+    // points shown. Now cites the WINNING meeting's own turns/total/date;
+    // {meetingCount} still names how many recordings were considered, but
+    // never mixes their figures together.
     code: 'spoke',
-    en: 'Took {candidateTurns} of {totalTurns} attributed speaking turns across the last {meetingCount} recorded {seriesTitle} meeting(s).',
-    si: 'පසුගිය {seriesTitle} රැස්වීම් {meetingCount}ක ශබ්ද පටිගත කිරීම්වල, ආරෝපිත කථන වාරවලින් {totalTurns}න් {candidateTurns}ක් ගත්තා.',
+    en: 'Took {candidateTurns} of {totalTurns} attributed speaking turns in {meetingTitle} ({sourceDate}) — their best of {meetingCount} recorded {seriesTitle} meeting(s).',
+    si: '{seriesTitle} හි පටිගත කළ රැස්වීම් {meetingCount}න් වඩාත්ම හොඳ ප්‍රතිඵලය {meetingTitle} ({sourceDate}) හිදී ලැබුණි — ආරෝපිත කථන වාරවලින් {totalTurns}න් {candidateTurns}ක් ගත්තා.',
   },
   {
     code: 'lead',
@@ -840,7 +846,13 @@ function scoreDiscussion(facts: CandidateFacts, ctx: ScoreContext): FamilyResult
     // with no natural floor. A negative `points` value (a malformed/adversarial
     // row) must never drive scoreDet negative; clamp BOTH ends, not just the
     // spec's upper cap of 3.
-    const pts = Math.max(0, Math.min(3, m.points))
+    // M6 (review round 2): `Math.max`/`Math.min` both propagate NaN silently
+    // (every comparison against NaN is false) — the SAME untyped-jsonb threat
+    // model that produces a negative number can just as easily produce NaN,
+    // null coerced to 0 (harmless) or, from a stricter runtime, a string.
+    // `Number.isFinite` is the one guard that rejects NaN, +/-Infinity, and
+    // non-numbers alike before the clamp ever runs.
+    const pts = Number.isFinite(m.points) ? Math.max(0, Math.min(3, m.points)) : 0
     const recency = e4e5Recency(daysBetween(m.meetingStartsAt, ctx.meetingDay))
     raw += pts * 2 * recency
     citedPoints += pts
@@ -872,44 +884,80 @@ function scoreDiscussion(facts: CandidateFacts, ctx: ScoreContext): FamilyResult
  * running average/pooled ratio.
  *
  * FIX (a DELIBERATE DEVIATION from the spec's literal "Averaged over kept
- * meetings" — flagged here for the spec to be amended): take the BEST band
+ * meetings" — flagged here for the spec to be amended): take the BEST value
  * across kept meetings, never the average. `max` over a set of non-negative
  * values is monotone non-decreasing as you add or remove elements, which is
  * exactly the invariant "no signal may ever subtract" requires, and that
  * invariant is stated as outranking every other rule in this ledger.
+ *
+ * I2 (review round 2): round 1's fix took the max of the raw BAND but
+ * dropped recency decay entirely (the loop only ever checked `recency > 0`,
+ * a pass/fail window test, never used the multiplier itself) — so a band-8
+ * recording scored 8 at 0 days and at 179 days alike, then fell off a cliff
+ * to 0 at 181 days, while E4 right next to it still decays smoothly
+ * (x1.0/x0.7/x0.4). The spec's own words are "Averaged over kept meetings
+ * WITH RECENCY DECAY" — round 1's deviation note above covers the averaging
+ * half only. FIX: take the max of `band * recencyWeight`, not the max of the
+ * raw band — `max` stays monotone regardless of what each value is
+ * individually weighted by, so this costs nothing on the C1 invariant while
+ * restoring decay. The deviation is now precisely scoped: the AVERAGING
+ * went, the DECAY stayed.
  */
 function scoreVoice(facts: CandidateFacts, ctx: ScoreContext): FamilyResult {
-  // I2: series signal — unavailable below 2 established occurrences.
+  // I2/I3 (round 1): series signal — unavailable below 2 established occurrences.
   if (ctx.seriesOccurrenceCount < 2) return { points: 0, reasons: [], hardEvidence: 0 }
 
-  let bestBand = 0
+  let best: {
+    weighted: number
+    meetingId: string
+    meetingTitle: string
+    meetingStartsAt: Date
+    candidateTurns: number
+    resolvedTurnsTotal: number
+  } | null = null
   const ids: string[] = []
-  let candidateTurnsTotal = 0
-  let resolvedTurnsTotalSum = 0
 
   for (const m of facts.voiceMeetings) {
     if (m.resolvedTurnsTotal <= 0 || m.resolvedSpeakerCount <= 0) continue
-    const withinWindow = e4e5Recency(daysBetween(m.meetingStartsAt, ctx.meetingDay)) > 0
-    if (!withinWindow) continue
+    const weight = e4e5Recency(daysBetween(m.meetingStartsAt, ctx.meetingDay))
+    if (weight <= 0) continue
 
     const share = m.candidateTurns / m.resolvedTurnsTotal
     const expected = 1 / m.resolvedSpeakerCount
     const ratio = expected > 0 ? share / expected : 0
     const band = ratio >= 0.75 ? 8 : ratio >= 0.35 ? 4 : 2
+    const weighted = band * weight
 
-    if (band > bestBand) bestBand = band
     ids.push(m.meetingId)
-    candidateTurnsTotal += m.candidateTurns
-    resolvedTurnsTotalSum += m.resolvedTurnsTotal
+    if (!best || weighted > best.weighted) {
+      best = {
+        weighted,
+        meetingId: m.meetingId,
+        meetingTitle: m.meetingTitle,
+        meetingStartsAt: m.meetingStartsAt,
+        candidateTurns: m.candidateTurns,
+        resolvedTurnsTotal: m.resolvedTurnsTotal,
+      }
+    }
   }
 
-  if (ids.length === 0) return { points: 0, reasons: [], hardEvidence: 0 }
+  if (!best) return { points: 0, reasons: [], hardEvidence: 0 }
 
-  const capped = Math.min(FAMILY_CAPS.E5, bestBand)
+  const capped = Math.round(Math.min(FAMILY_CAPS.E5, best.weighted))
+  // I1 (round 2): cite the WINNING meeting's own turns/total/date — round 1's
+  // fix switched points to "best meeting" but left the citation SUMMING
+  // across every kept meeting (a leftover from the averaging design), so the
+  // rendered line no longer recomputed to the score it carried (reproduced:
+  // "Took 9 of 210 ... across 2 meetings" carrying 8 points, when 9/210
+  // alone recomputes to band 2). Every number in this line is now the
+  // winning meeting's own, so the citation is disprovable exactly by opening
+  // that one meeting, and it recomputes to the points shown.
   const reasons = [
-    renderReason('spoke', capped, { ids }, {
-      candidateTurns: candidateTurnsTotal,
-      totalTurns: resolvedTurnsTotalSum,
+    renderReason('spoke', capped, { ids: [best.meetingId] }, {
+      candidateTurns: best.candidateTurns,
+      totalTurns: best.resolvedTurnsTotal,
+      meetingTitle: best.meetingTitle,
+      sourceDate: fmtDayMonth(best.meetingStartsAt),
       meetingCount: ids.length,
       seriesTitle: ctx.seriesTitle ?? ctx.meetingTitle,
     }),
@@ -961,6 +1009,14 @@ function scoreOwnership(facts: CandidateFacts, ctx: ScoreContext): FamilyResult 
 }
 
 function scoreAttendance(facts: CandidateFacts, ctx: ScoreContext): FamilyResult {
+  // I3 (review round 2): `facts.attendance.occurrences` and
+  // `ctx.seriesOccurrenceCount` are DIFFERENT quantities — the former is
+  // this candidate's own attendance-history fact, the latter is the run's
+  // series-establishment fact — so gating on only the first meant
+  // `seriesOccurrenceCount: 1` (series not established) could still emit 6
+  // E7 points, alongside a `no_series` caveat that directly contradicted
+  // them. Same class as I2's E4/E5 gate; applied here too, defensively.
+  if (ctx.seriesOccurrenceCount < 2) return { points: 0, reasons: [], hardEvidence: 0 }
   if (!facts.attendance || facts.attendance.occurrences < 2) return { points: 0, reasons: [], hardEvidence: 0 }
 
   const ratio = facts.attendance.attended / facts.attendance.occurrences
@@ -1108,8 +1164,14 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
         : 'skip'
 
   // ---- R5: floors — minimum tier optional. No floor may ever LOWER the tier
-  // (see `maxTier`) — this is the structural half of "no signal subtracts". ----
-  const floors = [
+  // (see `maxTier`) — this is the structural half of "no signal subtracts".
+  // M4 (review round 2): kept as a PER-CANDIDATE array — the tiny-pool floor
+  // is a POOL-level fact (`ctx.poolSize`, identical for every candidate in
+  // the run), so it's applied alongside this array rather than inside it,
+  // matching `ScoredCandidate.floors.softFloor`'s own doc ("excludes the
+  // tiny-pool floor"). Previously the array and the doc disagreed — harmless
+  // today only because `tierAll` ORs `tinyPool` in separately regardless. ----
+  const perCandidateFloors = [
     facts.assignment !== null && facts.assignment.allocationPct > 0,
     facts.isLead,
     hardEvidenceCount >= 1,
@@ -1118,9 +1180,9 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
     facts.attendedPreviousOccurrence,
     facts.selfOptIn,
     facts.isReturner,
-    ctx.poolSize <= 4, // TINY TEAM: skip disabled entirely
   ]
-  if (floors.some(Boolean)) tier = maxTier(tier, 'optional')
+  const tinyPool = ctx.poolSize <= 4 // TINY TEAM: skip disabled entirely
+  if (perCandidateFloors.some(Boolean) || tinyPool) tier = maxTier(tier, 'optional')
 
   // ---- R6: E3 required floor — primary role/topic hit + assigned to the app.
   // I4 (review round 1): excludes an INFERRED app. This is the strongest,
@@ -1162,7 +1224,7 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
   // `floors` array and `facts` used for the real (non-abstain) R5/R7 logic
   // above, so ABSTAIN mode never has to reverse-engineer them from text.
   const hardOverride = facts.isOrganizer || pinned.forcedRequired
-  const softFloor = floors.some(Boolean)
+  const softFloor = perCandidateFloors.some(Boolean)
 
   return {
     userId: facts.userId,

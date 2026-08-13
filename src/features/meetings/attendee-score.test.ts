@@ -547,6 +547,23 @@ describe('E4 — discussion points', () => {
     for (const r of scored.reasons) expect(r.points).toBeGreaterThanOrEqual(0)
   })
 
+  it('M6 (review round 2 regression): a NaN points value from the same unvalidated jsonb source never poisons scoreDet', () => {
+    // `Math.max`/`Math.min` both propagate NaN silently (every comparison
+    // against NaN is false), so `Math.max(0, Math.min(3, NaN))` is itself
+    // NaN — the exact same untyped-jsonb threat model C2 fixed for negative
+    // numbers produces NaN just as easily (a malformed model response,
+    // `Number(undefined)`, a bad JSON parse). `points: NaN` must contribute
+    // 0, not poison the whole scoreDet sum into NaN (where every `>=`
+    // threshold comparison silently evaluates to false).
+    const facts = baseFacts({
+      discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: NaN }],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null }))
+    expect(Number.isNaN(scored.scoreDet)).toBe(false)
+    expect(scored.scoreDet).toBe(0)
+    expect(scored.tier).toBe('skip')
+  })
+
   it('I2 (review round 1): is UNAVAILABLE (0, no penalty) when the series has fewer than 2 established occurrences', () => {
     const facts = baseFacts({
       discussionMeetings: [{ meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), points: 3 }],
@@ -645,6 +662,64 @@ describe('E5 — voice participation', () => {
     expect(before.scoreDet).toBe(32)
     expect(after.scoreDet).toBe(32) // NOT 29 — the second, weaker-but-real recording must not lower the total
     expect(tierRank[after.tier]).toBeGreaterThanOrEqual(tierRank[before.tier])
+  })
+
+  it('I2 (review round 2 regression): recency decay is restored — a band-8 recording does NOT score 8 at 179 days', () => {
+    // Round 1's fix took the max RAW band across kept meetings but only ever
+    // checked recency as a pass/fail window test (`> 0`), so a band-8
+    // recording scored the full 8 uniformly from 0 to 179 days, then fell
+    // off a cliff to 0 at 181 — while E4 next to it still decays smoothly.
+    // Fixed: max of (band * recencyWeight). Same ratio (band 8) at increasing
+    // ages must now decay 8 -> ~6 (x0.7) -> ~3 (x0.4) -> 0 (>180d, out of window).
+    const build = (days: number) =>
+      baseFacts({
+        voiceMeetings: [
+          { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(days), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 },
+        ],
+      })
+    expect(scoreCandidate(build(1), baseCtx({ appId: null })).scoreDet).toBe(8) // <=30d, x1.0
+    expect(scoreCandidate(build(45), baseCtx({ appId: null })).scoreDet).toBe(6) // <=90d, x0.7 -> round(5.6)
+    expect(scoreCandidate(build(120), baseCtx({ appId: null })).scoreDet).toBe(3) // <=180d, x0.4 -> round(3.2)
+    expect(scoreCandidate(build(200), baseCtx({ appId: null })).scoreDet).toBe(0) // >180d, out of window
+  })
+
+  it('I2: max(band x recencyWeight) stays monotone — a fresher, lower-band meeting can still win over a stale, higher-band one', () => {
+    // Directly exercises WHY max-of-weighted (not max-of-raw-band) was chosen:
+    // a band-8 meeting 120 days old (weighted 8*0.4=3.2) must lose to a band-4
+    // meeting 1 day old (weighted 4*1.0=4) — recency-weighted evidence beats
+    // stale strong evidence, exactly as it does for every other family.
+    const facts = baseFacts({
+      voiceMeetings: [
+        { meetingId: 'stale', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(120), candidateTurns: 15, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 }, // share .5, expected .333, ratio 1.5 -> band 8, weighted 8*0.4=3.2
+        { meetingId: 'fresh', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 5, resolvedTurnsTotal: 30, resolvedSpeakerCount: 3 }, // share .167, expected .333, ratio .5 -> band 4, weighted 4*1.0=4
+      ],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null }))
+    expect(scored.scoreDet).toBe(4)
+    expect(scored.reasons.find((r) => r.code === 'spoke')?.evidence.ids).toEqual(['fresh'])
+  })
+
+  it('I1 (review round 2 regression): the "spoke" reason cites the WINNING meeting only — the citation recomputes to the score it carries', () => {
+    // Reproduced: meetings of 8/10 turns @2 speakers (day 1, band 8) and
+    // 1/200 turns @2 speakers (day 1, band 2) used to render "Took 9 of 210
+    // ... across 2 meetings" carrying 8 points — but 9/210 recomputes to
+    // band 2, not 8. Every number in the line must now belong to the ONE
+    // meeting whose band actually produced the score.
+    const facts = baseFacts({
+      voiceMeetings: [
+        { meetingId: 'm1', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 8, resolvedTurnsTotal: 10, resolvedSpeakerCount: 2 }, // share .8, expected .5, ratio 1.6 -> band 8
+        { meetingId: 'm2', meetingTitle: 'Vela Weekly', meetingStartsAt: daysBefore(1), candidateTurns: 1, resolvedTurnsTotal: 200, resolvedSpeakerCount: 2 }, // share .005, ratio .01 -> band 2
+      ],
+    })
+    const scored = scoreCandidate(facts, baseCtx({ appId: null }))
+    expect(scored.scoreDet).toBe(8)
+    const reason = scored.reasons.find((r) => r.code === 'spoke')
+    expect(reason?.points).toBe(8)
+    // The citation must be exactly the winning meeting's own numbers (8 of 10) —
+    // never the old aggregate (9 of 210), which does not recompute to band 8.
+    expect(reason?.en).toContain('8 of 10')
+    expect(reason?.en).not.toContain('9 of 210')
+    expect(reason?.evidence.ids).toEqual(['m1'])
   })
 
   it('an unresolved speaker meeting is UNAVAILABLE for that candidate, not scored as zero', () => {
@@ -785,6 +860,22 @@ describe('E7 — attendance habit', () => {
     const scored = scoreCandidate(baseFacts({ attendance: { occurrences: 6, attended: 6 } }), baseCtx({ appId: null }))
     expect(scored.hardEvidenceCount).toBe(0)
     expect(scored.tier).not.toBe('required')
+  })
+
+  it('I3 (review round 2 regression): is UNAVAILABLE when the SERIES has fewer than 2 established occurrences, even with a rich attendance fact', () => {
+    // Reproduced: `facts.attendance.occurrences` (this candidate's own
+    // attendance-history fact) and `ctx.seriesOccurrenceCount` (the run's
+    // series-establishment fact) are DIFFERENT quantities. Gating on the
+    // former alone let seriesOccurrenceCount:1 + attendance{occurrences:6,
+    // attended:5} score a full 6 points while simultaneously emitting a
+    // `no_series` caveat that directly contradicted the score. Same class as
+    // E4/E5's I2 fix (round 1), applied here too.
+    const scored = scoreCandidate(
+      baseFacts({ attendance: { occurrences: 6, attended: 5 } }),
+      baseCtx({ appId: null, seriesOccurrenceCount: 1, seriesTitle: 'Vela Weekly' }),
+    )
+    expect(scored.scoreDet).toBe(0)
+    expect(scored.caveats.some((c) => c.code === 'no_series')).toBe(true)
   })
 })
 
@@ -1187,6 +1278,28 @@ describe('abstain mode', () => {
     const run = tierAll([organizer, pinned], baseCtx({ appId: null }))
     expect(run.abstained).toBe(true)
     expect(run.scored.find((c) => c.userId === 'u2')?.tier).toBe('required')
+  })
+
+  it('M5 (review round 2, DOCUMENTED BEHAVIOUR CHANGE from M7): an app lead floors to optional in abstain mode even when appId is null', () => {
+    // M7 (round 1) replaced tierAll's ABSTAIN reconciliation from pattern-
+    // matching reason CODES to reading scoreCandidate's structured
+    // `floors.softFloor`. This changed a real answer: `scoreOwnership`
+    // returns NO reasons at all when `ctx.appId === null` (E6 is hard-zeroed,
+    // same as E2/E3), so the OLD code-matching path could never see a `lead`
+    // reason here and fell through to `skip`. The NEW path reads
+    // `facts.isLead` directly — a per-candidate FACT, not a rendered
+    // string — and correctly floors to `optional`, which agrees with R5's
+    // own floor list ("apps.leadId" floors optional, unconditionally). This
+    // is the BETTER answer; it was unlabelled and untested until now.
+    const organizer = scoreCandidate(baseFacts({ userId: 'org', isOrganizer: true }), baseCtx({ appId: null }))
+    const lead = scoreCandidate(baseFacts({ userId: 'u2', isLead: true }), baseCtx({ appId: null }))
+    // Sanity: E6 truly contributes nothing and emits no reason when appId is null.
+    expect(lead.scoreDet).toBe(0)
+    expect(lead.reasons.some((r) => r.code === 'lead')).toBe(false)
+    expect(lead.floors.softFloor).toBe(true) // the fact survives even though no reason text does
+    const run = tierAll([organizer, lead], baseCtx({ appId: null }))
+    expect(run.abstained).toBe(true)
+    expect(run.scored.find((c) => c.userId === 'u2')?.tier).toBe('optional')
   })
 
   it('makes no negative statement: every reason has non-negative points and no banned phrasing, even for the skipped stray', () => {
