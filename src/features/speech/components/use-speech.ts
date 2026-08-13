@@ -120,7 +120,11 @@ export function useSpeech(): SpeechHandle {
 
       let played = false
       try {
-        const res = await synthesizeSpeech(trimmed)
+        // Chunk 0 only. The rest are fetched while this one is already
+        // playing — a whole summary in one response exceeds the platform's
+        // buffered-response ceiling and fails outright, and waiting for all
+        // of it would put 15-45s of silence first anyway. See chunk-speech.ts.
+        const res = await synthesizeSpeech(trimmed, 0)
         // Stale ticket: a stop() or newer speak() happened while Gemini was
         // generating. No cleanup — this invocation owns no audio yet, and the
         // shared refs may already belong to the newer one.
@@ -131,39 +135,76 @@ export function useSpeech(): SpeechHandle {
             // listener would believe they had heard all of it.
             setError('That was long, so only the first few minutes are read aloud.')
           }
-          // Gemini returns headerless PCM; browsers only play containerised
-          // audio, so it is wrapped in a WAV header here (see wav.ts).
-          const pcm = base64ToBytes(res.data.audioBase64)
-          const wav = pcmToWav(pcm, parsePcmRate(res.data.mimeType))
-          const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }))
-          objectUrlRef.current = url
-          const audio = new Audio(url)
-          audioRef.current = audio
-          audio.onended = () => {
+
+          const { chunkCount } = res.data
+          // Chunk n+1 is requested as soon as chunk n starts playing, so the
+          // next clip is usually decoded and waiting by the time this one
+          // ends. Depth 1 on purpose: deeper prefetch spends the caller's
+          // own free-tier rate limit on audio they may stop before reaching.
+          let ahead: ReturnType<typeof synthesizeSpeech> | null = null
+
+          const playChunk = async (
+            data: { audioBase64: string; mimeType: string },
+            index: number,
+          ): Promise<void> => {
+            // Gemini returns headerless PCM; browsers only play containerised
+            // audio, so it is wrapped in a WAV header here (see wav.ts).
+            const pcm = base64ToBytes(data.audioBase64)
+            const wav = pcmToWav(pcm, parsePcmRate(data.mimeType))
+            const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }))
+            objectUrlRef.current = url
+            const audio = new Audio(url)
+            audioRef.current = audio
+
+            const next = index + 1
+            // Start the next request BEFORE awaiting this chunk's playback.
+            ahead = next < chunkCount ? synthesizeSpeech(trimmed, next) : null
+
+            const finished = new Promise<void>((resolve) => {
+              audio.onended = () => resolve()
+              audio.onerror = () => {
+                setError('That audio could not be played')
+                resolve()
+              }
+            })
+
+            await audio.play()
+            if (genRef.current !== gen) {
+              audio.pause()
+              URL.revokeObjectURL(url)
+              return
+            }
+            setEngine('gemini')
+            setSpeaking(true)
+            // Sound is out, so the caller is no longer waiting even though
+            // later chunks are still being fetched behind it.
+            setLoading(false)
+
+            await finished
+            if (genRef.current !== gen) return
+
             cleanupAudio()
-            setSpeaking(false)
-            setEngine(null)
+            const pending = ahead
+            if (!pending) {
+              setSpeaking(false)
+              setEngine(null)
+              return
+            }
+            const nextRes = await pending
+            if (genRef.current !== gen) return
+            if (!nextRes.ok) {
+              // Mid-reading failure: say so rather than falling silent
+              // partway through, which is indistinguishable from having
+              // reached the end.
+              setSpeaking(false)
+              setEngine(null)
+              setError('The rest of that could not be read aloud.')
+              return
+            }
+            await playChunk(nextRes.data, next)
           }
-          audio.onerror = () => {
-            cleanupAudio()
-            setSpeaking(false)
-            setEngine(null)
-            setError('That audio could not be played')
-          }
-          await audio.play()
-          // stop() can land while play() is in flight — without this the
-          // element keeps playing behind a UI that says it stopped, and
-          // `speaking` sticks on with no handler left to clear it. The stale
-          // stop() already paused THIS element via the refs, so only the
-          // local handles need dropping — cleanupAudio on the shared refs
-          // here could kill a newer invocation's audio instead.
-          if (genRef.current !== gen) {
-            audio.pause()
-            URL.revokeObjectURL(url)
-            return
-          }
-          setEngine('gemini')
-          setSpeaking(true)
+
+          await playChunk(res.data, 0)
           played = true
           return
         }

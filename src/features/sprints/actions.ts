@@ -395,9 +395,9 @@ export async function updateSprintDates(
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const [existing] = await db
-    .select({ appId: sprints.appId })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   await db
@@ -418,9 +418,9 @@ export async function reorderSprint(sprintId: string, sortOrder: number): Promis
   if (!Number.isInteger(sortOrder)) return err('Invalid sort order')
 
   const [existing] = await db
-    .select({ appId: sprints.appId })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   await db.update(sprints).set({ sortOrder }).where(eq(sprints.id, sprintId))
@@ -442,10 +442,10 @@ export async function resortSprintsByDate(appId: string): Promise<ActionResult> 
   if (!(await requireAdmin())) return err('Admins only')
 
   const rows = await db
-    .select({ id: sprints.id })
-    .from(sprints)
-    .where(eq(sprints.appId, appId))
-    .orderBy(sprints.startDate, sprints.id)
+    .select({ id: liveSprints.id })
+    .from(liveSprints)
+    .where(eq(liveSprints.appId, appId))
+    .orderBy(liveSprints.startDate, liveSprints.id)
   if (rows.length === 0) return err('No sprints to sort')
 
   // Sequential, not db.batch: this reseeds a whole app's row order in one
@@ -472,9 +472,9 @@ export async function renameSprint(sprintId: string, name: string): Promise<Acti
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const [existing] = await db
-    .select({ appId: sprints.appId })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   await db.update(sprints).set({ name: parsed.data }).where(eq(sprints.id, sprintId))
@@ -484,20 +484,11 @@ export async function renameSprint(sprintId: string, name: string): Promise<Acti
   return ok(undefined)
 }
 
-export async function deleteSprint(sprintId: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
-
-  const [existing] = await db
-    .select({ appId: sprints.appId })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
-  if (!existing) return err('Sprint not found')
-
-  // tasks.sprint_id is ON DELETE SET NULL — a deleted sprint's tasks land
-  // back in the app's backlog rather than being destroyed with it.
-  await db.delete(sprints).where(eq(sprints.id, sprintId))
-
-  const slug = await slugForApp(existing.appId)
-  if (slug) revalidatePath('/apps/' + slug)
-  return ok(undefined)
-}
+// A second, hard-deleting `deleteSprint` used to sit here. It arrived with
+// this merge from a branch that forked before soft deletes existed, and it is
+// removed rather than renamed: two exported functions of one name is a
+// duplicate implementation, and the surviving version above is the one the
+// rest of the tree already speaks to — actions.test.ts and
+// sprint-edit-dialog.tsx both read `backlogTasks` off its result, which the
+// hard-delete version never returned. `DELETE FROM sprints` here would also
+// bypass the admin Trash and trip check 4 in src/db/live.test.ts.

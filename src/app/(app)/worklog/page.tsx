@@ -4,7 +4,8 @@ import { getSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
-import { getMyWorklogs, getTeamWorklogs } from '@/features/worklog/queries'
+import { getMyWorklogs, getTeamWorklogs, getUserJoinDay } from '@/features/worklog/queries'
+import { MAX_BACKFILL_DAYS, missingWorkDays } from '@/features/worklog/missing-days'
 import { resolveWorkDay, summarizeWorklogs, worklogDaysBack } from '@/features/worklog/worklog-day'
 
 export const metadata = { title: 'Work log' }
@@ -45,6 +46,14 @@ export default async function WorklogPage() {
       {/* Only the data waits. The heading is on screen immediately, and the
           form arrives with today's entry already in it rather than flashing
           an empty box that then fills. */}
+      {/* Owed days come FIRST, above today's box. The rule is that every
+          working day gets logged, so if earlier ones are outstanding they
+          are the thing to deal with — burying them under today's entry is
+          how a backlog becomes permanent. */}
+      <Suspense fallback={null}>
+        <CatchUp userId={session.user.id} today={today} />
+      </Suspense>
+
       <Suspense fallback={<FormSkeleton />}>
         <TodayEntry userId={session.user.id} today={today} />
       </Suspense>
@@ -59,6 +68,58 @@ export default async function WorklogPage() {
         </Suspense>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * The days this person still owes, each with its own entry box.
+ *
+ * Renders nothing when nothing is outstanding — a permanently-present
+ * "catch up" panel showing zero is noise that teaches people to ignore the
+ * area where the real prompt appears. Weekends and gazetted holidays are
+ * never counted, the window starts at the join date and is capped, so this
+ * is always a list somebody can actually clear (see missing-days.ts).
+ */
+async function CatchUp({ userId, today }: { userId: string; today: string }) {
+  const [joinedOn, recent] = await Promise.all([
+    getUserJoinDay(userId),
+    getMyWorklogs(userId, MAX_BACKFILL_DAYS * 3),
+  ])
+  if (!joinedOn) return null
+
+  const missing = missingWorkDays({
+    today,
+    joinedOn,
+    logged: new Set(recent.map((row) => row.day)),
+  })
+  if (missing.length === 0) return null
+
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/5 p-4">
+      <div className="flex flex-col gap-0.5">
+        <h2 className="font-heading text-sm font-semibold">
+          {missing.length === 1 ? '1 day still needs logging' : `${missing.length} days still need logging`}
+        </h2>
+        <p className="text-2xs text-muted-foreground">
+          Fill these in before today&rsquo;s. Weekends and public holidays are not counted, and this
+          only goes back as far as {MAX_BACKFILL_DAYS} working days — you will never be shown a
+          backlog you cannot clear.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        {missing.map((day) => (
+          <div key={day} className="flex flex-col gap-1.5">
+            <h3 className="font-mono text-xs tabular-nums text-muted-foreground">
+              {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
+            </h3>
+            {/* Draft with AI reads that day's own activity, so a forgotten
+                Tuesday is still recoverable from what LogPup saw. */}
+            <WorklogForm day={day} initial={null} />
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 

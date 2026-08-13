@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { dailyWorklogs, users } from '@/db/schema'
+import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 
 /**
  * Reads for the work log.
@@ -21,6 +22,21 @@ export type TeamWorklogRow = WorklogRow & {
   userId: string
   userName: string
   avatarUrl: string | null
+}
+
+/**
+ * The day this person joined, Colombo — the floor for "which days do you
+ * still owe". `users.createdAt` is used deliberately: `assignments` has no
+ * createdAt at all, and `assignment_history.effectiveFrom` is backfilled to
+ * GREATEST(user.createdAt, app.createdAt), which makes people look older on
+ * the team than they are and would invent debt they never owed.
+ */
+export async function getUserJoinDay(userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ createdAt: users.createdAt })
+    .from(users)
+    .where(eq(users.id, userId))
+  return row ? toIsoDateInTimeZone(row.createdAt, LK_TIMEZONE) : null
 }
 
 /** One person's most recent days, newest first. */
