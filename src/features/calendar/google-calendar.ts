@@ -19,19 +19,51 @@ export async function createCalendarEvent(opts: {
   // — carried straight through to Google's own `optional` attendee field,
   // same as it's carried to the .ics ROLE parameter in features/meetings/ics.ts.
   attendeeEmails: { email: string; optional: boolean }[]
-}): Promise<{ eventId: string }> {
+  /**
+   * Ask Google to attach a Meet room to the event. A Meet link cannot be
+   * minted on its own — it exists only as a property of a Calendar event —
+   * which is why "create a Meet link" in the form is a request carried by the
+   * save rather than an immediate fetch (an immediate fetch would need a
+   * throwaway event that outlives a cancelled form).
+   */
+  withMeet?: boolean
+}): Promise<{ eventId: string; meetLink: string | null }> {
   const res = await client(opts.refreshToken).events.insert({
     calendarId: 'primary',
     sendUpdates: 'all',
+    // Must be 1 for conferenceData to be honoured — at the default 0, Google
+    // silently strips it from the request, which reads as "Meet just doesn't
+    // work" with no error anywhere.
+    conferenceDataVersion: opts.withMeet ? 1 : 0,
     requestBody: {
       summary: opts.title,
       description: opts.agenda,
       start: { dateTime: opts.startsAt.toISOString() },
       end: { dateTime: opts.endsAt.toISOString() },
       attendees: opts.attendeeEmails.map(({ email, optional }) => ({ email, optional })),
+      ...(opts.withMeet
+        ? {
+            conferenceData: {
+              createRequest: {
+                // Idempotency key for the conference, not decoration: a retry
+                // of the same insert with the same id returns the same room
+                // instead of minting a second one.
+                requestId: crypto.randomUUID(),
+                conferenceSolutionKey: { type: 'hangoutsMeet' },
+              },
+            },
+          }
+        : {}),
     },
   })
-  return { eventId: res.data.id! }
+  // hangoutLink is the flat convenience copy; the entryPoints walk is the
+  // documented location. Both are checked because Google has moved this
+  // between the two across API revisions.
+  const meetLink =
+    res.data.hangoutLink ??
+    res.data.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri ??
+    null
+  return { eventId: res.data.id!, meetLink }
 }
 
 /**

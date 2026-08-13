@@ -50,6 +50,10 @@ const meetingFields = {
   agenda: z.string().max(2000).optional(),
   meetingUrl: meetingUrlSchema.optional(),
   attendeeIds: z.array(z.uuid()).min(1),
+  // "Create a Google Meet link for me": carried by the save because a Meet
+  // room only exists as a property of a Calendar event (see createCalendarEvent).
+  // Accepted on update too for schema symmetry, though only create acts on it.
+  withMeet: z.boolean().optional(),
 }
 
 const endsAfterStart = (data: { startsAt: string; endsAt: string }) =>
@@ -205,7 +209,9 @@ async function syncCalendarInvite(
     createdBy: string
   },
   attendees: AttendeeRef[],
-): Promise<{ reason?: string }> {
+  /** Ask Google to mint a Meet room with the event and store its link. */
+  withMeet?: boolean,
+): Promise<{ reason?: string; meetUrl?: string }> {
   const [creator] = await db
     .select({ googleRefreshToken: users.googleRefreshToken })
     .from(users)
@@ -216,14 +222,28 @@ async function syncCalendarInvite(
 
   try {
     const emails = await attendeeEmails(attendees)
-    const { eventId } = await createCalendarEvent({
+    const { eventId, meetLink } = await createCalendarEvent({
       refreshToken: creator.googleRefreshToken,
       title: meeting.title,
       agenda: meeting.agenda ?? undefined,
       startsAt: meeting.startsAt,
       endsAt: meeting.endsAt,
       attendeeEmails: emails,
+      withMeet,
     })
+    // The minted link fills meeting_url only where the form left it blank.
+    // The guarded WHERE — not a read-then-write — is what makes a link typed
+    // concurrently by someone else win over the minted one instead of being
+    // silently overwritten; the second statement lands the event id even when
+    // the first matched nothing.
+    if (withMeet && meetLink) {
+      await db
+        .update(meetings)
+        .set({ googleEventId: eventId, meetingUrl: meetLink })
+        .where(and(eq(meetings.id, meeting.id), isNull(meetings.meetingUrl)))
+      await db.update(meetings).set({ googleEventId: eventId }).where(eq(meetings.id, meeting.id))
+      return { meetUrl: meetLink }
+    }
     await db.update(meetings).set({ googleEventId: eventId }).where(eq(meetings.id, meeting.id))
     return {}
   } catch (error) {
@@ -272,7 +292,7 @@ async function syncCalendarTime(
 
 export async function createMeeting(
   input: unknown,
-): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
+): Promise<ActionResult<{ meetingId: string; calendarWarning?: string; meetUrl?: string }>> {
   // Any authenticated member may create a meeting — no role check beyond a session.
   const session = await requireSession()
   if (!session) return err('Sign in required')
@@ -348,7 +368,7 @@ export async function createMeeting(
     metadata: { startsAt, endsAt, attendeeCount: attendeeIds.length },
   })
 
-  const { reason } = await syncCalendarInvite(
+  const { reason, meetUrl } = await syncCalendarInvite(
     {
       id: meetingId,
       title,
@@ -361,6 +381,9 @@ export async function createMeeting(
     // invite-list UI work is a later task) — every row it inserts above is
     // optional:false by column default, so the calendar invite matches.
     attendeeIds.map((userId) => ({ userId, optional: false })),
+    // Only when no link was typed: a pasted Zoom link and a minted Meet room
+    // on the same meeting would give the Join button two contradictory answers.
+    parsed.data.withMeet === true && !meetingUrl,
   )
   const calendarWarning = reason ? inviteWarning(reason) : undefined
 
@@ -385,7 +408,7 @@ export async function createMeeting(
   }
 
   await revalidateMeetingPaths(appId)
-  return ok({ meetingId, calendarWarning })
+  return ok({ meetingId, calendarWarning, meetUrl })
 }
 
 export async function retryCalendarInvite(meetingId: string): Promise<ActionResult> {
@@ -541,7 +564,10 @@ export async function rescheduleMeeting(
  */
 export async function updateMeeting(
   input: unknown,
-): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
+  // meetUrl is never set here (update doesn't mint rooms — see meetingFields'
+  // withMeet note) but stays in the type so the form's shared success path can
+  // read one result shape for both save modes.
+): Promise<ActionResult<{ meetingId: string; calendarWarning?: string; meetUrl?: string }>> {
   const session = await requireSession()
   if (!session) return err('Sign in required')
 

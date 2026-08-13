@@ -11,7 +11,7 @@ import {
 } from 'react'
 import { addHours, format } from 'date-fns'
 import { toast } from 'sonner'
-import { Loader2, PlusIcon, UsersIcon, XIcon } from 'lucide-react'
+import { Loader2, PlusIcon, UsersIcon, VideoIcon, XIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,6 +37,7 @@ import { autoMeetingTitle, isAutoMeetingTitle } from '@/features/meetings/auto-t
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { MeetingShareDialog } from '@/features/meetings/components/meeting-share-dialog'
 import {
   Select,
   SelectContent,
@@ -242,6 +243,13 @@ export function MeetingForm({
   // is the only thing the (re-parsed) preview reads, so parsing never runs on
   // a half-typed word.
   const [quickAdd, setQuickAdd] = useState('')
+  // "Mint a Google Meet link on save". Separate from `form` because it is a
+  // request about the save, not a field of the meeting — and it must survive
+  // the parser writing into form.meetingUrl without being clobbered.
+  const [withMeet, setWithMeet] = useState(false)
+  // Set AFTER the form dialog closes on a successful create: the share sheet
+  // is its own dialog, keyed on the new meeting's id.
+  const [shareMeetingId, setShareMeetingId] = useState<string | null>(null)
   const [settled, setSettled] = useState('')
 
   // No render-time "did `open` change?" sync here on purpose. `open` is this
@@ -296,6 +304,7 @@ export function MeetingForm({
       setForm(editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart))
       setQuickAdd('')
       setSettled('')
+      setWithMeet(false)
       // Opened from an app page (defaultAppId set): the meeting is linked to
       // that app from the first paint, so its team is offered without a
       // manual re-select of the same app. Never on an edit — the attendees
@@ -464,6 +473,8 @@ export function MeetingForm({
           agenda: form.agenda || undefined,
           meetingUrl: form.meetingUrl,
           attendeeIds: form.attendeeIds,
+          // Only meaningful with a blank link — the server enforces the same.
+          withMeet: withMeet && !form.meetingUrl ? true : undefined,
         }
         const res = editing
           ? await updateMeeting({ meetingId: editing.id, ...fields })
@@ -484,8 +495,14 @@ export function MeetingForm({
             },
             duration: 12_000,
           })
+        } else if (!editing && res.data.meetUrl) {
+          toast.success('Meeting created — Google Meet link added')
         } else toast.success(editing ? 'Meeting updated' : 'Meeting created')
         handleOpenChange(false)
+        // The share sheet follows every successful CREATE — most of all when
+        // Google's own emails failed, which is exactly when a WhatsApp nudge
+        // is the only delivery. Edits change details; they don't re-invite.
+        if (!editing) setShareMeetingId(res.data.meetingId)
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -505,6 +522,7 @@ export function MeetingForm({
   const linkInvalid = !isValidMeetingUrl(form.meetingUrl)
 
   return (
+    <>
     <Dialog open={open} onOpenChange={handleOpenChange}>
       {trigger ? <DialogTrigger render={trigger} /> : null}
       <DialogContent className="sm:max-w-lg">
@@ -618,25 +636,48 @@ export function MeetingForm({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="meeting-link">Link</Label>
-            <Input
-              id="meeting-link"
-              type="url"
-              inputMode="url"
-              value={form.meetingUrl}
-              onChange={(e) => setForm((f) => ({ ...f, meetingUrl: e.target.value }))}
-              placeholder="https://meet.google.com/…"
-              autoComplete="off"
-              className="hover:border-ring/40"
-              aria-invalid={linkInvalid || undefined}
-              aria-describedby={linkInvalid ? 'meeting-link-error' : 'meeting-link-hint'}
-            />
+            <div className="flex items-start gap-2">
+              <Input
+                id="meeting-link"
+                type="url"
+                inputMode="url"
+                value={form.meetingUrl}
+                onChange={(e) => {
+                  const value = e.target.value
+                  // Typing a link IS the answer to "which room?" — it cancels
+                  // the minted one rather than racing it.
+                  if (value) setWithMeet(false)
+                  setForm((f) => ({ ...f, meetingUrl: value }))
+                }}
+                placeholder="https://meet.google.com/…"
+                autoComplete="off"
+                className="hover:border-ring/40"
+                disabled={withMeet}
+                aria-invalid={linkInvalid || undefined}
+                aria-describedby={linkInvalid ? 'meeting-link-error' : 'meeting-link-hint'}
+              />
+              {!editing && !form.meetingUrl ? (
+                <Button
+                  type="button"
+                  variant={withMeet ? 'secondary' : 'outline'}
+                  className="shrink-0"
+                  aria-pressed={withMeet}
+                  onClick={() => setWithMeet((v) => !v)}
+                >
+                  <VideoIcon aria-hidden />
+                  {withMeet ? 'Meet on save' : 'Create Meet link'}
+                </Button>
+              ) : null}
+            </div>
             {linkInvalid ? (
               <p id="meeting-link-error" role="alert" className="text-xs text-destructive">
                 {MEETING_URL_ERROR}
               </p>
             ) : (
               <p id="meeting-link-hint" className="text-xs text-muted-foreground">
-                Meet, Zoom or Teams link — attendees get a one-click join
+                {withMeet
+                  ? 'A Google Meet room will be created and its link filled in when you save — needs your Google Calendar connection.'
+                  : 'Meet, Zoom or Teams link — attendees get a one-click join'}
               </p>
             )}
           </div>
@@ -758,5 +799,7 @@ export function MeetingForm({
         </form>
       </DialogContent>
     </Dialog>
+      <MeetingShareDialog meetingId={shareMeetingId} onClose={() => setShareMeetingId(null)} />
+    </>
   )
 }
