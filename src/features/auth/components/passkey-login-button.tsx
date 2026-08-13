@@ -50,20 +50,28 @@ export function PasskeyLoginButton() {
   }
 
   return (
-    <Button
-      type="button"
-      size="lg"
-      variant="outline"
-      className="w-full"
-      onClick={loginWithPasskey}
-      disabled={busy}
-    >
-      {busy ? (
-        <Loader2 aria-hidden className="animate-spin motion-reduce:animate-none" />
-      ) : (
-        <Fingerprint aria-hidden />
-      )}
-      Sign in with a passkey
-    </Button>
+    <div className="flex flex-col gap-1.5">
+      <Button
+        type="button"
+        size="lg"
+        variant="outline"
+        className="w-full"
+        onClick={loginWithPasskey}
+        disabled={busy}
+      >
+        {busy ? (
+          <Loader2 aria-hidden className="animate-spin motion-reduce:animate-none" />
+        ) : (
+          <Fingerprint aria-hidden />
+        )}
+        Sign in with a passkey
+      </Button>
+      {/* The browser's own "no passkeys for this site" sheet is a dead end
+          with no directions — these are the directions. A passkey attaches
+          to an account, so the first visit has to come in another door. */}
+      <p className="text-center text-xs text-muted-foreground">
+        First time? Sign in with Google or password, then add a passkey in Settings.
+      </p>
+    </div>
   )
 }

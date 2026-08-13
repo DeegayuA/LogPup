@@ -1,5 +1,6 @@
 import { Suspense } from 'react'
 import { getSession } from '@/lib/session'
+import { PasskeyNudge } from '@/features/auth/components/passkey-nudge'
 import {
   businessHourOf,
   formatBusinessWeekdayLong,
@@ -82,6 +83,14 @@ export default async function DashboardPage() {
           </Suspense>
         ) : null}
       </header>
+
+      {/* One-time pointer from "signed in the slow way" to the fast way —
+          renders only while the account has zero passkeys (see PasskeyNudge). */}
+      {user ? (
+        <Suspense fallback={null}>
+          <PasskeyNudge userId={user.id} />
+        </Suspense>
+      ) : null}
 
       {/* ——— My day ——— */}
       {user ? (
