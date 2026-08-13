@@ -55,6 +55,14 @@ export const users = pgTable('users', {
   // Free-form organization labels (client/team names) an admin pins on a user.
   orgTags: text('org_tags').array().notNull().default([]),
   googleRefreshToken: text('google_refresh_token'),
+  // Alternate names/initials this person is known by elsewhere in the data
+  // (meeting transcripts, follow-up authors, AI notes) — e.g. "W.A.D.N. Perera"
+  // stored here as an alias for a user named "Nuwan". matchPersonToAttendee
+  // (src/features/meetings/followups.ts) only ever compares against
+  // users.name's first whitespace-split token, so a name recorded in any
+  // other form silently never matches without an entry here. Admin-set only;
+  // nullable/no default because most users need none.
+  aliases: text('aliases').array(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -224,7 +232,66 @@ export const meetingAttendees = pgTable('meeting_attendees', {
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   // RSVP state — the attendee marks whether they're coming.
   response: attendeeResponse('response').notNull().default('pending'),
+  // required = row optional:false (default); optional = row optional:true;
+  // skip = no row at all (see the attendee recommender design spec). A real,
+  // visible invite property — plumbed through to the .ics ROLE parameter
+  // (features/meetings/ics.ts) and the Google Calendar attendee payload
+  // (features/calendar/google-calendar.ts), not just stored and ignored.
+  optional: boolean('optional').notNull().default(false),
 }, (t) => [primaryKey({ columns: [t.meetingId, t.userId] })])
+
+// meetingId/userId/surface union: which of the four attendee-recommender
+// surfaces (scheduling, pre-meeting, retrospective, inferred series) most
+// recently computed this row. A plain text column with a TS union, not a
+// pgEnum — see the file-level comment on activityLog.verb/entityType: a new
+// surface is a new string at a call site, not a migration, and Postgres
+// forbids using a freshly ADD VALUE'd enum member in the same transaction
+// that added it, which matters on a database where migrations are already
+// applied by hand.
+export type MeetingAttendeeRecommendationSurface = 'schedule' | 'pre' | 'retro' | 'series'
+// Same reasoning as `surface` above — the tier vocabulary is scorer-owned,
+// not a fixed set the database should gate.
+export type MeetingAttendeeRecommendationTier = 'required' | 'optional' | 'skip'
+
+// One row per (meetingId, userId) — see the uniqueIndex below — upserted by
+// the scoring engine (attendee-score.ts, not part of this migration) as it
+// reruns across surfaces; `surface` records which run last wrote the row.
+// neon-http has no transactions (db.batch only), so this table is always
+// written via ON CONFLICT DO UPDATE, never a read-then-write pair.
+//   score / scoreDet   points_total / points_det from the absolute 100-point
+//                      ledger (see the design spec's Section 2) — scoreDet
+//                      is what the required-tier threshold is evaluated
+//                      against, score includes the AI's A1 signal.
+//   reasons            the full, organizer/admin-only reason ledger backing
+//                      `score`; the redaction projector (recommendation-view.ts,
+//                      not part of this migration) derives what a non-privileged
+//                      viewer sees from this rather than storing two copies.
+//   aiOverride/aiOverrideRejected  the Gemini validator's proposed one-tier-
+//                      upward move, and — separately — a proposal that failed
+//                      validation or the override bounds, kept for audit.
+//   status             reuses suggestionStatus (open|accepted|dismissed) —
+//                      identical accepted-by-a-human/dismissed-stays-dismissed
+//                      shape as meetingTaskSuggestions, not a boolean, for the
+//                      same reason documented on that table.
+export const meetingAttendeeRecommendations = pgTable('meeting_attendee_recommendations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  surface: text('surface').notNull().$type<MeetingAttendeeRecommendationSurface>(),
+  score: integer('score').notNull(),
+  scoreDet: integer('score_det').notNull(),
+  tier: text('tier').notNull().$type<MeetingAttendeeRecommendationTier>(),
+  hardEvidenceCount: integer('hard_evidence_count').notNull(),
+  reasons: jsonb('reasons'),
+  aiOverride: jsonb('ai_override'),
+  aiOverrideRejected: jsonb('ai_override_rejected'),
+  status: suggestionStatus('status').notNull().default('open'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('meeting_attendee_recs_meeting_user_idx').on(t.meetingId, t.userId),
+  index('meeting_attendee_recs_meeting_surface_idx').on(t.meetingId, t.surface),
+])
 
 // Per-user Gemini API keys. Multiple keys per user; requests roll across
 // active keys (least-recently-used first) so free-tier rate limits spread out.
@@ -409,7 +476,11 @@ export const meetingNoteSegments = pgTable('meeting_note_segments', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   deletedBy: uuid('deleted_by').references(() => users.id),
-})
+}, (t) => [
+  // The table had no index at all until the attendee recommender's E5 voice-
+  // participation signal started scanning it per candidate per series.
+  index('meeting_note_segments_meeting_idx').on(t.meetingId),
+])
 
 // Maps a raw speaker label ("Speaker 1", "Speaker 2", …) the live transcript
 // or the Gemini analysis produced for ONE meeting to a real user — set by an

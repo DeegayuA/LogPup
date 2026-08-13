@@ -9,6 +9,8 @@ export type MeetingAttendee = {
   name: string
   avatarUrl: string | null
   response: 'pending' | 'going' | 'maybe' | 'declined'
+  /** Real, visible invite property — see meeting_attendees.optional. */
+  optional: boolean
 }
 
 export type MeetingSummary = {
@@ -64,6 +66,7 @@ async function attachAttendees(
       name: users.name,
       avatarUrl: users.avatarUrl,
       response: meetingAttendees.response,
+      optional: meetingAttendees.optional,
     })
     .from(meetingAttendees)
     .innerJoin(users, eq(meetingAttendees.userId, users.id))
@@ -72,7 +75,13 @@ async function attachAttendees(
   const byMeeting = new Map<string, MeetingAttendee[]>()
   for (const row of attendeeRows) {
     const list = byMeeting.get(row.meetingId) ?? []
-    list.push({ id: row.id, name: row.name, avatarUrl: row.avatarUrl, response: row.response })
+    list.push({
+      id: row.id,
+      name: row.name,
+      avatarUrl: row.avatarUrl,
+      response: row.response,
+      optional: row.optional,
+    })
     byMeeting.set(row.meetingId, list)
   }
 

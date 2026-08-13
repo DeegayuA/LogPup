@@ -40,6 +40,8 @@ const UID_DOMAIN = 'logpup.app'
 export type IcsPerson = {
   name?: string | null
   email: string
+  /** ROLE=OPT-PARTICIPANT instead of the default REQ-PARTICIPANT. */
+  optional?: boolean
 }
 
 export type IcsEventInput = {
@@ -211,7 +213,7 @@ export function buildIcs(input: IcsEventInput): string {
     lines.push(
       personLine('ATTENDEE', attendee, [
         'CUTYPE=INDIVIDUAL',
-        'ROLE=REQ-PARTICIPANT',
+        attendee.optional ? 'ROLE=OPT-PARTICIPANT' : 'ROLE=REQ-PARTICIPANT',
         'PARTSTAT=NEEDS-ACTION',
         'RSVP=TRUE',
       ]),

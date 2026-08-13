@@ -2,6 +2,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { db } from '@/db'
 import {
   users, apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAiNotes,
+  meetingAttendeeRecommendations,
 } from '@/db/schema'
 
 // A backup contains password hashes and Google refresh tokens, so the JSON is
@@ -33,7 +34,7 @@ const backupUserColumns = {
 export async function buildSnapshot() {
   const [
     usersRows, appsRows, assignmentsRows, sprintsRows, tasksRows, meetingsRows, attendeesRows,
-    aiNotesRows,
+    aiNotesRows, attendeeRecommendationsRows,
   ] = await Promise.all([
     db.select(backupUserColumns).from(users),
     db.select().from(apps),
@@ -46,6 +47,10 @@ export async function buildSnapshot() {
     // re-derivable from anything else in the DB) — must be backed up.
     // geminiKeys stays excluded: those are per-user secrets, not data.
     db.select().from(meetingAiNotes),
+    // Recommender output is re-derivable in principle (the scorer can rerun),
+    // but the reason ledger and any AI-override/dismissed state are not —
+    // backing it up avoids re-litigating a dismissed suggestion after a restore.
+    db.select().from(meetingAttendeeRecommendations),
   ])
   return {
     version: 1,
@@ -59,6 +64,7 @@ export async function buildSnapshot() {
       meetings: meetingsRows,
       meetingAttendees: attendeesRows,
       meetingAiNotes: aiNotesRows,
+      meetingAttendeeRecommendations: attendeeRecommendationsRows,
     },
   }
 }

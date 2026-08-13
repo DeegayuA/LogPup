@@ -15,7 +15,10 @@ export async function createCalendarEvent(opts: {
   agenda?: string
   startsAt: Date
   endsAt: Date
-  attendeeEmails: string[]
+  // `optional` is a real, visible invite property (see meeting_attendees.optional)
+  // — carried straight through to Google's own `optional` attendee field,
+  // same as it's carried to the .ics ROLE parameter in features/meetings/ics.ts.
+  attendeeEmails: { email: string; optional: boolean }[]
 }): Promise<{ eventId: string }> {
   const res = await client(opts.refreshToken).events.insert({
     calendarId: 'primary',
@@ -25,7 +28,7 @@ export async function createCalendarEvent(opts: {
       description: opts.agenda,
       start: { dateTime: opts.startsAt.toISOString() },
       end: { dateTime: opts.endsAt.toISOString() },
-      attendees: opts.attendeeEmails.map((email) => ({ email })),
+      attendees: opts.attendeeEmails.map(({ email, optional }) => ({ email, optional })),
     },
   })
   return { eventId: res.data.id! }
