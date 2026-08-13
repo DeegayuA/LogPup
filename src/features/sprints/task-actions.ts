@@ -4,13 +4,15 @@ import { z } from 'zod'
 import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, meetingFollowups, sprints, tasks } from '@/db/schema'
+import { liveSprints, liveTasks } from '@/db/live'
+import { apps, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
 import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
-import { decideFollowupResolutionOnTaskStatusChange } from '@/features/meetings/followups'
+import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
@@ -162,57 +164,8 @@ function isForeignKeyViolation(error: unknown): boolean {
 }
 
 async function taskById(taskId: string) {
-  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId))
+  const [task] = await db.select().from(liveTasks).where(eq(liveTasks.id, taskId))
   return task ?? null
-}
-
-/**
- * The other half of closing the loop between meeting follow-ups and tasks
- * (see meetings/ai-actions.ts's linkFollowupToTask, which sets
- * meeting_followups.resolved_by_task_id when a task is created from a
- * suggestion that matches an open follow-up). A task moving TO 'done'
- * resolves the follow-up it's linked to; moving back OUT of 'done' reopens
- * it — decideFollowupResolutionOnTaskStatusChange is the pure decision,
- * this is just wiring it to a write.
- *
- * Called from every path that can change a task's status (updateTask,
- * moveTaskOnBoard) AFTER that write has already succeeded, and always
- * wrapped in its own try/catch by the caller: follow-up bookkeeping must
- * NEVER fail the task move it's riding on. A task with no linked follow-up
- * (the overwhelming majority) costs one no-op UPDATE that matches zero rows.
- */
-async function syncLinkedFollowups(
-  taskId: string,
-  fromStatus: TaskStatus,
-  toStatus: TaskStatus,
-): Promise<void> {
-  const decision = decideFollowupResolutionOnTaskStatusChange(fromStatus, toStatus)
-  if (decision === 'none') return
-
-  if (decision === 'resolve') {
-    await db
-      .update(meetingFollowups)
-      .set({
-        status: 'resolved',
-        resolvedAt: new Date(),
-        resolutionNote: 'Resolved automatically — the linked task was completed',
-      })
-      .where(and(eq(meetingFollowups.resolvedByTaskId, taskId), eq(meetingFollowups.status, 'open')))
-    return
-  }
-
-  // reopen: only undo what THIS auto-resolve did, not a manual resolve that
-  // happens to share the same linked task — resolutionNote is the marker.
-  await db
-    .update(meetingFollowups)
-    .set({ status: 'open', resolvedAt: null, resolutionNote: null })
-    .where(
-      and(
-        eq(meetingFollowups.resolvedByTaskId, taskId),
-        eq(meetingFollowups.status, 'resolved'),
-        eq(meetingFollowups.resolutionNote, 'Resolved automatically — the linked task was completed'),
-      ),
-    )
 }
 
 async function revalidateApps(appIds: readonly string[]) {
@@ -224,6 +177,12 @@ async function revalidateApps(appIds: readonly string[]) {
   // elsewhere by batching the read.
   const rows = await db.select({ slug: apps.slug }).from(apps).where(inArray(apps.id, unique))
   for (const row of rows) revalidatePath('/apps/' + row.slug)
+  // deleteTask routes through here (via revalidateApp) and a soft delete lands
+  // a new row in the admin Trash card — see revalidateAdmin's own comment. It
+  // is done for every task write rather than only the delete: /admin is
+  // auth-gated and dynamic, so the extra invalidation costs nothing, and a
+  // future delete-shaped path here inherits it for free.
+  revalidateAdmin()
 }
 
 async function revalidateApp(appId: string) {
@@ -244,9 +203,9 @@ async function revalidateApp(appId: string) {
  */
 async function sprintIsInApp(sprintId: string, appId: string): Promise<boolean> {
   const [row] = await db
-    .select({ id: sprints.id })
-    .from(sprints)
-    .where(and(eq(sprints.id, sprintId), eq(sprints.appId, appId)))
+    .select({ id: liveSprints.id })
+    .from(liveSprints)
+    .where(and(eq(liveSprints.id, sprintId), eq(liveSprints.appId, appId)))
   return row !== undefined
 }
 
@@ -272,13 +231,16 @@ async function nextRankFor(
   // instead of O(column size) — a 400-task backlog would otherwise ship 400
   // numbers over the wire to compute one.
   const [row] = await db
-    .select({ highest: max(tasks.sortOrder) })
-    .from(tasks)
+    .select({ highest: max(liveTasks.sortOrder) })
+    .from(liveTasks)
+    // Backlog rule (no sprint, or the sprint is trashed) lives in
+    // backlog.ts, shared with getBoard's own query in sprints/queries.ts.
+    .leftJoin(liveSprints, backlogJoinCondition)
     .where(
       and(
-        eq(tasks.appId, appId),
-        sprintId === null ? isNull(tasks.sprintId) : eq(tasks.sprintId, sprintId),
-        eq(tasks.status, status),
+        eq(liveTasks.appId, appId),
+        sprintOrBacklogCondition(sprintId),
+        eq(liveTasks.status, status),
       ),
     )
   // `max()` over no rows is SQL NULL — an empty column, which rankForAppend
@@ -405,17 +367,6 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     metadata,
   })
 
-  // Best-effort, deliberately outside the try/catch above: the task move
-  // already succeeded, and a follow-up bookkeeping failure must never turn
-  // a successful save into a reported failure.
-  if (nextStatus !== undefined && nextStatus !== existing.status) {
-    try {
-      await syncLinkedFollowups(taskId, existing.status, nextStatus)
-    } catch (error) {
-      console.error(`[sprints] follow-up sync failed for task ${taskId}:`, error)
-    }
-  }
-
   await revalidateApp(existing.appId)
   return ok(undefined)
 }
@@ -531,17 +482,6 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
     metadata,
   })
 
-  // Same best-effort follow-up sync as updateTask — a drag that changes
-  // column is exactly the other way a task's status changes, and a linked
-  // follow-up has to react to it identically either way.
-  if (status !== undefined && status !== existing.status) {
-    try {
-      await syncLinkedFollowups(taskId, existing.status, status)
-    } catch (error) {
-      console.error(`[sprints] follow-up sync failed for task ${taskId}:`, error)
-    }
-  }
-
   await revalidateApp(existing.appId)
   return ok(undefined)
 }
@@ -568,11 +508,9 @@ export async function bulkUpdateTasks(
   if (Object.keys(patch).length === 0) return err('Nothing to update')
 
   const rows = await db
-    // title rides along for the activity row's label — a batch still names
-    // one real task rather than reading "updated task 5 tasks".
-    .select({ id: tasks.id, appId: tasks.appId, assigneeId: tasks.assigneeId, title: tasks.title })
-    .from(tasks)
-    .where(inArray(tasks.id, taskIds))
+    .select({ id: liveTasks.id, appId: liveTasks.appId, assigneeId: liveTasks.assigneeId })
+    .from(liveTasks)
+    .where(inArray(liveTasks.id, taskIds))
   if (rows.length === 0) return err('No tasks found')
 
   const permitted = rows.filter((row) =>
@@ -588,9 +526,9 @@ export async function bulkUpdateTasks(
   let allowed = permitted
   if (typeof patch.sprintId === 'string') {
     const [sprint] = await db
-      .select({ appId: sprints.appId })
-      .from(sprints)
-      .where(eq(sprints.id, patch.sprintId))
+      .select({ appId: liveSprints.appId })
+      .from(liveSprints)
+      .where(eq(liveSprints.id, patch.sprintId))
     if (!sprint) return err('Sprint not found')
     allowed = permitted.filter((row) => row.appId === sprint.appId)
     if (allowed.length === 0) return err('That sprint belongs to a different app')
@@ -617,11 +555,7 @@ export async function bulkUpdateTasks(
     verb: 'updated',
     entityType: 'task',
     entityId: allowed[0].id,
-    // A real task title, with the batch size in `detail`. The label used to
-    // be "5 tasks", which the feed renders after the entity type — "updated
-    // task 5 tasks".
-    entityLabel: allowed[0].title,
-    detail: allowed.length > 1 ? `and ${allowed.length - 1} more` : null,
+    entityLabel: allowed.length === 1 ? '1 task' : `${allowed.length} tasks`,
     appId: touchedAppIds.length === 1 ? touchedAppIds[0] : null,
     metadata: { patch, taskIds: allowed.map((row) => row.id) },
   })
@@ -642,13 +576,19 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
   const existing = await taskById(taskId)
   if (!existing) return err('Task not found')
 
+  let marked: { id: string }[]
   try {
-    await db.delete(tasks).where(eq(tasks.id, taskId))
+    marked = await db
+      .update(tasks)
+      .set({ deletedAt: new Date(), deletedBy: session.user.id })
+      .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)))
+      .returning({ id: tasks.id })
   } catch (error) {
     return unexpected('deleteTask', error)
   }
+  if (marked.length === 0) return err('Task not found')
 
-  // `existing` was read before the delete, so the row can still be named.
+  // `existing` was read before the update, so the row can still be named.
   await logActivity({
     actorId: session.user.id,
     verb: 'deleted',

@@ -183,6 +183,13 @@
       "when": 1786559501693,
       "tag": "0026_meeting_speaker_display_name",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1786559502693,
+      "tag": "0027_soft_delete",
+      "breakpoints": true
     }
   ]
 }

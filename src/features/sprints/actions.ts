@@ -1,12 +1,14 @@
 'use server'
 
 import { z } from 'zod'
-import { and, count, desc, eq, ne } from 'drizzle-orm'
+import { and, count, desc, eq, isNull, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, sprints, tasks } from '@/db/schema'
+import { liveSprints, liveTasks } from '@/db/live'
+import { apps, sprints } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { logActivity } from '@/features/activity/log'
 import { initialSprintStatus } from '@/features/sprints/sprint-date-range'
@@ -98,7 +100,7 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
         db
           .update(sprints)
           .set({ status: 'done' })
-          .where(and(eq(sprints.appId, appId), eq(sprints.status, 'active'))),
+          .where(and(eq(sprints.appId, appId), eq(sprints.status, 'active'), isNull(sprints.deletedAt))),
         db
           .insert(sprints)
           .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status }),
@@ -154,7 +156,7 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
   if (!parsed.success) return err(parsed.error.issues[0].message)
   if (Object.keys(parsed.data).length === 0) return err('Nothing to update')
 
-  const [existing] = await db.select().from(sprints).where(eq(sprints.id, sprintId))
+  const [existing] = await db.select().from(liveSprints).where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   const startDate = parsed.data.startDate ?? existing.startDate
@@ -203,37 +205,57 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 }
 
 /**
- * Deletes a sprint. Its tasks are NOT deleted: `tasks.sprint_id` is
- * ON DELETE SET NULL, so they fall back into the app backlog where they stay
- * findable. The count is returned so the UI can say exactly how many landed
- * there rather than leaving the user to wonder where the work went.
+ * Deletes (soft) a sprint. Its tasks are NOT deleted AND NOT re-pointed:
+ * `tasks.sprint_id` is deliberately left exactly as it is, so restoring the
+ * sprint is lossless — every task snaps back into it. The old ON DELETE SET
+ * NULL cascade never fires (nothing is deleted), and nulling sprintId by hand
+ * here would destroy the sprint↔task membership permanently, which no restore
+ * could ever undo.
+ *
+ * The tasks stay visible in the meantime because "backlog" is defined as
+ * "no sprint, OR the sprint isn't live" — see backlogJoinCondition/
+ * sprintOrBacklogCondition in src/features/sprints/backlog.ts, which getBoard
+ * and nextRankFor both apply. The returned count is that visibility, not a
+ * mutation: how many live tasks will show up in the app backlog for as long
+ * as the sprint sits in Trash.
  */
 export async function deleteSprint(
   sprintId: string,
-): Promise<ActionResult<{ releasedTasks: number }>> {
+): Promise<ActionResult<{ backlogTasks: number }>> {
   const session = await requireAdmin()
   if (!session) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
-    .select({ appId: sprints.appId, name: sprints.name })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId, name: liveSprints.name })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
-  // COUNT in SQL. The only thing this number is for is a sentence in a
-  // toast, and pulling one row per task across the wire to call `.length` on
-  // it makes a sprint with 300 tasks pay 300 rows for a single integer.
+  // COUNT in SQL, over LIVE tasks only. The only thing this number is for is
+  // a sentence in a toast, and pulling one row per task across the wire to
+  // call `.length` on it makes a sprint with 300 tasks pay 300 rows for a
+  // single integer.
   const [attached] = await db
     .select({ total: count() })
-    .from(tasks)
-    .where(eq(tasks.sprintId, sprintId))
+    .from(liveTasks)
+    .where(eq(liveTasks.sprintId, sprintId))
 
+  let marked: { id: string }[]
   try {
-    await db.delete(sprints).where(eq(sprints.id, sprintId))
+    // ONE statement, and deliberately so: the tasks table is not written at
+    // all (see the docblock). A single guarded UPDATE also needs no batch/
+    // transaction machinery on neon-http, and the isNull guard makes a
+    // concurrent double-delete a 0-row no-op that touches nothing else.
+    marked = await db
+      .update(sprints)
+      .set({ deletedAt: new Date(), deletedBy: session.user.id })
+      .where(and(eq(sprints.id, sprintId), isNull(sprints.deletedAt)))
+      .returning({ id: sprints.id })
   } catch (error) {
     return unexpected('deleteSprint', error)
   }
+  if (marked.length === 0) return err('Sprint not found')
 
   const slug = await slugForApp(existing.appId)
   await logActivity({
@@ -244,11 +266,12 @@ export async function deleteSprint(
     entityLabel: existing.name,
     appId: existing.appId,
     pagePath: slug ? '/apps/' + slug : null,
-    detail: `releasing ${attached?.total ?? 0} tasks to the backlog`,
-    metadata: { releasedTasks: attached?.total ?? 0 },
+    detail: `${attached?.total ?? 0} tasks now show in the backlog`,
+    metadata: { backlogTasks: attached?.total ?? 0 },
   })
   if (slug) revalidatePath('/apps/' + slug)
-  return ok({ releasedTasks: attached?.total ?? 0 })
+  revalidateAdmin()
+  return ok({ backlogTasks: attached?.total ?? 0 })
 }
 
 export type SprintOption = {
@@ -278,15 +301,15 @@ export async function listSprintOptions(appId: string): Promise<ActionResult<Spr
 
   const rows = await db
     .select({
-      id: sprints.id,
-      name: sprints.name,
-      status: sprints.status,
-      startDate: sprints.startDate,
-      endDate: sprints.endDate,
+      id: liveSprints.id,
+      name: liveSprints.name,
+      status: liveSprints.status,
+      startDate: liveSprints.startDate,
+      endDate: liveSprints.endDate,
     })
-    .from(sprints)
-    .where(eq(sprints.appId, appId))
-    .orderBy(desc(sprints.startDate))
+    .from(liveSprints)
+    .where(eq(liveSprints.appId, appId))
+    .orderBy(desc(liveSprints.startDate))
 
   return ok(rows)
 }
@@ -301,9 +324,9 @@ export async function updateSprintStatus(
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
-    .select({ appId: sprints.appId, name: sprints.name, status: sprints.status })
-    .from(sprints)
-    .where(eq(sprints.id, sprintId))
+    .select({ appId: liveSprints.appId, name: liveSprints.name, status: liveSprints.status })
+    .from(liveSprints)
+    .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
 
   try {
@@ -321,6 +344,7 @@ export async function updateSprintStatus(
               eq(sprints.appId, existing.appId),
               eq(sprints.status, 'active'),
               ne(sprints.id, sprintId),
+              isNull(sprints.deletedAt),
             ),
           ),
       ])

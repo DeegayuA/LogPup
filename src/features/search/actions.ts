@@ -5,7 +5,8 @@ import { ilike, or, eq, and, sql, asc, desc } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
-import { apps, assignments, meetings, sprints, tasks, users } from '@/db/schema'
+import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { apps, assignments, tasks, users } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { parseTaskIntent } from '@/lib/task-intent'
 
@@ -75,42 +76,42 @@ export async function universalSearch(q: string): Promise<SearchResults> {
       .limit(LIMIT),
     db
       .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
-        sprintId: tasks.sprintId,
+        id: liveTasks.id,
+        title: liveTasks.title,
+        status: liveTasks.status,
+        sprintId: liveTasks.sprintId,
         appName: apps.name,
         appSlug: apps.slug,
       })
-      .from(tasks)
-      .innerJoin(apps, eq(tasks.appId, apps.id))
-      .where(ilike(tasks.title, pattern))
-      .orderBy(asc(tasks.status))
+      .from(liveTasks)
+      .innerJoin(apps, eq(liveTasks.appId, apps.id))
+      .where(ilike(liveTasks.title, pattern))
+      .orderBy(asc(liveTasks.status))
       .limit(LIMIT),
     db
       .select({
-        id: sprints.id,
-        name: sprints.name,
-        status: sprints.status,
+        id: liveSprints.id,
+        name: liveSprints.name,
+        status: liveSprints.status,
         appName: apps.name,
         appSlug: apps.slug,
       })
-      .from(sprints)
-      .innerJoin(apps, eq(sprints.appId, apps.id))
-      .where(or(ilike(sprints.name, pattern), ilike(sprints.goal, pattern)))
-      .orderBy(asc(sprints.status))
+      .from(liveSprints)
+      .innerJoin(apps, eq(liveSprints.appId, apps.id))
+      .where(or(ilike(liveSprints.name, pattern), ilike(liveSprints.goal, pattern)))
+      .orderBy(asc(liveSprints.status))
       .limit(LIMIT),
     db
       .select({
-        id: meetings.id,
-        title: meetings.title,
-        startsAt: meetings.startsAt,
+        id: liveMeetings.id,
+        title: liveMeetings.title,
+        startsAt: liveMeetings.startsAt,
         appName: apps.name,
       })
-      .from(meetings)
-      .leftJoin(apps, eq(meetings.appId, apps.id))
-      .where(or(ilike(meetings.title, pattern), ilike(meetings.agenda, pattern)))
-      .orderBy(desc(meetings.startsAt))
+      .from(liveMeetings)
+      .leftJoin(apps, eq(liveMeetings.appId, apps.id))
+      .where(or(ilike(liveMeetings.title, pattern), ilike(liveMeetings.agenda, pattern)))
+      .orderBy(desc(liveMeetings.startsAt))
       .limit(LIMIT),
   ])
 

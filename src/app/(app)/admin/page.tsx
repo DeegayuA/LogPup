@@ -12,9 +12,11 @@ import {
 import { AddUserDialog } from '@/features/admin/components/add-user-dialog'
 import { DbClearButton } from '@/features/admin/components/db-clear-button'
 import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
+import { TrashCard } from '@/features/admin/components/trash-card'
 import { UserTable } from '@/features/admin/components/user-table'
 import { AppsTable } from '@/features/admin/components/apps-table'
 import { listAllUsers, listPendingUsers } from '@/features/admin/queries'
+import { getTrash } from '@/features/admin/trash-queries'
 import { listApps } from '@/features/apps/queries'
 import { listActiveUsers } from '@/features/people/queries'
 
@@ -24,11 +26,12 @@ export default async function AdminPage() {
 
   const dbClearEnabled = process.env.ENABLE_DB_CLEAR === '1'
 
-  const [pendingUsers, allUsers, allApps, activeUsers] = await Promise.all([
+  const [pendingUsers, allUsers, allApps, activeUsers, trashGroups] = await Promise.all([
     listPendingUsers(),
     listAllUsers(),
     listApps(),
     listActiveUsers(),
+    getTrash(),
   ])
 
   const existingOrgTags = Array.from(new Set(allUsers.flatMap((u) => u.orgTags)))
@@ -75,6 +78,8 @@ export default async function AdminPage() {
             <AppsTable apps={allApps} activeUsers={activeUsers} />
           </CardContent>
         </Card>
+
+        <TrashCard groups={trashGroups} />
 
         <section className="flex flex-col gap-3">
           <h2 className="font-heading text-sm font-semibold text-destructive">

@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { meetingAttendees, meetings, users } from '@/db/schema'
+import { liveMeetings } from '@/db/live'
+import { meetingAttendees, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { canAccessApp } from '@/lib/access-gate'
 import { buildIcs, icsFileName, meetingIcsUid } from '@/features/meetings/ics'
@@ -49,7 +50,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const parsed = paramsSchema.safeParse(await params)
   if (!parsed.success) return new Response('Not found', { status: 404 })
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, parsed.data.id))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, parsed.data.id))
   if (!meeting) return new Response('Not found', { status: 404 })
 
   const [[organizer], attendees] = await Promise.all([
@@ -57,6 +58,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       .select({ name: users.name, email: users.email })
       .from(users)
       .where(eq(users.id, meeting.createdBy)),
+    // meetingAttendees has no deletedAt of its own — `meeting` above was
+    // already confirmed live via liveMeetings, so filtering on its id here
+    // cannot pull in a trashed meeting's attendees (see MEETING_CHILD_TABLES
+    // in src/db/live.ts).
     db
       .select({ name: users.name, email: users.email })
       .from(meetingAttendees)

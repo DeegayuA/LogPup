@@ -149,6 +149,8 @@ export const sprints = pgTable('sprints', {
   endDate: date('end_date').notNull(),
   status: sprintStatus('status').notNull().default('planned'),
   notionPageId: text('notion_page_id'),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
 })
 
 export const tasks = pgTable('tasks', {
@@ -178,10 +180,12 @@ export const tasks = pgTable('tasks', {
   // the ⌘K natural-language quick-add (see src/lib/task-intent.ts).
   dueDate: date('due_date'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
 }, (t) => [
   // Covers the board's only read: filter (app_id, sprint_id), order by rank.
   // `tasks` had no index at all, so every board render was a full scan + sort.
-  index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder),
+  index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder).where(sql`${t.deletedAt} is null`),
 ])
 
 export const meetings = pgTable('meetings', {
@@ -206,7 +210,14 @@ export const meetings = pgTable('meetings', {
   // set before any analysis has ever run — `meetingAiNotes` only gets a row
   // once the first analysis completes.
   autoAssignTasks: boolean('auto_assign_tasks').notNull().default(true),
-})
+  // Soft delete: reads go through src/db/live.ts; enforcement is src/db/live.test.ts.
+  // skip = deletedAt IS NOT NULL. Children of a trashed meeting are live-iff-meeting-live
+  // (derived, no columns).
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  index('meetings_starts_live_idx').on(t.startsAt).where(sql`${t.deletedAt} is null`),
+])
 
 export const meetingAttendees = pgTable('meeting_attendees', {
   meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
@@ -396,6 +407,8 @@ export const meetingNoteSegments = pgTable('meeting_note_segments', {
   startedAtMs: integer('started_at_ms'),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
 })
 
 // Maps a raw speaker label ("Speaker 1", "Speaker 2", …) the live transcript
@@ -525,6 +538,8 @@ export const meetingScreenshots = pgTable('meeting_screenshots', {
   byteSize: integer('byte_size'),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
 }, (t) => [index('meeting_screenshots_meeting_captured_idx').on(t.meetingId, t.capturedAtMs)])
 
 // Append-only trail of every mutation in the product: who did what, to which

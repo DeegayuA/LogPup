@@ -1,11 +1,10 @@
 import { desc, eq } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
+import { liveMeetings, liveTasks } from '@/db/live'
 import {
   appComments,
   assignmentHistory,
-  meetings,
-  tasks,
   users,
 } from '@/db/schema'
 import {
@@ -68,32 +67,32 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
       .limit(PER_SOURCE_LIMIT),
     db
       .select({
-        id: tasks.id,
-        at: tasks.createdAt,
-        title: tasks.title,
-        status: tasks.status,
+        id: liveTasks.id,
+        at: liveTasks.createdAt,
+        title: liveTasks.title,
+        status: liveTasks.status,
         assigneeName: users.name,
         assigneeAvatarUrl: users.avatarUrl,
       })
-      .from(tasks)
+      .from(liveTasks)
       // Left join: an unassigned task is normal and must still show up.
-      .leftJoin(users, eq(users.id, tasks.assigneeId))
-      .where(eq(tasks.appId, appId))
-      .orderBy(desc(tasks.createdAt))
+      .leftJoin(users, eq(users.id, liveTasks.assigneeId))
+      .where(eq(liveTasks.appId, appId))
+      .orderBy(desc(liveTasks.createdAt))
       .limit(PER_SOURCE_LIMIT),
     db
       .select({
-        id: meetings.id,
-        at: meetings.createdAt,
-        title: meetings.title,
-        startsAt: meetings.startsAt,
+        id: liveMeetings.id,
+        at: liveMeetings.createdAt,
+        title: liveMeetings.title,
+        startsAt: liveMeetings.startsAt,
         creatorName: users.name,
         creatorAvatarUrl: users.avatarUrl,
       })
-      .from(meetings)
-      .innerJoin(users, eq(users.id, meetings.createdBy))
-      .where(eq(meetings.appId, appId))
-      .orderBy(desc(meetings.createdAt))
+      .from(liveMeetings)
+      .innerJoin(users, eq(users.id, liveMeetings.createdBy))
+      .where(eq(liveMeetings.appId, appId))
+      .orderBy(desc(liveMeetings.createdAt))
       .limit(PER_SOURCE_LIMIT),
     db
       .select({

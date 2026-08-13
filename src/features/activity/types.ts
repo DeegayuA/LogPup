@@ -24,6 +24,11 @@ export const ACTIVITY_VERBS = [
   'created',
   'updated',
   'deleted',
+  // Soft deletes: the admin Trash card's two lifecycle moves. Both are logged
+  // by every action in src/features/admin/trash-actions.ts, so /activity's
+  // filter list would silently omit them without these two entries.
+  'restored',
+  'purged',
   'moved',
   'completed',
   'reopened',
