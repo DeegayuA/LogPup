@@ -347,6 +347,12 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
   // so it is deliberately outside the trash.
   'src/features/meetings/followup-move-actions.ts': 'deleteFollowup',
 
+  // why: removing a passkey is a security statement — "this device is gone"
+  // — and must be absolute. webauthn_credentials has no deletedAt (verified
+  // in schema.ts); a restorable credential in an admin Trash would be a key
+  // that can come back from the dead. Scoped to the caller's own rows.
+  'src/features/auth/webauthn-actions.ts': 'deletePasskey',
+
   // why: clearing a check-in is not the same as checking in at 0%. 0% is an
   // answer, absence is the lack of one, and the prep table renders them
   // differently — so the row has to be removable, not markable.

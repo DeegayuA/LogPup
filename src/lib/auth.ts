@@ -1,10 +1,11 @@
 import NextAuth from 'next-auth'
 import Google from 'next-auth/providers/google'
 import Notion from 'next-auth/providers/notion'
+import { createHash } from 'node:crypto'
 import Credentials from 'next-auth/providers/credentials'
-import { eq } from 'drizzle-orm'
+import { and, isNull, gt, eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { users } from '@/db/schema'
+import { webauthnLoginTokens, users } from '@/db/schema'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { verifyPassword } from '@/lib/password'
@@ -135,6 +136,39 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return { id: u.id, email: u.email, name: u.name }
       },
     }),
+    // Passkeys (WebAuthn). The cryptographic verification already happened in
+    // completePasskeyLogin (features/auth/webauthn-actions.ts) — what arrives
+    // here is that action's single-use 60-second token, and this provider's
+    // whole job is to redeem it exactly once. The redeem IS the guarded
+    // UPDATE: usedAt must still be null and expiresAt in the future, so a
+    // replayed token matches zero rows rather than racing a read-then-write.
+    Credentials({
+      id: 'passkey',
+      name: 'Passkey',
+      credentials: { token: {} },
+      async authorize(creds) {
+        const token = String(creds?.token ?? '')
+        if (!token) return null
+        const tokenHash = createHash('sha256').update(token).digest('base64url')
+        const [row] = await db
+          .update(webauthnLoginTokens)
+          .set({ usedAt: new Date() })
+          .where(
+            and(
+              eq(webauthnLoginTokens.tokenHash, tokenHash),
+              isNull(webauthnLoginTokens.usedAt),
+              gt(webauthnLoginTokens.expiresAt, new Date()),
+            ),
+          )
+          .returning({ userId: webauthnLoginTokens.userId })
+        if (!row) return null
+        const [u] = await db.select().from(users).where(eq(users.id, row.userId))
+        // Same refusals as the jwt callback — a deactivated or rejected
+        // account's token redeems to nothing.
+        if (!u || !u.active || u.status === 'rejected') return null
+        return { id: u.id, email: u.email, name: u.name }
+      },
+    }),
     // Notion OAuth. Requires the public integration's client id/secret and an explicit
     // redirect URI. Sign-in only succeeds for a Notion account whose email matches an
     // existing allowed user (see the signIn callback) — never auto-provisioned.
@@ -196,7 +230,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // here. Falling through would be wrong as well as redundant: a
       // credentials sign-in carries no `profile`, so the Google branch below
       // would re-provision against an empty one.
-      if (provider === 'password' || provider === 'credentials' || provider === 'google-one-tap') {
+      if (provider === 'password' || provider === 'credentials' || provider === 'passkey' || provider === 'google-one-tap') {
         return true
       }
 

@@ -3,6 +3,8 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Bot, Info, LogOut, PawPrint, SquareArrowOutUpRight, UserRound } from 'lucide-react'
 import { getSession } from '@/lib/session'
+import { listPasskeys } from '@/features/auth/webauthn-actions'
+import { PasskeysCard } from '@/features/auth/components/passkeys-card'
 import { signOut } from '@/lib/auth'
 import { CURRENT_VERSION, VERSION_HISTORY } from '@/lib/changelog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -49,6 +51,10 @@ export default async function SettingsPage() {
   // The (app) layout and the proxy both gate this already; this narrows the
   // types honestly rather than scattering `?.` through the render.
   if (!user?.id) redirect('/sign-in')
+
+  // Server-fetched so the card opens populated — no client waterfall.
+  const passkeysRes = await listPasskeys()
+  const passkeys = passkeysRes.ok ? passkeysRes.data : []
 
   const [geminiKeys, avatarUrl, title] = await Promise.all([
     listGeminiKeys(user.id),
@@ -123,6 +129,9 @@ export default async function SettingsPage() {
             rather than gathered. Client component: the choice lives in
             localStorage, not the database. */}
         <AppearanceCard />
+
+        {/* Passkeys: the faster door in after the first sign-in. */}
+        <PasskeysCard initial={passkeys} />
 
         {/* 3. AI & voice. A read-out, not a form — the keys themselves are
             managed on Profile (see the note in this file's doc comment). */}

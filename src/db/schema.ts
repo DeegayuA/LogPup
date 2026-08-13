@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   pgTable, pgEnum, text, uuid, integer, doublePrecision, boolean, date, timestamp,
   index, uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
@@ -809,3 +810,44 @@ export const dailyWorklogs = pgTable('daily_worklogs', {
   // The team view reads a day range across everybody.
   index('daily_worklogs_day_idx').on(t.day),
 ])
+
+// One registered passkey (WebAuthn credential) per row. `id` IS the
+// credential id Base64URL — the authenticator's own identifier, globally
+// unique by construction, so a synthetic uuid would just be a second name
+// for it. publicKey is Base64URL too: bytea round-trips through the
+// neon-http driver as hex strings, and encoding once at the boundary beats
+// remembering which reads decode.
+//
+// Deliberately NOT soft-deletable: removing a passkey is a security action
+// ("this device is gone") and must be absolute — a restorable credential in
+// an admin Trash would be a key that can come back from the dead. The
+// delete is exempted by name in live.test.ts.
+export const webauthnCredentials = pgTable('webauthn_credentials', {
+  id: text('id').primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  publicKey: text('public_key').notNull(),
+  // Signature counter — anti-cloning. bigint: the spec allows 2^32-1, which
+  // overflows a Postgres integer by exactly one.
+  counter: bigint('counter', { mode: 'number' }).notNull().default(0),
+  // CSV of the authenticator's transports ('internal,hybrid') — fed back to
+  // the browser so it picks the right UI (Touch ID vs QR-to-phone).
+  transports: text('transports'),
+  // What the user calls this device ("MacBook Touch ID"); free text.
+  label: text('label'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+}, (t) => [index('webauthn_credentials_user_idx').on(t.userId)])
+
+// The one-time bridge between a verified WebAuthn assertion and a NextAuth
+// session: completePasskeyLogin verifies the signature, writes a row here,
+// and hands the RAW token to the client, which trades it through the
+// 'passkey' Credentials provider within TTL. Only the sha256 of the token is
+// stored — a database read can never mint a session. Consumption is an
+// UPDATE of usedAt, not a delete, so replay shows up as "already used"
+// rather than "never existed", and the row itself is the audit record.
+export const webauthnLoginTokens = pgTable('webauthn_login_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+})

@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { GoogleOneTap } from '@/features/auth/components/google-one-tap'
+import { PasskeyLoginButton } from '@/features/auth/components/passkey-login-button'
 import { PasswordAuth } from '@/features/auth/components/password-auth'
 import { SignInBackdrop } from '@/features/auth/components/sign-in-backdrop'
 import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
@@ -151,6 +152,9 @@ export default function SignInPage() {
                   </Button>
                 </form>
               )}
+              {/* One tap for anyone who added a passkey in settings — the
+                  fast door after the first sign-in. */}
+              <PasskeyLoginButton />
             </div>
 
             {/* The rule now separates OAuth from credentials — the real fork in

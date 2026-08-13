@@ -23,6 +23,8 @@
     "@neondatabase/serverless": "^1.1.0",
     "@notionhq/client": "^5.24.0",
     "@radix-ui/react-use-controllable-state": "^1.2.6",
+    "@simplewebauthn/browser": "^9.0.1",
+    "@simplewebauthn/server": "^9.0.3",
     "@vercel/analytics": "^2.0.1",
     "@vercel/blob": "^2.7.0",
     "@vercel/speed-insights": "^2.0.0",
