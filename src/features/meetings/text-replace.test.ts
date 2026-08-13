@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   CONTEXT_CHARS,
   applyReplacements,
+  diffSingleWord,
   editDistance,
   findOccurrences,
   fuzzyBudget,
@@ -200,19 +201,40 @@ describe('findOccurrences', () => {
       expect(found[0].matched).toBe(NAME_SI)
     })
 
-    it('does report a match inside a longer word when the boundary is a vowel sign', () => {
-      // KNOWN LIMITATION, pinned here rather than left to be discovered in a
-      // transcript. isWordChar counts \p{L}/\p{N} only, and Sinhala vowel
-      // signs are combining marks (\p{Mn}) — so every consonant carrying one
-      // starts a new token and a term can align with the tail of a longer
-      // word. English is unaffected (nothing splits "megashanika"). Adding
-      // \p{M} to isWordChar closes it, at the cost of the suffixed-form match
-      // below, which is a product decision and not this test's to make: the
-      // review UI is what contains it, since the row shows "මහා" sitting
-      // immediately before the highlighted match.
-      const found = findOccurrences([target('s1', `මහා${NAME_SI}`)], NAME_SI)
-      expect(found.map((o) => [o.start, o.context.before])).toEqual([[3, 'මහා']])
+    it('does not match the tail of a longer word', () => {
+      // This used to report a match: isWordChar counted \p{L}/\p{N} only, and
+      // Sinhala vowel signs are combining marks, so every consonant carrying
+      // one began a fresh token and a term could align with the end of a
+      // compound. Marks are word characters now, so "මහාශානික" is one token
+      // and a search for the name inside it finds nothing — the same answer
+      // English always gave for "megashanika".
+      expect(findOccurrences([target('s1', `මහා${NAME_SI}`)], NAME_SI)).toEqual([])
       expect(findOccurrences([target('s1', 'megashanika')], 'shanika')).toEqual([])
+    })
+
+    it('matches an inflected form without swallowing its suffix', () => {
+      // ශානිකගේ is the possessive. The match must cover the name and stop, so
+      // that applying it leaves the ගේ standing — a replacement that ate the
+      // suffix would turn "Shanika's report" into "Shanika report".
+      const found = findOccurrences([target('s1', NAME_SI_POSSESSIVE)], NAME_SI, { fuzzy: true })
+      expect(found).toHaveLength(1)
+      expect(found[0].matched).toBe(NAME_SI)
+      expect(found[0].start).toBe(0)
+      expect(found[0].approximate).toBe(true)
+
+      const { updated } = applyReplacements(
+        [target('s1', NAME_SI_POSSESSIVE)],
+        [{ targetId: 's1', start: found[0].start, matched: found[0].matched }],
+        'ශානිකා',
+      )
+      expect(updated[0].text).toBe('ශානිකාගේ')
+    })
+
+    it('will not treat the front of an unrelated long word as an inflection', () => {
+      // Five characters of suffix is the limit — see MAX_INFLECTION_CHARS.
+      expect(
+        findOccurrences([target('s1', `${NAME_SI}වත්තේගමගේ`)], NAME_SI, { fuzzy: true }),
+      ).toEqual([])
     })
 
     it('offers a suffixed form only as an approximate match', () => {
@@ -467,5 +489,56 @@ describe('groupOccurrences', () => {
 
   it('groups nothing into nothing', () => {
     expect(groupOccurrences([])).toEqual([])
+  })
+})
+
+describe('diffSingleWord', () => {
+  it('reports the one word that changed', () => {
+    expect(diffSingleWord('Sanjeewa will ship it', 'Sanjeeva will ship it')).toEqual({
+      from: 'Sanjeewa',
+      to: 'Sanjeeva',
+    })
+  })
+
+  it('catches a capitalisation fix — the correction most worth propagating', () => {
+    expect(diffSingleWord('ask sanjeewa first', 'ask Sanjeewa first')).toEqual({
+      from: 'sanjeewa',
+      to: 'Sanjeewa',
+    })
+  })
+
+  it('sees through punctuation, which is not a token', () => {
+    expect(diffSingleWord('Nuwan, please review.', 'Nuwarn, please review.')).toEqual({
+      from: 'Nuwan',
+      to: 'Nuwarn',
+    })
+  })
+
+  it('works in Sinhala script', () => {
+    expect(diffSingleWord('අපි හෙට කතා කරමු', 'අපි හෙට කථා කරමු')).toEqual({
+      from: 'කතා',
+      to: 'කථා',
+    })
+  })
+
+  it('declines a rewritten sentence — two words moved, so no single term', () => {
+    expect(diffSingleWord('we ship on Friday', 'we release on Monday')).toBeNull()
+  })
+
+  it('declines when words were added or removed', () => {
+    expect(diffSingleWord('ship it', 'ship it today')).toBeNull()
+    expect(diffSingleWord('ship it today', 'ship it')).toBeNull()
+  })
+
+  it('declines an unchanged edit', () => {
+    expect(diffSingleWord('ship it  today', 'ship it today')).toBeNull()
+  })
+
+  it('declines a one-character term that would match half the transcript', () => {
+    expect(diffSingleWord('option a is better', 'option b is better')).toBeNull()
+  })
+
+  it('declines empty text', () => {
+    expect(diffSingleWord('', 'hello')).toBeNull()
   })
 })

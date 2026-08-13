@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 import { rescheduleMeeting } from '@/features/meetings/actions'
 import { meetingTiming } from '@/features/meetings/components/meeting-glance'
 import { MeetingDetailDialog } from '@/features/meetings/components/meeting-detail-dialog'
+import { MeetingNotesDialog } from '@/features/meetings/components/meeting-notes-dialog'
 import { dayKeyToDate, moveMeetingToDay } from '@/features/meetings/reschedule'
 import type { MeetingSummary } from '@/features/meetings/queries'
 import { eventColorClasses } from '@/features/meetings/event-color'
@@ -429,7 +430,34 @@ export function MeetingsMonthCalendar({
           if (!next) setOpenId(null)
         }}
         onOpenInList={onOpenMeetingInList ?? (onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined)}
+        onOpenNotes={setNotesId}
       />
+
+      {/* Reading a past meeting's write-up without leaving the month. Mounted
+          once and pointed at whichever meeting was asked for; it re-fetches on
+          every open, so pointing it somewhere new shows a skeleton rather than
+          the last meeting's notes under the new title. */}
+      {notesFor ? (
+        <MeetingNotesDialog
+          meetingId={notesFor.id}
+          meetingTitle={notesFor.title}
+          startsAt={notesFor.startsAt}
+          open
+          onOpenChange={(next) => {
+            if (!next) setNotesId(null)
+          }}
+          onOpenFullMeeting={
+            onOpenMeetingInList || onSelectDay
+              ? (id) => {
+                  const meeting = byId.get(id)?.meeting
+                  if (!meeting) return
+                  if (onOpenMeetingInList) onOpenMeetingInList(meeting)
+                  else onSelectDay?.(meeting.startsAt)
+                }
+              : undefined
+          }
+        />
+      ) : null}
     </div>
   )
 }

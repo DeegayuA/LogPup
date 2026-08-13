@@ -51,6 +51,7 @@ import {
   type CalendarView,
 } from '@/features/meetings/calendar-view'
 import { MeetingDetailDialog } from '@/features/meetings/components/meeting-detail-dialog'
+import { MeetingNotesDialog } from '@/features/meetings/components/meeting-notes-dialog'
 import { MeetingsAgenda } from '@/features/meetings/components/meetings-agenda'
 import { MeetingsMonthCalendar } from '@/features/meetings/components/meetings-month-calendar'
 import { MeetingsTimeGrid } from '@/features/meetings/components/meetings-time-grid'
@@ -154,6 +155,9 @@ export function MeetingsCalendar({
 }) {
   const isWide = useIsWideScreen()
   const [openId, setOpenId] = useState<string | null>(null)
+  // One write-up popup for the whole view, pointed at whichever meeting asked
+  // for it — see the same note in the month grid.
+  const [notesId, setNotesId] = useState<string | null>(null)
   const [pxPerHour, setPxPerHour] = useState(DEFAULT_PX_PER_HOUR)
 
   // The stored zoom, read once after mount. It cannot be read during render:
@@ -214,6 +218,10 @@ export function MeetingsCalendar({
   const open = useMemo(
     () => (openId ? (allMeetings.find((meeting) => meeting.id === openId) ?? null) : null),
     [allMeetings, openId],
+  )
+  const notesFor = useMemo(
+    () => (notesId ? (allMeetings.find((meeting) => meeting.id === notesId) ?? null) : null),
+    [allMeetings, notesId],
   )
 
   const stepUnit = VIEW_STEP_UNIT[drawnView]
@@ -442,7 +450,31 @@ export function MeetingsCalendar({
           if (!next) setOpenId(null)
         }}
         onOpenInList={onOpenMeetingInList ?? (onSelectDay ? (meeting) => onSelectDay(meeting.startsAt) : undefined)}
+        onOpenNotes={setNotesId}
       />
+
+      {/* The write-up, read from the calendar itself — see the month grid. */}
+      {notesFor ? (
+        <MeetingNotesDialog
+          meetingId={notesFor.id}
+          meetingTitle={notesFor.title}
+          startsAt={notesFor.startsAt}
+          open
+          onOpenChange={(next) => {
+            if (!next) setNotesId(null)
+          }}
+          onOpenFullMeeting={
+            onOpenMeetingInList || onSelectDay
+              ? (id) => {
+                  const meeting = allMeetings.find((row) => row.id === id)
+                  if (!meeting) return
+                  if (onOpenMeetingInList) onOpenMeetingInList(meeting)
+                  else onSelectDay?.(meeting.startsAt)
+                }
+              : undefined
+          }
+        />
+      ) : null}
     </div>
   )
 }

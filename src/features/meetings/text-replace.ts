@@ -65,10 +65,33 @@ export function fuzzyBudget(length: number): number {
   return 2
 }
 
-/** Unicode-aware "is this character part of a word". */
+/**
+ * How much word may hang off the end of a term and still be treated as the
+ * same name inflected. Sinhala's case endings are short (ට, ගේ, ගෙන්, ලා);
+ * five characters covers them without letting a term swallow the front of an
+ * unrelated compound.
+ */
+const MAX_INFLECTION_CHARS = 5
+
+/** Unicode-aware "could a word start here". */
+function isWordStart(char: string | undefined): boolean {
+  if (char === undefined) return false
+  return /\p{L}|\p{N}|_/u.test(char)
+}
+
+/**
+ * "Is this character part of a word already begun".
+ *
+ * `\p{M}` is the load-bearing part. Sinhala writes its vowels as combining
+ * marks on a consonant — the ා in කතා is U+0DCF, category Mc, which `\p{L}`
+ * does not match. Without marks in this class every Sinhala word broke at its
+ * first vowel sign: "කතා" tokenised as "කත", and a search for a name would
+ * have compared, matched and rewritten half of it. The same applies to every
+ * abugida (Devanagari, Tamil) and to the virama ්.
+ */
 function isWordChar(char: string | undefined): boolean {
   if (char === undefined) return false
-  return /\p{L}|\p{N}|[_'’-]/u.test(char)
+  return /\p{L}|\p{N}|\p{M}|[_'’-]/u.test(char)
 }
 
 /**
@@ -106,7 +129,10 @@ export function tokenize(text: string): { word: string; start: number }[] {
   const tokens: { word: string; start: number }[] = []
   let start = -1
   for (let i = 0; i <= text.length; i += 1) {
-    if (isWordChar(text[i])) {
+    // A word may only START on a letter or digit, but once begun it carries on
+    // through combining marks — otherwise a stray mark after punctuation would
+    // open a token of its own.
+    if (start === -1 ? isWordStart(text[i]) : isWordChar(text[i])) {
       if (start === -1) start = i
     } else if (start !== -1) {
       tokens.push({ word: text.slice(start, i), start })
@@ -114,6 +140,41 @@ export function tokenize(text: string): { word: string; start: number }[] {
     }
   }
   return tokens
+}
+
+/**
+ * "Did this edit correct exactly one word?" — and if so, which word became
+ * which.
+ *
+ * Deliberately strict: same token count, exactly one position different. That
+ * narrowness is the whole point. This is what decides whether to interrupt
+ * somebody with "found this spelling 11 more times", and an offer to rewrite
+ * eleven other places is only welcome when the edit really was a correction. A
+ * looser diff would fire on rewritten sentences, where the "term" it picked
+ * would be an arbitrary word from the middle of the change.
+ *
+ * Case-sensitive on purpose — fixing "sanjeewa" to "Sanjeewa" is precisely the
+ * correction most worth offering to propagate.
+ */
+export function diffSingleWord(before: string, after: string): { from: string; to: string } | null {
+  const a = tokenize(before)
+  const b = tokenize(after)
+  if (a.length === 0 || a.length !== b.length) return null
+
+  let changed = -1
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i].word === b[i].word) continue
+    if (changed !== -1) return null
+    changed = i
+  }
+  if (changed === -1) return null
+
+  const from = a[changed].word
+  const to = b[changed].word
+  // A one-character term matches half the transcript; findOccurrences would
+  // hand back noise and the offer would be worse than silence.
+  if (from.length < 2 || to.length === 0) return null
+  return { from, to }
 }
 
 export type FindOptions = {
@@ -183,6 +244,43 @@ export function findOccurrences(
           after: target.text.slice(end, end + CONTEXT_CHARS),
         },
       })
+    }
+
+    // Inflected forms. Sinhala marks case with a suffix glued to the noun, so
+    // the same misheard name appears as ශානිකගේ, ශානිකට, ශානිකගෙන් — one token
+    // each, none equal to the name and all beyond the edit-distance budget
+    // once the suffix is two or three characters long. Correcting a name would
+    // otherwise reach every bare mention and none of the inflected ones, which
+    // in a Sinhala transcript is most of them.
+    //
+    // The match spans ONLY the name, never the suffix, so applying it rewrites
+    // ශානිකගේ to the corrected name plus ගේ — still possessive. Always
+    // approximate: this is a longer word than what was searched for, and the
+    // review row must say so before anyone ticks it.
+    if (budget > 0 && termTokens.length === 1) {
+      for (const token of tokens) {
+        const suffixLength = token.word.length - needle.length
+        if (suffixLength <= 0 || suffixLength > MAX_INFLECTION_CHARS) continue
+        const prefix = token.word.slice(0, needle.length)
+        if (editDistance(fold(prefix), foldedTerm, budget) > budget) continue
+        const end = token.start + prefix.length
+        found.push({
+          targetId: target.id,
+          kind: target.kind,
+          label: target.label,
+          start: token.start,
+          matched: prefix,
+          // Not an edit-distance score: the prefix may match the term exactly.
+          // What is uncertain here is whether the longer word is the same word
+          // at all, so the number says how much of it the term accounts for.
+          similarity: needle.length / token.word.length,
+          approximate: true,
+          context: {
+            before: target.text.slice(Math.max(0, token.start - CONTEXT_CHARS), token.start),
+            after: target.text.slice(end, end + CONTEXT_CHARS),
+          },
+        })
+      }
     }
   }
 

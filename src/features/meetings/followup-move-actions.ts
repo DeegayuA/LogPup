@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { and, asc, eq, gt, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { meetingAiNotes, meetingAttendees, meetingFollowups, meetings } from '@/db/schema'
+import { liveMeetings } from '@/db/live'
+import { meetingAiNotes, meetingAttendees, meetingFollowups } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -58,11 +59,15 @@ export async function moveFollowupsToNextMeeting(
       personName: meetingFollowups.personName,
       text: meetingFollowups.text,
       status: meetingFollowups.status,
-      sourceCreatedBy: meetings.createdBy,
-      sourceAppId: meetings.appId,
+      sourceCreatedBy: liveMeetings.createdBy,
+      sourceAppId: liveMeetings.appId,
     })
     .from(meetingFollowups)
-    .innerJoin(meetings, eq(meetings.id, meetingFollowups.sourceMeetingId))
+    // meetingFollowups has no deletedAt of its own — live iff its source
+    // meeting is live (see MEETING_CHILD_TABLES in src/db/live.ts). The inner
+    // join is what makes a trashed meeting's items unreadable here, so nobody
+    // can pin an item from a binned meeting onto a real upcoming one.
+    .innerJoin(liveMeetings, eq(liveMeetings.id, meetingFollowups.sourceMeetingId))
     .where(inArray(meetingFollowups.id, parsed.data))
 
   const isAdmin = session.user.role === 'admin'
@@ -81,14 +86,18 @@ export async function moveFollowupsToNextMeeting(
   const upcoming = await db
     .select({
       userId: meetingAttendees.userId,
-      meetingId: meetings.id,
-      title: meetings.title,
-      startsAt: meetings.startsAt,
+      meetingId: liveMeetings.id,
+      title: liveMeetings.title,
+      startsAt: liveMeetings.startsAt,
     })
     .from(meetingAttendees)
-    .innerJoin(meetings, eq(meetings.id, meetingAttendees.meetingId))
-    .where(and(inArray(meetingAttendees.userId, userIds), gt(meetings.startsAt, new Date())))
-    .orderBy(asc(meetings.startsAt))
+    // meetingAttendees has no deletedAt of its own — live iff its meeting is
+    // live (see MEETING_CHILD_TABLES in src/db/live.ts). Without the join a
+    // trashed meeting could still win as somebody's next meeting, and the
+    // move would park their item somewhere it will never be raised.
+    .innerJoin(liveMeetings, eq(liveMeetings.id, meetingAttendees.meetingId))
+    .where(and(inArray(meetingAttendees.userId, userIds), gt(liveMeetings.startsAt, new Date())))
+    .orderBy(asc(liveMeetings.startsAt))
 
   const nextByUser = new Map<string, { meetingId: string; title: string }>()
   for (const row of upcoming) {

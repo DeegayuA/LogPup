@@ -49,6 +49,12 @@ import {
 import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
+import { diffSingleWord } from '@/features/meetings/text-replace'
+import {
+  findMeetingReplacements,
+  type MeetingReplaceMatches,
+} from '@/features/meetings/text-replace-actions'
+import { ReplaceReviewDialog } from '@/features/meetings/components/replace-review-dialog'
 import type { DeadlineHintSource } from '@/features/meetings/components/note-timeline-model'
 import {
   ActionItemSuggestionsList,
@@ -128,6 +134,14 @@ export function NoteTimeline({
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  // What the note said before the edit, kept so a saved change can be compared
+  // against it — see offerReplaceAll.
+  const [editOriginal, setEditOriginal] = useState('')
+  const [replaceOffer, setReplaceOffer] = useState<{
+    term: string
+    replacement: string
+    matches: MeetingReplaceMatches
+  } | null>(null)
   const [savingEditId, setSavingEditId] = useState<string | null>(null)
   const [editPending, startEditPending] = useTransition()
 
@@ -204,6 +218,41 @@ export function NoteTimeline({
   function startEdit(segment: NoteSegmentView) {
     setEditingId(segment.id)
     setEditDraft(segment.content)
+    setEditOriginal(segment.content)
+  }
+
+  /**
+   * After a one-word correction, ask whether the rest of the meeting should
+   * follow.
+   *
+   * A name misheard by the transcriber is misheard the same way every time it
+   * was said, so fixing it in one note fixes one of eleven. This looks for the
+   * old spelling everywhere else in this meeting — other notes, the summary,
+   * the action items, the raw transcript — and offers them for review. Fuzzy,
+   * because the transcriber's mistakes vary ("Sanjeewa", "Sanjeeva",
+   * "Sanjiwa"), and the whole point is to catch the variants a literal search
+   * would walk straight past.
+   *
+   * Silent on failure and silent on no matches: this is an unasked-for offer
+   * riding on somebody else's successful save, and an error toast about a
+   * search they never ran would read as the save having gone wrong.
+   */
+  async function offerReplaceAll(before: string, after: string) {
+    const change = diffSingleWord(before, after)
+    if (!change) return
+    try {
+      const res = await findMeetingReplacements({
+        meetingId,
+        term: change.from,
+        fuzzy: true,
+      })
+      // The note just saved now holds the NEW spelling, so it cannot match its
+      // own old one — every occurrence here is somewhere else.
+      if (!res.ok || res.data.occurrences.length === 0) return
+      setReplaceOffer({ term: change.from, replacement: change.to, matches: res.data })
+    } catch {
+      // Nothing to say: the edit itself succeeded.
+    }
   }
 
   function handleSaveEdit(segmentId: string) {
@@ -217,8 +266,12 @@ export function NoteTimeline({
           toast.error(res.error)
           return
         }
+        const before = editOriginal
         setEditingId(null)
         await load()
+        // After the reload, so the timeline behind the dialog already shows the
+        // correction the offer is about.
+        await offerReplaceAll(before, content)
       } catch {
         toast.error('Something went wrong — try again')
       } finally {
@@ -613,6 +666,25 @@ export function NoteTimeline({
         autoAssignCappedCount={autoAssignCappedCount}
         actions={actionItemActions}
       />
+
+      {/* "You corrected this spelling — it appears 11 more times." Mounted only
+          while there is an offer on the table, so the search result it is
+          reviewing is always the one that produced it. */}
+      {replaceOffer ? (
+        <ReplaceReviewDialog
+          meetingId={meetingId}
+          term={replaceOffer.term}
+          replacement={replaceOffer.replacement}
+          matches={replaceOffer.matches}
+          open
+          onOpenChange={(next) => {
+            if (!next) setReplaceOffer(null)
+          }}
+          onApplied={() => {
+            void load()
+          }}
+        />
+      ) : null}
     </div>
   )
 }

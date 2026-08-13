@@ -24,6 +24,14 @@ vi.mock('@/features/activity/log', () => ({ logActivity: logActivityMock }))
 vi.mock('@vercel/blob', () => ({ put: vi.fn(), get: vi.fn(), del: vi.fn() }))
 vi.mock('@/features/gemini/client', () => ({
   DEFAULT_GEMINI_MODEL: 'gemini-test',
+  // The model-routing table (features/gemini/models.ts) is imported for its
+  // side-effect-free constants by anything that reaches ai-actions, and it
+  // re-exports these two off the client. Absent from the mock they are
+  // `undefined` at module scope, which fails the whole FILE at import time —
+  // and it surfaces here and in trash-actions.test.ts as two unrelated-looking
+  // suite failures rather than one missing export.
+  FALLBACK_GEMINI_MODEL: 'gemini-test-fallback',
+  GEMINI_MODEL_FALLBACK_ORDER: ['gemini-test', 'gemini-test-fallback'],
   callGemini: vi.fn(),
   callGeminiWithAudio: vi.fn(),
   callGeminiWithImages: vi.fn(),

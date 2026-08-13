@@ -1,7 +1,8 @@
 import { cache } from 'react'
 import { and, count, eq, isNotNull, max, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { activityLog, assignments, tasks, users } from '@/db/schema'
+import { liveTasks } from '@/db/live'
+import { activityLog, assignments, users } from '@/db/schema'
 
 /** One member's standing on one app: who they are, and what they have done. */
 export type AppContribution = {
@@ -63,13 +64,13 @@ export const getAppContributions = cache(async function getAppContributions(
     // shipping every task row for the app just to group it by assignee.
     db
       .select({
-        assigneeId: tasks.assigneeId,
-        done: count(sql`case when ${tasks.status} = 'done' then 1 end`),
-        open: count(sql`case when ${tasks.status} <> 'done' then 1 end`),
+        assigneeId: liveTasks.assigneeId,
+        done: count(sql`case when ${liveTasks.status} = 'done' then 1 end`),
+        open: count(sql`case when ${liveTasks.status} <> 'done' then 1 end`),
       })
-      .from(tasks)
-      .where(and(eq(tasks.appId, appId), isNotNull(tasks.assigneeId)))
-      .groupBy(tasks.assigneeId),
+      .from(liveTasks)
+      .where(and(eq(liveTasks.appId, appId), isNotNull(liveTasks.assigneeId)))
+      .groupBy(liveTasks.assigneeId),
 
     db
       .select({
