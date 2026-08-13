@@ -618,6 +618,25 @@ export async function updateMeeting(
   if (added.length > 0) {
     attendeeWrites.push(
       db.insert(meetingAttendees).values(added.map((userId) => ({ meetingId, userId }))),
+      // CLOSE FIRST — the same rule assignSpeaker follows, and for the same
+      // reason. Someone absent from meeting_attendees may STILL have an open
+      // history row: the tombstone a removal deliberately leaves open. Adding
+      // them back without closing it would put two open intervals on one
+      // (meetingId, userId), which meeting_attendee_history_one_open_idx
+      // rejects outright — so remove an attendee, then add them back in the
+      // same editor, and the whole save failed with a 23505 that the catch
+      // below does not recognise (it only maps 23503) and therefore rethrows,
+      // losing the title, the times and every other attendee change with it.
+      db
+        .update(meetingAttendeeHistory)
+        .set({ effectiveTo: changedAt })
+        .where(
+          and(
+            eq(meetingAttendeeHistory.meetingId, meetingId),
+            inArray(meetingAttendeeHistory.userId, added),
+            isNull(meetingAttendeeHistory.effectiveTo),
+          ),
+        ),
       // Opened in the SAME batch as the live row, exactly as createMeeting
       // does — otherwise an attendee added by an edit has no recorded start
       // and "who was on this meeting on date X" answers wrongly for them.

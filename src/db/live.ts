@@ -42,7 +42,14 @@ export const SOFT_TABLES = [
   { table: meetingScreenshots, sqlName: 'meeting_screenshots', live: liveScreenshots, liveAs: liveScreenshotsAs },
 ] as const
 
+// Registered BEFORE anything reads them. Both tables arrived with later
+// merges, neither carries a deletedAt of its own, and both are live iff their
+// meeting is — so a read that forgets to join liveMeetings would hand back a
+// trashed meeting's rows. Adding them to the guard now is free, because
+// nothing reads either one yet; adding them after the first reader exists
+// means the guard stays blind for exactly as long as it matters.
 export const MEETING_CHILD_TABLES = [
   'meetingAttendees', 'meetingAiNotes', 'meetingFollowups', 'meetingSpeakers',
   'meetingTaskSuggestions', 'meetingRecordingSegments',
+  'meetingAttendeeHistory', 'meetingAttendeeRecommendations',
 ] as const

@@ -104,7 +104,6 @@ import {
   reconcileActionItems,
   type ActionRow,
 } from '@/features/meetings/components/meeting-notes-model'
-import { matchPersonToAttendee } from '@/features/meetings/followups'
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
 // Re-exported below (not just imported) — existing callers, including this
 // file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
@@ -3769,28 +3768,37 @@ const trackActionItemInput = z.object({
  * exactly like every other suggestion.
  *
  * `owner`/`due` are the free text the model wrote (a first name, a spoken
- * date phrase) — resolved the same way the rest of this pipeline already
- * does: matchPersonToAttendee for the owner (unresolvable stays unassigned,
- * never guessed), parseSpokenDueDate for the date (a phrase like "next
- * Friday" stays unset rather than inventing a day — never a fabricated
- * deadline).
+ * date phrase). The date is resolved by parseSpokenDueDate, which leaves a
+ * phrase like "next Friday" unset rather than inventing a day. The owner is
+ * NOT resolved: a first name matched against the attendee list is a guess,
+ * and this column is reserved for attributions a human confirmed. It lands
+ * unassigned, with the name still readable in the item's own text.
  */
 export async function trackActionItem(input: unknown): Promise<ActionResult<{ id: string }>> {
   const parsed = trackActionItemInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
-  const { meetingId, text, owner, due } = parsed.data
+  // `owner` stays in the input schema — callers send it and the write-up's
+  // own text carries the name — but it is no longer read here; see below.
+  const { meetingId, text, due } = parsed.data
 
   const ctx = await canManageMeeting(meetingId)
   if (!ctx) return err('Only admins or the meeting creator can track action items')
 
-  const attendees = await fetchAttendees(meetingId)
-  const suggestedUserId = owner ? matchPersonToAttendee(owner, attendees) : null
+  // Deliberately UNASSIGNED. This used to run the write-up's free-text owner
+  // through matchPersonToAttendee and store the result as suggestedUserId —
+  // a first-name guess recorded as fact. Migration 0029's second repair pass
+  // exists to null exactly these rows (open suggestions with no meeting_speakers
+  // row vouching for the attribution), so leaving the guess in would have this
+  // action re-creating the data the same merge shipped a migration to delete.
+  // The owner's name is already in `text`; a human picks the assignee, and the
+  // confirmed-speaker path (resolveSpeakerUserId) is the only thing allowed to
+  // fill this column without one.
   const resolvedDue = due ? parseSpokenDueDate(due) : null
   const suggestedDueDate = resolvedDue ? format(resolvedDue, 'yyyy-MM-dd') : null
 
   const [row] = await db
     .insert(meetingTaskSuggestions)
-    .values({ meetingId, text, suggestedUserId, suggestedDueDate, status: 'open' })
+    .values({ meetingId, text, suggestedUserId: null, suggestedDueDate, status: 'open' })
     .returning({ id: meetingTaskSuggestions.id })
 
   revalidatePath('/meetings')
