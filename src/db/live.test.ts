@@ -436,3 +436,41 @@ describe('check 6: isNull(...sprintId) backlog predicate confined to backlog.ts'
     })
   }
 })
+
+// Check 7 ---------------------------------------------------------------
+//
+// The legacy-notes probe must keep being CALLED, not merely keep existing.
+//
+// getMeetingNoteTimeline decides whether to fall back to the old
+// `meetings.notes` blob by asking whether typed segments EVER existed. That
+// question has to be asked of the RAW table: through liveNoteSegments,
+// trashing the last segment makes the answer "never existed" and the legacy
+// blob comes back from the dead — content the author had already replaced.
+//
+// The other checks do not cover this. `allowlist hygiene` asserts the probe's
+// FILE exists; checks 1-3 assert that reads go through live*. Neither notices
+// if someone keeps legacy-notes.ts on disk while deleting the calls to it and
+// converting getMeetingNoteTimeline to live* uniformly — which is exactly the
+// resolution a merge conflict invites, because those call sites sit inside the
+// hunks that conflict. File present, scan satisfied, bug silently shipped.
+describe('check 7: the legacy-notes probe is still called', () => {
+  const CALLER = 'src/features/meetings/ai-actions.ts'
+  const PROBE = 'haveNoteSegmentsEverExisted'
+  const caller = entries.find((e) => e.relPath === CALLER)
+
+  it(`${CALLER} imports and calls ${PROBE}`, () => {
+    expect(caller, `${CALLER} not found — update this check if the file moved`).toBeDefined()
+    const occurrences = caller!.text.split(PROBE).length - 1
+    // One import plus at least one call. Two call sites exist today (the
+    // timeline fallback and addTypedNoteSegment), so requiring >= 2 total
+    // means deleting every call fails even if the import lingers.
+    expect(
+      occurrences,
+      `${CALLER} must import AND call ${PROBE} (from @/features/meetings/legacy-notes). `
+      + 'That probe reads the raw meeting_note_segments table on purpose: asking it through '
+      + 'liveNoteSegments would make a trashed last segment look like "no segments ever existed", '
+      + 'resurrecting the legacy meetings.notes blob. If you are resolving a merge conflict here, '
+      + 'keep the probe raw and keep these calls.',
+    ).toBeGreaterThanOrEqual(2)
+  })
+})
