@@ -33,6 +33,7 @@ import { CapacityBar } from '@/features/people/components/capacity-bar'
 import { sortCapacities } from '@/features/dashboard/sort-capacities'
 import { summarizeAllocations } from '@/features/people/allocation'
 import { assignUser, removeAssignment, updateAssignment } from '@/features/people/actions'
+import { eventDotClasses } from '@/features/meetings/event-color'
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
 import { JOB_ROLES } from '@/lib/job-roles'
 import type {
@@ -381,6 +382,7 @@ function ChipEditor({
   if (!entry.assignmentId) {
     return (
       <span className={cn(chipClass, 'ring-dashed ring-border')}>
+        <span aria-hidden className={cn(APP_DOT_CLASS, eventDotClasses(entry.appId))} />
         {entry.appName} <span className={PCT_CLASS}>{formatPct(entry.allocationPct)}</span>
         <span className="italic">saving…</span>
       </span>
@@ -436,6 +438,7 @@ function ChipEditor({
           />
         }
       >
+        <span aria-hidden className={cn(APP_DOT_CLASS, eventDotClasses(entry.appId))} />
         {entry.appName} <span className={PCT_CLASS}>{formatPct(entry.allocationPct)}</span>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64" finalFocus={finalFocus}>

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { z } from 'zod'
 import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
+import { PersonAppRoleHistoryCard } from '@/features/people/components/app-role-history-card'
 import { AssignmentsCard } from '@/features/people/components/assignments-card'
 import { PersonActivityCard } from '@/features/people/components/person-activity-card'
 import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
@@ -13,6 +14,7 @@ import { buildPersonStats } from '@/features/people/person-stats'
 import {
   getPersonActivity,
   getPersonAllocationHistory,
+  getPersonAppRoleHistory,
   getPersonFollowups,
   getPersonMeetings,
   getPersonOverview,
@@ -71,13 +73,14 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
    * that matches nobody is rare enough that serialising every load to rule it
    * out costs more than the five wasted queries on the rare miss.
    */
-  const [overview, workload, followups, meetings, activity, history] = await Promise.all([
+  const [overview, workload, followups, meetings, activity, history, roleHistory] = await Promise.all([
     getPersonOverview(userId),
     getPersonWorkload(userId),
     getPersonFollowups(userId),
     getPersonMeetings(userId),
     getPersonActivity(userId),
     getPersonAllocationHistory(userId),
+    getPersonAppRoleHistory(userId),
   ])
 
   if (!overview) notFound()
@@ -144,6 +147,10 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
 
         <div className="lg:col-span-2">
           <AllocationHistoryCard history={history} />
+        </div>
+
+        <div className="lg:col-span-2">
+          <PersonAppRoleHistoryCard history={roleHistory} />
         </div>
       </div>
     </div>

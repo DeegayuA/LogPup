@@ -4,7 +4,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
 import { db } from '@/db'
 import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
-import { appComments, apps, assignments, users } from '@/db/schema'
+import { appComments, appRoleHistory, apps, assignments, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
   appHealth,
@@ -14,6 +14,7 @@ import {
   type AppSprintSnapshot,
   type AppTaskCounts,
 } from '@/features/apps/app-health'
+import { buildRoleTimeline, type AppRoleKind } from '@/features/apps/role-history'
 
 export type AppMember = {
   userId: string
@@ -325,6 +326,50 @@ export async function getAppBySlug(slug: string) {
     .leftJoin(pm, eq(apps.pmId, pm.id))
     .where(eq(apps.slug, slug))
   return app ?? null
+}
+
+export type AppRoleHistoryEntry = {
+  id: string
+  role: AppRoleKind
+  userId: string
+  userName: string | null
+  effectiveFrom: Date
+  effectiveTo: Date | null
+  changedByName: string | null
+  note: string | null
+  backfilled: boolean
+}
+
+/**
+ * Every PM/lead this app has ever had, newest first — the per-app half of
+ * "who was PM/lead of this app, and when", answered from app_role_history
+ * (an as-of index) rather than replayed from activity_log (an audit trail
+ * that can only say a change happened, not who held the role in between).
+ *
+ * Left joins throughout: a since-deleted holder or changer must not erase
+ * their row from the record, the same defensive shape getPersonAllocationHistory
+ * uses for assignment_history.
+ */
+export async function getAppRoleHistory(appId: string): Promise<AppRoleHistoryEntry[]> {
+  const holder = alias(users, 'app_role_holder')
+  const changer = alias(users, 'app_role_changer')
+  const rows = await db
+    .select({
+      id: appRoleHistory.id,
+      role: appRoleHistory.role,
+      userId: appRoleHistory.userId,
+      userName: holder.name,
+      effectiveFrom: appRoleHistory.effectiveFrom,
+      effectiveTo: appRoleHistory.effectiveTo,
+      changedByName: changer.name,
+      note: appRoleHistory.note,
+    })
+    .from(appRoleHistory)
+    .leftJoin(holder, eq(appRoleHistory.userId, holder.id))
+    .leftJoin(changer, eq(appRoleHistory.changedBy, changer.id))
+    .where(eq(appRoleHistory.appId, appId))
+
+  return buildRoleTimeline(rows)
 }
 
 export type AppCounts = {

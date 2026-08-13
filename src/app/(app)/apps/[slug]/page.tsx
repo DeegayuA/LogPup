@@ -14,7 +14,13 @@ import {
   type AppSprintSnapshot,
 } from '@/features/apps/app-health'
 import { APP_TAB_IDS, boardHref, normalizeAppTab, type AppTabId } from '@/features/apps/tabs'
-import { getAppBySlug, getAppCounts, listDistinctTechTags } from '@/features/apps/queries'
+import {
+  getAppBySlug,
+  getAppCounts,
+  getAppRoleHistory,
+  listDistinctTechTags,
+} from '@/features/apps/queries'
+import { AppRoleHistoryCard } from '@/features/apps/components/app-role-history-card'
 import { getAppActivity } from '@/features/apps/activity-queries'
 import { listAppComments } from '@/features/apps/comment-queries'
 import { AppHeader } from '@/features/apps/components/app-header'
@@ -115,6 +121,7 @@ export default async function AppDetailPage(props: {
     workspaceTechTags,
     activity,
     contributions,
+    roleHistory,
   ] = await Promise.all([
     getSprintsForApp(app.id),
     getTeamForApp(app.id),
@@ -128,6 +135,9 @@ export default async function AppDetailPage(props: {
     // Overview is the only tab that renders it; every other tab would pay
     // three aggregate queries for a panel it never shows.
     tab === 'overview' ? getAppContributions(app.id) : Promise.resolve([]),
+    // Settings is the only tab that shows PM/lead history — it sits right
+    // under the form that edits them (AppFormDialog below).
+    tab === 'settings' ? getAppRoleHistory(app.id) : Promise.resolve([]),
   ])
   const tasks = counts.tasks
 
@@ -584,6 +594,9 @@ export default async function AppDetailPage(props: {
               />
             </div>
           </div>
+
+          <AppRoleHistoryCard history={roleHistory} />
+
           <div className="flex flex-col gap-2 rounded-xl border border-dashed p-4">
             <h2 className="font-heading text-sm font-semibold">Archiving</h2>
             <p className="text-sm text-muted-foreground">

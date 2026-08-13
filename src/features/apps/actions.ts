@@ -1,10 +1,10 @@
 'use server'
 
 import { z } from 'zod'
-import { eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, users } from '@/db/schema'
+import { appRoleHistory, apps, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { managesApp } from '@/features/apps/project-manager'
 import { slugify } from '@/lib/slug'
@@ -12,6 +12,7 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { appCreateInput } from '@/features/apps/create-input'
 import { buildAppUpdate, summarizeAppChanges } from '@/features/apps/update-input'
+import { buildAppRoleEntry, type AppRoleKind } from '@/features/apps/role-history'
 import { callGemini } from '@/features/gemini/client'
 import { QUICK_MODELS } from '@/features/gemini/models'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
@@ -30,6 +31,27 @@ async function requireAdmin() {
 async function nameForUser(userId: string): Promise<string | null> {
   const [user] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId))
   return user?.name ?? null
+}
+
+/**
+ * Closes whichever app_role_history interval is currently open for
+ * (appId, role) — the other half of every PM/lead change, alongside
+ * buildAppRoleEntry opening the next one. Both take the SAME `at` instant
+ * (see the callers below), which is what makes the intervals abut exactly;
+ * see the closeOpenInterval comment in features/people/actions.ts for the
+ * fuller version of this note (assignment_history's sibling of this table).
+ */
+function closeOpenAppRoleInterval(input: { appId: string; role: AppRoleKind; at: Date }) {
+  return db
+    .update(appRoleHistory)
+    .set({ effectiveTo: input.at })
+    .where(
+      and(
+        eq(appRoleHistory.appId, input.appId),
+        eq(appRoleHistory.role, input.role),
+        isNull(appRoleHistory.effectiveTo),
+      ),
+    )
 }
 
 // Hard ceiling on the generated text. The description column is validated at
@@ -269,25 +291,51 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
     return err(`“${existing.name}” already uses the address /apps/${slug} — pick another name`)
   }
 
+  // Generated client-side, not via .returning(), so the id is known before
+  // the batch runs — same reason createMeeting does this (see
+  // meetings/actions.ts): the role-history rows below reference this app id,
+  // and db.batch is one atomic round trip (neon-http has no transactions)
+  // with no interactive step to fill the id in partway through.
+  const appId = crypto.randomUUID()
+  const at = new Date()
+
   try {
-    const [created] = await db
-      .insert(apps)
-      .values({ ...parsed.data, repoUrl: parsed.data.repoUrl || null, slug })
-      .returning({ id: apps.id })
-    // The initial PM assignment — the other half of "keep history" alongside
-    // updateApp's PM/lead-change logging below. This is an append-only audit
-    // trail (activity_log), not an as-of index: it answers "who was made PM,
-    // by whom, and when", not "who was PM on 12 June" from one query. See
-    // summarizeAppChanges in update-input.ts for the fuller version of this
-    // note.
+    await db.batch([
+      db.insert(apps).values({ ...parsed.data, id: appId, repoUrl: parsed.data.repoUrl || null, slug }),
+      // The role history opens in the SAME batch as the app row — otherwise
+      // every app created after this feature shipped would have a PM (and
+      // maybe a lead) with no recorded start, exactly the gap migration
+      // 0034's backfill exists to paper over for apps that predate it.
+      db.insert(appRoleHistory).values([
+        buildAppRoleEntry({ appId, userId: parsed.data.pmId, role: 'pm', changedBy: session.user.id, at }),
+        ...(parsed.data.leadId
+          ? [
+              buildAppRoleEntry({
+                appId,
+                userId: parsed.data.leadId,
+                role: 'lead',
+                changedBy: session.user.id,
+                at,
+              }),
+            ]
+          : []),
+      ]),
+    ])
+    // The initial PM (and lead) assignment — the other half of "keep
+    // history" alongside updateApp's PM/lead-change logging below. This is
+    // additive to the as-of rows written above: activity_log answers "who
+    // was made PM, by whom, and when" for a human reading /activity;
+    // app_role_history answers "who was PM on 12 June" from one indexed
+    // query. See summarizeAppChanges in update-input.ts for the fuller
+    // version of this note.
     const pmName = await nameForUser(parsed.data.pmId)
     await logActivity({
       actorId: session.user.id,
       verb: 'created',
       entityType: 'app',
-      entityId: created.id,
+      entityId: appId,
       entityLabel: parsed.data.name,
-      appId: created.id,
+      appId,
       appName: parsed.data.name,
       pagePath: `/apps/${slug}`,
       detail: `with ${pmName ?? 'an unknown member'} as PM`,
@@ -332,8 +380,66 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
     .where(eq(apps.id, parsedId.data))
   if (!app) return err('App not found')
 
+  const at = new Date()
+  const pmChanging = typeof result.set.pmId === 'string' && result.set.pmId !== app.pmId
+  const leadChanging = 'leadId' in result.set && result.set.leadId !== app.leadId
+
+  // db.batch takes a non-empty tuple, hence the always-present update first
+  // and the conditional role-history writes spread in after it — the same
+  // shape the conditional attendee writes in meetings/actions.ts use.
+  //
+  // An unchanged value writes NOTHING here: buildAppUpdate already drops keys
+  // the caller didn't send, and the settings form resubmits pmId/leadId
+  // whether or not they were touched, so pmChanging/leadChanging (comparing
+  // against the row read above) are what keep a same-value save from opening
+  // a spurious interval — the same no-op discipline summarizeAppChanges
+  // already applies to the activity-log detail below.
+  type BatchWrite = Parameters<typeof db.batch>[0][number]
+  const roleWrites: BatchWrite[] = []
+  if (pmChanging) {
+    roleWrites.push(
+      closeOpenAppRoleInterval({ appId: parsedId.data, role: 'pm', at }),
+      db
+        .insert(appRoleHistory)
+        .values(
+          buildAppRoleEntry({
+            appId: parsedId.data,
+            userId: result.set.pmId as string,
+            role: 'pm',
+            changedBy: session.user.id,
+            at,
+          }),
+        ),
+    )
+  }
+  if (leadChanging) {
+    const nextLeadId = result.set.leadId as string | null
+    roleWrites.push(closeOpenAppRoleInterval({ appId: parsedId.data, role: 'lead', at }))
+    // Clearing the lead (nextLeadId === null) closes the open interval and
+    // opens nothing — appRoleAsOf then finds no row covering any instant
+    // after `at` and correctly reports no lead. See the "no changeKind
+    // column" note on appRoleHistory in src/db/schema.ts for why that is
+    // sufficient here (unlike assignment_history's removal, which needs a
+    // tombstone).
+    if (nextLeadId) {
+      roleWrites.push(
+        db
+          .insert(appRoleHistory)
+          .values(
+            buildAppRoleEntry({
+              appId: parsedId.data,
+              userId: nextLeadId,
+              role: 'lead',
+              changedBy: session.user.id,
+              at,
+            }),
+          ),
+      )
+    }
+  }
+
   try {
-    await db.update(apps).set(result.set).where(eq(apps.id, parsedId.data))
+    await db.batch([db.update(apps).set(result.set).where(eq(apps.id, parsedId.data)), ...roleWrites])
   } catch (error) {
     console.error('[apps] updateApp failed:', error)
     return err('Could not save the changes — try again')
@@ -343,13 +449,12 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   // Names are only worth a query when the id they belong to actually changed
   // — the common save (nothing here touched) must not pay for two lookups it
   // will then throw away, and summarizeAppChanges already no-ops when the
-  // value is unchanged.
-  const pmName =
-    typeof result.set.pmId === 'string' && result.set.pmId !== app.pmId
-      ? await nameForUser(result.set.pmId)
-      : null
+  // value is unchanged. Reuses the same pmChanging/leadChanging the batch
+  // above used to decide what to write, so the activity-log detail and the
+  // as-of history can never disagree about which fields actually changed.
+  const pmName = pmChanging ? await nameForUser(result.set.pmId as string) : null
   const leadName =
-    typeof result.set.leadId === 'string' && result.set.leadId !== app.leadId
+    leadChanging && typeof result.set.leadId === 'string'
       ? await nameForUser(result.set.leadId)
       : null
 

@@ -1,6 +1,8 @@
 import { Badge } from '@/components/ui/badge'
+import { eventDotClasses } from '@/features/meetings/event-color'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import type { AssignableApp, UserCapacity } from '@/features/people/queries'
+import { cn } from '@/lib/utils'
 import { sortCapacities } from '@/features/dashboard/sort-capacities'
 import {
   CapacityCard,
@@ -62,10 +64,23 @@ export function CapacityHeat({
                   <div className="flex flex-wrap gap-1.5">
                     {person.breakdown.map((entry) => (
                       // Name only, no percentage: this is the non-admin view
-                      // and it stays pixel-identical to what shipped before
-                      // the editor existed. The per-app split is a click away
-                      // on the person page; the total is right below.
-                      <Badge key={entry.appId} variant="secondary" className="text-[10px]">
+                      // and the per-app split is a click away on the person
+                      // page; the total is right below.
+                      //
+                      // The dot is the app's identity hue — the same one its
+                      // meetings wear on the calendar and its chip wears in
+                      // the people directory, so one app is one colour
+                      // wherever it is named. It is NOT status: the amber a
+                      // few pixels below means "near capacity", and the word
+                      // on that badge is what carries it.
+                      <Badge key={entry.appId} variant="secondary" className="gap-1 text-[10px]">
+                        <span
+                          aria-hidden
+                          className={cn(
+                            'size-1.5 shrink-0 rounded-full',
+                            eventDotClasses(entry.appId) ?? 'bg-muted-foreground/50',
+                          )}
+                        />
                         {entry.appName}
                       </Badge>
                     ))}

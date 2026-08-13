@@ -14,6 +14,11 @@ export const userRole = pgEnum('user_role', ['admin', 'member'])
 // the status column is what /pending shows to explain that.
 export const userStatus = pgEnum('user_status', ['pending', 'approved', 'rejected'])
 export const appStatus = pgEnum('app_status', ['active', 'paused', 'archived'])
+// The two roles app_role_history tracks as-of intervals for. Closed set, like
+// every other "kind" column in this file, hence a pg enum rather than free
+// text (contrast assignments.role / assignmentHistory.role, which are
+// per-project free text and stay `text`).
+export const appRoleKind = pgEnum('app_role_kind', ['pm', 'lead'])
 export const sprintStatus = pgEnum('sprint_status', ['planned', 'active', 'done'])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
 export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
@@ -89,6 +94,70 @@ export const apps = pgTable('apps', {
   pmId: uuid('pm_id').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
+
+// Append-only "as of" index of who has held PM or lead on an app, and when.
+// Exactly the assignment_history pattern below, applied to apps.pmId /
+// apps.leadId — read that comment first; this one only records where the two
+// differ.
+//
+// apps.pmId / apps.leadId stay THE live state, untouched, for the same
+// reason assignments did: every existing read path keeps working with no new
+// filter to remember. Without this sibling, updateApp overwrote pmId/leadId
+// IN PLACE and every prior holder was lost — only an activity_log row said a
+// change had happened (see the write path in features/apps/actions.ts),
+// which cannot answer "who was PM on 12 June" from one indexed query.
+//
+// SHAPE — one row per (appId, role) *interval*, half-open [from, to), with AT
+// MOST ONE open row per (appId, role) — narrower than assignment_history's
+// (userId, appId) key, because a role here is a single scalar column on
+// `apps` (there is one pm and at most one lead at a time), not a set of
+// allocations.
+//
+// NO changeKind/tombstone column, unlike assignment_history and
+// meeting_attendee_history. Neither role has a summed quantity a stale value
+// could corrupt, and leadId — the only one of the two that can go back to
+// "nobody" — is fully described by a CLOSED row with nothing reopened after
+// it: appRoleAsOf finds no row covering that instant and correctly reports no
+// lead, with no special case required. The "who cleared it" fact still lives
+// where it always has, the activity_log row updateApp already writes.
+//
+// changedBy is the admin (or managing PM) who opened that interval — who put
+// this person in the role, not who removed the previous holder (that stays
+// on the row that names the removal in activity_log). Backfilled rows (see
+// migration 0034) carry note = BACKFILLED_APP_ROLE_NOTE ('backfilled at
+// migration', declared in features/apps/role-history.ts) — a fixed sentinel
+// rather than a description, so a consumer can tell "we watched this happen"
+// from "we assumed this at migration time" with a plain equality check. This
+// project has been burned by the alternative once already: migration 0015
+// backfilled assignment_history with an inferred effective_from
+// indistinguishable from an observed one, and a whole planned feature had to
+// drop as-of allocation as untrustworthy as a result.
+export const appRoleHistory = pgTable('app_role_history', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  role: appRoleKind('role').notNull(),
+  effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull().defaultNow(),
+  effectiveTo: timestamp('effective_to', { withTimezone: true }),
+  changedBy: uuid('changed_by').notNull().references(() => users.id),
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // Per-app timeline: "who has been PM/lead of this app, and when".
+  index('app_role_history_app_from_idx').on(t.appId, t.effectiveFrom),
+  // Per-person view: "which apps has this person been PM/lead of, and when".
+  index('app_role_history_user_from_idx').on(t.userId, t.effectiveFrom),
+  // "As of" lookups filter on the interval bounds alone, same shape as
+  // assignment_history_as_of_idx.
+  index('app_role_history_as_of_idx').on(t.effectiveFrom, t.effectiveTo),
+  // The "AT MOST ONE open row per (appId, role)" invariant above, enforced
+  // rather than only documented — same guard, declared the same way, as
+  // assignment_history_one_open_idx. A second open interval for the same
+  // (app, role) would make an "as of" read ambiguous about who held it.
+  uniqueIndex('app_role_history_one_open_idx')
+    .on(t.appId, t.role)
+    .where(sql`${t.effectiveTo} is null`),
+])
 
 export const assignments = pgTable('assignments', {
   id: uuid('id').primaryKey().defaultRandom(),

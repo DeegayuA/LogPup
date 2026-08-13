@@ -5,6 +5,7 @@ import { db } from '@/db'
 import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import {
   activityLog,
+  appRoleHistory,
   apps,
   assignmentHistory,
   assignments,
@@ -12,6 +13,7 @@ import {
   meetingFollowups,
   users,
 } from '@/db/schema'
+import { buildRoleTimeline, type AppRoleKind } from '@/features/apps/role-history'
 import {
   EMPTY_NOW,
   RECENT_ACTIONS,
@@ -531,6 +533,54 @@ export async function getPersonAllocationHistory(
     timeline: buildAllocationTimeline(rows),
     trend: allocationTotalSeries(rows),
   }
+}
+
+export type PersonAppRoleEntry = {
+  id: string
+  appId: string
+  appName: string
+  slug: string
+  role: AppRoleKind
+  effectiveFrom: Date
+  effectiveTo: Date | null
+  changedByName: string | null
+  note: string | null
+  backfilled: boolean
+}
+
+/**
+ * "Who did which project, and when" from the PERSON's side — every app this
+ * person has been PM or lead of, newest first, straight from app_role_history
+ * (features/apps/role-history.ts owns the shaping, shared with the per-app
+ * read in features/apps/queries.ts so the two surfaces cannot disagree about
+ * what "backfilled" means).
+ *
+ * Inner-joined to apps (a role can't outlive the app it was on: app_id
+ * cascades), left-joined to the changer so a since-deleted admin doesn't
+ * erase their own change from the record — same shape as the allocation
+ * history read above.
+ */
+export async function getPersonAppRoleHistory(userId: string): Promise<PersonAppRoleEntry[]> {
+  const changer = alias(users, 'app_role_changer')
+  const rows = await db
+    .select({
+      id: appRoleHistory.id,
+      appId: apps.id,
+      appName: apps.name,
+      slug: apps.slug,
+      role: appRoleHistory.role,
+      effectiveFrom: appRoleHistory.effectiveFrom,
+      effectiveTo: appRoleHistory.effectiveTo,
+      changedByName: changer.name,
+      note: appRoleHistory.note,
+    })
+    .from(appRoleHistory)
+    .innerJoin(apps, eq(appRoleHistory.appId, apps.id))
+    .leftJoin(changer, eq(appRoleHistory.changedBy, changer.id))
+    .where(eq(appRoleHistory.userId, userId))
+    .orderBy(desc(appRoleHistory.effectiveFrom))
+
+  return buildRoleTimeline(rows)
 }
 
 /**

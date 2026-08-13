@@ -75,12 +75,12 @@ export type AppChangeSummary = {
  * Turns the fields updateApp actually changed into the single detail/metadata
  * pair its one logActivity call carries — the generalization of the
  * statusChanged check this file used to do inline for status alone, now also
- * covering the PM and lead. This is the whole of the PM/lead "history" this
- * feature builds: an append-only audit row per change, answering "who
- * changed the PM/lead, to whom, and when" — NOT an as-of index like
- * assignment_history, which answers "who was PM on 12 June" from one indexed
- * query. If that is ever needed, the honest follow-up is an interval table
- * shaped like assignment_history; this does not attempt it.
+ * covering the PM and lead. This is the append-only AUDIT half of PM/lead
+ * history: it answers "who changed the PM/lead, to whom, and when" for a
+ * human reading /activity. The as-of half — "who was PM on 12 June" from one
+ * indexed query — is app_role_history (src/db/schema.ts), which updateApp
+ * writes to alongside this, in the same db.batch as the update itself. See
+ * features/apps/role-history.ts for that table's pure read/write logic.
  *
  * Compares `set` (buildAppUpdate's output — only the keys the caller actually
  * sent) against `before` (the row's state immediately prior to the write), so
