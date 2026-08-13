@@ -21,16 +21,25 @@ import { cn } from '@/lib/utils'
 export function LazyDisclosure({
   summary,
   hint,
+  defaultOpen = false,
   children,
   className,
 }: {
   summary: string
   /** One short line beside the label — what opening this gets you. */
   hint?: string
+  /**
+   * Start open. For a disclosure hiding the only way to DO something, rather
+   * than extra detail about something already on screen: a collapsed control
+   * that the surface above it resembles reads as a missing feature, not as a
+   * tidy default. Still lazy in the sense that matters — children mount with
+   * a real box, because the box is open on first paint.
+   */
+  defaultOpen?: boolean
   children: ReactNode
   className?: string
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
 
   return (
     <details

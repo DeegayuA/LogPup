@@ -495,8 +495,19 @@ export default async function AppDetailPage(props: {
             // today on mount, and inside a closed <details> that would resolve
             // against a zero-width box and land on the oldest sprint instead.
             <LazyDisclosure
-              summary={isAdmin ? 'Adjust the schedule' : 'See the full schedule'}
-              hint={isAdmin ? 'drag to move or resize a sprint' : 'every sprint, with dates'}
+              // Open for anyone who can actually change the plan. Collapsed,
+              // this was read as the feature being gone: the spine above is
+              // the thing that LOOKS like the roadmap, and it only selects —
+              // clicking, dragging and editing a sprint all live down here.
+              // A closed <details> is right for detail you might want; it is
+              // wrong for the only place an action exists.
+              defaultOpen={isAdmin}
+              summary={isAdmin ? 'Edit the schedule' : 'See the full schedule'}
+              hint={
+                isAdmin
+                  ? 'click a sprint to edit it, or drag to move and resize'
+                  : 'every sprint, with dates'
+              }
             >
               <Roadmap sprints={sprints} slug={slug} />
             </LazyDisclosure>
