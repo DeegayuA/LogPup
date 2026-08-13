@@ -29,6 +29,13 @@ function AvatarImage({ className, ...props }: AvatarPrimitive.Image.Props) {
   return (
     <AvatarPrimitive.Image
       data-slot="avatar-image"
+      // Google's avatar CDN (lh3.googleusercontent.com) 403s the image
+      // request when it receives a Referer header it doesn't expect — which
+      // renders as a broken image and silently falls back to the initials.
+      // `no-referrer` drops the header entirely so the request succeeds.
+      // Every avatar in the app goes through this one primitive, so fixing
+      // it here fixes them all — do not remove this.
+      referrerPolicy="no-referrer"
       className={cn(
         "aspect-square size-full rounded-full object-cover",
         className
