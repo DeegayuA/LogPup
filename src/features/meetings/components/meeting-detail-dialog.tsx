@@ -11,6 +11,7 @@ import {
   FileTextIcon,
   ListIcon,
   PencilIcon,
+  SparklesIcon,
   Trash2Icon,
   UsersIcon,
 } from 'lucide-react'
@@ -41,6 +42,7 @@ import {
 import { deleteMeeting, rescheduleMeeting } from '@/features/meetings/actions'
 import { AddToCalendarMenu } from '@/features/meetings/components/add-to-calendar'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
+import { MeetingProjectSelect } from '@/features/meetings/components/meeting-project-select'
 import { MetaChip } from '@/features/meetings/components/meeting-chips'
 import {
   durationLabel,
@@ -103,6 +105,7 @@ export function MeetingDetailDialog({
   isAdmin,
   onOpenChange,
   onOpenInList,
+  onOpenNotes,
   users = [],
   apps = [],
 }: {
@@ -113,6 +116,13 @@ export function MeetingDetailDialog({
   onOpenChange: (open: boolean) => void
   /** Jumps to the list view for this meeting (notes timeline, follow-ups, AI). */
   onOpenInList?: (meeting: MeetingSummary) => void
+  /**
+   * Opens the write-up popup without leaving the calendar. The caller owns that
+   * dialog and closes this one first — two stacked dialogs share a focus trap
+   * and a scroll lock, and unwinding them in the right order costs more than
+   * having both panels on screen is worth.
+   */
+  onOpenNotes?: (meetingId: string) => void
   /**
    * Attendee pool and app list for the edit dialog. Both optional and both
    * defaulting to empty, because a caller that has neither should still get a
@@ -142,6 +152,7 @@ export function MeetingDetailDialog({
             apps={apps}
             onOpenChange={onOpenChange}
             onOpenInList={onOpenInList}
+            onOpenNotes={onOpenNotes}
           />
         ) : null}
       </DialogContent>
@@ -157,6 +168,7 @@ function MeetingDetailBody({
   apps,
   onOpenChange,
   onOpenInList,
+  onOpenNotes,
 }: {
   meeting: MeetingSummary
   canManage: boolean
@@ -166,6 +178,7 @@ function MeetingDetailBody({
   apps: { id: string; name: string }[]
   onOpenChange: (open: boolean) => void
   onOpenInList?: (meeting: MeetingSummary) => void
+  onOpenNotes?: (meetingId: string) => void
 }) {
   const fieldId = useId()
   const [isPending, startTransition] = useTransition()
@@ -191,6 +204,11 @@ function MeetingDetailBody({
   const moved =
     start.getTime() !== meeting.startsAt.getTime() || end.getTime() !== meeting.endsAt.getTime()
   const errorId = `${fieldId}-end-error`
+  // A quick meeting gets booked before anyone knows which product it belongs
+  // to — sometimes it never belongs to one. Filing it later used to mean the
+  // full edit form, which re-submits the title, both times and the whole
+  // attendee list to change one column.
+  const canRefile = canManage && apps.length > 0
 
   /** Dragging the start carries the end with it, so the duration survives —
       the same promise the drag-to-another-day gesture makes. */
@@ -279,7 +297,10 @@ function MeetingDetailBody({
             </Badge>
           ) : meeting.appName ? (
             <Badge variant="secondary">{meeting.appName}</Badge>
-          ) : (
+          ) : canRefile ? null : (
+            // Dropped only when the picker below is there to say the same
+            // thing in a control — a badge reading "No app" directly above a
+            // field whose value is "No app" is the same fact twice.
             <Badge variant="outline">No app</Badge>
           )}
           {meeting.googleEventId ? (
@@ -305,6 +326,15 @@ function MeetingDetailBody({
           <p className="text-sm text-muted-foreground">No agenda was set for this meeting.</p>
         )}
       </Section>
+
+      {canRefile ? (
+        <MeetingProjectSelect
+          meetingId={meeting.id}
+          appId={meeting.appId}
+          apps={apps}
+          className="max-w-xs"
+        />
+      ) : null}
 
       <Section
         icon={UsersIcon}
@@ -347,27 +377,45 @@ function MeetingDetailBody({
         ) : (
           <p className="text-sm text-muted-foreground">No notes yet.</p>
         )}
-        {/* Not a dead end: the button that actually gets there is named right
-            here, next to the thing it is missing, instead of only in the
+        {/* Not a dead end: the buttons that actually get there are named right
+            here, next to the thing they are missing, instead of only in the
             footer under a generic label. */}
-        {onOpenInList ? (
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            className="w-fit"
-            onClick={() => {
-              onOpenInList(meeting)
-              onOpenChange(false)
-            }}
-          >
-            <ListIcon aria-hidden /> Open the write-up, transcript and follow-ups
-          </Button>
-        ) : (
+        <div className="flex flex-wrap gap-2">
+          {/* Reading the AI write-up is the common case and it does not need
+              the list view at all — this stays on the calendar. Editing any of
+              it still means going to the list, which is the button beside it. */}
+          {onOpenNotes ? (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => {
+                onOpenChange(false)
+                onOpenNotes(meeting.id)
+              }}
+            >
+              <SparklesIcon aria-hidden /> Read the write-up
+            </Button>
+          ) : null}
+          {onOpenInList ? (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => {
+                onOpenInList(meeting)
+                onOpenChange(false)
+              }}
+            >
+              <ListIcon aria-hidden /> Transcript and follow-ups
+            </Button>
+          ) : null}
+        </div>
+        {!onOpenInList && !onOpenNotes ? (
           <p className="text-xs text-muted-foreground">
             The write-up, transcript and follow-ups live in the list view.
           </p>
-        )}
+        ) : null}
       </Section>
 
       {canManage ? (

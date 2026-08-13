@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState, useTransition } from 'react'
+import { useState, useTransition } from 'react'
 import { Loader2Icon, SendIcon, SparklesIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -27,14 +27,10 @@ export function MeetingAssistant({ meetingId }: { meetingId: string }) {
   const [answer, setAnswer] = useState<string | null>(null)
   const [asking, startAsking] = useTransition()
   const speech = useSpeech()
-  // Whether the question currently in flight arrived by voice — see the
-  // component doc for why only those answers speak themselves.
-  const spokenQuestionRef = useRef(false)
 
   function ask(text: string, viaVoice: boolean) {
     const asked = text.trim()
     if (!asked) return
-    spokenQuestionRef.current = viaVoice
     setAnswer(null)
     startAsking(async () => {
       try {
@@ -44,7 +40,10 @@ export function MeetingAssistant({ meetingId }: { meetingId: string }) {
           return
         }
         setAnswer(res.data.answer)
-        if (spokenQuestionRef.current) void speech.speak(res.data.answer)
+        // `viaVoice` is read from THIS call's closure, not shared state: a
+        // shared ref was clobbered when a second question overlapped the
+        // first, making a typed question's answer speak itself.
+        if (viaVoice) void speech.speak(res.data.answer)
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -113,7 +112,11 @@ export function MeetingAssistant({ meetingId }: { meetingId: string }) {
         >
           <p className={cn(bilingualText, 'text-foreground')}>{answer}</p>
           <div className="flex justify-end">
-            <SpeakButton getText={() => answer} label="Play answer" />
+            {/* Shares the component's own handle: while the auto-speak is
+                loading or talking this button shows Stop for THAT audio,
+                instead of paying a second TTS call for the same text and
+                playing both voices at once. */}
+            <SpeakButton speech={speech} getText={() => answer} label="Play answer" />
           </div>
         </div>
       ) : null}

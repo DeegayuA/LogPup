@@ -132,10 +132,13 @@ export function RecordTimeline({ rows, canEdit }: { rows: RecordRow[]; canEdit: 
               {' · '}
               {row.meta}
               {canEdit && row.editable && !editing ? (
+                // Always visible, not hover-revealed: an affordance nobody
+                // can see is an affordance nobody uses, and this page has no
+                // other hint that the record is editable.
                 <button
                   type="button"
                   onClick={() => open(row)}
-                  className="ml-2 rounded px-1 text-[8.5pt] font-medium text-zinc-400 opacity-0 transition-opacity hover:text-zinc-700 focus-visible:opacity-100 group-hover:opacity-100 print:hidden"
+                  className="ml-2 rounded border border-zinc-200 px-1.5 text-[8pt] font-medium text-zinc-500 hover:border-zinc-400 hover:text-zinc-900 print:hidden"
                 >
                   Edit
                 </button>

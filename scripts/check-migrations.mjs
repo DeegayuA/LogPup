@@ -71,20 +71,61 @@ async function main() {
   // against the files on disk catches every kind of drift — new columns, type
   // changes, indexes, constraints — with no SQL parsing at all.
   let pending = []
+  let edited = []
   try {
-    const applied = new Set(
-      (await sqlClient`select hash from drizzle.__drizzle_migrations`).map((row) => row.hash),
-    )
-    pending = readdirSync(join(root, 'drizzle'))
+    const ledger = await sqlClient`select hash, created_at from drizzle.__drizzle_migrations`
+    const applied = new Set(ledger.map((row) => row.hash))
+    // Drizzle stamps each applied row's created_at with that migration's
+    // `when` from the journal, so a `when` present in the ledger proves the
+    // migration DID run — even when the file's hash no longer matches.
+    const appliedStamps = new Set(ledger.map((row) => Number(row.created_at)))
+    const whenByTag = new Map()
+    try {
+      const journal = JSON.parse(readFileSync(join(root, 'drizzle', 'meta', '_journal.json'), 'utf8'))
+      for (const entry of journal.entries) whenByTag.set(`${entry.tag}.sql`, entry.when)
+    } catch {
+      // No journal (or unreadable): every mismatch simply reports as pending,
+      // which is this script's pre-existing behaviour.
+    }
+
+    const unmatched = readdirSync(join(root, 'drizzle'))
       .filter((file) => file.endsWith('.sql'))
       .sort()
       .filter(
         (file) =>
           !applied.has(createHash('sha256').update(readFileSync(join(root, 'drizzle', file), 'utf8')).digest('hex')),
       )
+
+    // A hash mismatch has two very different causes, and telling someone to
+    // run db:migrate is the wrong answer to one of them. `0023_sprint_checkins`
+    // was applied and then edited afterwards (to make it replay-safe); its
+    // table has existed ever since, yet it reported as "never applied" forever
+    // and sent people looking for a schema problem that was not there. An
+    // applied migration file is effectively immutable — editing so much as a
+    // comment in one re-opens this.
+    for (const file of unmatched) {
+      const when = whenByTag.get(file)
+      if (when !== undefined && appliedStamps.has(when)) edited.push(file)
+      else pending.push(file)
+    }
   } catch {
     // No drizzle bookkeeping schema yet (a fresh database, or one migrated
     // entirely by hand). The table check below still applies.
+  }
+
+  // Reported separately from real drift, and never as an error: the schema is
+  // already correct, so `db:migrate` is not the fix and calling this "pending"
+  // is what taught people to distrust this check and hand-apply SQL instead.
+  if (edited.length > 0) {
+    process.stderr.write(
+      `\n${YELLOW}${BOLD}  Migration file edited after it was applied${RESET}\n` +
+        `  ${edited.length} file${edited.length === 1 ? '' : 's'} in drizzle/ no longer ` +
+        `match${edited.length === 1 ? 'es' : ''} the copy your database recorded:\n` +
+        edited.map((file) => `    ${YELLOW}${file}${RESET}\n`).join('') +
+        `  The schema change itself IS applied — nothing is broken and db:migrate\n` +
+        `  will not help. An applied migration is immutable; put the change in a\n` +
+        `  new migration and revert the edit, or re-record its hash.\n`,
+    )
   }
 
   if (pending.length === 0 && missingTables.length === 0) return

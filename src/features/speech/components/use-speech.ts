@@ -38,9 +38,12 @@ export function useSpeech(): SpeechHandle {
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const objectUrlRef = useRef<string | null>(null)
-  // Set while a stop() is pending against an in-flight request, so audio that
-  // arrives after the user pressed stop is discarded instead of playing.
-  const cancelledRef = useRef(false)
+  // Generation counter, NOT a boolean: each speak() takes a ticket, and stop()
+  // (or a newer speak) advances the counter, invalidating every older ticket.
+  // The boolean this replaces had a real race — speak(B) during speak(A)'s
+  // in-flight synthesis reset it to false, which UN-cancelled A: both clips
+  // then played over each other and only B's could be stopped.
+  const genRef = useRef(0)
 
   const cleanupAudio = useCallback(() => {
     const audio = audioRef.current
@@ -57,7 +60,7 @@ export function useSpeech(): SpeechHandle {
   }, [])
 
   const stop = useCallback(() => {
-    cancelledRef.current = true
+    genRef.current += 1
     cleanupAudio()
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel()
@@ -70,6 +73,15 @@ export function useSpeech(): SpeechHandle {
   // Audio must never outlive the component — a page navigation with a voice
   // still talking is its own small horror.
   useEffect(() => stop, [stop])
+
+  // Warm the browser voice registry once: getVoices() is free and kicks off
+  // the async voice-list load, so the fallback rung doesn't pay Chromium's
+  // TTS-service spin-up lag at the exact moment Gemini has already failed.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.getVoices()
+    }
+  }, [])
 
   const speakInBrowser = useCallback((text: string): boolean => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false
@@ -99,14 +111,20 @@ export function useSpeech(): SpeechHandle {
       if (!trimmed) return
 
       stop()
-      cancelledRef.current = false
+      // This invocation's ticket. Anything that advances the counter from here
+      // on — a stop(), or a newer speak() calling stop() — makes every check
+      // below bail out, and can never re-arm an older invocation.
+      const gen = ++genRef.current
       setError(null)
       setLoading(true)
 
       let played = false
       try {
         const res = await synthesizeSpeech(trimmed)
-        if (cancelledRef.current) return
+        // Stale ticket: a stop() or newer speak() happened while Gemini was
+        // generating. No cleanup — this invocation owns no audio yet, and the
+        // shared refs may already belong to the newer one.
+        if (genRef.current !== gen) return
         if (res.ok) {
           if (res.data.truncated) {
             // Never let a shortened reading pass as the whole thing — the
@@ -135,9 +153,13 @@ export function useSpeech(): SpeechHandle {
           await audio.play()
           // stop() can land while play() is in flight — without this the
           // element keeps playing behind a UI that says it stopped, and
-          // `speaking` sticks on with no handler left to clear it.
-          if (cancelledRef.current) {
-            cleanupAudio()
+          // `speaking` sticks on with no handler left to clear it. The stale
+          // stop() already paused THIS element via the refs, so only the
+          // local handles need dropping — cleanupAudio on the shared refs
+          // here could kill a newer invocation's audio instead.
+          if (genRef.current !== gen) {
+            audio.pause()
+            URL.revokeObjectURL(url)
             return
           }
           setEngine('gemini')
@@ -147,7 +169,7 @@ export function useSpeech(): SpeechHandle {
         }
         // Gemini refused (no key, quota, model gone). The browser voice is a
         // worse voice, not a worse outcome — say which one is talking.
-        if (speakInBrowser(trimmed)) {
+        if (genRef.current === gen && speakInBrowser(trimmed)) {
           played = true
           setError(`${res.error} Using this device's voice instead.`)
           return
@@ -157,7 +179,7 @@ export function useSpeech(): SpeechHandle {
         // Covers a rejected play() too (autoplay policy, decode failure) —
         // the element and its object URL must go either way.
         cleanupAudio()
-        if (cancelledRef.current) return
+        if (genRef.current !== gen) return
         if (speakInBrowser(trimmed)) {
           played = true
           setError("Could not reach the speech service — using this device's voice.")

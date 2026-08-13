@@ -65,12 +65,12 @@ describe('parseTaskIntent', () => {
     expect(intent?.title).toBe('fix login page')
   })
 
-  it('bare trailing names get no typo fallback — a misspelling stays in the title', () => {
-    // "shanka" would fuzzy-resolve after "to"/"for"/"@", but a bare last word
-    // has not earned that; guessing wrong here assigns silently.
+  it('bare trailing names get the typo fallback too — fuzzy everywhere by decree', () => {
+    // Originally strict (a stolen title word being the feared cost); the
+    // workspace explicitly chose typo tolerance in every position instead.
     const intent = parseTaskIntent('fix login shanka', PEOPLE, TODAY)
-    expect(intent?.assignee).toBeNull()
-    expect(intent?.title).toBe('fix login shanka')
+    expect(intent?.assignee?.id).toBe('u1')
+    expect(intent?.title).toBe('fix login')
   })
 
   it('reports a bare trailing first name shared by two people as ambiguous', () => {
@@ -240,10 +240,13 @@ describe('parseTaskIntent', () => {
     expect(intent?.title).toBe('fix the build')
   })
 
-  it('does not let a tail override a name already read from the front', () => {
+  it('a tail name ADDS an assignee beside the front one, never overrides it', () => {
+    // Multi-select semantics: "@deeghayu send the deck to shanika" is a task
+    // for both of them. The front name stays first (assignee = deeghayu).
     const intent = parseTaskIntent('@deeghayu send the deck to shanika', PEOPLE, TODAY)
     expect(intent?.assignee?.id).toBe('u2')
-    expect(intent?.title).toBe('send the deck to shanika')
+    expect(intent?.assignees.map((p) => p.id)).toEqual(['u2', 'u1'])
+    expect(intent?.title).toBe('send the deck')
   })
 
   it('returns null when there is no task left to create', () => {

@@ -1,50 +1,27 @@
-const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
+import {
+  HistoryDataSkeleton,
+  HistoryShellSkeleton,
+} from '@/features/people/components/history-skeleton'
 
 /**
- * Mirrors the real page block for block — header, pickers, six stat tiles, the
- * trend/overload pair, then the table — so nothing jumps when the data lands.
- * The sibling /people route has had one of these since it was built; this
- * route had none, which is why it flashed an empty frame on every date change.
+ * Cold entry into the route only.
+ *
+ * Kept (rather than deleted in favour of the page's own <Suspense>) because
+ * a dynamic route with no loading.tsx is not partially prefetchable at all —
+ * see node_modules/next/dist/docs/01-app/01-getting-started/04-linking-and-navigating.md.
+ * Removing it would silently disable the hover prefetch the as-of presets
+ * rely on.
+ *
+ * Both halves are shimmer here because on a cold load there is genuinely
+ * nothing real to show yet. Once the route is mounted, the page renders its
+ * header and pickers for real and only HistoryDataSkeleton stands in — see
+ * the Suspense boundary in page.tsx.
  */
 export default function LoadingCapacityHistory() {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      <span className="sr-only" role="status">
-        Loading capacity history
-      </span>
-
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-2">
-            <div className={`${shimmer} h-7 w-52`} />
-            <div className={`${shimmer} h-4 w-80`} />
-          </div>
-          <div className={`${shimmer} h-8 w-24`} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {[0, 1, 2, 3, 4].map((chip) => (
-            <div key={chip} className={`${shimmer} h-8 w-28`} />
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {[0, 1, 2].map((tab) => (
-            <div key={tab} className={`${shimmer} h-8 w-24`} />
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-6">
-        {[0, 1, 2, 3, 4, 5].map((tile) => (
-          <div key={tile} className={`${shimmer} h-[4.75rem]`} />
-        ))}
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className={`${shimmer} h-56`} />
-        <div className={`${shimmer} h-56`} />
-      </div>
-
-      <div className={`${shimmer} h-96`} />
+      <HistoryShellSkeleton />
+      <HistoryDataSkeleton />
     </div>
   )
 }

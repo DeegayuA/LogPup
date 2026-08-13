@@ -9,10 +9,12 @@ import {
   meetingAiNotes,
   meetingFollowups,
   meetingNoteSegments,
+  meetingSpeakers,
   meetingTaskSuggestions,
   meetings,
   users,
 } from '@/db/schema'
+import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { GeminiError, callGemini } from '@/features/gemini/client'
 import { ASSISTANT_MODELS } from '@/features/gemini/models'
@@ -70,41 +72,61 @@ export async function askMeeting(
   // meeting's creator, or someone who was actually there.
   if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
 
-  const [notes] = await db.select().from(meetingAiNotes).where(eq(meetingAiNotes.meetingId, id))
-
-  const segments = await db
-    .select({
-      source: meetingNoteSegments.source,
-      speakerLabel: meetingNoteSegments.speakerLabel,
-      speakerName: users.name,
-      content: meetingNoteSegments.content,
-    })
-    .from(meetingNoteSegments)
-    .leftJoin(users, eq(meetingNoteSegments.speakerId, users.id))
-    .where(eq(meetingNoteSegments.meetingId, id))
-    .orderBy(asc(meetingNoteSegments.startedAtMs), asc(meetingNoteSegments.createdAt))
-    .limit(MAX_SEGMENTS)
-
-  const actionItems = await db
-    .select({
-      text: meetingTaskSuggestions.text,
-      assignee: users.name,
-      due: meetingTaskSuggestions.suggestedDueDate,
-      status: meetingTaskSuggestions.status,
-    })
-    .from(meetingTaskSuggestions)
-    .leftJoin(users, eq(meetingTaskSuggestions.suggestedUserId, users.id))
-    .where(eq(meetingTaskSuggestions.meetingId, id))
-
-  const openFollowups = await db
-    .select({ person: meetingFollowups.personName, text: meetingFollowups.text })
-    .from(meetingFollowups)
-    .where(and(eq(meetingFollowups.sourceMeetingId, id), eq(meetingFollowups.status, 'open')))
+  // Four independent context reads, batched — never serialize what can run
+  // together (suggest-actions.ts's rule). On the Neon HTTP driver each await
+  // is a full round trip, and this action sits between a spoken question and
+  // its spoken answer, where every serial hop is audible dead air.
+  const [[notes], segments, actionItems, openFollowups, speakerMappings] = await Promise.all([
+    db.select().from(meetingAiNotes).where(eq(meetingAiNotes.meetingId, id)),
+    db
+      .select({
+        source: meetingNoteSegments.source,
+        speakerLabel: meetingNoteSegments.speakerLabel,
+        speakerName: users.name,
+        content: meetingNoteSegments.content,
+      })
+      .from(meetingNoteSegments)
+      .leftJoin(users, eq(meetingNoteSegments.speakerId, users.id))
+      .where(eq(meetingNoteSegments.meetingId, id))
+      .orderBy(asc(meetingNoteSegments.startedAtMs), asc(meetingNoteSegments.createdAt))
+      .limit(MAX_SEGMENTS),
+    db
+      .select({
+        text: meetingTaskSuggestions.text,
+        assignee: users.name,
+        due: meetingTaskSuggestions.suggestedDueDate,
+        status: meetingTaskSuggestions.status,
+      })
+      .from(meetingTaskSuggestions)
+      .leftJoin(users, eq(meetingTaskSuggestions.suggestedUserId, users.id))
+      .where(eq(meetingTaskSuggestions.meetingId, id)),
+    db
+      .select({ person: meetingFollowups.personName, text: meetingFollowups.text })
+      .from(meetingFollowups)
+      .where(and(eq(meetingFollowups.sourceMeetingId, id), eq(meetingFollowups.status, 'open'))),
+    // Speaker mappings, so a voice named by hand reaches the assistant too. A
+    // typed name has no users row, so the join above leaves speakerName null
+    // and the assistant would answer "Speaker 2 said…" about somebody the
+    // transcript, the timeline and the PDF all call by name.
+    db
+      .select({
+        label: meetingSpeakers.label,
+        userId: meetingSpeakers.userId,
+        userName: users.name,
+        displayName: meetingSpeakers.displayName,
+      })
+      .from(meetingSpeakers)
+      .leftJoin(users, eq(meetingSpeakers.userId, users.id))
+      .where(eq(meetingSpeakers.meetingId, id)),
+  ])
 
   const transcript = (notes?.transcript ?? '').slice(0, MAX_TRANSCRIPT_CHARS)
   const spoken = segments
     .filter((row) => row.source === 'voice')
-    .map((row) => `${row.speakerName ?? row.speakerLabel ?? 'Unknown'}: ${row.content}`)
+    .map(
+      (row) =>
+        `${resolveSpeakerNameForLabel(row.speakerLabel, speakerMappings) ?? row.speakerName ?? 'Unknown'}: ${row.content}`,
+    )
     .join('\n')
     .slice(0, MAX_TRANSCRIPT_CHARS)
   const typed = segments

@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { X } from 'lucide-react'
+import { Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { activityParams } from '@/features/activity/filters'
 import { ACTIVITY_ENTITY_TYPES } from '@/features/activity/types'
 
 /**
@@ -60,6 +61,74 @@ function DateFilter({
   )
 }
 
+/**
+ * Free-text search, debounced rather than committed on blur — search reads
+ * as "live" in a way a date field doesn't, so navigating after every
+ * keystroke would be too slow but waiting for blur would feel broken.
+ *
+ * Same local-draft-plus-remount pattern as DateFilter above: the parent keys
+ * this by the committed value so a navigation that changes `q` out from
+ * under it (Clear, back button, a shared link) resets the draft instead of
+ * fighting a stale local state.
+ */
+function SearchFilter({
+  value,
+  onCommit,
+}: {
+  value: string
+  onCommit: (next: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [])
+
+  function commit(next: string) {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    if (next !== value) onCommit(next)
+  }
+
+  return (
+    <div className="relative">
+      <Search
+        aria-hidden
+        className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+      />
+      <Input
+        type="text"
+        value={draft}
+        onChange={(e) => {
+          const next = e.target.value
+          setDraft(next)
+          if (timer.current) clearTimeout(timer.current)
+          // 400ms: long enough that a normal typing burst doesn't fire a
+          // navigation per keystroke, short enough that search still feels
+          // live rather than laggy.
+          timer.current = setTimeout(() => commit(next), 400)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit(draft)
+          }
+          if (e.key === 'Escape') {
+            if (timer.current) clearTimeout(timer.current)
+            setDraft(value)
+          }
+        }}
+        placeholder="Search the trail…"
+        aria-label="Search activity"
+        className="h-8 w-56 pl-7 text-xs"
+      />
+    </div>
+  )
+}
+
 /** What the /activity URL currently says. '' means "not filtered". */
 export type ActivityFilterState = {
   person: string
@@ -67,6 +136,7 @@ export type ActivityFilterState = {
   app: string
   from: string
   to: string
+  q: string
 }
 
 /**
@@ -91,13 +161,7 @@ export function ActivityFilterBar({
 
   function apply(patch: Partial<ActivityFilterState>) {
     const next = { ...current, ...patch }
-    const params = new URLSearchParams()
-    if (next.person) params.set('person', next.person)
-    if (next.type) params.set('type', next.type)
-    if (next.app) params.set('app', next.app)
-    if (next.from) params.set('from', next.from)
-    if (next.to) params.set('to', next.to)
-    const qs = params.toString()
+    const qs = activityParams(next).toString()
     router.push(qs ? `/activity?${qs}` : '/activity')
   }
 
@@ -106,7 +170,8 @@ export function ActivityFilterBar({
     current.type !== '' ||
     current.app !== '' ||
     current.from !== '' ||
-    current.to !== ''
+    current.to !== '' ||
+    current.q !== ''
 
   // Base UI's Select reserves '' for "no selection", so the all-rows option
   // carries this sentinel instead and apply() maps it back to ''.
@@ -132,6 +197,8 @@ export function ActivityFilterBar({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <SearchFilter key={`q-${current.q}`} value={current.q} onCommit={(q) => apply({ q })} />
+
       <Select
         value={current.person || ALL}
         items={personItems}
@@ -204,7 +271,7 @@ export function ActivityFilterBar({
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => apply({ person: '', type: '', app: '', from: '', to: '' })}
+          onClick={() => apply({ person: '', type: '', app: '', from: '', to: '', q: '' })}
         >
           <X aria-hidden /> Clear
         </Button>

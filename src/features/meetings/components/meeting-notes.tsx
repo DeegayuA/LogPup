@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition, type ReactNode } from 'react'
+import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import {
   AlertTriangle,
@@ -9,6 +10,7 @@ import {
   FileDown,
   ListChecks,
   Loader2Icon,
+  PencilIcon,
   MessageCircleQuestion,
   PlusCircle,
   ScrollText,
@@ -17,6 +19,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { MarkdownLite } from '@/components/markdown-lite'
 import { cn } from '@/lib/utils'
 import {
@@ -27,6 +30,7 @@ import {
 } from '@/features/meetings/components/meeting-chips'
 import type { ActionRow } from '@/features/meetings/components/meeting-notes-model'
 import { SpeakButton } from '@/features/speech/components/speak-button'
+import { updateMeetingSummary } from '@/features/meetings/followup-move-actions'
 import {
   EmptyFilterState,
   Panel,
@@ -197,6 +201,46 @@ export function MeetingAiNotes({
 
   const compact = density === 'compact'
 
+  /**
+   * INLINE WRITE-UP EDITING.
+   *
+   * The summary used to be regenerate-or-live-with-it. A write-up is a record
+   * people circulate, and the model gets a name or a number subtly wrong
+   * often enough that "fix that one line" has to be possible without throwing
+   * away the whole pass.
+   *
+   * The draft is the RAW stored text, not the language slice on screen: a
+   * bilingual write-up keeps English and Sinhala in one column
+   * (splitBilingualSummary reads them apart at render time), so saving back
+   * the English view would write over both and destroy the Sinhala half.
+   */
+  const router = useRouter()
+  const [editingSummary, setEditingSummary] = useState(false)
+  const [summaryDraft, setSummaryDraft] = useState('')
+  const [summarySaving, startSummarySave] = useTransition()
+
+  function openSummaryEditor() {
+    setSummaryDraft(notes.summary ?? '')
+    setEditingSummary(true)
+  }
+
+  function saveSummary() {
+    startSummarySave(async () => {
+      try {
+        const res = await updateMeetingSummary({ meetingId, summary: summaryDraft })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Write-up updated')
+        setEditingSummary(false)
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {notes.summary ? (
@@ -209,6 +253,12 @@ export function MeetingAiNotes({
           // pressing play speaks Sinhala rather than the English original.
           headerExtra={
             <span className="flex items-center gap-1">
+              {canManage && !editingSummary ? (
+                <Button variant="ghost" size="sm" type="button" onClick={openSummaryEditor}>
+                  <PencilIcon aria-hidden />
+                  Edit
+                </Button>
+              ) : null}
               <SpeakButton
                 getText={() => summaryBlocks.map((block) => block.content).join('\n\n')}
               />
@@ -238,10 +288,43 @@ export function MeetingAiNotes({
             </span>
           }
         >
-          {hasSinhala ? (
+          {editingSummary ? (
+            <div className="flex flex-col gap-2">
+              <Textarea
+                value={summaryDraft}
+                onChange={(event) => setSummaryDraft(event.target.value)}
+                rows={16}
+                maxLength={20000}
+                aria-label="Meeting write-up"
+                className="font-mono text-xs leading-relaxed"
+              />
+              <p className="text-2xs text-muted-foreground">
+                {hasSinhala
+                  ? 'This is the raw write-up — both languages in one text. Editing only the English half here would delete the Sinhala one.'
+                  : 'Markdown: ### for a heading, - for a bullet, **bold**.'}{' '}
+                Clearing it entirely removes the write-up.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button size="sm" type="button" disabled={summarySaving} onClick={saveSummary}>
+                  {summarySaving ? <Loader2Icon className="animate-spin" aria-hidden /> : null}
+                  {summarySaving ? 'Saving…' : 'Save write-up'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  disabled={summarySaving}
+                  onClick={() => setEditingSummary(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {!editingSummary && hasSinhala ? (
             <SummaryLanguageControl value={summaryLang} onChange={setSummaryLang} hasSinhala={hasSinhala} />
           ) : null}
-          <div className="flex flex-col gap-3">
+          <div className={cn('flex flex-col gap-3', editingSummary && 'hidden')}>
             {summaryBlocks.map((block) => (
               // The one piece of prose on the page allowed to be bigger than
               // body text. `bilingualLead` buys the extra leading Sinhala

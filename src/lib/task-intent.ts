@@ -193,7 +193,40 @@ function extractPriority(text: string): {
     const word = PRIORITY_WORDS[trailing[2].toLowerCase()]
     return { rest: trailing[1].replace(/,$/, '').trim(), priority: word.value, priorityLabel: word.label }
   }
+
+  // Fuzzy tail — "hgh", "urgnt" still count. Guarded by the FIRST LETTER on
+  // top of the similarity floor, because ordinary words sit one edit from
+  // these keywords ("slow" → "low" would set priority Low on a title about
+  // slowness; s ≠ l blocks it, while every real slip keeps its first letter).
+  const words = text.split(' ')
+  if (words.length > 1) {
+    const last = words[words.length - 1].toLowerCase()
+    const hits = fuzzyMatches(last, Object.entries(PRIORITY_WORDS), ([keyword]) => keyword).filter(
+      ([keyword]) => keyword[0] === last[0],
+    )
+    const values = new Set(hits.map(([, word]) => word.value))
+    if (values.size === 1) {
+      const [, word] = hits[0]
+      return {
+        rest: words.slice(0, -1).join(' ').replace(/,$/, '').trim(),
+        priority: word.value,
+        priorityLabel: word.label,
+      }
+    }
+  }
   return { rest: text, priority: null, priorityLabel: null }
+}
+
+function findPeople(query: string, people: IntentPerson[]): IntentPerson[] {
+  const q = query.toLowerCase()
+  const exact = people.filter((p) => p.name.toLowerCase() === q)
+  if (exact.length > 0) return exact
+  const firstName = people.filter((p) => p.name.toLowerCase().split(/\s+/)[0] === q)
+  if (firstName.length > 0) return firstName
+  const contains = people.filter((p) => p.name.toLowerCase().includes(q))
+  if (contains.length > 0) return contains
+  // Typo fallback ("shanka" → "Shanika"), only when nothing above matched.
+  return fuzzyMatches(query, people, (p) => p.name)
 }
 
 /**
@@ -288,10 +321,8 @@ export function parseTaskIntent(
   const text = rawParts[0].trim().replace(/\s+/g, ' ')
   if (text.length < 3) return null
 
-  let nameQuery: string | null = null
   let body = text
 
-  // 1. "@sam …" wherever the @ sits — explicit, wins outright.
   // EVERY @token, not just the first: "@shanika @sam fix login" is two
   // selections, and each strip re-runs the regex on the shortened body so
   // adjacent mentions cannot hide each other.
@@ -306,33 +337,34 @@ export function parseTaskIntent(
       match = AT_ANYWHERE.exec(body)
     }
   }
-  // 2. "assign <title> to <name>" / "task <title> for <name>"
+  // "assign <title> to <name and name>" / "task <title> for <name>"
   const command =
-    /^(?:assign|create\s+task|add\s+task|task)\s+([\s\S]+?)\s+(?:to|for)\s+([\s\S]+)$/i.exec(text)
-  // 3. "sam: ship the thing"
-  const colon = /^([\w][\w .'-]{0,40}?)\s*:\s+([\s\S]+)$/.exec(text)
+    /^(?:assign|create\s+task|add\s+task|task)\s+([\s\S]+?)\s+(?:to|for)\s+([\s\S]+)$/i.exec(body)
+  // "sam: ship the thing"
+  const colon = /^([\w][\w .'-]{0,40}?)\s*:\s+([\s\S]+)$/.exec(body)
 
-  if (atQueries.length > 0) {
-    nameQuery = atQueries[0]
-  } else if (command) {
+  const nameQueries: string[] = [...atQueries]
+
+  if (nameQueries.length === 0 && command) {
     body = command[1]
-    nameQuery = command[2]
-  } else if (colon) {
-    nameQuery = colon[1]
+    // The recipient side of the command form is a list like any other:
+    // "assign billing copy to shanika and deeghayu".
+    nameQueries.push(
+      ...command[2]
+        .split(/\s*(?:,|\band\b|\bor\b|&)\s*/i)
+        .map((part) => part.trim())
+        .filter(Boolean),
+    )
+  } else if (nameQueries.length === 0 && colon) {
+    nameQueries.push(colon[1])
     body = colon[2]
   } else {
-    // 4. Bare leading name: try two words then one, so "shanika ayasmanthi do
-    // X" and "shanika do X" both resolve. Only accepted when it actually
-    // matches somebody — otherwise the words stay in the title.
-    const words = text.split(' ')
-    for (const take of [2, 1]) {
-      if (words.length <= take) continue
-      const candidate = words.slice(0, take).join(' ')
-      if (findPeople(candidate, people).length > 0) {
-        nameQuery = candidate
-        body = words.slice(take).join(' ')
-        break
-      }
+    // Bare leading names — fuzzy, multiple, separator-aware. Runs even after
+    // an @ was found, so "@shanika deeghayu fix login" selects both.
+    const lead = takeNameRun(body, people, 'start')
+    if (lead.queries.length > 0) {
+      nameQueries.push(...lead.queries)
+      body = lead.rest
     }
   }
 
@@ -346,41 +378,27 @@ export function parseTaskIntent(
   let rest = withoutPriority.rest
 
   /*
-   * Then the trailing recipient — "new task to shanika". Tried once on either
-   * side of the app hint, because either can be written last:
-   *   "fix login to shanika on logpup"  -> app must come off first
-   *   "fix login on logpup to shanika"  -> name must come off first
-   * Never when a name was already read from the front: "@sam ship it for
-   * review" must not be reassigned by its own tail.
+   * Trailing names — tried on either side of the app hint, because either can
+   * be written last ("fix login to shanika on logpup" / "fix login on logpup
+   * to shanika"). The run scanner stops at the first non-name, so a phrase
+   * with no trailing names loses nothing.
    */
-  if (!nameQuery) {
-    const trailing = takeTrailingAssignee(rest, people)
-    if (trailing) {
-      nameQuery = trailing.query
-      rest = trailing.rest
+  {
+    const tail = takeNameRun(rest, people, 'end')
+    if (tail.queries.length > 0) {
+      nameQueries.push(...tail.queries)
+      rest = tail.rest
     }
   }
 
   const withoutApp = extractApp(rest)
   rest = withoutApp.rest
 
-  if (!nameQuery) {
-    const trailing = takeTrailingAssignee(rest, people)
-    if (trailing) {
-      nameQuery = trailing.query
-      rest = trailing.rest
-    }
-  }
-
-  // Last resort: a bare name on the end, with no "to"/"for"/"@" announcing
-  // it. Runs after the app hint has been peeled so "fix login shanika on
-  // logpup" resolves both, and only under its strict matcher (see
-  // takeBareTrailingName for why fuzzy is not welcome here).
-  if (!nameQuery) {
-    const bare = takeBareTrailingName(rest, people)
-    if (bare) {
-      nameQuery = bare.query
-      rest = bare.rest
+  {
+    const tail = takeNameRun(rest, people, 'end')
+    if (tail.queries.length > 0) {
+      nameQueries.push(...tail.queries)
+      rest = tail.rest
     }
   }
 
@@ -389,7 +407,7 @@ export function parseTaskIntent(
   // assigned — "@shanika @bob fix login" with an unknown bob reports bob
   // rather than quietly creating for shanika alone, because the preview can
   // only warn about what the parse surfaces.
-  const queries = atQueries.length > 0 ? atQueries : nameQuery ? [nameQuery] : []
+  const queries = nameQueries
   const resolved: IntentPerson[] = []
   let ambiguousMatches: IntentPerson[] = []
   let failedQuery: string | null = null

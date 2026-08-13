@@ -27,6 +27,7 @@ import {
 } from '@/features/meetings/components/meeting-chips'
 import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
 import { DictateButton } from '@/features/speech/components/dictate-button'
+import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
 import type { DeadlineHintSource } from '@/features/meetings/components/note-timeline-model'
 import {
   ActionItemSuggestionsList,
@@ -224,12 +225,15 @@ export function NoteTimeline({
     })
   }
 
-  function handleAssignSpeaker(label: string, value: string) {
+  function handleAssignSpeaker(label: string, value: string, displayName?: string | null) {
     const userId = value === NOT_ATTENDEE ? null : value
     setSpeakerBusyLabel(label)
     startSpeakerPending(async () => {
       try {
-        const res = await setSpeakerMapping(meetingId, label, userId)
+        // Omitting displayName for a real user is deliberate: the action
+        // treats the arguments as the mapping's whole intended state, so
+        // naming a person clears any typed name that used to stand in.
+        const res = await setSpeakerMapping(meetingId, label, userId, displayName)
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -347,13 +351,39 @@ export function NoteTimeline({
                         <SelectItem value={NOT_ATTENDEE}>Not a listed attendee</SelectItem>
                       </SelectContent>
                     </Select>
-                  ) : (
+                  ) : null}
+                  {/* "Not a listed attendee" alone only records that the voice
+                      is nobody on the invite — it discards WHO it was, so the
+                      transcript keeps saying "Speaker 1". Commits on blur or
+                      Enter, never per keystroke: each save renames the voice
+                      across every segment carrying this label. */}
+                  {canManage && value === NOT_ATTENDEE ? (
+                    <input
+                      type="text"
+                      defaultValue={mapping?.displayName ?? ''}
+                      disabled={busy}
+                      maxLength={80}
+                      placeholder="Their name"
+                      aria-label={`Name for ${label}`}
+                      onBlur={(event) => {
+                        const typed = event.target.value.trim()
+                        if (typed === (mapping?.displayName ?? '')) return
+                        handleAssignSpeaker(label, NOT_ATTENDEE, typed || null)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          event.currentTarget.blur()
+                        }
+                      }}
+                      className="h-7 w-32 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                    />
+                  ) : null}
+                  {!canManage ? (
                     <span className="text-xs font-medium">
-                      {mapping
-                        ? (mapping.userName ?? 'Not a listed attendee')
-                        : 'Unassigned'}
+                      {resolveSpeakerNameForLabel(label, data.speakers) ?? 'Unassigned'}
                     </span>
-                  )}
+                  ) : null}
                 </div>
               )
             })}
@@ -376,8 +406,15 @@ export function NoteTimeline({
             const Icon = meta.icon
             const isEditing = editingId === segment.id
             const canEditThis = canManage && segment.source !== 'voice' && !segment.isLegacy
+            // Mappings first, THEN the joined user name. A hand-typed name for
+            // a voice with no account lives on the mapping row, so resolving
+            // from the segment alone left this reading "Speaker 1" while the
+            // PDF export — which already resolves this way — showed the real
+            // name. One shared helper, so the two cannot disagree again.
             const speakerDisplay =
-              segment.speakerName ?? segment.speakerLabel ?? (segment.source === 'typed' ? segment.createdByName : null)
+              resolveSpeakerNameForLabel(segment.speakerLabel, data.speakers) ??
+              segment.speakerName ??
+              (segment.source === 'typed' ? segment.createdByName : null)
             return (
               <li
                 key={segment.id}

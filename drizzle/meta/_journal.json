@@ -176,6 +176,13 @@
       "when": 1786518384468,
       "tag": "0025_meeting_suggestion_app",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786559501693,
+      "tag": "0026_meeting_speaker_display_name",
+      "breakpoints": true
     }
   ]
 }

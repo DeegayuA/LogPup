@@ -124,6 +124,12 @@ export function AsOfPicker({
               aria-pressed={active}
               disabled={isPending}
               onClick={() => go(target)}
+              // Hover/focus is a strong click signal on exactly ONE preset —
+              // warm that route so the click paints from the router cache
+              // instead of waiting out the 3-query overview render. Plain
+              // buttons get neither viewport nor hover prefetch for free.
+              onPointerEnter={() => router.prefetch(historyHref(params, { at: target }))}
+              onFocus={() => router.prefetch(historyHref(params, { at: target }))}
               className="pointer-coarse:min-h-11"
             >
               {preset.days === 0 ? <CalendarClock aria-hidden /> : null}

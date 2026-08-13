@@ -2611,7 +2611,15 @@ export type NoteSegmentView = {
   isLegacy?: boolean
 }
 
-export type SpeakerRow = { label: string; userId: string | null; userName: string | null }
+export type SpeakerRow = {
+  label: string
+  userId: string | null
+  userName: string | null
+  /** Typed-in name for a voice with no account; null whenever userId is set.
+   *  Render via resolveSpeakerName (notes.ts) — the segment rows cannot carry
+   *  this, since a name with no account has no users row to join. */
+  displayName: string | null
+}
 
 export type TaskSuggestionView = {
   id: string
@@ -2736,24 +2744,42 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
   if (!meeting) return err('Meeting not found')
   if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
 
-  const attendees = await fetchAttendees(id)
-
-  const segmentRows = await db
-    .select({
-      id: meetingNoteSegments.id,
-      source: meetingNoteSegments.source,
-      speakerId: meetingNoteSegments.speakerId,
-      speakerName: speakerUsers.name,
-      speakerLabel: meetingNoteSegments.speakerLabel,
-      content: meetingNoteSegments.content,
-      startedAtMs: meetingNoteSegments.startedAtMs,
-      createdByName: authorUsers.name,
-      createdAt: meetingNoteSegments.createdAt,
-    })
-    .from(meetingNoteSegments)
-    .leftJoin(speakerUsers, eq(meetingNoteSegments.speakerId, speakerUsers.id))
-    .innerJoin(authorUsers, eq(meetingNoteSegments.createdBy, authorUsers.id))
-    .where(eq(meetingNoteSegments.meetingId, id))
+  // Five independent reads, batched: all key on the already-validated id (or
+  // nothing at all), and on the Neon HTTP driver each serial await is a full
+  // round trip. This action runs on every meeting panel open — it was five
+  // sequential hops before the timeline could render.
+  const [attendees, segmentRows, speakerMapRows, suggestionRows, approvedUsers] =
+    await Promise.all([
+      fetchAttendees(id),
+      db
+        .select({
+          id: meetingNoteSegments.id,
+          source: meetingNoteSegments.source,
+          speakerId: meetingNoteSegments.speakerId,
+          speakerName: speakerUsers.name,
+          speakerLabel: meetingNoteSegments.speakerLabel,
+          content: meetingNoteSegments.content,
+          startedAtMs: meetingNoteSegments.startedAtMs,
+          createdByName: authorUsers.name,
+          createdAt: meetingNoteSegments.createdAt,
+        })
+        .from(meetingNoteSegments)
+        .leftJoin(speakerUsers, eq(meetingNoteSegments.speakerId, speakerUsers.id))
+        .innerJoin(authorUsers, eq(meetingNoteSegments.createdBy, authorUsers.id))
+        .where(eq(meetingNoteSegments.meetingId, id)),
+      db
+        .select({
+          label: meetingSpeakers.label,
+          userId: meetingSpeakers.userId,
+          userName: users.name,
+          displayName: meetingSpeakers.displayName,
+        })
+        .from(meetingSpeakers)
+        .leftJoin(users, eq(meetingSpeakers.userId, users.id))
+        .where(eq(meetingSpeakers.meetingId, id)),
+      fetchTaskSuggestions(id),
+      fetchApprovedUsers(),
+    ])
 
   // No segments yet — the legacy `meetings.notes` blob (pre-dating this
   // feature) still renders as a read-only first entry rather than vanishing;
@@ -2776,15 +2802,6 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
           },
         ]
       : orderNoteSegments(segmentRows)
-
-  const speakerMapRows = await db
-    .select({ label: meetingSpeakers.label, userId: meetingSpeakers.userId, userName: users.name })
-    .from(meetingSpeakers)
-    .leftJoin(users, eq(meetingSpeakers.userId, users.id))
-    .where(eq(meetingSpeakers.meetingId, id))
-
-  const suggestionRows = await fetchTaskSuggestions(id)
-  const approvedUsers = await fetchApprovedUsers()
 
   return ok({
     segments,
@@ -3000,31 +3017,48 @@ const setSpeakerMappingInput = z.object({
   meetingId: z.uuid(),
   label: z.string().trim().min(1).max(60),
   userId: z.uuid().nullable(),
+  displayName: z.string().trim().min(1).max(80).nullable().optional(),
 })
 
 /**
- * Maps a speaker label to a real user (or explicitly to "not a listed
- * attendee", i.e. null) and backfills speakerId on every note segment
- * already carrying that label — so assigning "Speaker 1" once relabels
+ * Maps a speaker label to a real user, or to a typed-in name for someone with
+ * no account, or explicitly to nobody — and backfills speakerId on every note
+ * segment already carrying that label, so assigning "Speaker 1" once relabels
  * everything they said, past and future, not just from here on.
+ *
+ * `displayName` is stored ONLY when userId is null. A mapped user's name
+ * belongs to the users table; keeping a second copy here would survive a
+ * rename and quietly contradict it. Passing a user therefore CLEARS any name
+ * typed earlier rather than leaving a losing value behind the winner — see
+ * resolveSpeakerName for the precedence this mirrors. Omitting displayName on
+ * an existing row clears it too: the argument is the whole intended state of
+ * the mapping, not a patch.
  */
 export async function setSpeakerMapping(
   meetingId: string,
   label: string,
   userId: string | null,
+  displayName?: string | null,
 ): Promise<ActionResult> {
-  const parsed = setSpeakerMappingInput.safeParse({ meetingId, label, userId })
+  const parsed = setSpeakerMappingInput.safeParse({ meetingId, label, userId, displayName })
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const ctx = await canManageMeeting(parsed.data.meetingId)
   if (!ctx) return err('Not allowed')
 
+  const storedName = parsed.data.userId ? null : (parsed.data.displayName ?? null)
+
   await db
     .insert(meetingSpeakers)
-    .values({ meetingId: parsed.data.meetingId, label: parsed.data.label, userId: parsed.data.userId })
+    .values({
+      meetingId: parsed.data.meetingId,
+      label: parsed.data.label,
+      userId: parsed.data.userId,
+      displayName: storedName,
+    })
     .onConflictDoUpdate({
       target: [meetingSpeakers.meetingId, meetingSpeakers.label],
-      set: { userId: parsed.data.userId },
+      set: { userId: parsed.data.userId, displayName: storedName },
     })
 
   await db

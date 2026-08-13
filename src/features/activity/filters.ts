@@ -1,6 +1,39 @@
-import { and, eq, gte, lt, lte, or, type SQL } from 'drizzle-orm'
+import { and, eq, gte, ilike, lt, lte, or, type SQL } from 'drizzle-orm'
 import { activityLog } from '@/db/schema'
 import type { ActivityFilters } from '@/features/activity/types'
+
+/**
+ * Layer 1 of /activity search: SQL narrowing over the WHOLE table.
+ * Tokenises `q` on whitespace; every token must match (AND), and a token
+ * matches if it appears in ANY of the trail's free-text columns (OR), via
+ * case-insensitive `ilike('%token%')`. `%` and `_` are LIKE metacharacters —
+ * escaping them (same backslash-escape as features/people/queries.ts) keeps
+ * a query containing them literal instead of a wildcard.
+ *
+ * Deliberately typo-INTOLERANT: "meetign" matches nothing here, however the
+ * pattern is built. That's Layer 2's job (features/activity/search.ts), run
+ * in pure TS over the rows this layer returns — or, when this layer returns
+ * none, over an unfiltered page (see the /activity page's fallback).
+ *
+ * Empty/whitespace-only input returns undefined — same "unfiltered, not
+ * empty" contract as activityConditions below — so a blank search box never
+ * turns the trail into an empty page.
+ */
+export function activitySearchCondition(q: string): SQL | undefined {
+  const tokens = q.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return undefined
+
+  const perToken = tokens.map((token) => {
+    const pattern = `%${token.replace(/[\\%_]/g, '\\$&')}%`
+    return or(
+      ilike(activityLog.entityLabel, pattern),
+      ilike(activityLog.detail, pattern),
+      ilike(activityLog.verb, pattern),
+      ilike(activityLog.entityType, pattern),
+    )
+  })
+  return and(...perToken)
+}
 
 /**
  * The WHERE clause for a trail read, built in one tested place. queries.ts is
@@ -18,6 +51,7 @@ export function activityConditions(
     filters.appId ? eq(activityLog.appId, filters.appId) : undefined,
     filters.from ? gte(activityLog.createdAt, filters.from) : undefined,
     filters.to ? lte(activityLog.createdAt, filters.to) : undefined,
+    activitySearchCondition(filters.q ?? ''),
     // Keyset pagination: at-or-older than the cursor's millisecond, with id
     // as the tiebreaker inside it.
     //
@@ -70,4 +104,33 @@ export function decodeActivityCursor(
   const id = raw.slice(split + 1)
   if (Number.isNaN(createdAt.getTime()) || !UUID.test(id)) return null
   return { createdAt, id }
+}
+
+/** What the /activity URL currently says, one string per filter. '' means "not filtered". */
+export type ActivityParamState = {
+  person: string
+  type: string
+  app: string
+  from: string
+  to: string
+  q: string
+}
+
+/**
+ * Builds the `/activity` query string from filter state. Shared by
+ * ActivityFilterBar's `apply()` (every filter change) and the page's
+ * Load-more link (same filters, plus a cursor) so the two can't drift apart —
+ * the classic bug here is pagination silently dropping a filter (`q` most of
+ * all, since it's the newest) on page two. One function, both call sites.
+ */
+export function activityParams(state: ActivityParamState, before?: string): URLSearchParams {
+  const params = new URLSearchParams()
+  if (state.person) params.set('person', state.person)
+  if (state.type) params.set('type', state.type)
+  if (state.app) params.set('app', state.app)
+  if (state.from) params.set('from', state.from)
+  if (state.to) params.set('to', state.to)
+  if (state.q) params.set('q', state.q)
+  if (before) params.set('before', before)
+  return params
 }

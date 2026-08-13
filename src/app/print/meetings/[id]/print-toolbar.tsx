@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { FileDown } from 'lucide-react'
+import { FileDown, SlidersHorizontal } from 'lucide-react'
 
 /**
  * Screen-only chrome above the A4 preview. The button drives the browser's
@@ -10,15 +10,41 @@ import { FileDown } from 'lucide-react'
  * scripts), and "Save as PDF" in the print dialog produces the file.
  * Everything here disappears in the printed output via `print:hidden`.
  *
- * The Summary/Full record pair are links, not client state: the full record
- * (complete transcript + every timeline entry) is fetched server-side only
- * when asked for, so the default export never pays for a long meeting's
- * whole transcript.
+ * Every control is a link, not client state. The detail level decides what the
+ * server fetches at all (the full record's transcript can be hundreds of KB),
+ * and the composition — which sections are in — lives in the same URL, so a
+ * document somebody shaped is a link they can send on or bookmark for a
+ * recurring report. The page stays a server component as a result.
+ *
+ * The order left to right is the order of the job: choose the level, shape the
+ * document, then save it. Save sits last and alone on the right because it is
+ * the only step that leaves the page.
  */
-export function PrintToolbar({ meetingId, full }: { meetingId: string; full: boolean }) {
+export function PrintToolbar({
+  summaryHref,
+  fullHref,
+  full,
+  editing,
+  editHref,
+  hiddenCount,
+  showAllHref,
+}: {
+  summaryHref: string
+  fullHref: string
+  full: boolean
+  /** Section hide/show controls are showing on the sheet below. */
+  editing: boolean
+  /** This same document with edit mode flipped. */
+  editHref: string
+  /** Sections this meeting HAS that the reader has left out. */
+  hiddenCount: number
+  showAllHref: string
+}) {
   const tab = (active: boolean) =>
     `rounded-md px-3 py-1.5 text-sm font-medium ${
-      active ? 'bg-zinc-900 text-white' : 'text-zinc-600 hover:bg-zinc-100'
+      active
+        ? 'bg-[var(--doc-brand)] text-white'
+        : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
     }`
 
   return (
@@ -27,26 +53,72 @@ export function PrintToolbar({ meetingId, full }: { meetingId: string; full: boo
     // two overlapping lines of text ("MEETING MINUTES" behind the tab labels)
     // that read as a rendering fault rather than a sticky toolbar. z-20 keeps
     // it above the sheet, which carries a shadow of its own.
-    <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-zinc-200 bg-white px-4 py-2.5 shadow-sm print:hidden">
-      <nav aria-label="Export detail level" className="flex items-center gap-1 rounded-lg border border-zinc-200 p-0.5">
-        <Link href={`/print/meetings/${meetingId}`} className={tab(!full)} aria-current={!full ? 'page' : undefined}>
-          Summary
+    <div className="sticky top-0 z-20 border-b border-zinc-200 bg-white shadow-sm print:hidden">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+        <nav
+          aria-label="Export detail level"
+          className="flex items-center gap-1 rounded-lg border border-zinc-200 p-0.5"
+        >
+          <Link href={summaryHref} className={tab(!full)} aria-current={!full ? 'page' : undefined}>
+            Summary
+          </Link>
+          <Link href={fullHref} className={tab(full)} aria-current={full ? 'page' : undefined}>
+            Full record
+          </Link>
+        </nav>
+
+        <p className="text-sm text-zinc-500 max-lg:hidden">
+          A4 preview — choose <span className="font-medium text-zinc-700">Save as PDF</span> in the
+          print dialog.
+        </p>
+
+        {/* A link rather than a toggle button: the mode is a place in the URL,
+            so it survives a reload and travels with the document. The label
+            states the action either way, which is what a link's accessible
+            name has to do — there is no pressed state to announce. */}
+        <Link
+          href={editHref}
+          className={`ml-auto inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium ${
+            editing
+              ? 'border-[var(--doc-brand)] bg-[var(--doc-brand-wash)] text-[var(--doc-brand-deep)]'
+              : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
+          } focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--doc-brand)]`}
+        >
+          <SlidersHorizontal aria-hidden className="size-4" />
+          {editing ? 'Done choosing sections' : 'Choose sections'}
         </Link>
-        <Link href={`/print/meetings/${meetingId}?full=1`} className={tab(full)} aria-current={full ? 'page' : undefined}>
-          Full record
-        </Link>
-      </nav>
-      <p className="text-sm text-zinc-500 max-sm:hidden">
-        A4 preview — choose <span className="font-medium text-zinc-700">Save as PDF</span> in the print dialog.
-      </p>
-      <button
-        type="button"
-        onClick={() => window.print()}
-        className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900"
-      >
-        <FileDown aria-hidden className="size-4" />
-        Save as PDF
-      </button>
+
+        <button
+          type="button"
+          onClick={() => window.print()}
+          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--doc-brand)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--doc-brand-deep)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--doc-brand)]"
+        >
+          <FileDown aria-hidden className="size-4" />
+          Save as PDF
+        </button>
+      </div>
+
+      {/* Somebody opening a bookmarked or forwarded link must not be left
+          wondering where the glossary went — the omission is stated, with the
+          way back, before they scroll into a document that is missing things.
+          aria-live because the count changes under navigation, not reload. */}
+      {hiddenCount > 0 ? (
+        <p
+          aria-live="polite"
+          className="flex flex-wrap items-center gap-x-2 border-t border-zinc-100 bg-zinc-50 px-4 py-1.5 text-sm text-zinc-600"
+        >
+          <span>
+            {hiddenCount === 1 ? '1 section is' : `${hiddenCount} sections are`} hidden and will not
+            be printed.
+          </span>
+          <Link
+            href={showAllHref}
+            className="font-medium text-[var(--doc-brand-deep)] underline underline-offset-2 hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--doc-brand)]"
+          >
+            Show all
+          </Link>
+        </p>
+      ) : null}
     </div>
   )
 }

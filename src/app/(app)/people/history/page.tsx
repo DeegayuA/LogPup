@@ -15,9 +15,12 @@ import {
   OverloadCard,
 } from '@/features/people/components/history-views'
 import { hasMovement } from '@/features/people/capacity-compare'
+import { Suspense } from 'react'
+import { HistoryDataSkeleton } from '@/features/people/components/history-skeleton'
 import {
   parseHistoryParams,
   resolveHistoryWindow,
+  type HistoryParams,
   type RawHistoryParams,
 } from '@/features/people/history-params'
 import { buildCapacityHistoryStats } from '@/features/people/history-stats'
@@ -55,7 +58,6 @@ export default async function TeamCapacityHistoryPage(props: {
   // `at` would otherwise be copied into every control's href, so the "that
   // date couldn't be read" banner could never be cleared by using the page.
   const params = { ...raw, at: asOf.isToday ? undefined : asOf.iso }
-  const overview = await getCapacityHistoryOverview(from, asOf.at)
 
   // Formatted from the resolved DAY, not the instant: `asOf.at` is
   // 23:59:59.999 Asia/Colombo, and date-fns formats in the *server's* zone, so
@@ -64,6 +66,66 @@ export default async function TeamCapacityHistoryPage(props: {
   // boundary.
   const stamp = format(new Date(`${asOf.iso}T12:00:00`), 'EEEE, MMMM d, yyyy')
   const compareLabel = `${params.window} days earlier`
+
+  return (
+    <div className="flex flex-1 flex-col gap-6 p-6">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h1 className="font-heading text-2xl font-bold tracking-tight">Capacity history</h1>
+            <p className="text-sm text-muted-foreground">
+              {asOf.isToday
+                ? `Where the team stands today, and how it moved over the last ${params.window} days.`
+                : `How the team was loaded on ${stamp}, against ${fromIso}.`}
+            </p>
+          </div>
+          <Button variant="outline" size="sm" render={<Link href="/people" />}>
+            <ArrowLeft aria-hidden /> People
+          </Button>
+        </div>
+
+        {asOf.invalid ? (
+          <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+            That date couldn’t be read, so today is shown instead.
+          </p>
+        ) : null}
+
+        <AsOfPicker iso={asOf.iso} isToday={asOf.isToday} params={params} />
+        <HistoryFilters params={params} />
+      </div>
+
+      {/* Only the DATA waits. The header and both pickers above are rendered
+          from the URL alone, so they are on screen and interactive while the
+          three history queries are still running — changing the date no
+          longer blanks the control you just used. */}
+      <Suspense fallback={<HistoryDataSkeleton />}>
+        <HistoryData
+          params={params}
+          from={from}
+          asOfAt={asOf.at}
+          compareLabel={compareLabel}
+        />
+      </Suspense>
+    </div>
+  )
+}
+
+/**
+ * Everything behind the capacity queries. Split out purely so the page above
+ * can render without awaiting them — see the Suspense boundary there.
+ */
+async function HistoryData({
+  params,
+  from,
+  asOfAt,
+  compareLabel,
+}: {
+  params: HistoryParams
+  from: Date
+  asOfAt: Date
+  compareLabel: string
+}) {
+  const overview = await getCapacityHistoryOverview(from, asOfAt)
 
   // One filter expression, applied per view against whatever names that view
   // actually shows — a person matches on their apps too, so filtering by an
@@ -102,32 +164,7 @@ export default async function TeamCapacityHistoryPage(props: {
   const filteredListLabel = { people: 'people', apps: 'apps', changes: 'changes' }[params.view]
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6">
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <h1 className="font-heading text-2xl font-bold tracking-tight">Capacity history</h1>
-            <p className="text-sm text-muted-foreground">
-              {asOf.isToday
-                ? `Where the team stands today, and how it moved over the last ${params.window} days.`
-                : `How the team was loaded on ${stamp}, against ${fromIso}.`}
-            </p>
-          </div>
-          <Button variant="outline" size="sm" render={<Link href="/people" />}>
-            <ArrowLeft aria-hidden /> People
-          </Button>
-        </div>
-
-        {asOf.invalid ? (
-          <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-            That date couldn’t be read, so today is shown instead.
-          </p>
-        ) : null}
-
-        <AsOfPicker iso={asOf.iso} isToday={asOf.isToday} params={params} />
-        <HistoryFilters params={params} />
-      </div>
-
+    <>
       {/* The strip answers "where does the team stand" in one line, and every
           tile's meta says which way that number moved — a bare number here
           would be exactly the snapshot this page used to be. */}
@@ -180,6 +217,6 @@ export default async function TeamCapacityHistoryPage(props: {
         People are today&rsquo;s roster; only the allocations are historical. Someone deactivated
         since is not shown even if they carried work on that date.
       </p>
-    </div>
+    </>
   )
 }

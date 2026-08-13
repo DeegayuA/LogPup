@@ -630,6 +630,68 @@ export async function updateMeeting(
   return ok({ meetingId, calendarWarning })
 }
 
+/**
+ * Files an existing meeting under an app, moves it to a different one, or
+ * unfiles it entirely.
+ *
+ * `updateMeeting` can already change the app, but only as part of a full
+ * re-submission of the whole meeting — title, times and the entire attendee
+ * list. That makes the cheap, common correction ("this standup belongs to
+ * Ledger after all") cost a round trip through a form that can reset RSVPs and
+ * republish calendar invites. A quick meeting is meant to start general and be
+ * attached later, so attaching it needs its own one-field write.
+ *
+ * Nothing else about the meeting is touched: no calendar sync (the app is not
+ * part of the Google event) and no notifications (an attendee does not need to
+ * hear that a meeting was refiled).
+ */
+export async function setMeetingApp(meetingId: string, appId: string | null): Promise<ActionResult> {
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
+
+  const parsed = z
+    .object({ meetingId: z.uuid(), appId: z.uuid().nullable() })
+    .safeParse({ meetingId, appId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const existing = await meetingById(parsed.data.meetingId)
+  if (!existing) return err('Meeting not found')
+  if (!canManageMeeting(session, existing)) return err('Not allowed')
+
+  const nextAppId = parsed.data.appId
+  // Re-picking the app it is already filed under is a no-op, not an activity
+  // row: without this the trail fills with "updated · to Ledger" lines that
+  // record nothing having happened.
+  if (nextAppId === existing.appId) return ok(undefined)
+
+  try {
+    await db.update(meetings).set({ appId: nextAppId }).where(eq(meetings.id, existing.id))
+  } catch (error) {
+    if (isForeignKeyViolation(error)) return err('Invalid app')
+    throw error
+  }
+
+  const nextAppName = await appNameById(nextAppId)
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: existing.id,
+    entityLabel: existing.title,
+    appId: nextAppId,
+    appName: nextAppName,
+    pagePath: '/meetings',
+    detail: nextAppName ? `to ${nextAppName}` : 'off its app',
+    metadata: { appId: { from: existing.appId, to: nextAppId } },
+  })
+
+  // Both apps, same reason as updateMeeting: the app it left has one meeting
+  // fewer and needs re-rendering as much as the one it joined.
+  await revalidateMeetingPaths(existing.appId)
+  await revalidateMeetingPaths(nextAppId)
+  return ok(undefined)
+}
+
 export async function updateMeetingNotes(meetingId: string, notes: string): Promise<ActionResult> {
   const session = await requireSession()
   if (!session) return err('Sign in required')

@@ -147,6 +147,10 @@ export function MeetingsMonthCalendar({
   }
   const [expanded, setExpanded] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
+  // One write-up popup for the whole grid rather than one per chip: a busy
+  // month renders a hundred chips, and a hundred mounted dialogs is a hundred
+  // fetch effects waiting to fire.
+  const [notesId, setNotesId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [, startTransition] = useTransition()
 
@@ -281,6 +285,7 @@ export function MeetingsMonthCalendar({
 
   const dragging = draggingId ? byId.get(draggingId) : undefined
   const open = openId ? (byId.get(openId)?.meeting ?? null) : null
+  const notesFor = notesId ? (byId.get(notesId)?.meeting ?? null) : null
 
   return (
     <div className="flex flex-col gap-4">

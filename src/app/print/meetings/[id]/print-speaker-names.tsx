@@ -31,8 +31,8 @@ export function PrintSpeakerNames({
   meetingId: string
   /** Distinct speakerLabels found in this meeting's voice segments. */
   labels: string[]
-  /** Mappings already made — label → a user, or explicitly nobody. */
-  speakers: { label: string; userId: string | null; userName: string | null }[]
+  /** Mappings already made — label → a user, a typed name, or explicitly nobody. */
+  speakers: { label: string; userId: string | null; userName: string | null; displayName?: string | null }[]
   /** Everyone who can be named: this meeting's attendees first, then the rest. */
   people: { id: string; name: string }[]
 }) {
@@ -42,11 +42,16 @@ export function PrintSpeakerNames({
 
   if (labels.length === 0) return null
 
-  function assign(label: string, value: string) {
+  function assign(label: string, value: string, displayName?: string | null) {
     setBusyLabel(label)
     startTransition(async () => {
       try {
-        const res = await setSpeakerMapping(meetingId, label, value === NOT_ATTENDEE ? null : value)
+        const res = await setSpeakerMapping(
+          meetingId,
+          label,
+          value === NOT_ATTENDEE ? null : value,
+          displayName,
+        )
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -77,6 +82,11 @@ export function PrintSpeakerNames({
           const mapping = speakers.find((s) => s.label === label)
           const value = mapping ? (mapping.userId ?? NOT_ATTENDEE) : ''
           const busy = busyLabel === label && pending
+          // "Not a listed attendee" on its own only records that the voice is
+          // nobody on the invite — it throws away WHO it was, so the document
+          // keeps saying "Speaker 1". The name field is what finishes that
+          // thought, and it appears exactly when that option is chosen.
+          const isOutsider = value === NOT_ATTENDEE
           return (
             <li key={label} className="flex items-center gap-1.5">
               <span className="text-xs text-zinc-500">{label}</span>
@@ -100,6 +110,33 @@ export function PrintSpeakerNames({
                 ))}
                 <option value={NOT_ATTENDEE}>Not a listed attendee</option>
               </select>
+
+              {isOutsider ? (
+                // Commits on blur or Enter, not per keystroke: each write is a
+                // server round trip that renames the voice through the whole
+                // document, and doing that on every letter would rewrite the
+                // transcript a dozen times for one name.
+                <input
+                  type="text"
+                  defaultValue={mapping?.displayName ?? ''}
+                  disabled={busy}
+                  maxLength={80}
+                  placeholder="Their name"
+                  aria-label={`Name for ${label}`}
+                  onBlur={(event) => {
+                    const typed = event.target.value.trim()
+                    if (typed === (mapping?.displayName ?? '')) return
+                    assign(label, NOT_ATTENDEE, typed || null)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      event.currentTarget.blur()
+                    }
+                  }}
+                  className="w-36 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:opacity-60"
+                />
+              ) : null}
             </li>
           )
         })}

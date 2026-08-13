@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.166",
+  "current": "v0.0.169",
   "versions": [
     {
       "version": "v0.0.1",
@@ -996,6 +996,24 @@
       "date": "2026-08-12",
       "hash": "732d4ac",
       "change": "."
+    },
+    {
+      "version": "v0.0.167",
+      "date": "2026-08-12",
+      "hash": "58db0aa",
+      "change": "."
+    },
+    {
+      "version": "v0.0.168",
+      "date": "2026-08-13",
+      "hash": "162db7d",
+      "change": "docs: meeting load reduction implementation plan (B, 18 tasks)"
+    },
+    {
+      "version": "v0.0.169",
+      "date": "2026-08-13",
+      "hash": "469d5cc",
+      "change": "docs: people work history, observed load and KPIs implementation plan (C, 10 tasks)"
     }
   ]
 }

@@ -15,7 +15,13 @@ import { isOverdue, type TaskStatus } from '@/features/sprints/board-view'
 
 export type NoteSource = 'typed' | 'voice' | 'ai'
 
-export type SpeakerMapping = { label: string; userId: string | null }
+export type SpeakerMapping = {
+  label: string
+  userId: string | null
+  /** Free-text name typed for a voice that is nobody on the invite. Only
+   *  meaningful while userId is null — see resolveSpeakerName. */
+  displayName?: string | null
+}
 
 /**
  * Resolves a speaker label ("Speaker 1", or an attendee name the model
@@ -38,6 +44,56 @@ export function resolveSpeakerUserId(
   const mapping = mappings.find((m) => m.label === label)
   if (mapping) return mapping.userId
   return matchPersonToAttendee(label, attendees)
+}
+
+export type SpeakerNameParts = {
+  /** Name of the mapped user, when the label resolved to a real account. */
+  userName?: string | null
+  /** Free-text name typed for a voice with no account. */
+  displayName?: string | null
+  /** The as-transcribed label ("Speaker 1"). */
+  label?: string | null
+}
+
+/**
+ * The one name a speaker is shown under: mapped user's name, then a typed-in
+ * displayName, then the raw label.
+ *
+ * The user's name outranks displayName because it is the live one — a
+ * mapping made before a rename would otherwise keep showing the old spelling
+ * forever, and only one of the two can be kept true without the other. The
+ * label comes last because it is the thing every caller is trying to replace;
+ * it survives as a fallback so an unassigned voice still reads as "Speaker 1"
+ * rather than disappearing. Blank/whitespace values are treated as absent, so
+ * a name saved as spaces cannot blank out the label behind it. Null only when
+ * nothing at all is known — callers decide what to say then, since the right
+ * fallback differs per surface (an author's name, "Voice", "Unknown").
+ */
+export function resolveSpeakerName(parts: SpeakerNameParts): string | null {
+  const firstReal = [parts.userName, parts.displayName, parts.label]
+    .map((value) => value?.trim())
+    .find((value) => !!value)
+  return firstReal ?? null
+}
+
+/** A mapping row as the timeline reads it: the row plus the joined user's name. */
+export type NamedSpeakerMapping = SpeakerMapping & { userName?: string | null }
+
+/**
+ * resolveSpeakerName for a label plus the meeting's mapping rows — what a
+ * caller holding a whole timeline (segments + speakers) needs, since a typed
+ * name lives on the mapping row and never on the segment itself.
+ */
+export function resolveSpeakerNameForLabel(
+  label: string | null | undefined,
+  mappings: NamedSpeakerMapping[],
+): string | null {
+  const mapping = label ? mappings.find((m) => m.label === label) : undefined
+  return resolveSpeakerName({
+    userName: mapping?.userName,
+    displayName: mapping?.displayName,
+    label,
+  })
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/

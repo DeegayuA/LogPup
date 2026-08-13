@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { getMeetingPrep } from '@/features/meetings/ai-actions'
 import type { AttendeeCheckinPrep, AttendeePrep } from '@/features/meetings/notes'
 import { checkinGap } from '@/features/sprints/checkins'
-import { upsertSprintCheckin } from '@/features/sprints/checkin-actions'
+import { deleteSprintCheckin, upsertSprintCheckin } from '@/features/sprints/checkin-actions'
 import { GapHint } from '@/features/sprints/components/sprint-checkin-editor'
 import { MetaChip, SectionHeading, SkeletonBlock } from '@/features/meetings/components/meeting-chips'
 
@@ -31,11 +31,14 @@ import { MetaChip, SectionHeading, SkeletonBlock } from '@/features/meetings/com
 export function MeetingPrepSection({
   meetingId,
   currentUserId,
+  isAdmin = false,
   open: controlledOpen,
   onOpenChange,
 }: {
   meetingId: string
   currentUserId: string
+  /** Admins get the editor on EVERY row, plus Clear — see upsertSprintCheckin. */
+  isAdmin?: boolean
   /** Controlled open state, for a caller (the meeting write-up's panel shell)
    *  that persists this alongside every other panel's collapse preference.
    *  Omit both this and onOpenChange to keep the original uncontrolled
@@ -120,7 +123,12 @@ export function MeetingPrepSection({
   // instant Save is pressed (this is mid-meeting — the number IS the
   // conversation), reverts to what was there before if the server refuses,
   // and is replaced by server truth via the silent refetch on success.
-  function handleCheckin(row: AttendeePrep, percent: number, note: string | null) {
+  function handleCheckin(
+    row: AttendeePrep,
+    percent: number,
+    note: string | null,
+    onBehalf: boolean,
+  ) {
     const target = row.checkinTarget
     if (!target) return
     const before = row.checkin
@@ -136,13 +144,43 @@ export function MeetingPrepSection({
     })
     startSave(async () => {
       try {
-        const res = await upsertSprintCheckin(target.sprintId, percent, note ?? undefined)
+        const res = await upsertSprintCheckin(
+          target.sprintId,
+          percent,
+          note ?? undefined,
+          // Only sent when it IS someone else's row: passing your own id would
+          // trip the admin path for an ordinary self check-in.
+          onBehalf ? row.userId : undefined,
+        )
         if (!res.ok) {
           patchCheckin(row.userId, before)
           toast.error(res.error)
           return
         }
         toast.success(`Checked in at ${res.data.percent}%`)
+        await load('refresh')
+      } catch {
+        patchCheckin(row.userId, before)
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  /** Removes a check-in outright — absence and 0% are different answers. */
+  function handleClearCheckin(row: AttendeePrep, onBehalf: boolean) {
+    const target = row.checkinTarget
+    if (!target) return
+    const before = row.checkin
+    patchCheckin(row.userId, null)
+    startSave(async () => {
+      try {
+        const res = await deleteSprintCheckin(target.sprintId, onBehalf ? row.userId : undefined)
+        if (!res.ok) {
+          patchCheckin(row.userId, before)
+          toast.error(res.error)
+          return
+        }
+        toast.success('Check-in cleared')
         await load('refresh')
       } catch {
         patchCheckin(row.userId, before)
@@ -219,8 +257,12 @@ export function MeetingPrepSection({
                     key={row.userId}
                     row={row}
                     isSelf={row.userId === currentUserId}
+                    isAdmin={isAdmin}
                     savePending={savePending}
-                    onCheckin={(percent, note) => handleCheckin(row, percent, note)}
+                    onCheckin={(percent, note) =>
+                      handleCheckin(row, percent, note, row.userId !== currentUserId)
+                    }
+                    onClear={() => handleClearCheckin(row, row.userId !== currentUserId)}
                   />
                 ))}
               </ul>
@@ -255,13 +297,17 @@ function PrepSkeleton() {
 function PrepRow({
   row,
   isSelf,
+  isAdmin,
   savePending,
   onCheckin,
+  onClear,
 }: {
   row: AttendeePrep
   isSelf: boolean
+  isAdmin: boolean
   savePending: boolean
   onCheckin: (percent: number, note: string | null) => void
+  onClear: () => void
 }) {
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5">
@@ -304,8 +350,16 @@ function PrepRow({
         <p className="text-xs text-muted-foreground">Not linked to any project.</p>
       )}
 
-      {isSelf && row.checkinTarget ? (
-        <SelfCheckinForm row={row} pending={savePending} onSubmit={onCheckin} />
+      {/* The editor is yours by right and an admin's by permission — the
+          admin path is audited rather than silent (see upsertSprintCheckin). */}
+      {(isSelf || isAdmin) && row.checkinTarget ? (
+        <SelfCheckinForm
+          row={row}
+          pending={savePending}
+          onSubmit={onCheckin}
+          onClear={row.checkin ? onClear : undefined}
+          onBehalf={!isSelf}
+        />
       ) : null}
     </li>
   )
@@ -370,10 +424,16 @@ function SelfCheckinForm({
   row,
   pending,
   onSubmit,
+  onClear,
+  onBehalf = false,
 }: {
   row: AttendeePrep
   pending: boolean
   onSubmit: (percent: number, note: string | null) => void
+  /** Absent when there is nothing to clear — Clear is not a way to say 0%. */
+  onClear?: () => void
+  /** True when an admin is writing someone else's row; changes the wording. */
+  onBehalf?: boolean
 }) {
   const target = row.checkinTarget
   const [percentText, setPercentText] = useState(row.checkin ? String(row.checkin.percent) : '')
@@ -437,8 +497,20 @@ function SelfCheckinForm({
           className="shrink-0"
           disabled={pending || draftPercent === null}
         >
-          {row.checkin ? 'Update' : 'Check in'}
+          {row.checkin ? 'Update' : onBehalf ? 'Record for them' : 'Check in'}
         </Button>
+        {onClear ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="shrink-0"
+            disabled={pending}
+            onClick={onClear}
+          >
+            Clear
+          </Button>
+        ) : null}
       </div>
     </form>
   )

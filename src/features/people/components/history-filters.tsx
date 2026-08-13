@@ -46,7 +46,7 @@ function HistoryFiltersInner({ params }: { params: HistoryParams }) {
   }
 
   return (
-    <div className={cn('flex flex-col gap-3', pending && 'opacity-60')}>
+    <div data-history-filters className={cn('flex flex-col gap-3', pending && 'opacity-60')}>
       {/* Every link carries the CURRENT draft, not the last committed query:
           clicking a tab while a filter is half-typed used to race the blur
           commit and drop what was typed. Carrying it means the two agree
@@ -121,7 +121,15 @@ function HistoryFiltersInner({ params }: { params: HistoryParams }) {
             <InputGroupInput
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              onBlur={() => commit(draft.trim())}
+              onBlur={(event) => {
+                // Focus moving to one of this bar's own links? Their hrefs
+                // already carry the draft, so committing here too would fire
+                // a SECOND full server render (old view + new q, then the
+                // link's own navigation) with a stale-view flash between.
+                const next = event.relatedTarget
+                if (next instanceof Element && next.closest('[data-history-filters]')) return
+                commit(draft.trim())
+              }}
               placeholder="Filter by person or app…"
               aria-label="Filter by person or app"
               maxLength={60}

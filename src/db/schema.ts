@@ -405,11 +405,19 @@ export const meetingNoteSegments = pgTable('meeting_note_segments', {
 // (distinct from "not yet assigned": a row exists either way once someone
 // has looked at the label). Setting/changing a mapping backfills
 // meetingNoteSegments.speakerId on every segment carrying that label.
+// displayName carries a typed-in name for a voice that is nobody on the
+// invite — a client, a candidate, someone's colleague. Without it, "not a
+// listed attendee" recorded only that the voice was nobody we know and threw
+// away who it actually was, leaving the transcript saying "Speaker 1"
+// forever. It is meaningful only while userId is null: a mapped user's name
+// is the users table's to change, and a stale copy here would outlive a
+// rename.
 export const meetingSpeakers = pgTable('meeting_speakers', {
   id: uuid('id').primaryKey().defaultRandom(),
   meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
   label: text('label').notNull(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  displayName: text('display_name'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [uniqueIndex('meeting_speakers_meeting_label_idx').on(t.meetingId, t.label)])
 

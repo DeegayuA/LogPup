@@ -81,4 +81,11 @@ export type ActivityFilters = {
   /** Inclusive day bounds. */
   from?: Date
   to?: Date
+  /**
+   * Free-text search. Whitespace-tokenised, every token required (AND), each
+   * token matched against entityLabel/detail/verb/entityType (OR) — see
+   * activitySearchCondition. SQL-exact only; typo tolerance is a separate,
+   * pure-TS layer (features/activity/search.ts) applied over the results.
+   */
+  q?: string
 }

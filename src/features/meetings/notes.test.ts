@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   resolveSpeakerUserId,
+  resolveSpeakerName,
+  resolveSpeakerNameForLabel,
   normalizeDueDate,
   suggestionToTaskPayload,
   orderNoteSegments,
@@ -56,6 +58,70 @@ describe('resolveSpeakerUserId', () => {
       { label: 'Speaker 2', userId: 'u2' },
     ]
     expect(resolveSpeakerUserId('Speaker 2', mappings, attendees)).toBe('u2')
+  })
+})
+
+describe('resolveSpeakerName', () => {
+  it('prefers the mapped user name over a typed name and the label', () => {
+    expect(
+      resolveSpeakerName({ userName: 'Kasun Silva', displayName: 'Kas', label: 'Speaker 1' }),
+    ).toBe('Kasun Silva')
+  })
+
+  it('falls back to the typed name when no user is mapped', () => {
+    expect(
+      resolveSpeakerName({ userName: null, displayName: 'Ravi (client)', label: 'Speaker 2' }),
+    ).toBe('Ravi (client)')
+  })
+
+  it('falls back to the raw label when neither is set', () => {
+    expect(resolveSpeakerName({ userName: null, displayName: null, label: 'Speaker 3' })).toBe(
+      'Speaker 3',
+    )
+  })
+
+  it('treats blank names as absent rather than blanking out the label', () => {
+    expect(resolveSpeakerName({ userName: '   ', displayName: '', label: 'Speaker 1' })).toBe(
+      'Speaker 1',
+    )
+  })
+
+  it('trims the name it returns', () => {
+    expect(resolveSpeakerName({ displayName: '  Ravi  ' })).toBe('Ravi')
+  })
+
+  it('returns null when nothing at all is known', () => {
+    expect(resolveSpeakerName({})).toBeNull()
+    expect(resolveSpeakerName({ userName: null, displayName: null, label: null })).toBeNull()
+  })
+})
+
+describe('resolveSpeakerNameForLabel', () => {
+  const speakers = [
+    { label: 'Speaker 1', userId: 'u2', userName: 'Kasun Silva', displayName: null },
+    { label: 'Speaker 2', userId: null, userName: null, displayName: 'Ravi (client)' },
+    { label: 'Speaker 3', userId: null, userName: null, displayName: null },
+  ]
+
+  it('resolves a mapped user by label', () => {
+    expect(resolveSpeakerNameForLabel('Speaker 1', speakers)).toBe('Kasun Silva')
+  })
+
+  it('resolves a typed name by label', () => {
+    expect(resolveSpeakerNameForLabel('Speaker 2', speakers)).toBe('Ravi (client)')
+  })
+
+  it('keeps the label for a mapping that names nobody', () => {
+    expect(resolveSpeakerNameForLabel('Speaker 3', speakers)).toBe('Speaker 3')
+  })
+
+  it('keeps the label when no mapping exists yet', () => {
+    expect(resolveSpeakerNameForLabel('Speaker 9', speakers)).toBe('Speaker 9')
+  })
+
+  it('returns null for a missing label', () => {
+    expect(resolveSpeakerNameForLabel(null, speakers)).toBeNull()
+    expect(resolveSpeakerNameForLabel(undefined, speakers)).toBeNull()
   })
 })
 

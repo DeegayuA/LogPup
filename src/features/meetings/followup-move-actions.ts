@@ -4,10 +4,11 @@ import { z } from 'zod'
 import { and, asc, eq, gt, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { meetingAttendees, meetingFollowups, meetings } from '@/db/schema'
+import { meetingAiNotes, meetingAttendees, meetingFollowups, meetings } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
+import { canManageMeeting } from '@/features/meetings/ai-actions'
 
 export type MoveFollowupsResult = {
   /** How many items were pinned to a meeting. */
@@ -233,6 +234,74 @@ export async function editFollowupText(input: unknown): Promise<ActionResult> {
     pagePath: '/meetings',
     detail: `for ${existing.personName}`,
     metadata: { text: { from: existing.text, to: parsed.data.text } },
+  })
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+const summaryInput = z.object({
+  meetingId: z.uuid(),
+  // Same ceiling as the notes column's own limit elsewhere in this feature.
+  summary: z.string().trim().max(20000),
+})
+
+/**
+ * REWRITE THE MEETING WRITE-UP BY HAND.
+ *
+ * The summary was previously read-only: regenerate it or live with it. A
+ * write-up is a record people circulate, and the model gets names, numbers
+ * and decisions subtly wrong often enough that "fix that one line" has to be
+ * possible without discarding the whole pass.
+ *
+ * TAKES THE RAW STORED TEXT, deliberately — not the language slice on screen.
+ * A bilingual write-up keeps English and Sinhala in ONE column
+ * (splitBilingualSummary reads them apart at render time), so accepting the
+ * English view back would write it over the top of both and silently destroy
+ * the Sinhala half. The editor shows the raw text and says so.
+ *
+ * Empty string is allowed and means "no write-up" — the panel then renders
+ * the same nothing-yet state as before the AI ran, rather than an empty box
+ * pretending to be a summary.
+ *
+ * Permission is `canManageMeeting` (organiser or admin), matching every other
+ * write on this surface. The previous text goes into the activity metadata:
+ * an edited record that leaves no trace of what it said before is exactly the
+ * thing minutes are supposed to prevent.
+ */
+export async function updateMeetingSummary(input: unknown): Promise<ActionResult> {
+  const parsed = summaryInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Only the organiser or an admin can edit the write-up')
+
+  const [existing] = await db
+    .select({ summary: meetingAiNotes.summary })
+    .from(meetingAiNotes)
+    .where(eq(meetingAiNotes.meetingId, parsed.data.meetingId))
+  if (!existing) return err('There is no write-up to edit yet')
+
+  const next = parsed.data.summary || null
+  if (next === existing.summary) return ok(undefined)
+
+  await db
+    .update(meetingAiNotes)
+    .set({ summary: next })
+    .where(eq(meetingAiNotes.meetingId, parsed.data.meetingId))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: parsed.data.meetingId,
+    entityLabel: ctx.meeting.title,
+    appId: ctx.meeting.appId,
+    pagePath: '/meetings',
+    detail: next ? 'edited the write-up' : 'cleared the write-up',
+    // The previous text, not a diff: a diff needs the old text to be useful
+    // anyway, and this is the only copy that survives the overwrite.
+    metadata: { previousSummary: existing.summary },
   })
 
   revalidatePath('/meetings')

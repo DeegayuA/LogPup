@@ -361,7 +361,15 @@ function storedValue(item: CarriedForwardItem, field: ComposerField): string {
  * here, without changing a single line of meeting-prep.tsx's own rendering.
  * Must render inside a MeetingPanelsProvider — see MeetingIntelPanel below.
  */
-function AroundTheTablePanel({ meetingId, currentUserId }: { meetingId: string; currentUserId: string }) {
+function AroundTheTablePanel({
+  meetingId,
+  currentUserId,
+  isAdmin,
+}: {
+  meetingId: string
+  currentUserId: string
+  isAdmin: boolean
+}) {
   const { openMap, setPanelOpen } = usePanels()
   const id: PanelId = 'around-the-table'
   return (
@@ -369,6 +377,7 @@ function AroundTheTablePanel({ meetingId, currentUserId }: { meetingId: string; 
       <MeetingPrepSection
         meetingId={meetingId}
         currentUserId={currentUserId}
+        isAdmin={isAdmin}
         open={openMap[id] ?? PANEL_DEFAULT_OPEN[id]}
         onOpenChange={(value) => setPanelOpen(id, value)}
       />
@@ -2731,7 +2740,11 @@ export function MeetingIntelPanel({
                     per-attendee walk-through (their apps, sprint counts, and
                     check-ins) loads its own board-derived data independently of
                     the transcript-bearing intel above (see meeting-prep.tsx). */}
-                <AroundTheTablePanel meetingId={meetingId} currentUserId={currentUserId} />
+                <AroundTheTablePanel
+                  meetingId={meetingId}
+                  currentUserId={currentUserId}
+                  isAdmin={isAdmin}
+                />
 
                 {unattributed.length > 0 ? (
                   <Panel id="needs-attribution" title="Needs attribution" icon={UserPlus} count={unattributed.length}>

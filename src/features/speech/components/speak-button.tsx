@@ -5,7 +5,7 @@ import { Loader2Icon, SquareIcon, Volume2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useSpeech } from './use-speech'
+import { useSpeech, type SpeechHandle } from './use-speech'
 
 /**
  * "Read it to me" — plays a piece of text aloud in LogPup's voice, falling
@@ -18,18 +18,28 @@ import { useSpeech } from './use-speech'
  */
 export function SpeakButton({
   getText,
+  speech: external,
   disabled,
   className,
   label = 'Read aloud',
   size = 'sm',
 }: {
   getText: () => string
+  /**
+   * Share a caller's SpeechHandle instead of owning one. Two independent
+   * instances know nothing of each other: in MeetingAssistant the auto-spoken
+   * answer and this button each held their own — clicking Play during the
+   * auto-speak paid a SECOND Gemini TTS call for identical text, both voices
+   * overlapped, and each Stop silenced only its own half.
+   */
+  speech?: SpeechHandle
   disabled?: boolean
   className?: string
   label?: string
   size?: 'sm' | 'icon-sm'
 }) {
-  const speech = useSpeech()
+  const internal = useSpeech()
+  const speech = external ?? internal
   // Which message has already been shown. Without it the effect re-fires when
   // `speaking` flips false at the end of a fallback reading, and a notice the
   // user already saw as info comes back as an error toast after the audio
