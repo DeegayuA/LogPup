@@ -356,7 +356,7 @@ async function insertAutoNotesAndSuggestions(
       meetingId,
       source: 'voice',
       speakerLabel: segment.speaker,
-      speakerId: resolveSpeakerUserId(segment.speaker, mappingRows, attendees),
+      speakerId: resolveSpeakerUserId(segment.speaker, mappingRows),
       content: segment.text,
       // The model gives no per-chunk timing — a monotonic counter still
       // orders these chunks correctly relative to one another (they share
@@ -372,7 +372,7 @@ async function insertAutoNotesAndSuggestions(
 
   const resolvedItems = actionItems.map((item) => ({
     item,
-    resolvedUserId: resolveSpeakerUserId(item.suggestedAssigneeLabel, mappingRows, attendees),
+    resolvedUserId: resolveSpeakerUserId(item.suggestedAssigneeLabel, mappingRows),
     // App routing: the model returned an app NAME (or null) from the lists
     // the prompt offered; resolveSuggestedAppId is deterministic — exact
     // match, then unambiguous case-insensitive — and gives null rather than

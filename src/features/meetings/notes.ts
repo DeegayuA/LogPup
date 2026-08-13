@@ -5,7 +5,6 @@
 // the server actions in ai-actions.ts fetch rows and call these functions to
 // decide what to do with them.
 
-import { matchPersonToAttendee, type AttendeeRef } from '@/features/meetings/followups'
 import {
   checkinGap,
   computeTaskProgress,
@@ -27,23 +26,29 @@ export type SpeakerMapping = {
  * Resolves a speaker label ("Speaker 1", or an attendee name the model
  * recognized) to a real user id.
  *
- * An explicit mapping (set via the speaker-assignment control) always wins —
- * including one that maps a label to `null` ("not a listed attendee"),
- * which must NOT fall through to name-matching once a human has looked at
- * it. Only when no mapping exists yet does this fall back to matching the
- * label as a name against the meeting's attendees (matchPersonToAttendee),
- * which is what lets a model-recognized "Kasun Silva" resolve automatically
- * without waiting on a manual assignment.
+ * Resolves ONLY through an explicit, human-confirmed `meeting_speakers`
+ * mapping. No mapping means no user: the caller must render the raw label,
+ * not a person.
+ *
+ * This used to fall back to `matchPersonToAttendee(label, attendees)`, so a
+ * model-recognized "Kasun Silva" resolved without waiting on a manual
+ * assignment. That convenience shipped a real bug: diarization labels are
+ * frequently names the model heard *mentioned* rather than the name of
+ * whoever was speaking, so notes got attributed to people who were talked
+ * ABOUT, not talking. Worse, this same function resolves
+ * `suggestedAssigneeLabel`, so one bad guess pre-assigned a real task to the
+ * wrong person — a guess laundered into a fact nobody was asked to confirm.
+ *
+ * `matchPersonToAttendee` is still correct and still used elsewhere; what was
+ * wrong was treating its output as confirmed.
  */
 export function resolveSpeakerUserId(
   label: string | null | undefined,
   mappings: SpeakerMapping[],
-  attendees: AttendeeRef[],
 ): string | null {
   if (!label) return null
   const mapping = mappings.find((m) => m.label === label)
-  if (mapping) return mapping.userId
-  return matchPersonToAttendee(label, attendees)
+  return mapping ? mapping.userId : null
 }
 
 export type SpeakerNameParts = {
