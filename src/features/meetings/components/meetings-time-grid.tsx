@@ -20,12 +20,17 @@
  *    both; it snaps to the quarter hour and keeps its length. The pixel->time
  *    arithmetic lives in features/meetings/time-drag.ts, where it is unit
  *    tested without a DOM.
- *
- * WHAT IT DELIBERATELY DOES NOT DO (YET): drag to RESIZE. Moving and resizing
- * are separate gestures with separate failure modes — a resize needs its own
- * handle, must be suppressed on a midnight-cut edge, and can invert a
- * meeting's start and end, none of which a move has to think about. See the
- * seam comment on `TimeGridEvent`.
+ *  - DRAG TO RESIZE. A thin handle on a block's top and bottom edge moves its
+ *    start or end independently — never both, never inverted, never below the
+ *    15-minute floor. Same pixel->time arithmetic, same file, its own pure
+ *    functions (`resizeMeetingStartByDrag` / `resizeMeetingEndByDrag`). A
+ *    handle is OMITTED on whichever edge is a midnight cut rather than the
+ *    meeting's real boundary — see `continuesBefore`/`continuesAfter` on
+ *    `TimeGridEvent` — because that edge is a rendering artifact and dragging
+ *    it would rewrite a time the block never shows. The handles are pointer
+ *    input only; the keyboard route to the same edit is the meeting's own
+ *    edit dialog (Starts/Ends fields), the same relationship the sprint
+ *    roadmap's bars have to their edit dialog.
  *
  * ── THE Z-TIER LADDER ─────────────────────────────────────────────────────
  * Written out once, here, because every layer in this file is either sticky or
@@ -105,7 +110,14 @@ import { laneFraction, overlapMap } from '@/features/meetings/calendar-overlap'
 import { isoDayInstant, isoToDisplayDate } from '@/features/meetings/calendar-view'
 import { chipTone } from '@/features/meetings/components/meetings-month-calendar'
 import { rescheduleMeeting } from '@/features/meetings/actions'
-import { draggedMinutes, isRealMove, moveMeetingByDrag } from '@/features/meetings/time-drag'
+import {
+  draggedMinutes,
+  isRealMove,
+  isRealResize,
+  moveMeetingByDrag,
+  resizeMeetingEndByDrag,
+  resizeMeetingStartByDrag,
+} from '@/features/meetings/time-drag'
 import { durationLabel, meetingTiming } from '@/features/meetings/components/meeting-glance'
 import { formatBusinessTime } from '@/features/people/format-instant'
 import type { MeetingSummary } from '@/features/meetings/queries'
@@ -129,6 +141,22 @@ const COMPACT_BLOCK_PX = 40
  *  the meeting, so a drag only starts once the pointer has actually
  *  travelled. */
 const DRAG_ACTIVATION_DISTANCE = 8
+
+/**
+ * Which gesture a drag on this grid represents — move the whole block, or
+ * resize one edge of it. Carried in each draggable's `data` and read back out
+ * of `event.active.data.current` in `handleDragEnd`, so one drop handler can
+ * tell all three apart without inventing three different id shapes to parse.
+ */
+type DragKind = 'move' | 'resize-start' | 'resize-end'
+
+type DragData = {
+  meetingId: string
+  /** The day column this drag started in — the move handler's day-delta
+   *  base. Irrelevant to a resize, which never changes days. */
+  sourceIso: string
+  kind: DragKind
+}
 
 /** One meeting's slice of one day, with everything that does NOT depend on the
  *  zoom or the clock resolved once: the midnight clipping, and the labels. */
@@ -262,34 +290,13 @@ export function MeetingsTimeGrid({
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
   )
 
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const sourceIso = event.active.data.current?.sourceIso as string | undefined
-      const meetingId = event.active.data.current?.meetingId as string | undefined
-      if (!sourceIso || !meetingId) return
-
-      // No drop target means the block was released outside every column —
-      // over the gutter, the header, or off the grid. Treat that as a
-      // cancel, not as "keep the day and take the time".
-      const targetIso = event.over ? String(event.over.id) : null
-      if (!targetIso) return
-
-      const dayDelta = days.indexOf(targetIso) - days.indexOf(sourceIso)
-      const minuteDelta = draggedMinutes(event.delta.y, pxPerHour)
-      if (!isRealMove(dayDelta, minuteDelta)) return
-
-      const meeting = visibleMeetings.find((m) => m.id === meetingId)
-      if (!meeting) return
-
-      const next = moveMeetingByDrag({
-        startsAt: meeting.startsAt,
-        endsAt: meeting.endsAt,
-        dayDelta,
-        minuteDelta,
-        gridStartHour: GRID_START_HOUR,
-        gridEndHour: GRID_END_HOUR,
-      })
-
+  /* The write path for BOTH gestures — a moved block and a resized edge both
+     end as "this meeting's window is now X" — so there is exactly one place
+     that calls `rescheduleMeeting`, applies the optimistic patch, and rolls
+     it back on failure. Splitting this per-gesture was the second pattern
+     the brief for this feature explicitly said not to invent. */
+  const commitReschedule = useCallback(
+    (meetingId: string, next: { startsAt: Date; endsAt: Date }) => {
       startTransition(async () => {
         // Inside the transition, so React ties the optimistic state to this
         // action's lifetime and rolls it back on failure.
@@ -308,11 +315,62 @@ export function MeetingsTimeGrid({
           // still having moved the meeting — surfaced, not swallowed.
           if (res.data?.calendarWarning) toast.warning(res.data.calendarWarning)
         } catch {
-          toast.error('Could not move that meeting — try again')
+          toast.error('Could not update that meeting — try again')
         }
       })
     },
-    [days, pxPerHour, visibleMeetings, applyOptimisticMove],
+    [applyOptimisticMove],
+  )
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const data = event.active.data.current as Partial<DragData> | undefined
+      const sourceIso = data?.sourceIso
+      const meetingId = data?.meetingId
+      if (!sourceIso || !meetingId) return
+
+      const meeting = visibleMeetings.find((m) => m.id === meetingId)
+      if (!meeting) return
+
+      // Same conversion for every gesture: `event.delta.y` is the only axis
+      // a resize handle reads — a resize never changes the day column, so
+      // unlike the move branch below it has no use for `event.over` at all.
+      const minuteDelta = draggedMinutes(event.delta.y, pxPerHour)
+
+      if (data?.kind === 'resize-start' || data?.kind === 'resize-end') {
+        const before = { startsAt: meeting.startsAt, endsAt: meeting.endsAt }
+        const next =
+          data.kind === 'resize-start'
+            ? resizeMeetingStartByDrag({ ...before, minuteDelta })
+            : resizeMeetingEndByDrag({ ...before, minuteDelta })
+        // A drag that snapped back to zero, or one the minimum-duration
+        // clamp absorbed entirely, produced the same window — skip the
+        // write exactly as a no-op move does below.
+        if (!isRealResize(before, next)) return
+        commitReschedule(meetingId, next)
+        return
+      }
+
+      // No drop target means the block was released outside every column —
+      // over the gutter, the header, or off the grid. Treat that as a
+      // cancel, not as "keep the day and take the time".
+      const targetIso = event.over ? String(event.over.id) : null
+      if (!targetIso) return
+
+      const dayDelta = days.indexOf(targetIso) - days.indexOf(sourceIso)
+      if (!isRealMove(dayDelta, minuteDelta)) return
+
+      const next = moveMeetingByDrag({
+        startsAt: meeting.startsAt,
+        endsAt: meeting.endsAt,
+        dayDelta,
+        minuteDelta,
+        gridStartHour: GRID_START_HOUR,
+        gridEndHour: GRID_END_HOUR,
+      })
+      commitReschedule(meetingId, next)
+    },
+    [days, pxPerHour, visibleMeetings, commitReschedule],
   )
 
   /* Two passes, deliberately. The day window, the midnight clipping and every
@@ -847,24 +905,40 @@ const DayHeader = memo(function DayHeader({ iso, isToday }: { iso: string; isTod
 /**
  * One meeting, drawn at its own time.
  *
- * ── DRAG SEAM ────────────────────────────────────────────────────────────
- * Drag-to-move and drag-to-resize are deliberately NOT in this pass. When
- * they are added, this is the component that grows them and nothing else has
- * to change:
- *   - the block is already absolutely positioned from `top`/`height` alone,
- *     both derived by `eventGeometry` from a minute offset and `pxPerHour`, so
- *     the inverse (pixels dragged -> minutes moved) is `deltaPx * 60 /
- *     pxPerHour` rounded to a snap interval — the mirror of `snapDays` in the
- *     sprint roadmap;
- *   - wrap this button in a dnd-kit `useDraggable` exactly as the month grid's
- *     `MeetingChip` does, keeping the same pointer-travel guard so a plain
- *     click still opens the meeting;
- *   - a resize handle belongs on the bottom edge of this element, and must be
- *     omitted when `continuesAfter` is true (that edge is a midnight cut, not
- *     the meeting's end);
- *   - the write goes through the existing `rescheduleMeeting` action, which
- *     already takes a start and an end.
- * Nothing above this component needs to know a drag happened.
+ * ── DRAG-TO-MOVE AND DRAG-TO-RESIZE ────────────────────────────────────────
+ * The block is absolutely positioned from `top`/`height` alone, both derived
+ * by `eventGeometry` from a minute offset and `pxPerHour`; every gesture below
+ * is the same inverse of that — `deltaPx * 60 / pxPerHour`, snapped — applied
+ * to a different part of the meeting. `time-drag.ts` owns the pure math and
+ * is unit tested without a DOM; this component owns turning a `dnd-kit` id
+ * into the right call.
+ *
+ * THREE `useDraggable`s share this block, told apart by `kind` in their drag
+ * data: the whole button is the MOVE gesture (id `meetingId::dayIso`), and a
+ * `ResizeHandle` on the top and bottom edges is RESIZE-START / RESIZE-END (id
+ * `meetingId::dayIso::resize-start` / `-end`). `handleDragEnd` reads `kind`
+ * back out of `event.active.data.current` to route to `moveMeetingByDrag`,
+ * `resizeMeetingStartByDrag`, or `resizeMeetingEndByDrag`.
+ *
+ * A resize handle is OMITTED on a midnight-cut edge: the top handle when
+ * `continuesBefore` is true, the bottom when `continuesAfter` is true. That
+ * edge is a rendering artifact, not the meeting's real boundary — the true
+ * start or end is off-screen on the adjoining day, and letting someone drag
+ * what they cannot see would silently rewrite a time with no visual feedback
+ * at all.
+ *
+ * The handles are POINTER INPUT ONLY. They are bare `div`s — not `button`s,
+ * since nesting one interactive control inside another (this block already
+ * is one) is invalid HTML — with no `role` or `tabIndex`, so a screen reader
+ * never announces them as controls a keyboard user is expected to operate.
+ * The keyboard route to the same edit is the meeting's own edit dialog, which
+ * already has Starts/Ends fields — the same relationship the sprint
+ * roadmap's bars have to their edit dialog.
+ *
+ * Same pointer-travel guard as before: `DRAG_ACTIVATION_DISTANCE` on the
+ * shared `PointerSensor` means a plain click anywhere on the block, including
+ * on a handle's thin strip, still opens the meeting rather than registering
+ * as a zero-length resize.
  */
 const TimeGridEvent = memo(function TimeGridEvent({
   block,
@@ -896,7 +970,7 @@ const TimeGridEvent = memo(function TimeGridEvent({
      the drop handler diffs against to get the day delta. */
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `${meeting.id}::${dayIso}`,
-    data: { meetingId: meeting.id, sourceIso: dayIso },
+    data: { meetingId: meeting.id, sourceIso: dayIso, kind: 'move' } satisfies DragData,
   })
 
   return (
@@ -954,6 +1028,11 @@ const TimeGridEvent = memo(function TimeGridEvent({
         continuesAfter ? 'rounded-b-none' : 'rounded-b-sm',
       )}
     >
+      {/* Omitted on a midnight cut — see the DRAG-TO-MOVE-AND-RESIZE comment
+          above: that edge is not the meeting's real start or end. */}
+      {!continuesBefore ? (
+        <ResizeHandle meetingId={meeting.id} dayIso={dayIso} edge="start" />
+      ) : null}
       <span className="sr-only">
         {[
           dayPrefix,
@@ -997,9 +1076,88 @@ const TimeGridEvent = memo(function TimeGridEvent({
           </span>
         ) : null}
       </span>
+      {!continuesAfter ? <ResizeHandle meetingId={meeting.id} dayIso={dayIso} edge="end" /> : null}
     </button>
   )
 })
+
+/**
+ * One edge of a `TimeGridEvent`, as its own `dnd-kit` draggable — see the
+ * DRAG-TO-MOVE-AND-RESIZE comment on `TimeGridEvent` for why this exists and
+ * why it is not a `button`.
+ *
+ * `onPointerDown` does two things dnd-kit does not do for you, in order:
+ *
+ *  1. STOPS PROPAGATION before handing the event to dnd-kit's own listener:
+ *     this `div` sits inside the block's own `button`, which has its own
+ *     `useDraggable` listeners for the MOVE gesture spread onto it. Without
+ *     stopping the event here, the same pointerdown that starts a resize also
+ *     bubbles up to the button a moment later, and the two gestures race for
+ *     the same pointer — the same trap the sprint roadmap's `BarBody` avoids
+ *     for its own click-vs-drag distinction.
+ *  2. CAPTURES THE POINTER on this element. dnd-kit's own sensor tracks a
+ *     drag by attaching `pointermove`/`pointerup` listeners to the exact
+ *     element the pointerdown fired on (`AbstractPointerSensor.attach`,
+ *     `@dnd-kit/core`), not to `document`. This handle is only 8px tall —
+ *     far smaller than a real resize drag travels — so without capturing the
+ *     pointer, a browser that hit-tests each move event against whatever is
+ *     currently under the cursor (rather than keeping it pinned to the
+ *     element it went down on) would stop delivering events to this handle
+ *     the moment the drag leaves that 8px strip. `setPointerCapture` is the
+ *     standards-based way to guarantee every subsequent event for this
+ *     pointer id keeps targeting THIS element regardless of where the cursor
+ *     physically is, which is what dnd-kit's listener needs — cheap
+ *     insurance for a handle this small, whichever way a given engine
+ *     resolves hit-testing during a held button. The block's own move
+ *     draggable does not need this because its hit area is the whole
+ *     button, large enough that an ordinary drag never leaves it.
+ */
+function ResizeHandle({
+  meetingId,
+  dayIso,
+  edge,
+}: {
+  meetingId: string
+  dayIso: string
+  edge: 'start' | 'end'
+}) {
+  const { listeners, setNodeRef } = useDraggable({
+    id: `${meetingId}::${dayIso}::resize-${edge}`,
+    data: {
+      meetingId,
+      sourceIso: dayIso,
+      kind: edge === 'start' ? 'resize-start' : 'resize-end',
+    } satisfies DragData,
+  })
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      onPointerDown={(event) => {
+        event.stopPropagation()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        listeners?.onPointerDown?.(event)
+      }}
+      // Not `role="button"`/`tabIndex` (dnd-kit's `attributes`, deliberately
+      // not spread here) and not a `<button>`: this is pointer input only, so
+      // it must be invisible to the accessibility tree rather than announced
+      // as a control with no keyboard way to operate it.
+      aria-hidden
+      style={{
+        // Dragging is a pointer gesture; without this the browser claims the
+        // vertical drag for scrolling on touch and the handle never moves —
+        // the same reason the block itself sets this for the move gesture.
+        touchAction: 'none',
+      }}
+      className={cn(
+        'absolute inset-x-0 z-10 h-2 cursor-ns-resize rounded-sm bg-foreground/0',
+        'transition-colors duration-150 hover:bg-foreground/25 motion-reduce:transition-none',
+        edge === 'start' ? 'top-0' : 'bottom-0',
+      )}
+    />
+  )
+}
 
 /** How many faces fit before a block starts looking like a contact sheet. */
 const MAX_VISIBLE_ATTENDEES = 3

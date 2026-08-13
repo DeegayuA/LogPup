@@ -90,3 +90,77 @@ export function moveMeetingByDrag(input: {
 export function isRealMove(dayDelta: number, minuteDelta: number): boolean {
   return dayDelta !== 0 || minuteDelta !== 0
 }
+
+/**
+ * Shortest a meeting may be shrunk to by an edge drag. 15 minutes, the same
+ * number as `SNAP_MINUTES` — a duration finer than the grid's own snap could
+ * never be produced by a drag in the first place, so the floor and the grain
+ * share one constant instead of two that happen to agree today and drift
+ * tomorrow.
+ */
+export const MIN_MEETING_MINUTES = SNAP_MINUTES
+
+/**
+ * The meeting's new window after dragging its TOP edge by `minuteDelta`
+ * (already snapped — see `draggedMinutes`, the same conversion the move path
+ * uses).
+ *
+ * ONLY THE START MOVES. The end comes back as a fresh `Date` built from the
+ * input's own time rather than the input reference itself, so nothing a
+ * caller does to the result can reach back and mutate the meeting object it
+ * read from. The easy bug here is recomputing the duration and shifting the
+ * end along with it — done that way, dragging the top edge down also drags
+ * the end down, silently shortening a meeting nobody touched the bottom of.
+ *
+ * CLAMPED, NEVER INVERTED: the start cannot cross past
+ * `endsAt - MIN_MEETING_MINUTES`. Dragging the top edge below the bottom one
+ * lands the meeting at its shortest legal length instead of putting the end
+ * before the start.
+ */
+export function resizeMeetingStartByDrag(input: {
+  startsAt: Date
+  endsAt: Date
+  minuteDelta: number
+}): { startsAt: Date; endsAt: Date } {
+  const { startsAt, endsAt, minuteDelta } = input
+  const latestStartMs = endsAt.getTime() - MIN_MEETING_MINUTES * 60_000
+  const proposedStartMs = startsAt.getTime() + minuteDelta * 60_000
+  const clampedStartMs = Math.min(proposedStartMs, latestStartMs)
+  return { startsAt: new Date(clampedStartMs), endsAt: new Date(endsAt) }
+}
+
+/**
+ * The meeting's new window after dragging its BOTTOM edge by `minuteDelta`.
+ * The mirror of `resizeMeetingStartByDrag`: only the end moves, returned as a
+ * fresh `Date`, and it is clamped to `startsAt + MIN_MEETING_MINUTES` rather
+ * than allowed to cross back above the start.
+ */
+export function resizeMeetingEndByDrag(input: {
+  startsAt: Date
+  endsAt: Date
+  minuteDelta: number
+}): { startsAt: Date; endsAt: Date } {
+  const { startsAt, endsAt, minuteDelta } = input
+  const earliestEndMs = startsAt.getTime() + MIN_MEETING_MINUTES * 60_000
+  const proposedEndMs = endsAt.getTime() + minuteDelta * 60_000
+  const clampedEndMs = Math.max(proposedEndMs, earliestEndMs)
+  return { startsAt: new Date(startsAt), endsAt: new Date(clampedEndMs) }
+}
+
+/**
+ * True when a resize actually changed the meeting's start or end. A resize
+ * needs its own version of `isRealMove`'s guard rather than reusing a
+ * pre-clamp `minuteDelta !== 0` check: the minimum-duration clamp above can
+ * absorb a nonzero drag entirely (shrinking an edge that is already at the
+ * floor produces the same window it started from), and that no-op deserves
+ * the same skip a snapped-back move gets.
+ */
+export function isRealResize(
+  before: { startsAt: Date; endsAt: Date },
+  after: { startsAt: Date; endsAt: Date },
+): boolean {
+  return (
+    before.startsAt.getTime() !== after.startsAt.getTime() ||
+    before.endsAt.getTime() !== after.endsAt.getTime()
+  )
+}

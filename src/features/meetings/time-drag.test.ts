@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { SNAP_MINUTES, draggedMinutes, isRealMove, moveMeetingByDrag } from './time-drag'
+import { DEFAULT_PX_PER_HOUR } from './calendar-grid'
+import {
+  MIN_MEETING_MINUTES,
+  SNAP_MINUTES,
+  draggedMinutes,
+  isRealMove,
+  isRealResize,
+  moveMeetingByDrag,
+  resizeMeetingEndByDrag,
+  resizeMeetingStartByDrag,
+} from './time-drag'
 
 const GRID_START = 7
 const GRID_END = 22
@@ -132,5 +142,98 @@ describe('isRealMove', () => {
   it('accepts a move in either dimension', () => {
     expect(isRealMove(1, 0)).toBe(true)
     expect(isRealMove(0, -15)).toBe(true)
+  })
+})
+
+describe('resizeMeetingStartByDrag', () => {
+  it('moves the start and leaves the end untouched', () => {
+    const result = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: -30 })
+    expect(result.startsAt.getHours()).toBe(9)
+    expect(result.startsAt.getMinutes()).toBe(30)
+    expect(result.endsAt.getTime()).toBe(END.getTime())
+  })
+
+  it('shrinks the meeting when dragged down, still leaving the end untouched', () => {
+    const result = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: 15 })
+    expect(result.startsAt.getHours()).toBe(10)
+    expect(result.startsAt.getMinutes()).toBe(15)
+    expect(result.endsAt.getTime()).toBe(END.getTime())
+  })
+
+  it('clamps to the minimum duration instead of crossing past the end', () => {
+    // Dragging the top edge down by two hours would put the start at noon,
+    // an hour past the 11:00 end — must clamp, not invert.
+    const result = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: 120 })
+    expect(result.startsAt.getTime()).toBe(END.getTime() - MIN_MEETING_MINUTES * 60_000)
+    expect(result.endsAt.getTime()).toBe(END.getTime())
+    expect(result.endsAt.getTime() - result.startsAt.getTime()).toBe(MIN_MEETING_MINUTES * 60_000)
+  })
+
+  it('never inverts start and end even at an extreme drag', () => {
+    const result = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: 10_000 })
+    expect(result.startsAt.getTime()).toBeLessThan(result.endsAt.getTime())
+  })
+
+  it('snaps a small drag to the quarter hour at the default zoom', () => {
+    // 7px at 56px/hour (DEFAULT_PX_PER_HOUR) is 7.5 raw minutes — the
+    // boundary case that must still land on a quarter hour, not "7" or "8".
+    const minuteDelta = draggedMinutes(7, DEFAULT_PX_PER_HOUR)
+    expect(minuteDelta % SNAP_MINUTES).toBe(0)
+    const result = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta })
+    expect(result.startsAt.getMinutes() % SNAP_MINUTES).toBe(0)
+  })
+})
+
+describe('resizeMeetingEndByDrag', () => {
+  it('moves the end and leaves the start untouched', () => {
+    const result = resizeMeetingEndByDrag({ startsAt: START, endsAt: END, minuteDelta: 30 })
+    expect(result.endsAt.getHours()).toBe(11)
+    expect(result.endsAt.getMinutes()).toBe(30)
+    expect(result.startsAt.getTime()).toBe(START.getTime())
+  })
+
+  it('shrinks the meeting when dragged up, still leaving the start untouched', () => {
+    const result = resizeMeetingEndByDrag({ startsAt: START, endsAt: END, minuteDelta: -15 })
+    expect(result.endsAt.getHours()).toBe(10)
+    expect(result.endsAt.getMinutes()).toBe(45)
+    expect(result.startsAt.getTime()).toBe(START.getTime())
+  })
+
+  it('clamps to the minimum duration instead of crossing above the start', () => {
+    // Dragging the bottom edge up by two hours would put the end at 09:00,
+    // an hour before the 10:00 start — must clamp, not invert.
+    const result = resizeMeetingEndByDrag({ startsAt: START, endsAt: END, minuteDelta: -120 })
+    expect(result.endsAt.getTime()).toBe(START.getTime() + MIN_MEETING_MINUTES * 60_000)
+    expect(result.startsAt.getTime()).toBe(START.getTime())
+    expect(result.endsAt.getTime() - result.startsAt.getTime()).toBe(MIN_MEETING_MINUTES * 60_000)
+  })
+
+  it('never inverts start and end even at an extreme drag', () => {
+    const result = resizeMeetingEndByDrag({ startsAt: START, endsAt: END, minuteDelta: -10_000 })
+    expect(result.endsAt.getTime()).toBeGreaterThan(result.startsAt.getTime())
+  })
+
+  it('snaps a small drag to the quarter hour at the default zoom', () => {
+    const minuteDelta = draggedMinutes(7, DEFAULT_PX_PER_HOUR)
+    const result = resizeMeetingEndByDrag({ startsAt: START, endsAt: END, minuteDelta })
+    expect(result.endsAt.getMinutes() % SNAP_MINUTES).toBe(0)
+  })
+})
+
+describe('isRealResize', () => {
+  it('rejects a resize that produced the same window', () => {
+    const same = { startsAt: START, endsAt: END }
+    expect(isRealResize(same, same)).toBe(false)
+  })
+
+  it('rejects a resize clamped back to the original window', () => {
+    // Zero minutes of drag clamps to exactly where it started.
+    const after = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: 0 })
+    expect(isRealResize({ startsAt: START, endsAt: END }, after)).toBe(false)
+  })
+
+  it('accepts a resize that actually changed the start or end', () => {
+    const after = resizeMeetingStartByDrag({ startsAt: START, endsAt: END, minuteDelta: -30 })
+    expect(isRealResize({ startsAt: START, endsAt: END }, after)).toBe(true)
   })
 })
