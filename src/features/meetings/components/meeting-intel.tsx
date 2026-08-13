@@ -51,6 +51,7 @@ import { cn } from '@/lib/utils'
 import type { ActionResult } from '@/lib/action-result'
 import type { MentionUser } from '@/components/mention-textarea'
 import { NoteTimeline } from '@/features/meetings/components/note-timeline'
+import { MeetingPip } from '@/features/meetings/components/meeting-pip'
 import { MeetingAssistant } from '@/features/meetings/components/meeting-assistant'
 import { useScreenKeyframes } from '@/features/meetings/components/use-screen-keyframes'
 import { ScreenFilmstrip } from '@/features/meetings/components/screen-filmstrip'
@@ -2718,6 +2719,19 @@ export function MeetingIntelPanel({
                 {micOn ? 'Mic on' : 'Mic off'}
               </Button>
             ) : null}
+            {/* Follows the user to other tabs while the meeting records — the
+                Meet-style popup. Auto-opens on tab switch (Chrome routes it
+                through mediaSession while the mic is held); the button is the
+                everywhere-else path, since the API needs a gesture. */}
+            <MeetingPip
+              recording={recording}
+              seconds={seconds}
+              tail={`${finalText} ${provisional?.text ?? ''} ${interimText}`.trim().slice(-240)}
+              micOn={micOn}
+              canToggleMic={captureMode !== 'mic'}
+              onToggleMic={toggleMic}
+              onStop={() => recorderRef.current?.stop()}
+            />
             <span
               className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive"
               role="status"
