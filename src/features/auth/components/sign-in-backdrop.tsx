@@ -33,6 +33,7 @@ const RINGS = Array.from({ length: 11 }, (_, index) => {
 type RingVars = React.CSSProperties & {
   '--ring-duration': string
   '--ring-delay': string
+  '--ring-opacity': string
 }
 
 export function SignInBackdrop() {
@@ -56,7 +57,16 @@ export function SignInBackdrop() {
             <ellipse
               className="ring-breathe"
               style={
-                { '--ring-duration': ring.duration, '--ring-delay': ring.delay } as RingVars
+                {
+                  '--ring-duration': ring.duration,
+                  '--ring-delay': ring.delay,
+                  // The keyframes animate opacity, and a CSS opacity overrides
+                  // the SVG presentation attribute outright — without passing
+                  // each ring's own value through, every ring would animate
+                  // between the same two opacities and the cluster would lose
+                  // the depth that the varied `ring.opacity` gives it.
+                  '--ring-opacity': String(ring.opacity),
+                } as RingVars
               }
               rx={ring.rx}
               ry={ring.ry}

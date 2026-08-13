@@ -352,9 +352,21 @@
   0%,
   100% {
     transform: scale(1);
+    opacity: var(--ring-opacity, 1);
   }
   50% {
-    transform: scale(1.045);
+    /* 1.045 was imperceptible: a 4.5% change spread over 14s falls below the
+       threshold at which motion is noticed at all, so the backdrop read as
+       static. 12% over the same slow curve is legible as a swell without
+       becoming a distraction — still far below anything that pulls the eye
+       off the sign-in form. */
+    transform: scale(1.12);
+    /* Paired with the scale so each ring dims slightly as it expands, which
+       is what makes the staggered cluster read as a ripple travelling OUTWARD
+       rather than every ring inflating in place. This is a slow drift, not
+       the opacity flicker the note above warns against — one traversal per
+       ~13s, on a compositor-friendly property. */
+    opacity: calc(var(--ring-opacity, 1) * 0.55);
   }
 }
 
