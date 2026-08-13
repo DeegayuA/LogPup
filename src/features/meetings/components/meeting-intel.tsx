@@ -1812,10 +1812,20 @@ export function MeetingIntelPanel({
   // to fill it in.
   function runFinalize() {
     setFinalizeError(null)
+    // Everything this pass covers, fixed BEFORE the first await. Recording can
+    // start again while the write-up is still running (a meeting does not stop
+    // for it), so from here on the refs are moving targets: a new take pushes
+    // upload promises, appends segments and rewrites the live transcript. Read
+    // them later and this pass would wait on the new take's uploads, and then
+    // drop its freshly-transcribed segments as though they had been written up.
+    const pendingUploads = [...segmentUploadPromisesRef.current]
+    const transcript = finalTranscriptRef.current
+    const consumed = new Set(segmentsRef.current.map((segment) => segment.index))
+
     startFinalizing(async () => {
       try {
-        await Promise.allSettled(segmentUploadPromisesRef.current)
-        const res = await finalizeMeetingRecording(meetingId, finalTranscriptRef.current)
+        await Promise.allSettled(pendingUploads)
+        const res = await finalizeMeetingRecording(meetingId, transcript)
         if (!res.ok) {
           setFinalizeError(res.error)
           toast.error(res.error)
@@ -1825,8 +1835,12 @@ export function MeetingIntelPanel({
         // segment survives this — finalize proceeds even with a gap
         // (concatenateSegments reports it rather than blocking), so its
         // audio has to stay retryable, or that stretch of the meeting is
-        // gone for good the moment this succeeds.
-        segmentsRef.current = segmentsRef.current.filter((s) => s.status !== 'done')
+        // gone for good the moment this succeeds. Anything recorded AFTER
+        // this pass began survives too, on the same principle: it was never
+        // in the write-up, so dropping it would lose it silently.
+        segmentsRef.current = segmentsRef.current.filter(
+          (s) => s.status !== 'done' || !consumed.has(s.index),
+        )
         publishSegments()
         // Say which of the two outcomes this actually was. The limited
         // (no-Gemini) outcome is a success — the meeting has real notes —
@@ -2576,7 +2590,14 @@ export function MeetingIntelPanel({
             aria-hidden
           />
         </Button>
-        {open && canRecord && !recording && !finalizing ? (
+        {/* Deliberately NOT gated on `finalizing`. The write-up is a server
+            round trip over the whole transcript and can run for minutes; the
+            meeting it is describing carries on regardless. Hiding the record
+            controls until it finished meant stopping mid-meeting locked you
+            out of recording the rest — the one moment the button matters most.
+            runFinalize snapshots what it covers before its first await, so a
+            take started now cannot be swallowed by the pass still running. */}
+        {open && canRecord && !recording ? (
           <>
             <Button variant="outline" size="sm" type="button" onClick={() => startRecording('mic')}>
               <Mic /> Record mic
@@ -2760,7 +2781,7 @@ export function MeetingIntelPanel({
         ) : null}
       </div>
 
-      {open && canRecord && !recording && !finalizing ? (
+      {open && canRecord && !recording ? (
         <div className="flex flex-col gap-1">
           {/* Whether there is anything left to transcribe WITH, before the
               meeting rather than after it. A key that is out of quota is
