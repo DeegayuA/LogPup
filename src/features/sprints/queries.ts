@@ -196,13 +196,13 @@ export async function getSprintTaskCounts(
 ): Promise<Map<string | null, SprintTaskCounts>> {
   const rows = await db
     .select({
-      sprintId: tasks.sprintId,
-      status: tasks.status,
+      sprintId: liveTasks.sprintId,
+      status: liveTasks.status,
       count: sql<number>`count(*)`,
     })
-    .from(tasks)
-    .where(eq(tasks.appId, appId))
-    .groupBy(tasks.sprintId, tasks.status)
+    .from(liveTasks)
+    .where(eq(liveTasks.appId, appId))
+    .groupBy(liveTasks.sprintId, liveTasks.status)
 
   const bySprint = new Map<string | null, SprintTaskCounts>()
   for (const row of rows) {

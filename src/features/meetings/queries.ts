@@ -109,9 +109,9 @@ export const getMeetingById = cache(
   async function getMeetingById(meetingId: string): Promise<MeetingSummary | null> {
     const rows = await db
       .select(meetingColumns)
-      .from(meetings)
-      .leftJoin(apps, eq(meetings.appId, apps.id))
-      .where(eq(meetings.id, meetingId))
+      .from(liveMeetings)
+      .leftJoin(apps, eq(liveMeetings.appId, apps.id))
+      .where(eq(liveMeetings.id, meetingId))
 
     const [meeting] = await attachAttendees(rows)
     return meeting ?? null

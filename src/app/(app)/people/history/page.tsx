@@ -197,7 +197,7 @@ async function HistoryData({
                 would make the alarm meaningless. */}
             <AllocationTrend
               points={overview.trend}
-              now={asOf.at}
+              now={asOfAt}
               reference={overview.stats.headcount * 100}
               referenceLabel="full team"
             />
