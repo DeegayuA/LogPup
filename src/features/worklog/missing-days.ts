@@ -1,4 +1,4 @@
-import { LK_HOLIDAYS } from '@/lib/lk-holidays'
+import { isWorkingDay } from '@/lib/working-days'
 
 /**
  * Which days a person still owes a work log for.
@@ -28,29 +28,21 @@ import { LK_HOLIDAYS } from '@/lib/lk-holidays'
  */
 export const MAX_BACKFILL_DAYS = 10
 
-/** ISO `yyyy-mm-dd` → is it a gazetted Sri Lankan holiday? */
-function isGazettedHoliday(iso: string): boolean {
-  return iso in LK_HOLIDAYS
-}
-
 /**
  * Whether a work log is expected for this day at all.
  *
- * Saturday counts as non-working alongside Sunday. That is the safer error:
- * a team that does work Saturdays is merely not nagged about them, whereas
- * requiring a day the team does not work produces a backlog nobody can
- * clear. `lk-holidays.ts` models only Sunday (isLkSunday), which is why the
- * weekend test is done here rather than borrowed from there.
+ * Delegates to the studio-wide definition in src/lib/working-days.ts rather
+ * than deciding here: Saturday is a HALF working day at this studio, and it
+ * still owes a log. Two other features (the people KPI baseline and the
+ * invited-hours metric) have to answer the same question, so the definition
+ * lives in one place or the studio ends up with three answers to "how many
+ * working days was that".
  */
 export function isRequiredWorkDay(
   iso: string,
-  isHoliday: (iso: string) => boolean = isGazettedHoliday,
+  isHoliday?: (iso: string) => boolean,
 ): boolean {
-  // Midday UTC: far enough from either boundary that the ±05:30 Colombo
-  // offset cannot tip the weekday to its neighbour.
-  const weekday = new Date(`${iso}T12:00:00Z`).getUTCDay()
-  if (weekday === 0 || weekday === 6) return false
-  return !isHoliday(iso)
+  return isWorkingDay(iso, isHoliday)
 }
 
 /**

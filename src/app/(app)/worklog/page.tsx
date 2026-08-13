@@ -6,6 +6,7 @@ import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { getMyWorklogs, getTeamWorklogs, getUserJoinDay } from '@/features/worklog/queries'
 import { MAX_BACKFILL_DAYS, missingWorkDays } from '@/features/worklog/missing-days'
+import { isHalfWorkingDay } from '@/lib/working-days'
 import { resolveWorkDay, summarizeWorklogs, worklogDaysBack } from '@/features/worklog/worklog-day'
 
 export const metadata = { title: 'Work log' }
@@ -101,17 +102,26 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
           {missing.length === 1 ? '1 day still needs logging' : `${missing.length} days still need logging`}
         </h2>
         <p className="text-2xs text-muted-foreground">
-          Fill these in before today&rsquo;s. Weekends and public holidays are not counted, and this
-          only goes back as far as {MAX_BACKFILL_DAYS} working days — you will never be shown a
-          backlog you cannot clear.
+          Fill these in before today&rsquo;s. Sundays and public holidays are not counted; Saturdays
+          are, as half days. This only goes back {MAX_BACKFILL_DAYS} working days — you will never
+          be shown a backlog you cannot clear.
         </p>
       </div>
 
       <div className="flex flex-col gap-3">
         {missing.map((day) => (
           <div key={day} className="flex flex-col gap-1.5">
-            <h3 className="font-mono text-xs tabular-nums text-muted-foreground">
+            <h3 className="flex items-baseline gap-2 font-mono text-xs tabular-nums text-muted-foreground">
               {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
+              {/* Saturdays are half days here, and the percentage means "of
+                  what I planned" — so saying which days are half is what
+                  keeps a full Saturday from reading as an under-delivered
+                  weekday. */}
+              {isHalfWorkingDay(day) ? (
+                <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
+                  Half day
+                </span>
+              ) : null}
             </h3>
             {/* Draft with AI reads that day's own activity, so a forgotten
                 Tuesday is still recoverable from what LogPup saw. */}

@@ -9,9 +9,17 @@ describe('isRequiredWorkDay', () => {
     expect(isRequiredWorkDay('2026-08-13')).toBe(true)
   })
 
-  it('does not require Saturday or Sunday', () => {
-    expect(isRequiredWorkDay('2026-08-15')).toBe(false)
+  it('requires Saturday — it is a half working day here, not a day off', () => {
+    expect(isRequiredWorkDay('2026-08-15')).toBe(true)
+  })
+
+  it('does not require Sunday', () => {
     expect(isRequiredWorkDay('2026-08-16')).toBe(false)
+  })
+
+  it('lets a holiday win over Saturday — a Saturday Poya day is not a half day', () => {
+    const holiday = (iso: string) => iso === '2026-08-15'
+    expect(isRequiredWorkDay('2026-08-15', holiday)).toBe(false)
   })
 
   it('does not require a gazetted holiday', () => {
@@ -50,14 +58,15 @@ describe('missingWorkDays', () => {
     expect(missing).toEqual(['2026-08-10', '2026-08-12'])
   })
 
-  it('skips weekends', () => {
-    // Mon 2026-08-17 back through the weekend to Fri 2026-08-14.
+  it('skips Sunday but keeps Saturday', () => {
+    // Mon 2026-08-17 back through the weekend to Fri 2026-08-14. Saturday
+    // the 15th is a half working day and still owes a log; Sunday does not.
     const missing = missingWorkDays({
       today: '2026-08-17',
       joinedOn: '2026-08-14',
       logged: new Set(),
     })
-    expect(missing).toEqual(['2026-08-14'])
+    expect(missing).toEqual(['2026-08-14', '2026-08-15'])
   })
 
   it('never asks for days before the person joined', () => {
