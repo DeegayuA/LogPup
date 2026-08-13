@@ -5,7 +5,10 @@ import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
-import { apps, meetingAttendees, meetingScreenshots, meetings, users } from '@/db/schema'
+// meetingScreenshots is deliberately NOT imported: deleteMeeting used to read
+// its rows to sweep the Blob objects, and a soft delete keeps both the rows and
+// the objects (they are purged with the meeting from admin Trash, not here).
+import { apps, meetingAttendees, meetings, users } from '@/db/schema'
 import {
   formatBusinessTime,
   formatBusinessWeekdayDayMonth,
@@ -800,17 +803,10 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
     .returning({ id: meetings.id })
   if (marked.length === 0) return err('Meeting not found')
 
-  await logActivity({
-    actorId: session.user.id,
-    verb: 'deleted',
-    entityType: 'meeting',
-    entityId: meetingId,
-    entityLabel: existing.title,
-    appId: existing.appId,
-    appName: await appNameById(existing.appId),
-    pagePath: '/meetings',
-  })
-
+  // ONE activity row per delete. The merge that brought soft-deletes in left
+  // two identical logActivity calls here (the branch's and main's), which wrote
+  // the trash event to the activity feed twice and ran appNameById twice per
+  // delete.
   await logActivity({
     actorId: session.user.id,
     verb: 'deleted',

@@ -5,7 +5,7 @@ import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveSprints, liveTasks } from '@/db/live'
-import { apps, meetingFollowups, sprints, tasks } from '@/db/schema'
+import { apps, meetingFollowups, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { revalidateAdmin } from '@/lib/revalidate-admin'
@@ -671,17 +671,10 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
   }
   if (marked.length === 0) return err('Task not found')
 
+  // ONE row, deliberately. The merge that brought soft deletes in landed this
+  // logActivity twice (main's copy plus the branch's re-worded copy), which
+  // put two identical "deleted task" entries in the feed for every delete.
   // `existing` was read before the update, so the row can still be named.
-  await logActivity({
-    actorId: session.user.id,
-    verb: 'deleted',
-    entityType: 'task',
-    entityId: taskId,
-    entityLabel: existing.title,
-    appId: existing.appId,
-  })
-
-  // `existing` was read before the delete, so the row can still be named.
   await logActivity({
     actorId: session.user.id,
     verb: 'deleted',

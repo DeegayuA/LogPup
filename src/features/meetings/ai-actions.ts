@@ -8,7 +8,14 @@ import { alias } from 'drizzle-orm/pg-core'
 import { put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
-import { liveMeetings, liveNoteSegments, liveScreenshots, liveTasks, liveTasksAs } from '@/db/live'
+import {
+  liveMeetings,
+  liveNoteSegments,
+  liveScreenshots,
+  liveSprints,
+  liveTasks,
+  liveTasksAs,
+} from '@/db/live'
 import {
   apps,
   assignments,
@@ -21,7 +28,10 @@ import {
   meetingSpeakers,
   meetingTaskSuggestions,
   meetings,
-  sprints,
+  // `sprints` is not imported: every sprint READ in this file goes through
+  // liveSprints, and nothing here writes a sprint row. `meetings`, `tasks` and
+  // meetingNoteSegments/meetingScreenshots stay because their WRITES (soft
+  // deletes, inserts, updates) still target the raw tables.
   tasks,
   users,
 } from '@/db/schema'
@@ -594,10 +604,10 @@ async function fetchAttendeeAppLists(attendeeIds: string[]): Promise<Map<string,
     .where(inArray(assignments.userId, attendeeIds))
 
   const taskRows = await db
-    .select({ userId: tasks.assigneeId, id: apps.id, name: apps.name })
-    .from(tasks)
-    .innerJoin(apps, eq(tasks.appId, apps.id))
-    .where(and(inArray(tasks.assigneeId, attendeeIds), ne(tasks.status, 'done')))
+    .select({ userId: liveTasks.assigneeId, id: apps.id, name: apps.name })
+    .from(liveTasks)
+    .innerJoin(apps, eq(liveTasks.appId, apps.id))
+    .where(and(inArray(liveTasks.assigneeId, attendeeIds), ne(liveTasks.status, 'done')))
 
   for (const row of [...assignmentRows, ...taskRows]) {
     if (!row.userId) continue
@@ -1914,14 +1924,14 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   if (linkedTaskIds.length > 0) {
     const taskRows = await db
       .select({
-        id: tasks.id,
-        title: tasks.title,
-        status: tasks.status,
+        id: liveTasks.id,
+        title: liveTasks.title,
+        status: liveTasks.status,
         appSlug: apps.slug,
       })
-      .from(tasks)
-      .leftJoin(apps, eq(tasks.appId, apps.id))
-      .where(inArray(tasks.id, linkedTaskIds))
+      .from(liveTasks)
+      .leftJoin(apps, eq(liveTasks.appId, apps.id))
+      .where(inArray(liveTasks.id, linkedTaskIds))
     for (const row of taskRows) {
       linkedTaskById.set(row.id, { id: row.id, title: row.title, status: row.status, appSlug: row.appSlug })
     }
@@ -2043,7 +2053,7 @@ export async function getMeetingPrep(meetingId: string): Promise<ActionResult<At
   if (!idParsed.success) return err(idParsed.error.issues[0].message)
   const id = idParsed.data
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, id))
   if (!meeting) return err('Meeting not found')
   if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
 
@@ -2070,22 +2080,22 @@ export async function getMeetingPrep(meetingId: string): Promise<ActionResult<At
   const todayIso = toIsoDateInTimeZone(new Date())
   const sprintRows = await db
     .select({
-      sprintId: sprints.id,
-      sprintName: sprints.name,
-      appId: sprints.appId,
+      sprintId: liveSprints.id,
+      sprintName: liveSprints.name,
+      appId: liveSprints.appId,
       appName: apps.name,
       appSlug: apps.slug,
-      startDate: sprints.startDate,
+      startDate: liveSprints.startDate,
     })
-    .from(sprints)
-    .innerJoin(apps, eq(sprints.appId, apps.id))
+    .from(liveSprints)
+    .innerJoin(apps, eq(liveSprints.appId, apps.id))
     .where(
       or(
-        eq(sprints.status, 'active'),
+        eq(liveSprints.status, 'active'),
         and(
-          eq(sprints.status, 'planned'),
-          lte(sprints.startDate, todayIso),
-          gte(sprints.endDate, todayIso),
+          eq(liveSprints.status, 'planned'),
+          lte(liveSprints.startDate, todayIso),
+          gte(liveSprints.endDate, todayIso),
         ),
       ),
     )
@@ -2098,13 +2108,18 @@ export async function getMeetingPrep(meetingId: string): Promise<ActionResult<At
     sprintIds.length > 0
       ? await db
           .select({
-            sprintId: tasks.sprintId,
-            assigneeId: tasks.assigneeId,
-            status: tasks.status,
-            dueDate: tasks.dueDate,
+            sprintId: liveTasks.sprintId,
+            assigneeId: liveTasks.assigneeId,
+            status: liveTasks.status,
+            dueDate: liveTasks.dueDate,
           })
-          .from(tasks)
-          .where(and(inArray(tasks.sprintId, sprintIds), inArray(tasks.assigneeId, attendeeIds)))
+          .from(liveTasks)
+          .where(
+            and(
+              inArray(liveTasks.sprintId, sprintIds),
+              inArray(liveTasks.assigneeId, attendeeIds),
+            ),
+          )
       : []
 
   const checkinsBySprint = await getCheckinsForSprints(sprintIds)
@@ -3034,12 +3049,18 @@ export async function deleteNoteSegment(segmentId: string): Promise<ActionResult
  * Gemini call rather than another meeting, and someone who cleared the notes by
  * mistake has not destroyed the only record of what was said.
  *
- * PERMANENT, against the project's soft-delete rule, and the exemption is the
- * point: these rows are derived data rebuildable from the transcript that
+ * PERMANENT FOR THE DERIVED ROWS, and the exemption is the point: the write-up
+ * and the follow-ups it produced are rebuildable from the transcript that
  * survives, not a record of something that happened. A trash bin for
  * regenerable output is a second thing to reason about for a recovery nobody
- * needs. One caveat the caller must surface first — this also removes typed
- * note segments, and those are NOT regenerable.
+ * needs.
+ *
+ * TYPED NOTE SEGMENTS ARE THE EXCEPTION, and they are SOFT-deleted here. The
+ * caveat this comment used to carry — "this also removes typed note segments,
+ * and those are NOT regenerable" — was a caveat precisely because the
+ * behaviour was wrong. meeting_note_segments is a soft-deleted table now, so a
+ * person's typed words go to the admin Trash and come back, while the
+ * generated rows around them still go for good.
  */
 export async function clearMeetingAiNotes(meetingId: string): Promise<ActionResult> {
   const parsed = idInput.safeParse(meetingId)
@@ -3049,7 +3070,15 @@ export async function clearMeetingAiNotes(meetingId: string): Promise<ActionResu
   if (!ctx) return err('Not allowed')
 
   await db.delete(meetingAiNotes).where(eq(meetingAiNotes.meetingId, parsed.data))
-  await db.delete(meetingNoteSegments).where(eq(meetingNoteSegments.meetingId, parsed.data))
+  // Marked, not removed. Already-trashed rows are skipped so this cannot
+  // overwrite the deletedBy of whoever trashed a single segment earlier —
+  // the trail should keep naming them, not this caller.
+  await db
+    .update(meetingNoteSegments)
+    .set({ deletedAt: new Date(), deletedBy: ctx.session.user.id })
+    .where(
+      and(eq(meetingNoteSegments.meetingId, parsed.data), isNull(meetingNoteSegments.deletedAt)),
+    )
   // sourceMeetingId, not a plain meetingId: a follow-up is authored by one
   // meeting and may be resolved in a later one. This clears the ones THIS
   // meeting produced, which is the right scope — but it takes their resolution

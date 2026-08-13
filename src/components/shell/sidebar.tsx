@@ -89,12 +89,30 @@ export function Sidebar({
 
   return (
     <nav className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col self-start overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
-      <Link href="/" className="flex items-center gap-2.5 px-4 pb-6 pt-4">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <PawPrint className="size-4" aria-hidden />
-        </span>
-        <span className="font-heading text-base font-bold tracking-tight">LogPup</span>
-      </Link>
+      {/* Branding row. LogPup owns the left edge; the Alta Vision mark — the
+          company that builds and operates it — sits at the right edge of the
+          same row, small enough to read as attribution rather than as a second
+          brand of equal weight. The two are siblings in a flex row, not nested:
+          one is an internal Link and one is an external anchor, and an <a>
+          inside an <a> is invalid markup. Both are `shrink-0` because the
+          sidebar is a fixed w-56 — neither mark may squash the other. */}
+      <div className="flex items-center gap-2 px-4 pb-6 pt-4">
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
+          <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <PawPrint className="size-4" aria-hidden />
+          </span>
+          <span className="font-heading text-base font-bold tracking-tight">LogPup</span>
+        </Link>
+        <a
+          href="https://altavision.lk"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Alta Vision — opens altavision.lk in a new tab"
+          className="ml-auto inline-flex shrink-0 rounded-md opacity-80 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+        >
+          <AltaVisionLogo className="h-3 w-auto" />
+        </a>
+      </div>
 
       <div className="flex flex-col gap-0.5 px-2">
         {navItems.map(({ href, label, icon, key }) => (
@@ -144,21 +162,6 @@ export function Sidebar({
           <CommandHint />
           <VersionBadge />
         </div>
-        {/* Parent-company mark, deliberately last and deliberately quiet. The
-            LogPup paw owns the top of the sidebar; this only answers "whose
-            tool is this", so it sits below everything and lifts on hover
-            rather than competing for the eye on every page load. The mark
-            stands alone — a "by" label next to a wordmark is two typographic
-            systems arguing at 11px. */}
-        <a
-          href="https://altavision.lk"
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Alta Vision — opens altavision.lk in a new tab"
-          className="mt-2 inline-flex w-fit rounded-md pl-2 opacity-80 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
-        >
-          <AltaVisionLogo className="h-3.5 w-auto" />
-        </a>
       </div>
     </nav>
   )

@@ -2263,9 +2263,13 @@ export function MeetingIntelPanel({
                   <AlertDialogHeader>
                     <AlertDialogTitle>Clear this meeting&apos;s notes?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      Deletes the summary, every note, and the follow-up questions this meeting
-                      raised — including notes typed by hand and any answers already written
-                      against those follow-ups. This cannot be undone.
+                      Deletes the summary and the follow-up questions this meeting raised,
+                      including any answers already written against those follow-ups. That part
+                      cannot be undone.
+                      <br />
+                      <br />
+                      Notes typed by hand go to the admin Trash instead, and an admin can put
+                      them back — nobody&apos;s own words are destroyed by this button.
                       <br />
                       <br />
                       The recording transcript is kept, so the notes can be written up again

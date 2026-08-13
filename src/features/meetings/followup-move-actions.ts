@@ -172,10 +172,14 @@ export async function deleteFollowup(followupId: unknown): Promise<ActionResult>
       id: meetingFollowups.id,
       text: meetingFollowups.text,
       personName: meetingFollowups.personName,
-      sourceAppId: meetings.appId,
+      sourceAppId: liveMeetings.appId,
     })
     .from(meetingFollowups)
-    .innerJoin(meetings, eq(meetings.id, meetingFollowups.sourceMeetingId))
+    // A follow-up is live iff its source meeting is (see MEETING_CHILD_TABLES
+    // in src/db/live.ts), so trashing the meeting has to make this read miss:
+    // the item then reports "not found" instead of being removable — and
+    // logged as removed — from a meeting that is already in the bin.
+    .innerJoin(liveMeetings, eq(liveMeetings.id, meetingFollowups.sourceMeetingId))
     .where(eq(meetingFollowups.id, parsed.data))
   if (!existing) return err('Follow-up not found')
 
@@ -221,10 +225,13 @@ export async function editFollowupText(input: unknown): Promise<ActionResult> {
       id: meetingFollowups.id,
       text: meetingFollowups.text,
       personName: meetingFollowups.personName,
-      sourceAppId: meetings.appId,
+      sourceAppId: liveMeetings.appId,
     })
     .from(meetingFollowups)
-    .innerJoin(meetings, eq(meetings.id, meetingFollowups.sourceMeetingId))
+    // Same liveness rule as the delete above: a follow-up whose meeting is in
+    // the bin must stop being readable, so an edit cannot rewrite the record
+    // of a question asked at a meeting nobody can open any more.
+    .innerJoin(liveMeetings, eq(liveMeetings.id, meetingFollowups.sourceMeetingId))
     .where(eq(meetingFollowups.id, parsed.data.followupId))
   if (!existing) return err('Follow-up not found')
 
@@ -288,6 +295,12 @@ export async function updateMeetingSummary(input: unknown): Promise<ActionResult
   const [existing] = await db
     .select({ summary: meetingAiNotes.summary })
     .from(meetingAiNotes)
+    // meetingAiNotes has no deletedAt of its own — live iff its meeting is
+    // (see MEETING_CHILD_TABLES in src/db/live.ts). canManageMeeting above
+    // already resolves through liveMeetings and refuses a trashed meeting;
+    // naming the liveness source in the statement too means this read stays
+    // correct on its own terms if that gate ever changes.
+    .innerJoin(liveMeetings, eq(liveMeetings.id, meetingAiNotes.meetingId))
     .where(eq(meetingAiNotes.meetingId, parsed.data.meetingId))
   if (!existing) return err('There is no write-up to edit yet')
 

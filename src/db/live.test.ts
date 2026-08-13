@@ -304,13 +304,90 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
   // that are only "soft" gone. removeAssignment is the one place that
   // deletes an assignment row (verified by reading the file).
   'src/features/people/actions.ts': 'removeAssignment',
+
+  // The four below all delete rows in tables that are NOT soft-deletable —
+  // verified against SOFT_TABLES above and against schema.ts, where none of
+  // meeting_attendees, meeting_ai_notes, meeting_followups or sprint_checkins
+  // carries a deletedAt column. This check greps a FILE for `db.delete(`
+  // without knowing which table it targets, so a legitimate hard delete of a
+  // never-soft table reads as a violation; naming the one function keeps the
+  // rest of each file under the check.
+
+  // why: attendee reconciliation. Editing a meeting writes only the added and
+  // removed rows so untouched attendees keep their RSVPs, and "removed from
+  // the meeting" has no soft state to be in — the row's absence IS the fact.
+  'src/features/meetings/actions.ts': 'updateMeeting',
+
+  // why: clearMeetingAiNotes drops the generated write-up (meeting_ai_notes)
+  // and the follow-ups this meeting raised (meeting_followups), both
+  // rebuildable from the transcript that survives. The typed note segments it
+  // used to hard-delete alongside them are soft-deleted now — that is a real
+  // meeting_note_segments UPDATE in the same function, not an exemption.
+  'src/features/meetings/ai-actions.ts': 'clearMeetingAiNotes',
+
+  // why: an admin stopping a follow-up from carrying forward. meeting_followups
+  // is generated from the meeting and regenerable by re-running the analysis,
+  // so it is deliberately outside the trash.
+  'src/features/meetings/followup-move-actions.ts': 'deleteFollowup',
+
+  // why: clearing a check-in is not the same as checking in at 0%. 0% is an
+  // answer, absence is the lack of one, and the prep table renders them
+  // differently — so the row has to be removable, not markable.
+  'src/features/sprints/checkin-actions.ts': 'deleteSprintCheckin',
+}
+
+/**
+ * Index of a function's BODY `{`, given the index of its parameter list's `(`.
+ *
+ * Not `text.indexOf('{', declEnd)`, and the difference is the whole point. A
+ * signature like
+ *
+ *   export async function updateMeeting(
+ *     input: unknown,
+ *   ): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
+ *
+ * puts a `{` in the RETURN TYPE. Taking the first one makes functionSpan
+ * brace-match that type literal and report a span ending a hundred lines
+ * before the body starts — so every db.delete() in the function stays an
+ * offender no matter what DELETE_ALLOWED_FUNCTIONS says, and the exemption
+ * silently does nothing. Destructured parameters (`function f({ a, b }: T)`)
+ * fail the same way.
+ *
+ * So: walk past the balanced parameter list first, then take the first `{`
+ * that is not nested inside angle brackets.
+ */
+function bodyBraceIndex(text: string, parenOpen: number): number {
+  let depth = 0
+  let i = parenOpen
+  for (; i < text.length; i += 1) {
+    if (text[i] === '(') depth += 1
+    else if (text[i] === ')') {
+      depth -= 1
+      if (depth === 0) {
+        i += 1
+        break
+      }
+    }
+  }
+  if (depth !== 0) return -1
+
+  let angle = 0
+  for (; i < text.length; i += 1) {
+    const ch = text[i]
+    if (ch === '<') angle += 1
+    else if (ch === '>') {
+      // `=>` inside a return type is not a closing angle bracket.
+      if (text[i - 1] !== '=') angle = Math.max(0, angle - 1)
+    } else if (ch === '{' && angle === 0) return i
+  }
+  return -1
 }
 
 /** Byte offsets [start, end) of `function <name>(` ... matching `}`, or null. */
 function functionSpan(text: string, functionName: string): [number, number] | null {
   const decl = new RegExp(`function\\s+${functionName}\\s*\\(`).exec(text)
   if (!decl) return null
-  const braceStart = text.indexOf('{', decl.index)
+  const braceStart = bodyBraceIndex(text, decl.index + decl[0].length - 1)
   if (braceStart === -1) return null
   let depth = 0
   for (let i = braceStart; i < text.length; i += 1) {

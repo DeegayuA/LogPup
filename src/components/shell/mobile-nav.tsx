@@ -73,13 +73,26 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
           data-slot="mobile-nav-content"
           className="fixed inset-y-0 left-0 z-50 flex h-svh w-72 max-w-[85vw] flex-col gap-4 border-r border-sidebar-border bg-sidebar p-4 text-sidebar-foreground outline-none duration-150 ease-out motion-reduce:transition-none data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-left data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-left"
         >
-          <div className="flex items-center justify-between gap-2">
-            <DialogTitle className="flex items-center gap-2.5 text-base">
+          {/* Same branding row as the desktop sidebar: LogPup left, the Alta
+              Vision mark pushed right. The close button still owns the far
+              right edge — it is the one control a thumb reaches for, so the
+              attribution mark yields to it rather than the other way round. */}
+          <div className="flex items-center gap-2">
+            <DialogTitle className="flex shrink-0 items-center gap-2.5 text-base">
               <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                 <PawPrint className="size-4" aria-hidden />
               </span>
               LogPup
             </DialogTitle>
+            <a
+              href="https://altavision.lk"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Alta Vision — opens altavision.lk in a new tab"
+              className="ml-auto inline-flex shrink-0 rounded-md opacity-80 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none motion-reduce:transition-none"
+            >
+              <AltaVisionLogo className="h-3 w-auto" />
+            </a>
             <DialogClose
               render={<Button variant="ghost" size="icon-sm" aria-label="Close navigation" />}
             >
@@ -130,29 +143,19 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
             ) : null}
           </nav>
 
-          {/* Same quiet parent-company sign-off as the desktop sidebar, so the
-              two shells say the same thing about who makes LogPup — now with
-              the version beside it.
+          {/* The version had exactly one home before this: the desktop sidebar
+              footer, which is `hidden md:flex`. On a phone there was therefore
+              NO way to answer "which build am I on?", which is the first
+              question any bug report needs. This is the same VersionBadge the
+              desktop footer renders (one component, one CURRENT_VERSION), so
+              the changelog comes along with it; if the nested popup ever
+              misbehaves inside this sheet the version string itself is still on
+              screen, because it is the trigger's own label.
 
-              The version had exactly one home before this: the desktop
-              sidebar footer, which is `hidden md:flex`. On a phone there was
-              therefore NO way to answer "which build am I on?", which is the
-              first question any bug report needs. This is the same
-              VersionBadge the desktop footer renders (one component, one
-              CURRENT_VERSION), so the changelog comes along with it; if the
-              nested popup ever misbehaves inside this sheet the version
-              string itself is still on screen, because it is the trigger's
-              own label. */}
-          <div className="flex items-center justify-between gap-2 border-t border-sidebar-border pt-3">
-            <a
-              href="https://altavision.lk"
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Alta Vision — opens altavision.lk in a new tab"
-              className="inline-flex rounded-md opacity-80 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none motion-reduce:transition-none"
-            >
-              <AltaVisionLogo className="h-4 w-auto" />
-            </a>
+              The Alta Vision mark used to sit beside it here; it now rides in
+              the branding row above, next to the paw it belongs with, and is
+              deliberately not repeated in a sheet this short. */}
+          <div className="flex items-center border-t border-sidebar-border pt-3">
             <VersionBadge />
           </div>
         </DialogPrimitive.Popup>

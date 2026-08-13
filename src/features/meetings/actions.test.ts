@@ -70,8 +70,14 @@ const { deleteMeeting } = await import('./actions')
 const MEETING_ID = '11111111-1111-4111-8111-111111111111'
 const CREATOR_ID = 'creator-1'
 
+const ADMIN_ID = 'admin-1'
+
 const asCreator = () => authMock.mockResolvedValue({ user: { id: CREATOR_ID, role: 'member' } })
 const asOther = () => authMock.mockResolvedValue({ user: { id: 'someone-else', role: 'member' } })
+// Deletion is admin-only, organiser or not — see the gate in deleteMeeting.
+// The creator is therefore NOT a sufficient actor for a delete test here, and
+// that is the one way this file differs from the edit/reschedule tests.
+const asAdmin = () => authMock.mockResolvedValue({ user: { id: ADMIN_ID, role: 'admin' } })
 
 function baseMeeting(overrides: Record<string, unknown> = {}) {
   return {
@@ -97,18 +103,31 @@ beforeEach(() => {
 })
 
 describe('deleteMeeting', () => {
-  it('rejects a caller who is neither the creator nor an admin, and writes nothing', async () => {
+  it('rejects a non-admin caller and writes nothing', async () => {
     asOther()
     meetingQueue = [[baseMeeting()]]
     const res = await deleteMeeting(MEETING_ID)
-    expect(res).toEqual({ ok: false, error: 'Not allowed' })
+    expect(res).toEqual({ ok: false, error: 'Only an admin can delete meetings' })
+    expect(writeSpy).not.toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(logActivityMock).not.toHaveBeenCalled()
+  })
+
+  // The organiser is the interesting rejection, not a random member: they may
+  // edit and reschedule this very meeting, so "can manage it" reads like "can
+  // delete it" until this test says otherwise.
+  it('rejects the meeting’s own creator when they are not an admin', async () => {
+    asCreator()
+    meetingQueue = [[baseMeeting()]]
+    const res = await deleteMeeting(MEETING_ID)
+    expect(res).toEqual({ ok: false, error: 'Only an admin can delete meetings' })
     expect(writeSpy).not.toHaveBeenCalled()
     expect(deleteSpy).not.toHaveBeenCalled()
     expect(logActivityMock).not.toHaveBeenCalled()
   })
 
   it('a second delete of an already-trashed meeting returns err and does no further write', async () => {
-    asCreator()
+    asAdmin()
     meetingQueue = [[baseMeeting()]]
     // isNull(deletedAt) guard matched nothing — someone else already trashed it.
     updateReturningQueue = [[]]
@@ -120,7 +139,7 @@ describe('deleteMeeting', () => {
   })
 
   it('marks the row deleted, still deletes the Google Calendar event, and never touches Blob storage', async () => {
-    asCreator()
+    asAdmin()
     meetingQueue = [[baseMeeting({ googleEventId: 'event-123' })]]
     userQueue = [[{ googleRefreshToken: 'refresh-xyz' }]]
     updateReturningQueue = [[{ id: MEETING_ID }]]
@@ -133,7 +152,7 @@ describe('deleteMeeting', () => {
     expect(deleteSpy).not.toHaveBeenCalled()
     expect(writeSpy).toHaveBeenCalledWith(
       meetings,
-      expect.objectContaining({ deletedAt: expect.any(Date), deletedBy: CREATOR_ID }),
+      expect.objectContaining({ deletedAt: expect.any(Date), deletedBy: ADMIN_ID }),
     )
     expect(logActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ verb: 'deleted', entityType: 'meeting', entityId: MEETING_ID }),

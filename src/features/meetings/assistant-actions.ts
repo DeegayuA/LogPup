@@ -5,13 +5,12 @@ import { format } from 'date-fns'
 import { and, asc, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
+import { liveMeetings, liveNoteSegments } from '@/db/live'
 import {
   meetingAiNotes,
   meetingFollowups,
-  meetingNoteSegments,
   meetingSpeakers,
   meetingTaskSuggestions,
-  meetings,
   users,
 } from '@/db/schema'
 import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
@@ -66,7 +65,7 @@ export async function askMeeting(
   }
   const { meetingId: id, question: asked } = parsed.data
 
-  const [meeting] = await db.select().from(meetings).where(eq(meetings.id, id))
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, id))
   if (!meeting) return err('Meeting not found')
   // Same gate as every other read of transcript-derived content: admin, the
   // meeting's creator, or someone who was actually there.
@@ -76,19 +75,33 @@ export async function askMeeting(
   // together (suggest-actions.ts's rule). On the Neon HTTP driver each await
   // is a full round trip, and this action sits between a spoken question and
   // its spoken answer, where every serial hop is audible dead air.
+  //
+  // Every child read below joins liveMeetings itself: meetingAiNotes,
+  // meetingTaskSuggestions, meetingFollowups and meetingSpeakers carry no
+  // deletedAt of their own (MEETING_CHILD_TABLES in src/db/live.ts), so a
+  // trashed meeting's children have to stop being readable along with it.
+  // The lookup above already turns a trashed meeting away; the joins keep
+  // that true if this batch is ever reordered or moved ahead of that gate.
   const [[notes], segments, actionItems, openFollowups, speakerMappings] = await Promise.all([
-    db.select().from(meetingAiNotes).where(eq(meetingAiNotes.meetingId, id)),
+    // Columns named instead of a bare select(): the liveMeetings join would
+    // otherwise nest the row under a table key, and only these two are ever
+    // read — the rest of meeting_ai_notes is jsonb this action never touches.
+    db
+      .select({ transcript: meetingAiNotes.transcript, summary: meetingAiNotes.summary })
+      .from(meetingAiNotes)
+      .innerJoin(liveMeetings, eq(meetingAiNotes.meetingId, liveMeetings.id))
+      .where(eq(meetingAiNotes.meetingId, id)),
     db
       .select({
-        source: meetingNoteSegments.source,
-        speakerLabel: meetingNoteSegments.speakerLabel,
+        source: liveNoteSegments.source,
+        speakerLabel: liveNoteSegments.speakerLabel,
         speakerName: users.name,
-        content: meetingNoteSegments.content,
+        content: liveNoteSegments.content,
       })
-      .from(meetingNoteSegments)
-      .leftJoin(users, eq(meetingNoteSegments.speakerId, users.id))
-      .where(eq(meetingNoteSegments.meetingId, id))
-      .orderBy(asc(meetingNoteSegments.startedAtMs), asc(meetingNoteSegments.createdAt))
+      .from(liveNoteSegments)
+      .leftJoin(users, eq(liveNoteSegments.speakerId, users.id))
+      .where(eq(liveNoteSegments.meetingId, id))
+      .orderBy(asc(liveNoteSegments.startedAtMs), asc(liveNoteSegments.createdAt))
       .limit(MAX_SEGMENTS),
     db
       .select({
@@ -98,11 +111,13 @@ export async function askMeeting(
         status: meetingTaskSuggestions.status,
       })
       .from(meetingTaskSuggestions)
+      .innerJoin(liveMeetings, eq(meetingTaskSuggestions.meetingId, liveMeetings.id))
       .leftJoin(users, eq(meetingTaskSuggestions.suggestedUserId, users.id))
       .where(eq(meetingTaskSuggestions.meetingId, id)),
     db
       .select({ person: meetingFollowups.personName, text: meetingFollowups.text })
       .from(meetingFollowups)
+      .innerJoin(liveMeetings, eq(meetingFollowups.sourceMeetingId, liveMeetings.id))
       .where(and(eq(meetingFollowups.sourceMeetingId, id), eq(meetingFollowups.status, 'open'))),
     // Speaker mappings, so a voice named by hand reaches the assistant too. A
     // typed name has no users row, so the join above leaves speakerName null
@@ -116,6 +131,7 @@ export async function askMeeting(
         displayName: meetingSpeakers.displayName,
       })
       .from(meetingSpeakers)
+      .innerJoin(liveMeetings, eq(meetingSpeakers.meetingId, liveMeetings.id))
       .leftJoin(users, eq(meetingSpeakers.userId, users.id))
       .where(eq(meetingSpeakers.meetingId, id)),
   ])

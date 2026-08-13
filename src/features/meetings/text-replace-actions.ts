@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
 import { and, asc, eq, ne } from 'drizzle-orm'
 import { db } from '@/db'
+import { liveMeetings, liveNoteSegments } from '@/db/live'
 import { meetingAiNotes, meetingNoteSegments, meetingTaskSuggestions } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -113,21 +114,31 @@ async function fetchTargets(meetingId: string): Promise<SearchTarget[]> {
   const [segments, [aiNotes], suggestions] = await Promise.all([
     db
       .select({
-        id: meetingNoteSegments.id,
-        source: meetingNoteSegments.source,
-        speakerLabel: meetingNoteSegments.speakerLabel,
-        content: meetingNoteSegments.content,
+        id: liveNoteSegments.id,
+        source: liveNoteSegments.source,
+        speakerLabel: liveNoteSegments.speakerLabel,
+        content: liveNoteSegments.content,
       })
-      .from(meetingNoteSegments)
-      .where(eq(meetingNoteSegments.meetingId, meetingId))
-      .orderBy(asc(meetingNoteSegments.createdAt), asc(meetingNoteSegments.startedAtMs)),
+      .from(liveNoteSegments)
+      .where(eq(liveNoteSegments.meetingId, meetingId))
+      .orderBy(asc(liveNoteSegments.createdAt), asc(liveNoteSegments.startedAtMs)),
     db
       .select({ summary: meetingAiNotes.summary })
       .from(meetingAiNotes)
+      // Unlike the segments above — which have a deletedAt of their own, hence
+      // liveNoteSegments — meetingAiNotes and meetingTaskSuggestions carry
+      // none: they are live iff the meeting is (see MEETING_CHILD_TABLES in
+      // src/db/live.ts). The join names that here rather than leaning on the
+      // callers' canManageMeeting gate, because this list doubles as the apply
+      // pass's authorization boundary: a trashed meeting's write-up and action
+      // items have to be unreachable as WRITE targets, not just as search hits.
+      .innerJoin(liveMeetings, eq(liveMeetings.id, meetingAiNotes.meetingId))
       .where(eq(meetingAiNotes.meetingId, meetingId)),
     db
       .select({ id: meetingTaskSuggestions.id, text: meetingTaskSuggestions.text })
       .from(meetingTaskSuggestions)
+      // Same meeting-liveness join as the write-up read above.
+      .innerJoin(liveMeetings, eq(liveMeetings.id, meetingTaskSuggestions.meetingId))
       .where(
         and(
           eq(meetingTaskSuggestions.meetingId, meetingId),

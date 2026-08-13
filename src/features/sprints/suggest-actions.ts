@@ -3,7 +3,8 @@
 import { z } from 'zod'
 import { and, desc, eq, ne } from 'drizzle-orm'
 import { db } from '@/db'
-import { meetingAiNotes, meetings, sprints, tasks } from '@/db/schema'
+import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { meetingAiNotes } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { callGemini } from '@/features/gemini/client'
@@ -54,23 +55,29 @@ export async function suggestSprint(appId: unknown): Promise<ActionResult<Sprint
   // never serialize what can run together.
   const [openTasks, pastSprints, recentNotes] = await Promise.all([
     db
-      .select({ title: tasks.title, status: tasks.status })
-      .from(tasks)
-      .where(and(eq(tasks.appId, parsedId.data), ne(tasks.status, 'done')))
-      .orderBy(desc(tasks.createdAt))
+      .select({ title: liveTasks.title, status: liveTasks.status })
+      .from(liveTasks)
+      .where(and(eq(liveTasks.appId, parsedId.data), ne(liveTasks.status, 'done')))
+      .orderBy(desc(liveTasks.createdAt))
       .limit(25),
     db
-      .select({ name: sprints.name, goal: sprints.goal })
-      .from(sprints)
-      .where(eq(sprints.appId, parsedId.data))
-      .orderBy(desc(sprints.startDate))
+      .select({ name: liveSprints.name, goal: liveSprints.goal })
+      .from(liveSprints)
+      .where(eq(liveSprints.appId, parsedId.data))
+      .orderBy(desc(liveSprints.startDate))
       .limit(5),
     db
-      .select({ title: meetings.title, summary: meetingAiNotes.summary })
+      .select({ title: liveMeetings.title, summary: meetingAiNotes.summary })
       .from(meetingAiNotes)
-      .innerJoin(meetings, eq(meetings.id, meetingAiNotes.meetingId))
-      .where(eq(meetings.appId, parsedId.data))
-      .orderBy(desc(meetings.startsAt))
+      // meetingAiNotes has no deletedAt of its own — live iff its meeting is
+      // (see MEETING_CHILD_TABLES in src/db/live.ts). Nothing gates this read
+      // per-meeting the way canManageMeeting gates the meeting surfaces, so
+      // the join is the only thing stopping a trashed meeting's write-up from
+      // steering the next sprint's goal — and every limit here is small
+      // enough that a few binned meetings could crowd out the live ones.
+      .innerJoin(liveMeetings, eq(liveMeetings.id, meetingAiNotes.meetingId))
+      .where(eq(liveMeetings.appId, parsedId.data))
+      .orderBy(desc(liveMeetings.startsAt))
       .limit(3),
   ])
 
