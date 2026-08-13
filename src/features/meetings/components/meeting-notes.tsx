@@ -242,10 +242,27 @@ export function MeetingAiNotes({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div
+      className={cn(
+        'grid gap-3',
+        // THIS is what Compact buys on a wide screen: two panels per row
+        // instead of one column of full-width cards with metres of empty
+        // gutter beside them. Tighter padding alone was a change you had to
+        // hunt for; halving the scroll length is not.
+        //
+        // `items-start` so a short panel keeps its own height rather than
+        // stretching to match whatever tall thing landed beside it — grid's
+        // default stretch is what makes two-column card layouts look broken.
+        compact && 'items-start lg:grid-cols-2',
+      )}
+    >
       {notes.summary ? (
         <Panel
           id="summary"
+          // Full width even in two-column mode. The summary is prose somebody
+          // reads start to finish; prose in a half-width column beside a list
+          // of action items is harder to read, not denser.
+          className={compact ? 'lg:col-span-2' : undefined}
           title="Summary"
           icon={Sparkles}
           // Reads exactly what is on screen — the language control below

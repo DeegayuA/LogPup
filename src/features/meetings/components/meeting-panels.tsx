@@ -20,6 +20,8 @@ import {
   ListChecks,
   MessageCircleQuestion,
   Repeat2,
+  Rows2Icon,
+  Rows4Icon,
   UserRound,
   Users,
   X,
@@ -240,6 +242,7 @@ export function Panel({
   count,
   kind,
   headerExtra,
+  className,
   children,
 }: {
   id: PanelId
@@ -256,6 +259,9 @@ export function Panel({
    *  switch on Record. Nesting a real button inside the toggle button would
    *  be invalid HTML and unreachable by keyboard past the outer button. */
   headerExtra?: ReactNode
+  /** Grid placement from the caller — a panel does not know how many columns
+   *  it is sitting in, so spanning is the layout's decision, not its own. */
+  className?: string
   children: ReactNode
 }) {
   const { openMap, setPanelOpen } = usePanels()
@@ -266,7 +272,12 @@ export function Panel({
   return (
     <section
       id={id}
-      className={cn('scroll-mt-24 rounded-lg border border-border bg-card', accent && 'border-l-2', accent)}
+      className={cn(
+        'scroll-mt-24 rounded-lg border border-border bg-card',
+        accent && 'border-l-2',
+        accent,
+        className,
+      )}
     >
       <div className="flex items-center gap-2 px-1 py-1">
         <h4 className="min-w-0 flex-1 font-heading">
@@ -404,6 +415,32 @@ function FilterChip({
   )
 }
 
+/**
+ * The two densities, each stating what it actually changes. "Compact" used to
+ * mean slightly tighter padding, which is a difference you have to hunt for;
+ * it now means two panels per row on a wide screen, which is the one worth
+ * naming in the hint.
+ */
+const DENSITY_OPTIONS = [
+  {
+    id: 'comfortable',
+    label: 'Comfortable',
+    hint: 'one panel per row, roomier spacing',
+    icon: Rows2Icon,
+  },
+  {
+    id: 'compact',
+    label: 'Compact',
+    hint: 'two panels per row on a wide screen, tighter spacing',
+    icon: Rows4Icon,
+  },
+] as const satisfies readonly {
+  id: Density
+  label: string
+  hint: string
+  icon: typeof Rows2Icon
+}[]
+
 function DensityToggle({ value, onChange }: { value: Density; onChange: (d: Density) => void }) {
   return (
     // role="group" + aria-label matches the same pattern already used for
@@ -411,18 +448,29 @@ function DensityToggle({ value, onChange }: { value: Density; onChange: (d: Dens
     // as-of-picker.tsx, meeting-rsvp.tsx, apps-browser.tsx) — kept identical
     // rather than introducing a one-off <fieldset> next to a dozen of these.
     <div className="inline-flex items-center rounded-md border border-border p-0.5" role="group" aria-label="Density">
-      {(['comfortable', 'compact'] as const).map((option) => (
+      {DENSITY_OPTIONS.map(({ id, label, hint, icon: Icon }) => (
         <button
-          key={option}
+          key={id}
           type="button"
-          aria-pressed={value === option}
-          onClick={() => onChange(option)}
+          aria-pressed={value === id}
+          // What the option DOES, for anyone who cannot see the two-column
+          // layout change — the icons differ by line count, which is a
+          // distinction a screen reader gets nothing from.
+          aria-label={`${label} — ${hint}`}
+          title={hint}
+          onClick={() => onChange(id)}
           className={cn(
-            'rounded px-2 py-1 text-2xs font-medium capitalize transition-colors duration-150 motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
-            value === option ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:text-foreground',
+            'inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium transition-colors duration-150 motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+            value === id
+              ? 'bg-secondary text-secondary-foreground'
+              : // Was text-muted-foreground, which on the card background sat
+                // close enough to the border to read as disabled rather than
+                // as the option you can switch to.
+                'text-foreground/70 hover:bg-muted/50 hover:text-foreground',
           )}
         >
-          {option}
+          <Icon className="size-3.5 shrink-0" aria-hidden />
+          {label}
         </button>
       ))}
     </div>
