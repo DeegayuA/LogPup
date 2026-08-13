@@ -15,7 +15,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { NavLink } from '@/components/shell/sidebar'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
+import { VersionBadge } from '@/components/shell/version-badge'
 import { adminNavItems, navItems } from '@/components/shell/nav-items'
+import { settingsNavItem } from '@/features/settings/nav'
 
 /**
  * Mobile navigation. Below `md` the persistent Sidebar is hidden entirely
@@ -101,6 +103,14 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
                 active={href === '/' ? pathname === '/' : pathname.startsWith(href)}
               />
             ))}
+            {/* Same single declaration the desktop sidebar renders — see the
+                comment there for why it isn't in navItems. */}
+            <NavLink
+              href={settingsNavItem.href}
+              label={settingsNavItem.label}
+              icon={settingsNavItem.icon}
+              active={pathname.startsWith(settingsNavItem.href)}
+            />
 
             {isAdmin ? (
               <div className="mt-6 flex flex-col gap-0.5">
@@ -121,8 +131,19 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
           </nav>
 
           {/* Same quiet parent-company sign-off as the desktop sidebar, so the
-              two shells say the same thing about who makes LogPup. */}
-          <div className="border-t border-sidebar-border pt-3">
+              two shells say the same thing about who makes LogPup — now with
+              the version beside it.
+
+              The version had exactly one home before this: the desktop
+              sidebar footer, which is `hidden md:flex`. On a phone there was
+              therefore NO way to answer "which build am I on?", which is the
+              first question any bug report needs. This is the same
+              VersionBadge the desktop footer renders (one component, one
+              CURRENT_VERSION), so the changelog comes along with it; if the
+              nested popup ever misbehaves inside this sheet the version
+              string itself is still on screen, because it is the trigger's
+              own label. */}
+          <div className="flex items-center justify-between gap-2 border-t border-sidebar-border pt-3">
             <a
               href="https://altavision.lk"
               target="_blank"
@@ -132,6 +153,7 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
             >
               <AltaVisionLogo className="h-4 w-auto" />
             </a>
+            <VersionBadge />
           </div>
         </DialogPrimitive.Popup>
       </DialogPortal>

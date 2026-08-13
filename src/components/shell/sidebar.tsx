@@ -9,6 +9,7 @@ import { VersionBadge } from '@/components/shell/version-badge'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { InstallButton } from '@/features/pwa/pwa'
 import { adminNavItems, navItems } from '@/components/shell/nav-items'
+import { settingsNavItem } from '@/features/settings/nav'
 
 // Exported so MobileNav (the mobile nav sheet) can render the exact same
 // link markup for the exact same nav-items.ts data — one implementation of
@@ -106,6 +107,18 @@ export function Sidebar({
             active={href === '/' ? pathname === '/' : pathname.startsWith(href)}
           />
         ))}
+        {/* Settings sits after the workspace destinations rather than inside
+            navItems, because navItems is shared data about the WORKSPACE and
+            this is the one row that is about you. It is still a single
+            declaration (features/settings/nav.ts) rendered by both nav
+            surfaces through the same NavLink, so the desktop sidebar and the
+            mobile sheet cannot drift. */}
+        <NavLink
+          href={settingsNavItem.href}
+          label={settingsNavItem.label}
+          icon={settingsNavItem.icon}
+          active={pathname.startsWith(settingsNavItem.href)}
+        />
       </div>
 
       {isAdmin ? (
