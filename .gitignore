@@ -51,7 +51,13 @@ next-env.d.ts
 /e2e/.auth/
 
 # Claude agent worktrees
-.claude/
+# Machine-local Claude state stays ignored, but PROJECT SKILLS are shared
+# knowledge and must travel with the repo (.claude/skills/*/SKILL.md).
+# .claude/ itself can't stay a blanket ignore: git cannot re-include a
+# child of an excluded directory, so the children are ignored one level
+# down instead.
+.claude/*
+!.claude/skills/
 
 # graphify internals (keep graph.json/report/html committed)
 graphify-out/.graphify_*
