@@ -10,6 +10,7 @@ import {
 } from '@/features/gemini/client'
 import { TTS_MODEL_FALLBACK_ORDER, TTS_VOICE } from '@/features/gemini/models'
 import { truncateForSpeech } from '@/features/speech/spoken-text'
+import { MAX_SPEECH_CHUNKS, chunkForSpeech } from '@/features/speech/chunk-speech'
 
 /**
  * Voice in / voice out for the UI, meeting-agnostic: dictation (short mic
@@ -82,30 +83,55 @@ export type SpokenAudio = {
   model: string
   /** True when only the first MAX_TTS_CHARS were spoken — the UI must say so. */
   truncated: boolean
+  /** How many chunks this text splits into; the client fetches 0..count-1. */
+  chunkCount: number
+  /** Which chunk this response carries. */
+  index: number
 }
 
 /**
- * Text → spoken audio on the Gemini TTS model chain (models.ts). The client
- * is responsible for playback (and for its own browser speechSynthesis
- * fallback when this fails — that fallback lives client-side because the
- * server has no speakers).
+ * Text → spoken audio on the Gemini TTS model chain (models.ts), ONE CHUNK
+ * at a time. The client is responsible for playback, for fetching the
+ * remaining chunks, and for its own browser speechSynthesis fallback when
+ * this fails — that fallback lives client-side because the server has no
+ * speakers.
+ *
+ * Chunked rather than whole-clip because a whole clip does not fit: a
+ * 1,140-character summary comes back as ~4.6MB of base64 in one Server
+ * Action response, past the ~4.5MB buffered-response ceiling, and every
+ * real stored summary measured was over it. See chunk-speech.ts for the
+ * numbers, and for why streaming was rejected. The split also means sound
+ * starts after the first ~450 characters rather than after the whole thing.
  */
-export async function synthesizeSpeech(text: string): Promise<ActionResult<SpokenAudio>> {
+export async function synthesizeSpeech(
+  text: string,
+  index: number = 0,
+): Promise<ActionResult<SpokenAudio>> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
   const parsed = speakInput.safeParse({ text })
   if (!parsed.success) return err('Nothing to read aloud')
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_SPEECH_CHUNKS) {
+    return err('Nothing to read aloud')
+  }
 
   const spokenText = truncateForSpeech(parsed.data.text)
   const truncated = spokenText.length < parsed.data.text.length
 
+  const chunks = chunkForSpeech(spokenText)
+  if (chunks.length === 0) return err('Nothing to read aloud')
+  const chunk = chunks[index]
+  // Asking past the end is a client bug, not a user error, but it must not
+  // reach Gemini as an empty prompt.
+  if (!chunk) return err('Nothing to read aloud')
+
   try {
-    const spoken = await callGeminiSpeech(session.user.id, spokenText, {
+    const spoken = await callGeminiSpeech(session.user.id, chunk, {
       models: TTS_MODEL_FALLBACK_ORDER,
       voiceName: TTS_VOICE,
     })
-    return ok({ ...spoken, truncated })
+    return ok({ ...spoken, truncated, chunkCount: chunks.length, index })
   } catch (error) {
     if (error instanceof GeminiError) return err(error.message)
     return err('Could not generate speech — try again')
