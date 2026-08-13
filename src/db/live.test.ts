@@ -110,6 +110,16 @@ const ALLOWLIST: readonly string[] = [
   // rows too, so trashing the last typed segment doesn't resurrect the legacy
   // notes blob.
   'src/features/meetings/legacy-notes.ts',
+
+  // why: the meeting-keyframes proxy route's admin-preview exception. An
+  // admin has to be able to preview a trashed keyframe from the admin Trash
+  // card, and a non-admin's "is the MEETING trashed" check needs the real
+  // meetings row too — liveScreenshots/liveMeetings would filter a
+  // soft-deleted row out before the route ever got a chance to look at it.
+  // The actual authorization decision is the pure canServeKeyframe function
+  // (src/features/meetings/keyframe-access.ts, unit tested directly in
+  // keyframe-access.test.ts); this raw read only gathers the facts it needs.
+  'src/app/api/meeting-keyframes/[...path]/route.ts',
 ]
 const allowlistSet = new Set(ALLOWLIST)
 
