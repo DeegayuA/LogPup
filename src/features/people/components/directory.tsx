@@ -2,7 +2,15 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronRight, PawPrint, Search, ShieldCheck } from 'lucide-react'
+import {
+  ChevronRight,
+  CircleDashed,
+  CircleDot,
+  History,
+  PawPrint,
+  Search,
+  ShieldCheck,
+} from 'lucide-react'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +26,14 @@ import {
 import { cn } from '@/lib/utils'
 import { ContactButtons } from '@/components/contact-buttons'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
+import {
+  RECENT_DAYS,
+  actionSentence,
+  nowHeadline,
+  overdueCount,
+  recentSummary,
+  type PersonNow,
+} from '@/features/people/now'
 import type { UserCapacity } from '@/features/people/queries'
 
 type SortKey = 'name' | 'load-desc' | 'load-asc'
@@ -29,7 +45,80 @@ const SORT_LABEL: Record<SortKey, string> = {
 }
 
 /** Sortable, org-filterable directory rows for the People page. */
-export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
+/**
+ * The two lines that turn a capacity list into a work list: what someone is on
+ * right now, and what they have actually been doing.
+ *
+ * Both are deliberately quiet — this is a directory, and a row that shouts
+ * stops being scannable. The ONE thing allowed to raise its voice is overdue
+ * work, because that is the only state on the row a reader has to act on.
+ */
+function PersonNowLines({ now, todayIso }: { now?: PersonNow; todayIso: string }) {
+  const doing = now?.doing ?? []
+  const recent = now?.recent ?? []
+  const headline = nowHeadline(doing, todayIso)
+  const late = overdueCount(doing, todayIso)
+  const history = recentSummary(recent)
+
+  return (
+    <span className="mt-0.5 flex flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5 truncate text-xs">
+        {headline ? (
+          <>
+            <CircleDot className="size-3 shrink-0 text-primary" aria-hidden />
+            <span className="sr-only">Working on: </span>
+            <span className="truncate text-foreground">{headline}</span>
+            {/* A word, not just the amber — the row's only urgent state must
+                not be carried by colour alone (WCAG 1.4.1). */}
+            {late > 0 ? (
+              <span className="shrink-0 font-medium text-warning">
+                <span className="font-mono tabular-nums">{late}</span> overdue
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <CircleDashed className="size-3 shrink-0 text-muted-foreground/60" aria-hidden />
+            {/* Said plainly rather than left blank: an empty line reads as
+                missing data, and "nothing in progress" is a real answer. */}
+            <span className="text-muted-foreground">Nothing in progress</span>
+          </>
+        )}
+      </span>
+      <span className="flex min-w-0 items-center gap-1.5 truncate text-2xs text-muted-foreground">
+        <History className="size-3 shrink-0" aria-hidden />
+        {history ? (
+          <>
+            <span className="sr-only">Recently: </span>
+            {/* The counts first — they are the scannable part — then the most
+                recent thing in full, which is what makes the row concrete. */}
+            <span className="shrink-0">{history}</span>
+            <span aria-hidden>·</span>
+            <span className="truncate">{actionSentence(recent[0])}</span>
+          </>
+        ) : (
+          <span>No recorded activity in the last {RECENT_DAYS} days</span>
+        )}
+      </span>
+    </span>
+  )
+}
+
+export function PeopleDirectory({
+  people,
+  now = {},
+  todayIso,
+}: {
+  people: UserCapacity[]
+  /**
+   * Per-person current work and recent history, keyed by user id. Optional and
+   * defaulting to empty so the directory still renders if a caller has not
+   * fetched it — the rows simply say so rather than the page failing.
+   */
+  now?: Record<string, PersonNow>
+  /** Resolved server-side in the business timezone; never `new Date()` here. */
+  todayIso: string
+}) {
   const [sort, setSort] = useState<SortKey>('name')
   const [org, setOrg] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -229,6 +318,7 @@ export function PeopleDirectory({ people }: { people: UserCapacity[] }) {
                 <span className="truncate text-xs text-muted-foreground">
                   {user.title ?? 'No title yet'}
                 </span>
+                <PersonNowLines now={now[user.id]} todayIso={todayIso} />
               </div>
               {user.orgTags.length > 0 ? (
                 <div className="hidden items-center gap-1 md:flex">

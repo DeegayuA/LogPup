@@ -1,9 +1,10 @@
 import { cache } from 'react'
-import { and, asc, desc, eq, gt, gte, ilike, isNull, lte, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
 import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import {
+  activityLog,
   apps,
   assignmentHistory,
   assignments,
@@ -11,6 +12,12 @@ import {
   meetingFollowups,
   users,
 } from '@/db/schema'
+import {
+  EMPTY_NOW,
+  RECENT_ACTIONS,
+  RECENT_DAYS,
+  type PersonNow,
+} from '@/features/people/now'
 import { summarizeAllocations } from '@/features/people/allocation'
 import {
   allocationTotalSeries,
@@ -856,3 +863,116 @@ export const getPersonMeetings = cache(async function getPersonMeetings(userId: 
 
   return { ...splitPersonMeetings(rows, now), now }
 })
+
+/**
+ * "What is everyone doing now, and what have they been doing?" for the whole
+ * directory, in TWO queries — never one per person.
+ *
+ * The directory renders every member of the workspace, so anything shaped as a
+ * per-person call is an N+1 the moment the team grows. getPersonWorkload and
+ * getPersonActivity already answer richer versions of these questions for ONE
+ * person on their own page; this is the batched, deliberately thinner pair the
+ * list needs.
+ *
+ * NOW is in-progress tasks only — see the note on now.ts for why the todo
+ * backlog is excluded rather than folded in.
+ *
+ * HISTORY is the activity log, windowed per person with row_number() so each
+ * one gets their own most recent handful. A plain `limit` here would return
+ * the busiest person's actions and nothing for anybody else.
+ */
+export const getPeopleNow = cache(async function getPeopleNow(
+  userIds: string[],
+): Promise<Record<string, PersonNow>> {
+  if (userIds.length === 0) return {}
+
+  const since = new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000)
+
+  // Ranked in a subquery, then filtered on the rank — Postgres forbids a
+  // window function in WHERE, since windows are computed after it.
+  const ranked = db
+    .select({
+      id: activityLog.id,
+      actorId: activityLog.actorId,
+      verb: activityLog.verb,
+      entityType: activityLog.entityType,
+      entityLabel: activityLog.entityLabel,
+      appName: activityLog.appName,
+      detail: activityLog.detail,
+      pagePath: activityLog.pagePath,
+      at: activityLog.createdAt,
+      rank: sql<number>`row_number() over (
+        partition by ${activityLog.actorId}
+        order by ${activityLog.createdAt} desc
+      )`.as('rank'),
+    })
+    .from(activityLog)
+    .where(and(inArray(activityLog.actorId, userIds), gte(activityLog.createdAt, since)))
+    .as('ranked')
+
+  const [taskRows, actionRows] = await Promise.all([
+    db
+      .select({
+        id: liveTasks.id,
+        assigneeId: liveTasks.assigneeId,
+        title: liveTasks.title,
+        appName: apps.name,
+        appSlug: apps.slug,
+        sprintName: liveSprints.name,
+        dueDate: liveTasks.dueDate,
+        priority: liveTasks.priority,
+      })
+      .from(liveTasks)
+      .leftJoin(apps, eq(liveTasks.appId, apps.id))
+      .leftJoin(liveSprints, eq(liveTasks.sprintId, liveSprints.id))
+      .where(
+        and(
+          inArray(liveTasks.assigneeId, userIds),
+          eq(liveTasks.status, 'in_progress'),
+        ),
+      ),
+    db.select().from(ranked).where(lte(ranked.rank, RECENT_ACTIONS)).orderBy(desc(ranked.at)),
+  ])
+
+  const byUser: Record<string, PersonNow> = {}
+  const forUser = (userId: string): PersonNow => {
+    const existing = byUser[userId]
+    if (existing) return existing
+    const fresh: PersonNow = { doing: [], recent: [] }
+    byUser[userId] = fresh
+    return fresh
+  }
+
+  for (const row of taskRows) {
+    // assigneeId is non-null by the WHERE above; the column is nullable in the
+    // schema (an unassigned task) so TypeScript cannot know that.
+    if (!row.assigneeId) continue
+    forUser(row.assigneeId).doing.push({
+      id: row.id,
+      title: row.title,
+      appName: row.appName,
+      appSlug: row.appSlug,
+      sprintName: row.sprintName,
+      dueDate: row.dueDate,
+      priority: row.priority,
+    })
+  }
+
+  for (const row of actionRows) {
+    forUser(row.actorId).recent.push({
+      id: row.id,
+      verb: row.verb,
+      entityType: row.entityType,
+      entityLabel: row.entityLabel,
+      appName: row.appName,
+      detail: row.detail,
+      pagePath: row.pagePath,
+      at: row.at,
+    })
+  }
+
+  return byUser
+})
+
+/** The shared empty value, so callers never branch on a missing key. */
+export { EMPTY_NOW }
