@@ -34,7 +34,11 @@ import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingNotesDialog } from '@/features/meetings/components/meeting-notes-dialog'
 import { dayKeyToDate, moveMeetingToDay } from '@/features/meetings/reschedule'
 import type { MeetingSummary } from '@/features/meetings/queries'
-import { eventColorClasses } from '@/features/meetings/event-color'
+import {
+  eventFadedClasses,
+  eventSolidClasses,
+  meetingColorKey,
+} from '@/features/meetings/event-color'
 
 /*
  * Chip colour encodes STATE FIRST, then identity.
@@ -68,10 +72,15 @@ import { eventColorClasses } from '@/features/meetings/event-color'
  * `appId` is optional so a caller with no app in scope keeps the neutral
  * chip rather than being forced to invent one.
  */
-export function chipTone(isPast: boolean, isLive: boolean, appId?: string | null): string {
-  if (isLive) return 'border-l-primary bg-primary/10 text-foreground'
-  if (isPast) return 'border-l-border bg-muted/50 text-muted-foreground'
-  return eventColorClasses(appId) ?? 'border-l-muted-foreground/40 bg-card text-foreground'
+export function chipTone(isPast: boolean, isLive: boolean, colorKey?: string | null): string {
+  // Color is the meeting's PEOPLE (meetingColorKey): the same crew's standup
+  // and retro wear the same hue. State rides on top — a live meeting keeps
+  // its team color and gains a ring, a past one keeps the hue faded — and is
+  // always also said in words (chipLabel), never carried by color alone.
+  const solid = eventSolidClasses(colorKey) ?? 'border-muted-foreground/40 bg-card text-foreground'
+  if (isLive) return cn(solid, 'ring-2 ring-ring ring-offset-1 ring-offset-background')
+  if (isPast) return eventFadedClasses(colorKey) ?? 'border-transparent bg-muted/50 text-muted-foreground'
+  return solid
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -607,14 +616,13 @@ function ChipFace({ entry, isLive = false }: { entry: Entry; isLive?: boolean })
   return (
     <div
       className={cn(
-        'flex min-w-0 flex-col rounded-sm border-l-2 px-1.5 py-1 text-left',
-        chipTone(isPast, isLive, meeting.appId),
+        'flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-1.5 py-1 text-left',
+        chipTone(isPast, isLive, meetingColorKey(meeting)),
       )}
     >
       <span className="min-w-0 truncate text-xs font-medium">{meeting.title}</span>
-      <span className="flex w-full min-w-0 items-center gap-1 text-xs text-muted-foreground">
-        <span className="shrink-0 font-mono">{format(meeting.startsAt, 'h:mm a')}</span>
-        {meeting.appName ? <span className="min-w-0 truncate">· {meeting.appName}</span> : null}
+      <span className="shrink-0 font-mono text-2xs opacity-85">
+        {format(meeting.startsAt, 'h:mm a')}
       </span>
     </div>
   )
@@ -678,10 +686,10 @@ function MeetingChip({
         onOpen(meeting.id)
       }}
       className={cn(
-        'flex min-w-0 flex-col rounded-sm border-l-2 px-1.5 py-1 text-left',
-        'transition-colors duration-150 hover:brightness-95 motion-reduce:transition-none',
+        'flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-1.5 py-1 text-left',
+        'transition-[filter] duration-150 hover:brightness-110 motion-reduce:transition-none',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        chipTone(isPast, isLive, meeting.appId),
+        chipTone(isPast, isLive, meetingColorKey(meeting)),
         draggable && 'cursor-grab active:cursor-grabbing',
         // The chip stays in place as a ghost while its overlay copy follows
         // the pointer, so the day's layout doesn't jump mid-drag.
@@ -689,20 +697,16 @@ function MeetingChip({
       )}
     >
       <span className="sr-only">{chipLabel(meeting, isPast, isLive)}</span>
-      {/* The app name and the time are visible text, never encoded in the
-          chip's colour: colour here says only which state the meeting is in
-          (running / upcoming / over), and the accessible label above says the
-          same thing in words (WCAG 1.4.1). Both were 11px — below the
-          practical floor for muted text — and are now 12px. */}
+      {/* Color says WHO (the attendee set — same crew, same hue); the title,
+          time, app name and state all remain words in the accessible label
+          above, so nothing is carried by color alone (WCAG 1.4.1). The app
+          name left the visible line when the pill went single-line — it
+          stays one focus away in the details panel. */}
       <span aria-hidden className="min-w-0 truncate text-xs font-medium">
         {meeting.title}
       </span>
-      <span
-        aria-hidden
-        className="flex w-full min-w-0 items-center gap-1 text-xs text-muted-foreground"
-      >
-        <span className="shrink-0 font-mono">{format(meeting.startsAt, 'h:mm a')}</span>
-        {meeting.appName ? <span className="min-w-0 truncate">· {meeting.appName}</span> : null}
+      <span aria-hidden className="shrink-0 font-mono text-2xs opacity-85">
+        {format(meeting.startsAt, 'h:mm a')}
       </span>
     </button>
   )

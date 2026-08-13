@@ -5,6 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatBusinessMonthYear } from '@/features/people/format-instant'
 import { telHref, waHref } from '@/lib/phone'
+import { cn } from '@/lib/utils'
+import { eventDotClasses } from '@/features/meetings/event-color'
 import type { PersonOverview } from '@/features/people/queries'
 
 /**
@@ -105,6 +107,15 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
                     className="font-normal"
                     render={<Link href={`/apps/${entry.slug}`} />}
                   >
+                    {/* The app's event hue — the same dot its meetings wear
+                        on the calendar and its chip wears in the directory. */}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'size-2 shrink-0 rounded-full',
+                        eventDotClasses(entry.appId) ?? 'bg-muted-foreground/50',
+                      )}
+                    />
                     {entry.appName}
                     {/* Per-project role: the same person can be a manager on
                         one app and a reviewer on another. */}

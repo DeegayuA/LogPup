@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { ContactButtons } from '@/components/contact-buttons'
+import { eventDotClasses } from '@/features/meetings/event-color'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import {
   RECENT_DAYS,
@@ -334,25 +335,36 @@ export function PeopleDirectory({
                   ) : null}
                 </div>
               ) : null}
-              <span className="hidden max-w-56 truncate text-xs text-muted-foreground lg:block">
+              <span className="hidden max-w-md items-center gap-1.5 overflow-hidden text-xs text-muted-foreground lg:flex">
                 {breakdown.length > 0 ? (
                   <>
-                    {breakdown.slice(0, 2).map((b, i) => (
-                      <span key={b.appName}>
-                        {i > 0 ? ' · ' : ''}
-                        {b.appName}
-                        {/* The PER-PROJECT role — the same person is a
-                            manager on one app and a reviewer on another,
-                            so the role belongs to the pairing, not the
-                            person. */}
-                        {b.role ? (
-                          <span className="text-muted-foreground/80"> — {b.role}</span>
-                        ) : null}{' '}
-                        <span className="font-mono tabular-nums">{b.allocationPct}%</span>
+                    {breakdown.slice(0, 2).map((b) => (
+                      /* One chip per project, each wearing ITS color — the
+                         dot is the app's event hue, the same one its
+                         meetings wear on the calendar, so "the amber one"
+                         means the same thing everywhere. The role is the
+                         PER-PROJECT one: a manager on one app is a reviewer
+                         on another, so it belongs to the pairing. */
+                      <span
+                        key={b.appId}
+                        className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-1.5 py-0.5"
+                      >
+                        <span
+                          aria-hidden
+                          className={cn(
+                            'size-2 shrink-0 rounded-full',
+                            eventDotClasses(b.appId) ?? 'bg-muted-foreground/50',
+                          )}
+                        />
+                        <span className="truncate text-foreground">{b.appName}</span>
+                        {b.role ? <span className="truncate">· {b.role}</span> : null}
+                        <span className="shrink-0 font-mono tabular-nums">{b.allocationPct}%</span>
                       </span>
                     ))}
                     {breakdown.length > 2 ? (
-                      <span className="font-mono tabular-nums"> +{breakdown.length - 2}</span>
+                      <span className="shrink-0 font-mono tabular-nums">
+                        +{breakdown.length - 2}
+                      </span>
                     ) : null}
                   </>
                 ) : (

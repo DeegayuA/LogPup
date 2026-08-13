@@ -4,6 +4,9 @@ import {
   eventColorClasses,
   eventColorSlot,
   eventDotClasses,
+  eventFadedClasses,
+  eventSolidClasses,
+  meetingColorKey,
 } from './event-color'
 
 const APP_A = '11111111-1111-4111-8111-111111111111'
@@ -75,5 +78,53 @@ describe('eventColorClasses', () => {
     const slot = eventColorSlot(APP_A)
     expect(eventColorClasses(APP_A)).toContain(`event-${slot}`)
     expect(eventDotClasses(APP_A)).toBe(`bg-event-${slot}`)
+  })
+})
+
+describe('meetingColorKey', () => {
+  it('ignores attendee order — the same people are the same team', () => {
+    const a = meetingColorKey({ attendees: [{ id: 'u2' }, { id: 'u1' }, { id: 'u3' }] })
+    const b = meetingColorKey({ attendees: [{ id: 'u1' }, { id: 'u3' }, { id: 'u2' }] })
+    expect(a).toBe(b)
+  })
+
+  it('so two meetings of one crew land on one slot', () => {
+    const standup = meetingColorKey({ attendees: [{ id: 'u1' }, { id: 'u2' }] })
+    const retro = meetingColorKey({ attendees: [{ id: 'u2' }, { id: 'u1' }] })
+    expect(eventColorSlot(standup)).toBe(eventColorSlot(retro))
+  })
+
+  it('distinguishes different sets', () => {
+    expect(meetingColorKey({ attendees: [{ id: 'u1' }] })).not.toBe(
+      meetingColorKey({ attendees: [{ id: 'u2' }] }),
+    )
+  })
+
+  it('falls back to the app, then to neutral', () => {
+    expect(meetingColorKey({ attendees: [], appId: APP_A })).toBe(APP_A)
+    expect(meetingColorKey({ attendees: [] })).toBeNull()
+    expect(meetingColorKey({})).toBeNull()
+  })
+})
+
+describe('solid and faded pill classes', () => {
+  it('returns literal classes Tailwind can find, with inverted text on solids', () => {
+    const key = meetingColorKey({ attendees: [{ id: 'u1' }, { id: 'u2' }] }) as string
+    expect(eventSolidClasses(key)).toMatch(/^border-event-[1-8] bg-event-[1-8] text-background$/)
+    expect(eventFadedClasses(key)).toMatch(
+      /^border-transparent bg-event-[1-8]\/20 text-muted-foreground$/,
+    )
+  })
+
+  it('keeps one hue across solid, faded and dot for the same key', () => {
+    const key = meetingColorKey({ attendees: [{ id: 'u9' }] }) as string
+    const slot = eventColorSlot(key)
+    expect(eventSolidClasses(key)).toContain(`event-${slot}`)
+    expect(eventFadedClasses(key)).toContain(`event-${slot}`)
+  })
+
+  it('returns null for a keyless meeting so callers keep the neutral chip', () => {
+    expect(eventSolidClasses(null)).toBeNull()
+    expect(eventFadedClasses(null)).toBeNull()
   })
 })

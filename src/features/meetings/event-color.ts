@@ -49,6 +49,25 @@ export function eventColorSlot(appId: string | null | undefined): number | null 
 }
 
 /**
+ * The color identity of a meeting on the calendar: WHO IS IN IT. Sorted so
+ * attendee order (storage order, not meaning) can never give one team two
+ * colors — the standup and the retro of the same people wear the same hue,
+ * and the month grid reads as "the blue meetings are that crew" without a
+ * legend. Ids rather than names, so a rename does not recolor a team.
+ *
+ * Falls back to the app id for a meeting whose attendees are not loaded,
+ * and to null (the neutral chip) when there is neither.
+ */
+export function meetingColorKey(meeting: {
+  attendees?: readonly { id: string }[]
+  appId?: string | null
+}): string | null {
+  const ids = meeting.attendees?.map((a) => a.id)
+  if (ids && ids.length > 0) return [...ids].sort().join('|')
+  return meeting.appId ?? null
+}
+
+/**
  * The full class string for a coloured event block.
  *
  * Written out per slot rather than interpolated (`bg-event-${n}/12`) because
@@ -95,4 +114,50 @@ export function eventColorClasses(appId: string | null | undefined): string | nu
 export function eventDotClasses(appId: string | null | undefined): string | null {
   const slot = eventColorSlot(appId)
   return slot === null ? null : EVENT_DOT_CLASSES[slot]
+}
+
+/**
+ * SOLID pill for the month grid — the Notion-calendar look the team asked
+ * for: saturated ground, inverted text.
+ *
+ * `text-background` rather than white on purpose: the event tokens are
+ * L 0.5 in light theme (near-white text passes) but L 0.74 in dark theme,
+ * where white FAILS contrast — and `background` is exactly the color that
+ * inverts correctly against both (near-white in light, near-black in dark).
+ */
+const EVENT_SOLID_CLASSES: Record<number, string> = {
+  1: 'border-event-1 bg-event-1 text-background',
+  2: 'border-event-2 bg-event-2 text-background',
+  3: 'border-event-3 bg-event-3 text-background',
+  4: 'border-event-4 bg-event-4 text-background',
+  5: 'border-event-5 bg-event-5 text-background',
+  6: 'border-event-6 bg-event-6 text-background',
+  7: 'border-event-7 bg-event-7 text-background',
+  8: 'border-event-8 bg-event-8 text-background',
+}
+
+/**
+ * The same hue with the volume turned down, for meetings that are over —
+ * identity stays readable (the crew is still the crew last week) but a past
+ * day never outshouts an upcoming one.
+ */
+const EVENT_FADED_CLASSES: Record<number, string> = {
+  1: 'border-transparent bg-event-1/20 text-muted-foreground',
+  2: 'border-transparent bg-event-2/20 text-muted-foreground',
+  3: 'border-transparent bg-event-3/20 text-muted-foreground',
+  4: 'border-transparent bg-event-4/20 text-muted-foreground',
+  5: 'border-transparent bg-event-5/20 text-muted-foreground',
+  6: 'border-transparent bg-event-6/20 text-muted-foreground',
+  7: 'border-transparent bg-event-7/20 text-muted-foreground',
+  8: 'border-transparent bg-event-8/20 text-muted-foreground',
+}
+
+export function eventSolidClasses(key: string | null | undefined): string | null {
+  const slot = eventColorSlot(key)
+  return slot === null ? null : EVENT_SOLID_CLASSES[slot]
+}
+
+export function eventFadedClasses(key: string | null | undefined): string | null {
+  const slot = eventColorSlot(key)
+  return slot === null ? null : EVENT_FADED_CLASSES[slot]
 }
