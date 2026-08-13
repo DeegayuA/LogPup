@@ -1,5 +1,13 @@
 import type { ComponentType } from 'react'
-import { AppWindow, CalendarDays, History, LayoutDashboard, ShieldCheck, Users } from 'lucide-react'
+import {
+  AppWindow,
+  CalendarDays,
+  History,
+  LayoutDashboard,
+  NotebookPen,
+  ShieldCheck,
+  Users,
+} from 'lucide-react'
 
 export type NavItem = {
   href: string
@@ -15,6 +23,10 @@ export type NavItem = {
 // keeping their own copies, so the two can't drift out of sync.
 export const navItems: NavItem[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard, key: 'D' },
+  // Second, and high on purpose: this is the one page somebody is asked to
+  // open every working day, and a daily habit buried under Activity is a
+  // daily habit nobody forms.
+  { href: '/worklog', label: 'Work log', icon: NotebookPen, key: 'W' },
   { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
   { href: '/people', label: 'People', icon: Users, key: 'P' },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },
