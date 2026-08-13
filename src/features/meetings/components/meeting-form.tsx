@@ -80,7 +80,9 @@ type FormState = {
 
 function emptyState(defaultAppId?: string, startAt?: Date): FormState {
   // A slot the person clicked is already an exact time — round only the
-  // "right now" default, which is never on a step boundary.
+  // "right now" default, which is never on a step boundary. Callers that
+  // only know a DAY (the month grid's empty-cell click) put a sensible time
+  // on it before calling, rather than this guessing one back out of a date.
   const start = startAt ?? roundUpToStep(new Date())
   return {
     appId: defaultAppId ?? '',
@@ -203,19 +205,23 @@ export function MeetingForm({
   apps,
   activeUsers,
   defaultAppId,
+  defaultStart,
   trigger,
   defaultOpen,
-  defaultStart,
   onOpenChange: onOpenChangeProp,
   editing,
 }: {
   apps: { id: string; name: string }[]
   activeUsers: ActiveUser[]
   defaultAppId?: string
-  trigger: ReactElement
-  defaultOpen?: boolean
-  /** Pre-fill the start time — set when a calendar slot is what opened this. */
+  /** Pre-fill the start time (and, one hour later, the end) — set when a
+   *  calendar slot or day cell is what opened this. */
   defaultStart?: Date
+  /** Omit for a caller that opens this form itself with no visible trigger of
+   *  its own — the calendar mounts one keyed `MeetingForm` for the slot that
+   *  was clicked and passes `defaultOpen` instead. */
+  trigger?: ReactElement
+  defaultOpen?: boolean
   /** Told whenever the dialog opens or closes, so a caller holding the slot that
    *  opened it can drop that slot again on close. */
   onOpenChange?: (open: boolean) => void
@@ -238,6 +244,13 @@ export function MeetingForm({
   const [quickAdd, setQuickAdd] = useState('')
   const [settled, setSettled] = useState('')
 
+  // No render-time "did `open` change?" sync here on purpose. `open` is this
+  // component's own state, so every open/close goes through handleOpenChange
+  // below, which reseeds the fields from the truth — and it knows whether it
+  // is reseeding a blank create or the meeting being edited, which a
+  // render-time sync watching a bare boolean does not. A caller that wants a
+  // form seeded differently mounts a new one under a new `key` (the calendar
+  // does, per clicked slot) rather than driving an `open` prop.
   useEffect(() => {
     const timer = setTimeout(() => setSettled(quickAdd), QUICK_ADD_DEBOUNCE_MS)
     return () => clearTimeout(timer)
@@ -493,7 +506,7 @@ export function MeetingForm({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={trigger} />
+      {trigger ? <DialogTrigger render={trigger} /> : null}
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{editing ? 'Edit meeting' : 'New meeting'}</DialogTitle>

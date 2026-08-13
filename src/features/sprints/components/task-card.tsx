@@ -1,12 +1,29 @@
 'use client'
 
-import { useRef, type CSSProperties, type PointerEventHandler } from 'react'
+import {
+  useRef,
+  useState,
+  useTransition,
+  type CSSProperties,
+  type PointerEventHandler,
+} from 'react'
+import { useRouter } from 'next/navigation'
 import { useSortable } from '@dnd-kit/sortable'
 import { CalendarClock, GripVertical } from 'lucide-react'
 import { format } from 'date-fns'
+import { toast } from 'sonner'
+import { CardQuickMenu, type QuickMenuItem } from '@/components/shared/card-quick-menu'
+import { InlineRename } from '@/components/shared/inline-rename'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/utils'
-import { PRIORITY_LABEL, isDueToday, isOverdue } from '@/features/sprints/board-view'
+import {
+  PRIORITY_LABEL,
+  STATUS_LABEL,
+  TASK_STATUSES,
+  isDueToday,
+  isOverdue,
+} from '@/features/sprints/board-view'
+import { deleteTask, updateTask } from '@/features/sprints/task-actions'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 
 // Priority 0 (none) draws nothing; the ramp climbs sage → ember → destructive
@@ -23,6 +40,18 @@ const PRIORITY_BAR: Record<number, string | null> = {
  *  actually travelled. */
 export const DRAG_ACTIVATION_DISTANCE = 8
 
+/**
+ * `PRIORITY_LABEL` is written for the card face, where the surrounding column
+ * and colour bar supply the noun ("High"). A menu item has no such context,
+ * so put the noun back — except on 0, which is already a whole phrase. One
+ * shared map, two readings, rather than a second copy of the labels here that
+ * would drift the first time a level is renamed.
+ */
+function priorityMenuLabel(value: number): string {
+  const label = PRIORITY_LABEL[value]
+  return value === 0 ? label : `${label} priority`
+}
+
 /** A `date` column is a calendar day, not an instant. `new Date('2026-08-14')`
  *  parses as UTC midnight and renders as the 13th west of Greenwich; noon is
  *  far enough from either boundary to survive any offset. Same rule as
@@ -36,15 +65,29 @@ function formatDueDate(iso: string): string {
  * one definition, so the thing under the cursor can never drift from the
  * thing in the column.
  */
-function CardFace({ task, todayIso }: { task: TaskWithAssignee; todayIso: string }) {
+function CardFace({
+  task,
+  todayIso,
+  /** The real card renders the title itself when the user may rename it in
+   *  place (the rename control cannot live inside the card's open-button —
+   *  see TaskCard). Dropping the title here keeps ONE face rather than a
+   *  second, forked copy for editable cards. */
+  hideTitle,
+}: {
+  task: TaskWithAssignee
+  todayIso: string
+  hideTitle?: boolean
+}) {
   const overdue = isOverdue(task, todayIso)
   const dueToday = isDueToday(task, todayIso)
 
   return (
     <>
-      <p className="line-clamp-2 text-sm leading-snug font-medium text-card-foreground">
-        {task.title}
-      </p>
+      {hideTitle ? null : (
+        <p className="line-clamp-2 text-sm leading-snug font-medium text-card-foreground">
+          {task.title}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         {task.dueDate ? (
           <span
@@ -125,6 +168,8 @@ export function TaskCardFace({
 export function TaskCard({
   task,
   draggable,
+  isAdmin,
+  team,
   selected,
   selectionMode,
   todayIso,
@@ -132,7 +177,18 @@ export function TaskCard({
   onToggleSelect,
 }: {
   task: TaskWithAssignee
+  /** Whether THIS user may move/edit/reassign this specific card — the same
+      `canMoveTask` check the board already uses to decide draggability, and
+      the quick menu's assign/priority/status items respect the identical
+      gate rather than a separate rule. */
   draggable: boolean
+  /** Deleting is the one card action that is not covered by `draggable`: an
+   *  assignee may move and re-prioritise their own card but never destroy
+   *  it, which is exactly what `deleteTask` enforces server-side. */
+  isAdmin: boolean
+  /** The roster the quick menu's reassign items are built from, so a card can
+   *  change hands without opening the dialog. */
+  team: { userId: string; name: string }[]
   selected: boolean
   /** True once anything is selected: checkboxes are permanently visible while
    *  a selection exists, so the set you are building can't be lost to a
@@ -142,6 +198,10 @@ export function TaskCard({
   onOpen: (task: TaskWithAssignee) => void
   onToggleSelect: (taskId: string) => void
 }) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
+  const [menuOpen, setMenuOpen] = useState(false)
+
   // dnd-kit still needs a stable sortable registration even for non-draggable
   // cards (they must remain valid drop targets within the column's
   // SortableContext) — `disabled` just suppresses the drag listeners/attrs.
@@ -162,6 +222,93 @@ export function TaskCard({
     transition,
   }
 
+  // The quick menu's edits are NOT part of the board's optimistic move state
+  // (that one models a drag: a rank plus a column). They are one-field writes
+  // that the server revalidation paints, so they refresh rather than guess.
+  function runUpdate(patch: Record<string, unknown>, successMessage: string) {
+    startTransition(async () => {
+      try {
+        const res = await updateTask(task.id, patch)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(successMessage)
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  function handleDelete() {
+    startTransition(async () => {
+      try {
+        const res = await deleteTask(task.id)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Task deleted')
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  const items: QuickMenuItem[] = []
+  if (draggable) {
+    for (const status of TASK_STATUSES) {
+      if (status === task.status) continue
+      items.push({
+        type: 'item',
+        key: `status-${status}`,
+        label: `Move to ${STATUS_LABEL[status]}`,
+        onSelect: () => runUpdate({ status }, `Moved to ${STATUS_LABEL[status]}`),
+      })
+    }
+    items.push({ type: 'separator', key: 'sep-priority' })
+    for (const key of Object.keys(PRIORITY_LABEL)) {
+      const value = Number(key)
+      if (value === task.priority) continue
+      items.push({
+        type: 'item',
+        key: `priority-${value}`,
+        label: priorityMenuLabel(value),
+        onSelect: () => runUpdate({ priority: value }, 'Priority updated'),
+      })
+    }
+    items.push({ type: 'separator', key: 'sep-assignee' })
+    if (task.assignee) {
+      items.push({
+        type: 'item',
+        key: 'unassign',
+        label: 'Unassign',
+        onSelect: () => runUpdate({ assigneeId: null }, 'Unassigned'),
+      })
+    }
+    for (const member of team) {
+      if (member.userId === task.assignee?.id) continue
+      items.push({
+        type: 'item',
+        key: `assign-${member.userId}`,
+        label: `Assign to ${member.name}`,
+        onSelect: () => runUpdate({ assigneeId: member.userId }, `Assigned to ${member.name}`),
+      })
+    }
+  }
+  if (isAdmin) {
+    if (items.length > 0) items.push({ type: 'separator', key: 'sep-delete' })
+    items.push({
+      type: 'item',
+      key: 'delete',
+      label: 'Delete',
+      destructive: true,
+      onSelect: handleDelete,
+    })
+  }
+
   const bar = PRIORITY_BAR[task.priority]
 
   return (
@@ -177,8 +324,20 @@ export function TaskCard({
             ? (listeners?.onPointerDown as PointerEventHandler<HTMLDivElement> | undefined)
             : undefined
         }
+        // The quick menu renders nested inside this card, so a contextmenu
+        // fired anywhere else on the card would never reach a listener on the
+        // menu itself. Hence the listener here and the controlled open state
+        // — the pattern CardQuickMenu documents.
+        onContextMenu={(event) => {
+          if (items.length === 0) return
+          event.preventDefault()
+          setMenuOpen(true)
+        }}
         className={cn(
-          'group/card relative flex items-start gap-1.5 overflow-hidden rounded-lg border bg-card p-2 pl-3 shadow-xs',
+          // Both group names on purpose: this card's own affordances key on
+          // `group/card`, while the shared CardQuickMenu reveals its ⋯ button
+          // on the plain `group` that every card it is used on provides.
+          'group group/card relative flex items-start gap-1.5 overflow-hidden rounded-lg border bg-card p-2 pl-3 shadow-xs',
           'transition-[border-color,box-shadow,opacity] duration-150',
           'hover:border-ring/60 has-focus-visible:border-ring',
           draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
@@ -208,30 +367,51 @@ export function TaskCard({
           )}
         />
 
-        <button
-          type="button"
-          onPointerDown={(event) => {
-            pointerStart.current = { x: event.clientX, y: event.clientY }
-          }}
-          onClick={(event) => {
-            const from = pointerStart.current
-            pointerStart.current = null
-            if (
-              from &&
-              Math.hypot(event.clientX - from.x, event.clientY - from.y) >=
-                DRAG_ACTIVATION_DISTANCE
-            ) {
-              return
-            }
-            onOpen(task)
-          }}
-          className="flex min-w-0 flex-1 flex-col gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="sr-only">{cardLabel(task, todayIso)}</span>
-          <span aria-hidden className="contents">
-            <CardFace task={task} todayIso={todayIso} />
-          </span>
-        </button>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/*
+            Rename in place, for anyone who may edit this card. It sits
+            OUTSIDE the open-button below because it is its own tab stop and,
+            once editing, an <input> — neither of which may be nested inside a
+            button. The trade is that a single click on the title no longer
+            opens the dialog (every other part of the face still does): the
+            same separation the roadmap's label cell makes between a rename
+            trigger and the navigation target beside it.
+          */}
+          {draggable ? (
+            <InlineRename
+              value={task.title}
+              onSave={(next) => runUpdate({ title: next }, 'Task renamed')}
+              ariaLabel="Task title"
+              className="line-clamp-2 text-sm leading-snug font-medium text-card-foreground"
+              maxLength={140}
+            />
+          ) : null}
+
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              pointerStart.current = { x: event.clientX, y: event.clientY }
+            }}
+            onClick={(event) => {
+              const from = pointerStart.current
+              pointerStart.current = null
+              if (
+                from &&
+                Math.hypot(event.clientX - from.x, event.clientY - from.y) >=
+                  DRAG_ACTIVATION_DISTANCE
+              ) {
+                return
+              }
+              onOpen(task)
+            }}
+            className="flex min-w-0 flex-col gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="sr-only">{cardLabel(task, todayIso)}</span>
+            <span aria-hidden className="contents">
+              <CardFace task={task} todayIso={todayIso} hideTitle={draggable} />
+            </span>
+          </button>
+        </div>
 
         {/*
           The keyboard drag handle, and the reason Enter/Space on the card
@@ -261,6 +441,17 @@ export function TaskCard({
             <GripVertical className="size-4" aria-hidden />
           </button>
         ) : null}
+
+        {/* `static` overrides the shared menu's own top-right absolute
+            placement: on this card that corner is the drag grip's, so the ⋯
+            rides in the flow beside it rather than on top of it. */}
+        <CardQuickMenu
+          items={items}
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
+          label="Task actions"
+          className="static mt-0.5 shrink-0"
+        />
       </div>
     </li>
   )

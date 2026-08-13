@@ -8,7 +8,13 @@ import { liveMeetings } from '@/db/live'
 // meetingScreenshots is deliberately NOT imported: deleteMeeting used to read
 // its rows to sweep the Blob objects, and a soft delete keeps both the rows and
 // the objects (they are purged with the meeting from admin Trash, not here).
-import { apps, meetingAttendees, meetings, users } from '@/db/schema'
+import {
+  apps,
+  meetingAttendeeHistory,
+  meetingAttendees,
+  meetings,
+  users,
+} from '@/db/schema'
 import {
   formatBusinessTime,
   formatBusinessWeekdayDayMonth,
@@ -27,6 +33,7 @@ import {
 import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
+import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 
 /**
  * The editable shape of a meeting, shared by create and update so the two can
@@ -276,6 +283,9 @@ export async function createMeeting(
   // (neon-http has no transactions), so the attendee rows can't reference a
   // meeting id that isn't guaranteed to exist yet.
   const meetingId = crypto.randomUUID()
+  // One instant for the meeting row and every attendee's opening membership
+  // interval, so the history starts exactly when the meeting did.
+  const at = new Date()
 
   try {
     await db.batch([
@@ -288,10 +298,27 @@ export async function createMeeting(
         agenda: agenda || null,
         meetingUrl: meetingUrl ?? null,
         createdBy: session.user.id,
+        createdAt: at,
       }),
       db
         .insert(meetingAttendees)
         .values(attendeeIds.map((userId) => ({ meetingId, userId }))),
+      // The membership history opens in the SAME batch as the live rows —
+      // otherwise every meeting created after this feature shipped would have
+      // attendees with no recorded start, and "who was on this meeting on
+      // date X" would only work for the backfilled ones.
+      db.insert(meetingAttendeeHistory).values(
+        attendeeIds.map((userId) =>
+          buildAttendanceEntry({
+            meetingId,
+            userId,
+            response: 'pending',
+            changeKind: 'added',
+            changedBy: session.user.id,
+            at,
+          }),
+        ),
+      ),
     ])
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid app or attendee')
@@ -525,13 +552,23 @@ export async function updateMeeting(
   const nextStart = new Date(startsAt)
   const nextEnd = new Date(endsAt)
 
+  // `response` rides along for the removal tombstone below — meeting_attendee_history
+  // carries the RSVP a removed person had rather than zeroing it, so the timeline
+  // can say "removed — was going" instead of "removed — pending".
   const currentRows = await db
-    .select({ userId: meetingAttendees.userId })
+    .select({ userId: meetingAttendees.userId, response: meetingAttendees.response })
     .from(meetingAttendees)
     .where(eq(meetingAttendees.meetingId, meetingId))
   const currentIds = new Set(currentRows.map((row) => row.userId))
+  const responseByUser = new Map(currentRows.map((row) => [row.userId, row.response]))
   const added = nextAttendeeIds.filter((id) => !currentIds.has(id))
   const removed = [...currentIds].filter((id) => !nextAttendeeIds.includes(id))
+  // ONE instant for every history row this save writes, so a closed interval
+  // and the one opened after it abut exactly — see buildAttendanceEntry in
+  // attendance-history.ts. Deriving the two timestamps separately leaves a gap
+  // or an overlap at the boundary and corrupts every "as of" answer that lands
+  // in it.
+  const changedAt = new Date()
 
   // One atomic round trip. neon-http has no transactions, so `db.batch` is
   // what keeps the meeting row and its attendee rows from landing apart. It
@@ -549,11 +586,53 @@ export async function updateMeeting(
             inArray(meetingAttendees.userId, removed),
           ),
         ),
+      // Close whatever interval each of them had open …
+      db
+        .update(meetingAttendeeHistory)
+        .set({ effectiveTo: changedAt })
+        .where(
+          and(
+            eq(meetingAttendeeHistory.meetingId, meetingId),
+            inArray(meetingAttendeeHistory.userId, removed),
+            isNull(meetingAttendeeHistory.effectiveTo),
+          ),
+        ),
+      // … then leave a 'removed' tombstone OPEN. Not close-only: a close
+      // records the instant but not the actor, and attendanceAsOf stays one
+      // uniform rule ("the row open at the date wins") with no special case
+      // for "no open row". Readers drop 'removed' rows from a roster.
+      db.insert(meetingAttendeeHistory).values(
+        removed.map((userId) =>
+          buildAttendanceEntry({
+            meetingId,
+            userId,
+            response: responseByUser.get(userId) ?? 'pending',
+            changeKind: 'removed',
+            changedBy: session.user.id,
+            at: changedAt,
+          }),
+        ),
+      ),
     )
   }
   if (added.length > 0) {
     attendeeWrites.push(
       db.insert(meetingAttendees).values(added.map((userId) => ({ meetingId, userId }))),
+      // Opened in the SAME batch as the live row, exactly as createMeeting
+      // does — otherwise an attendee added by an edit has no recorded start
+      // and "who was on this meeting on date X" answers wrongly for them.
+      db.insert(meetingAttendeeHistory).values(
+        added.map((userId) =>
+          buildAttendanceEntry({
+            meetingId,
+            userId,
+            response: 'pending',
+            changeKind: 'added',
+            changedBy: session.user.id,
+            at: changedAt,
+          }),
+        ),
+      ),
     )
   }
 

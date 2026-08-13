@@ -108,8 +108,15 @@ import {
   type UnattributedFollowupView,
 } from '@/features/meetings/ai-actions'
 import {
+  containsSinhala,
+  isRestartStorm,
+  isSilentSinhalaFallback,
+  pickInterimLeader,
   pickUtterance,
   shouldFlush,
+  DUAL_PROBE_WINDOW_MS,
+  RESTART_RETRY_LIMIT,
+  RESTART_RETRY_MS,
   UTTERANCE_PAIR_WINDOW_MS,
   type ActiveLanguage,
   type UtteranceCandidate,
@@ -174,6 +181,12 @@ interface SpeechRecognitionLike extends EventTarget {
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
   onend: (() => void) | null
+  // `audiostart` is the only trustworthy proof that an engine actually owns
+  // the microphone: `start()` resolving means nothing (it never throws for a
+  // session that is about to be aborted by another one) and `onstart` fires
+  // before the browser has arbitrated who gets the mic. Measured on Chrome
+  // 151: ~500–740ms between start() and audiostart.
+  onaudiostart: (() => void) | null
   start: () => void
   stop: () => void
   abort: () => void
@@ -256,10 +269,25 @@ const ACTIVE_LANGUAGE_LABEL: Record<ActiveLanguage, string> = {
   'en-US': 'English',
   'si-LK': 'Sinhala',
 }
-// Recognizer engines dual mode runs, in the fixed order they are started
-// and the order candidates are handed to pickUtterance — that order is
-// also what its documented tie-break relies on being stable.
-const DUAL_ENGINE_LANGUAGES: ActiveLanguage[] = ['en-US', 'si-LK']
+function otherLanguage(lang: ActiveLanguage): ActiveLanguage {
+  return lang === 'en-US' ? 'si-LK' : 'en-US'
+}
+// Whether this browser has already been PROVEN unable to run two
+// SpeechRecognition sessions at once. Persisted because the proof costs a
+// engine restart and the answer never changes for a given browser — see
+// the probe in startLiveRecognition, and the measured event traces in
+// docs/superpowers/specs/2026-08-11-live-transcription-design.md.
+const DUAL_UNSUPPORTED_STORAGE_KEY = 'logpup:transcribe-dual-unsupported'
+// Said once, plainly, whenever live text is one language while the user
+// asked for bilingual. The recording is unaffected — Gemini transcribes the
+// audio itself and handles both languages — so this is a note, not an error.
+function singleEngineNotice(lang: ActiveLanguage): string {
+  return `This browser runs one speech engine at a time — live text is ${ACTIVE_LANGUAGE_LABEL[lang]} only. The recording still captures both languages for the AI notes.`
+}
+const SINHALA_UNAVAILABLE_NOTICE =
+  'Sinhala live text isn’t available in this browser — the recording still captures it for the AI notes.'
+const SINHALA_NOT_LISTENING_NOTICE =
+  'This browser accepted Sinhala but isn’t writing any — live text may be wrong. The recording still captures it for the AI notes.'
 
 function pickMimeType(): string {
   if (typeof MediaRecorder === 'undefined') return ''
@@ -464,9 +492,6 @@ export function MeetingIntelPanel({
   // lastWinnerLang because the leader can flip word-by-word while a final
   // hasn't landed yet.
   const [interimLeaderLang, setInterimLeaderLang] = useState<ActiveLanguage | null>(null)
-  // Set when dual mode couldn't start both engines (see startBilingualRecognition)
-  // and fell back to a single engine — a quiet, one-line, non-blocking notice.
-  // The meeting keeps recording regardless.
   // Consecutive SpeechRecognition errors per engine, reset by any result. A
   // ref, not state: it changes inside recognizer callbacks that must not
   // re-render the panel mid-recording.
@@ -504,12 +529,31 @@ export function MeetingIntelPanel({
   // APPEND (like acceptUtterance does) instead of overwriting, so a user's
   // mid-meeting corrections in the textarea survive every new utterance.
   const geminiCommittedRef = useRef(0)
+  // Everything the Web Speech rung owes the user an honest word about: dual
+  // mode not being possible here, a language this browser can't hear, an
+  // engine that stopped. A LIST, not one string, because those facts stack —
+  // `fallbackNotice` above stays the single "the rung above degraded, here is
+  // why" line, and the two are rendered as separate paragraphs rather than
+  // one overwriting the other. Quiet lines, never toasts: the meeting keeps
+  // recording regardless, so none of these are worth interrupting for.
+  const [notices, setNotices] = useState<string[]>([])
+  // Which recognizers are alive right now, mirrored from recognitionRefs so
+  // the status chip can name what is ACTUALLY running. Two entries is the
+  // only thing that may ever be called "Bilingual".
+  const [activeEngines, setActiveEngines] = useState<ActiveLanguage[]>([])
   const [finalText, setFinalText] = useState('')
   const [interimText, setInterimText] = useState('')
   // See RecordingSegment above. One entry per cut segment, from the moment
   // it's cut until finalize has consumed it; mirrors segmentsRef so a retry
   // (which needs the actual Blob back) never reads stale render state.
+  // (Replaces the single whole-meeting PendingAudio blob described above.)
   const [segments, setSegments] = useState<RecordingSegment[]>([])
+  // A finalized utterance that is buffered waiting for the other engine's
+  // read of the same speech. It is rendered IMMEDIATELY, styled like interim
+  // text: the pairing window is allowed to replace these words, never to
+  // withhold them. Before this existed the phrase was in neither finalText
+  // nor interimText and simply vanished from screen for up to 1.2s.
+  const [provisional, setProvisional] = useState<{ text: string; lang: ActiveLanguage } | null>(null)
   // Follow-up state. Every action (resolve, not yet, reopen) is one click and
   // writes immediately; `composer` is the single open text field, since the
   // writing is always optional enrichment layered on afterwards. `drafts` is
@@ -619,11 +663,11 @@ export function MeetingIntelPanel({
   // key means that engine either was never started or has permanently
   // failed (see handleEngineUnavailable) — never a live instance.
   const recognitionRefs = useRef<Partial<Record<ActiveLanguage, SpeechRecognitionLike>>>({})
-  // Whether we're currently supervising one engine or two. Starts as
-  // whatever the language preference implies and can drop from 'dual' to
-  // 'single' mid-recording if the second engine fails (resource guard, see
-  // startBilingualRecognition / handleEngineUnavailable) — never the other
-  // direction.
+  // Whether we're currently supervising one engine or two. Starts at
+  // 'single' and is only raised to 'dual' once the concurrency probe has
+  // PROVED two sessions coexist here (syncActiveEngines reads the live
+  // recognizers, never the preference); it drops back if an engine fails
+  // (see handleEngineUnavailable).
   const engineModeRef = useRef<'dual' | 'single'>('single')
   const recordingRef = useRef(false)
   const finalTranscriptRef = useRef('')
@@ -653,6 +697,32 @@ export function MeetingIntelPanel({
   // immediately, since there is nothing to pair it against.
   const pendingUtteranceRef = useRef<{ candidate: UtteranceCandidate; receivedAt: number } | null>(null)
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Mirrors interimLeaderLang for the handlers (state isn't readable
+  // synchronously here) — pickInterimLeader takes it as the incumbent that
+  // keeps the display until a challenger is clearly ahead.
+  const interimLeaderRef = useRef<ActiveLanguage | null>(null)
+  // Per-engine liveness bookkeeping. `reachedAudio` is the only proof an
+  // engine owns the mic; the counters below turn "restarted again and never
+  // got there" into the storm signal isRestartStorm decides on.
+  const reachedAudioRef = useRef<Partial<Record<ActiveLanguage, boolean>>>({})
+  const restartsWithoutAudioRef = useRef<Partial<Record<ActiveLanguage, number>>>({})
+  const restartRetriesRef = useRef<Partial<Record<ActiveLanguage, number>>>({})
+  const restartTimersRef = useRef<Partial<Record<ActiveLanguage, ReturnType<typeof setTimeout>>>>({})
+  // The concurrency probe (see startLiveRecognition). While it is set,
+  // NEITHER engine auto-restarts — that is what makes probing safe, since
+  // the measured 30,000-restarts-in-7s storm requires both engines to
+  // blindly restart into each other.
+  const dualProbeRef = useRef<{
+    incumbent: ActiveLanguage
+    challenger: ActiveLanguage
+    timer: ReturnType<typeof setTimeout> | null
+  } | null>(null)
+  // Proven-once-per-browser answer to "can two sessions coexist?", hydrated
+  // from localStorage so only the first recording ever pays for the proof.
+  const dualUnsupportedRef = useRef(false)
+  // Evidence for isSilentSinhalaFallback: a browser that accepted si-LK and
+  // then never writes a Sinhala codepoint is not transcribing Sinhala.
+  const sinhalaEvidenceRef = useRef({ finalsSeen: 0, finalsWithSinhala: 0, settled: false })
   // Persisted across sessions (LAST_ACTIVE_LANGUAGE_STORAGE_KEY) — seeds
   // previousLangRef at the start of each new recording, and manual mode's
   // initial engine when the preference itself doesn't say which language.
@@ -672,6 +742,9 @@ export function MeetingIntelPanel({
       const lastActive = window.localStorage.getItem(LAST_ACTIVE_LANGUAGE_STORAGE_KEY)
       if (lastActive === 'en-US' || lastActive === 'si-LK') {
         lastActiveLangRef.current = lastActive
+      }
+      if (window.localStorage.getItem(DUAL_UNSUPPORTED_STORAGE_KEY) === 'true') {
+        dualUnsupportedRef.current = true
       }
     } catch {
       /* private mode / unavailable — defaults stay Bilingual / English */
@@ -828,24 +901,54 @@ export function MeetingIntelPanel({
     }
   }
 
+  function clearRestartTimer(lang: ActiveLanguage) {
+    const timer = restartTimersRef.current[lang]
+    if (timer) clearTimeout(timer)
+    delete restartTimersRef.current[lang]
+  }
+
+  function clearDualProbe() {
+    if (dualProbeRef.current?.timer) clearTimeout(dualProbeRef.current.timer)
+    dualProbeRef.current = null
+  }
+
+  // Keeps the rendered engine list honest: it is read from the live
+  // recognizers, never from what we intended to start. The status chip is
+  // only allowed to say "Bilingual" when this has two entries.
+  function syncActiveEngines() {
+    const live = Object.keys(recognitionRefs.current) as ActiveLanguage[]
+    engineModeRef.current = live.length > 1 ? 'dual' : 'single'
+    setActiveEngines(live)
+  }
+
+  function addNotice(text: string) {
+    setNotices((prev) => (prev.includes(text) ? prev : [...prev, text]))
+  }
+
+  // Detaches one engine for good: handlers nulled first so onend's restart
+  // can never fire for a deliberate stop.
+  function teardownEngine(lang: ActiveLanguage) {
+    clearRestartTimer(lang)
+    const recognition = recognitionRefs.current[lang]
+    delete recognitionRefs.current[lang]
+    engineInterimRef.current[lang] = ''
+    if (!recognition) return
+    recognition.onresult = null
+    recognition.onerror = null
+    recognition.onend = null
+    recognition.onaudiostart = null
+    try {
+      recognition.stop()
+    } catch {
+      /* already stopped */
+    }
+  }
+
   // Stops every currently-running engine (one in manual mode, up to two in
-  // dual mode). Nulls the handlers before stop() so onend's auto-restart
-  // never fires for a deliberate stop, same guarantee the single-recognizer
+  // dual mode). Same deliberate-stop guarantee the single-recognizer
   // version had.
   function stopAllRecognition() {
-    for (const lang of Object.keys(recognitionRefs.current) as ActiveLanguage[]) {
-      const recognition = recognitionRefs.current[lang]
-      if (recognition) {
-        recognition.onresult = null
-        recognition.onerror = null
-        recognition.onend = null
-        try {
-          recognition.stop()
-        } catch {
-          /* already stopped */
-        }
-      }
-    }
+    for (const lang of Object.keys(recognitionRefs.current) as ActiveLanguage[]) teardownEngine(lang)
     recognitionRefs.current = {}
   }
 
@@ -880,8 +983,15 @@ export function MeetingIntelPanel({
     keyframes.stop()
     screenVideoTrackRef.current = null
     clearFlushTimer()
+    clearDualProbe()
     pendingUtteranceRef.current = null
+    setProvisional(null)
     engineInterimRef.current = {}
+    reachedAudioRef.current = {}
+    restartsWithoutAudioRef.current = {}
+    restartRetriesRef.current = {}
+    interimLeaderRef.current = null
+    setActiveEngines([])
     if (timerRef.current) clearInterval(timerRef.current)
     timerRef.current = null
     for (const stream of streamsRef.current) {
@@ -899,7 +1009,7 @@ export function MeetingIntelPanel({
     setSeconds(0)
     setInterimText('')
     setInterimLeaderLang(null)
-    setFallbackNotice(null)
+    setNotices([])
   }
 
   useEffect(() => cleanupCapture, [])
@@ -968,7 +1078,10 @@ export function MeetingIntelPanel({
     const el = transcriptPanelRef.current
     if (!el || document.activeElement === el) return
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [finalText, interimText])
+    // `provisional` is in here with the other two because it is rendered
+    // text like they are — a buffered utterance appearing is exactly the
+    // kind of growth that should keep a pinned panel pinned.
+  }, [finalText, interimText, provisional])
 
   function handleTranscriptScroll() {
     const el = transcriptPanelRef.current
@@ -1029,33 +1142,57 @@ export function MeetingIntelPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geminiLive.notice])
 
-  // Recomputes which engine's INTERIM text is currently shown, and updates
-  // the visible (provisional, muted/italic) interim string. Whichever
-  // engine's partial result is currently longer is treated as "leading" —
-  // in practice the engine actually matching what's being said tends to
-  // keep extending its partial transcript, while the other one (hearing
-  // the wrong grammar for what it's picking up) produces shorter or
-  // choppier partials. A tie (including both empty) falls back to the last
-  // ACCEPTED utterance's language for continuity, same inertia idea
-  // pickUtterance uses, rather than flapping between the two on every
-  // event. Works unmodified for manual (single-engine) mode too — the
-  // other language's interim simply never has any text.
+  // Recomputes which engine's INTERIM text is shown. The leader is decided
+  // by pickInterimLeader, which compares ESTIMATED SPOKEN UNITS rather than
+  // string length: Sinhala packs a syllable into ~1.9 UTF-16 units against
+  // English's ~3.0, so the old length comparison handed the display to
+  // English by construction, even mid-Sinhala-sentence.
+  //
+  // While a provisional (buffered final) is on screen, only that engine's
+  // interim is shown: the other engine's partial right then is a competing
+  // read of the SAME audio, and rendering both prints the phrase twice in
+  // two scripts. The provisional engine's own new partial is genuinely the
+  // next thing being said, so it still shows.
+  //
+  // Works unmodified for single-engine mode too — the other language's
+  // interim simply never has any text.
   function refreshInterimDisplay() {
     const en = engineInterimRef.current['en-US'] ?? ''
     const si = engineInterimRef.current['si-LK'] ?? ''
-    if (!en && !si) {
+    const pendingLang = pendingUtteranceRef.current?.candidate.lang ?? null
+    const leader = pendingLang
+      ? pendingLang
+      : pickInterimLeader({
+          en,
+          si,
+          previousLang: previousLangRef.current,
+          currentLeader: interimLeaderRef.current,
+        })
+    if (!leader) {
+      interimLeaderRef.current = null
       setInterimText('')
       setInterimLeaderLang(null)
       return
     }
-    let leader: ActiveLanguage
-    if (en.length === si.length) {
-      leader = previousLangRef.current === 'si-LK' ? 'si-LK' : 'en-US'
-    } else {
-      leader = en.length > si.length ? 'en-US' : 'si-LK'
-    }
-    setInterimText(leader === 'en-US' ? en : si)
+    const text = leader === 'en-US' ? en : si
+    interimLeaderRef.current = text ? leader : interimLeaderRef.current
+    setInterimText(text)
     setInterimLeaderLang(leader)
+  }
+
+  // Buffers the finalized-but-unpaired utterance. Ref and state move
+  // together on purpose: the ref is what the handlers read synchronously
+  // (and carries the timestamp shouldFlush needs), the state is what puts
+  // the words on screen the instant they exist. The timestamp deliberately
+  // stays out of state — rendered state must not be derived from a clock.
+  function bufferUtterance(candidate: UtteranceCandidate) {
+    pendingUtteranceRef.current = { candidate, receivedAt: Date.now() }
+    setProvisional({ text: candidate.text, lang: candidate.lang })
+  }
+
+  function clearPendingUtterance() {
+    pendingUtteranceRef.current = null
+    setProvisional(null)
   }
 
   // Commits one utterance to the live transcript and remembers its
@@ -1075,8 +1212,9 @@ export function MeetingIntelPanel({
   function flushPendingUtterance() {
     clearFlushTimer()
     const pending = pendingUtteranceRef.current
-    pendingUtteranceRef.current = null
+    clearPendingUtterance()
     if (pending) acceptUtterance(pending.candidate)
+    refreshInterimDisplay()
   }
 
   // Schedules the pairing-window timeout. The pure `shouldFlush` decision —
@@ -1094,44 +1232,82 @@ export function MeetingIntelPanel({
     }, UTTERANCE_PAIR_WINDOW_MS)
   }
 
-  // One engine finalized a result. In manual (single-engine) mode there is
-  // only ever one source, so it's accepted immediately — same latency as
-  // before this feature. In dual mode, it goes through the pairing buffer:
-  // the first engine to finalize an utterance waits up to
-  // UTTERANCE_PAIR_WINDOW_MS for the other to finalize its own read of
-  // (roughly) the same stretch of speech, then pickUtterance decides
-  // between them. If the SAME engine finalizes again before a pair
-  // arrives, the buffered one clearly isn't getting a partner — flush it
-  // now rather than silently dropping it, then start a fresh buffer.
+  // One engine finalized a result. In single-engine mode there is only ever
+  // one source, so it's accepted immediately. In dual mode it goes through
+  // the pairing buffer: the first engine to finalize waits up to
+  // UTTERANCE_PAIR_WINDOW_MS for the other's read of (roughly) the same
+  // speech, then pickUtterance decides between them. If the SAME engine
+  // finalizes again before a pair arrives, the buffered one clearly isn't
+  // getting a partner — flush it now rather than silently dropping it, then
+  // start a fresh buffer.
+  //
+  // The buffer is VISIBLE the whole time (see bufferUtterance). Waiting
+  // for a pair may change which words end up committed; it must never be
+  // the reason there are no words on screen.
   function handleEngineFinal(lang: ActiveLanguage, text: string, confidence: number | undefined) {
     engineInterimRef.current[lang] = ''
-    refreshInterimDisplay()
+    if (lang === 'si-LK' && noteSinhalaEvidence(text)) {
+      // The engine that produced this was just dropped for not actually
+      // being a Sinhala recognizer — its text is exactly what we don't want
+      // in the transcript.
+      refreshInterimDisplay()
+      return
+    }
 
     if (engineModeRef.current === 'single') {
       acceptUtterance({ lang, text, confidence })
+      refreshInterimDisplay()
       return
     }
 
     const candidate: UtteranceCandidate = { lang, text, confidence }
     const pending = pendingUtteranceRef.current
     if (!pending) {
-      pendingUtteranceRef.current = { candidate, receivedAt: Date.now() }
+      bufferUtterance(candidate)
       scheduleFlush()
+      refreshInterimDisplay()
       return
     }
     if (pending.candidate.lang === lang) {
       flushPendingUtterance()
-      pendingUtteranceRef.current = { candidate, receivedAt: Date.now() }
+      bufferUtterance(candidate)
       scheduleFlush()
+      refreshInterimDisplay()
       return
     }
     clearFlushTimer()
-    pendingUtteranceRef.current = null
+    clearPendingUtterance()
     const winner = pickUtterance({
       candidates: [pending.candidate, candidate],
       previousLang: previousLangRef.current,
     })
     if (winner) acceptUtterance(winner)
+    refreshInterimDisplay()
+  }
+
+  // Some browsers accept `lang = 'si-LK'` and then quietly transcribe the
+  // system language instead — confident, fluent, and completely wrong.
+  // That's worse than an error because nothing looks broken, so it gets
+  // caught on the evidence: a Sinhala recognizer writes Sinhala script.
+  /** Returns true if the si-LK engine was dropped as a result — meaning the
+   *  final that triggered this must not be committed. */
+  function noteSinhalaEvidence(text: string): boolean {
+    const evidence = sinhalaEvidenceRef.current
+    if (evidence.settled) return false
+    evidence.finalsSeen += 1
+    if (containsSinhala(text)) evidence.finalsWithSinhala += 1
+    if (!isSilentSinhalaFallback(evidence)) return false
+    evidence.settled = true // decided once; don't keep re-litigating it
+    if (Object.keys(recognitionRefs.current).length > 1) {
+      // There is a real engine left — drop the one that's making things up.
+      handleEngineUnavailable('si-LK', SINHALA_UNAVAILABLE_NOTICE)
+      return true
+    }
+    // The user pinned Sinhala and it's all we have. Say so; don't stop it,
+    // because a hedged live preview is still better than none while the
+    // recording (which Gemini transcribes properly) keeps running.
+    addNotice(SINHALA_NOT_LISTENING_NOTICE)
+    return false
   }
 
   function handleEngineInterim(lang: ActiveLanguage, text: string) {
@@ -1140,15 +1316,19 @@ export function MeetingIntelPanel({
   }
 
   // An engine hit a permanent failure (denied mic permission, no capture
-  // device). In dual mode this is the resource guard's other half — if one
-  // engine is still running, keep going in single-engine mode rather than
-  // losing live text entirely; only give up if NOTHING is left. Any
-  // utterance still buffered has lost its only possible pairing partner —
-  // flush it immediately instead of waiting out the window.
+  // device, a language this browser can't hear). If one engine is still
+  // running, keep going in single-engine mode rather than losing live text
+  // entirely; only give up if NOTHING is left. Any utterance still buffered
+  // has lost its only possible pairing partner — flush it immediately
+  // instead of waiting out a window that can no longer produce a pair.
   function handleEngineUnavailable(lang: ActiveLanguage, reason?: string) {
-    delete recognitionRefs.current[lang]
-    engineInterimRef.current[lang] = ''
-    refreshInterimDisplay()
+    clearDualProbe()
+    teardownEngine(lang)
+    syncActiveEngines()
+    // Whatever was buffered is real speech that has now lost its only
+    // possible pairing partner — commit it before anything else, including
+    // in the give-up path, so it still reaches the transcript.
+    flushPendingUtterance()
     const remaining = Object.keys(recognitionRefs.current) as ActiveLanguage[]
     if (remaining.length === 0) {
       // The reason survives even when there is nothing left to fall back to.
@@ -1159,11 +1339,134 @@ export function MeetingIntelPanel({
       setFallbackNotice(reason ?? null)
       return
     }
-    engineModeRef.current = 'single'
-    flushPendingUtterance()
-    setFallbackNotice(
-      `Live text for ${ACTIVE_LANGUAGE_LABEL[lang]} stopped${reason ? ` (${reason})` : ''} — continuing in ${ACTIVE_LANGUAGE_LABEL[remaining[0]]} only.`,
+    // `reason` is already a whole sentence wherever it is set (see
+    // SINHALA_UNAVAILABLE_NOTICE), so it is used as-is rather than pushed
+    // into a parenthetical inside another sentence.
+    addNotice(
+      reason ??
+        `Live text for ${ACTIVE_LANGUAGE_LABEL[lang]} stopped — continuing in ${ACTIVE_LANGUAGE_LABEL[remaining[0]]} only.`,
     )
+  }
+
+  // Records, once and for this browser, that two SpeechRecognition sessions
+  // cannot coexist here, and collapses to a single honestly-labelled engine.
+  //
+  // This is the measured reality on every browser the team uses (Chrome,
+  // Edge and Android Chrome are Chromium; Safari arbitrates one recognizer
+  // too): starting the second session aborts the first, `start()` doesn't
+  // throw, and the old auto-restart turned that into ~30,000 restarts in 7
+  // seconds with zero results. Collapsing here is what stops both the storm
+  // and the quieter bug it caused — sitting in 'dual' mode with one engine,
+  // where every utterance waited out the full pairing window for a partner
+  // that could never arrive.
+  function concludeDualUnsupported(keep: ActiveLanguage) {
+    clearDualProbe()
+    dualUnsupportedRef.current = true
+    try {
+      window.localStorage.setItem(DUAL_UNSUPPORTED_STORAGE_KEY, 'true')
+    } catch {
+      /* private mode — we'll just re-prove it next time */
+    }
+    for (const lang of Object.keys(recognitionRefs.current) as ActiveLanguage[]) {
+      if (lang !== keep) teardownEngine(lang)
+    }
+    syncActiveEngines()
+    // Fresh start for the survivor: the restarts it racked up while the two
+    // engines were killing each other must not count against it now that it
+    // is alone, or the storm guard would immediately declare it dead too.
+    restartsWithoutAudioRef.current[keep] = 0
+    restartRetriesRef.current[keep] = 0
+    // The kept engine may itself be the one that was aborted; restarting an
+    // already-running session is harmless (it throws InvalidStateError,
+    // which the retry path treats as "already going").
+    if (recognitionRefs.current[keep]) restartEngine(keep)
+    else if (!startEngine(keep)) setLiveUnavailable(true)
+    flushPendingUtterance()
+    addNotice(singleEngineNotice(keep))
+  }
+
+  // Restarts one engine after the browser ended its session. The old code
+  // swallowed a throw here with "the next onend will retry" — which is
+  // unsound: a start() that throws leaves NO session, so no further onend
+  // ever fires and the engine is dead forever, silently. Retry on a timer
+  // instead, and give up out loud.
+  function restartEngine(lang: ActiveLanguage) {
+    if (!recordingRef.current) return
+    const recognition = recognitionRefs.current[lang]
+    if (!recognition) return
+    clearRestartTimer(lang)
+    reachedAudioRef.current[lang] = false
+    const restarts = (restartsWithoutAudioRef.current[lang] ?? 0) + 1
+    restartsWithoutAudioRef.current[lang] = restarts
+    if (isRestartStorm({ restartsWithoutAudio: restarts })) {
+      handleRestartStorm(lang)
+      return
+    }
+    try {
+      recognition.start()
+      restartRetriesRef.current[lang] = 0
+    } catch {
+      const retries = (restartRetriesRef.current[lang] ?? 0) + 1
+      restartRetriesRef.current[lang] = retries
+      if (retries > RESTART_RETRY_LIMIT) {
+        handleEngineUnavailable(lang)
+        return
+      }
+      restartTimersRef.current[lang] = setTimeout(() => {
+        delete restartTimersRef.current[lang]
+        restartEngine(lang)
+      }, RESTART_RETRY_MS)
+    }
+  }
+
+  // An engine keeps restarting and never reaches audio — the signature of
+  // two sessions aborting each other. Belt to the probe's braces: whatever
+  // the probe concluded, this collapses to one engine rather than letting a
+  // spin loop burn the CPU and produce nothing.
+  function handleRestartStorm(lang: ActiveLanguage) {
+    const live = Object.keys(recognitionRefs.current) as ActiveLanguage[]
+    if (live.length > 1) {
+      concludeDualUnsupported(otherLanguage(lang))
+      return
+    }
+    handleEngineUnavailable(lang)
+  }
+
+  // The engine owns the microphone — the only trustworthy proof it is
+  // actually running. Two things hang off it: the storm counter resets, and
+  // (first time only) the concurrency probe starts the second engine, since
+  // there is no point testing coexistence before the first one exists.
+  function handleEngineAudioStart(lang: ActiveLanguage) {
+    reachedAudioRef.current[lang] = true
+    restartsWithoutAudioRef.current[lang] = 0
+    restartRetriesRef.current[lang] = 0
+    if (!recordingRef.current) return
+    if (dualProbeRef.current) return
+    if (dualUnsupportedRef.current) return
+    if (languagePreferenceRef.current !== 'bilingual') return
+    if (Object.keys(recognitionRefs.current).length !== 1) return
+    startDualProbe(lang)
+  }
+
+  // Starts the second engine and watches whether it kills the first.
+  // Crucially, while `dualProbeRef` is set NEITHER engine auto-restarts —
+  // that is what makes probing safe, because the storm needs both engines
+  // restarting into each other.
+  function startDualProbe(incumbent: ActiveLanguage) {
+    const challenger = otherLanguage(incumbent)
+    dualProbeRef.current = { incumbent, challenger, timer: null }
+    if (!startEngine(challenger)) {
+      // Couldn't even construct/start it — nothing was disturbed, so just
+      // carry on with the one engine that works.
+      clearDualProbe()
+      addNotice(singleEngineNotice(incumbent))
+      return
+    }
+    dualProbeRef.current.timer = setTimeout(() => {
+      // Survived the window with both alive: this browser really can run two.
+      clearDualProbe()
+      syncActiveEngines()
+    }, DUAL_PROBE_WINDOW_MS)
   }
 
   // Creates one recognizer for `lang` with the continuous + interimResults
@@ -1198,6 +1501,7 @@ export function MeetingIntelPanel({
       }
       handleEngineInterim(lang, interim)
     }
+    recognition.onaudiostart = () => handleEngineAudioStart(lang)
     recognition.onerror = (event) => {
       // Permanent failures — stop retrying this engine and say why.
       //
@@ -1207,7 +1511,14 @@ export function MeetingIntelPanel({
       // which errored again, forever — an invisible loop whose only symptom
       // was a Live transcript stuck on "Listening…" with no notice at all,
       // because nothing ever reached handleEngineUnavailable to report it.
-      const permanent = PERMANENT_RECOGNITION_ERRORS[event.error]
+      //
+      // si-LK gets the plain-language sentence rather than the generic map
+      // entry, because the silent-fallback path reaches this same conclusion
+      // by a different route and must not word it differently.
+      const permanent =
+        event.error === 'language-not-supported' && lang === 'si-LK'
+          ? SINHALA_UNAVAILABLE_NOTICE
+          : PERMANENT_RECOGNITION_ERRORS[event.error]
       if (permanent) {
         recognition.onend = null
         handleEngineUnavailable(lang, permanent)
@@ -1231,30 +1542,44 @@ export function MeetingIntelPanel({
             : `speech recognition kept failing (${event.error})`,
         )
       }
+      // Everything else (no-speech, network, aborted) is transient and left
+      // to onend below — note that a session aborted by another engine
+      // starting sometimes reports 'aborted' here and sometimes reports
+      // nothing at all, which is why the probe keys on `end`, not on this.
     }
     recognition.onend = () => {
       // Some browsers silently end recognition after a pause in speech.
-      // Restart it for as long as we're still recording; stopAllRecognition()
+      // Restart it for as long as we're still recording; teardownEngine()
       // nulls this handler before calling stop() so a deliberate stop never
       // loops back here.
       if (!recordingRef.current) return
-      try {
-        recognition.start()
-      } catch {
-        /* already starting — the next onend will retry */
+      const probe = dualProbeRef.current
+      if (probe) {
+        // An end DURING the probe means the two sessions can't coexist:
+        // whichever one died, the other one killed it. Do not restart —
+        // restarting is precisely what turns this into the storm.
+        concludeDualUnsupported(probe.incumbent)
+        return
       }
+      restartEngine(lang)
     }
     return recognition
   }
 
   // Creates and starts one engine, registering it in recognitionRefs on
-  // success. Returns false without throwing if the browser refuses to
-  // start it (some browsers only allow one active SpeechRecognition session
-  // at a time) — the resource guard callers use to decide whether to fall
-  // back to single-engine mode.
+  // success. Returns false only when the browser has no SpeechRecognition
+  // constructor or the constructor itself refuses.
+  //
+  // NOTE what this can NOT detect: `start()` does not throw when a second
+  // concurrent session is about to be aborted by the browser. The old code
+  // treated a non-throwing start as proof the engine was running, which is
+  // how it ended up believing it had two. Proof lives in `audiostart`.
   function startEngine(lang: ActiveLanguage): boolean {
     const recognition = createRecognizer(lang)
     if (!recognition) return false
+    reachedAudioRef.current[lang] = false
+    restartsWithoutAudioRef.current[lang] = 0
+    restartRetriesRef.current[lang] = 0
     try {
       recognition.start()
     } catch {
@@ -1264,44 +1589,47 @@ export function MeetingIntelPanel({
     // Fresh start, fresh count — otherwise a recording that ended with two
     // network blips leaves the next one one error away from giving up.
     engineErrorCountRef.current[lang] = 0
+    syncActiveEngines()
     return true
   }
 
   /**
-   * Starts recognition according to the current language preference. Extracted
-   * so the mic toggle can restart live text mid-recording using exactly the
-   * same rules the initial start used — two call sites choosing engines by
-   * different logic is how "bilingual" quietly becomes "English" on resume.
+   * Starts recognition according to the current language preference. Kept as
+   * its own zero-arg entry point so the mic toggle can restart live text
+   * mid-recording using exactly the same rules the initial start used — two
+   * call sites choosing engines by different logic is how "bilingual" quietly
+   * becomes "English" on resume.
    */
   function startRecognitionForPreference() {
-    if (language === 'bilingual') {
-      startBilingualRecognition()
-      return
-    }
-    // Manual override — exactly one engine, in the chosen language.
-    engineModeRef.current = 'single'
-    if (!startEngine(language)) setLiveUnavailable(true)
+    startLiveRecognition(language)
   }
 
-  // Starts both engines for "Bilingual (auto)" mode. Resource guard: some
-  // browsers refuse to run a second concurrent SpeechRecognition instance.
-  // If only one of the two starts, fall back to single-engine mode
-  // automatically (with a quiet notice) rather than losing live text —
-  // the meeting keeps recording regardless either way. If neither starts,
-  // that's the same as an unsupported browser.
-  function startBilingualRecognition() {
-    engineModeRef.current = 'dual'
-    const started = DUAL_ENGINE_LANGUAGES.filter((lang) => startEngine(lang))
-    if (started.length === 0) {
-      setLiveUnavailable(true)
+  // Starts live recognition for this recording.
+  //
+  // Dual mode is never assumed any more — it is proved, once per browser,
+  // and remembered. One engine starts; when it reports `audiostart` (so we
+  // know it holds the mic) the probe starts the second and watches whether
+  // the first survives. Everywhere we ship, it does not — so in practice
+  // this runs exactly one engine and says which one, out loud.
+  //
+  // The engine we start FIRST is the one that last won an utterance, so
+  // when the probe fails the surviving engine is the useful one rather than
+  // an arbitrary default.
+  function startLiveRecognition(preference: LanguagePreference) {
+    if (preference !== 'bilingual') {
+      // Manual override — exactly one engine, in the chosen language.
+      engineModeRef.current = 'single'
+      if (!startEngine(preference)) setLiveUnavailable(true)
       return
     }
-    if (started.length < DUAL_ENGINE_LANGUAGES.length) {
-      engineModeRef.current = 'single'
-      setFallbackNotice(
-        `Only one language engine could start — using ${ACTIVE_LANGUAGE_LABEL[started[0]]} only for this recording.`,
-      )
+    const first = lastActiveLangRef.current
+    if (!startEngine(first)) {
+      // Fall back to the other engine before giving up on live text.
+      if (!startEngine(otherLanguage(first))) setLiveUnavailable(true)
+      return
     }
+    if (dualUnsupportedRef.current) addNotice(singleEngineNotice(first))
+    // Otherwise the probe fires from handleEngineAudioStart.
   }
 
   // Publishes segmentsRef (the source of truth) to render state. Every
@@ -1747,6 +2075,13 @@ export function MeetingIntelPanel({
         // ~5-minute target.
         cutSegment()
         const capturedSegments = segmentIndexRef.current
+        // Commit whatever is still sitting in the pairing buffer BEFORE
+        // cleanupCapture() runs — it nulls pendingUtteranceRef, and the
+        // transcript runFinalize hands to Gemini is finalTranscriptRef,
+        // which only gains a buffered utterance once it is accepted. Without
+        // this the last utterance of every dual-mode recording — the one
+        // still waiting for a partner when Stop was pressed — was dropped.
+        flushPendingUtterance()
         cleanupCapture()
         if (capturedSegments === 0) {
           toast.error('Nothing was recorded')
@@ -1785,10 +2120,19 @@ export function MeetingIntelPanel({
       setInterimLeaderLang(null)
       setLastWinnerLang(null)
       setFallbackNotice(null)
+      setNotices([])
       setLiveUnavailable(false)
       engineInterimRef.current = {}
-      pendingUtteranceRef.current = null
+      interimLeaderRef.current = null
+      // Every per-engine judgement this recording will make starts from
+      // nothing: the last recording's Sinhala evidence, its pairing buffer
+      // and its in-flight probe say nothing about this one, and a probe left
+      // armed across a restart is what the storm guard exists to prevent.
+      sinhalaEvidenceRef.current = { finalsSeen: 0, finalsWithSinhala: 0, settled: false }
+      clearPendingUtterance()
       clearFlushTimer()
+      clearDualProbe()
+      engineModeRef.current = 'single'
       geminiCommittedRef.current = 0
       // Seed the conversation-inertia fallback from whichever language
       // last won an utterance (persisted across sessions) rather than
@@ -2124,6 +2468,15 @@ export function MeetingIntelPanel({
   // heard right now), falling back to whichever language last won an
   // accepted utterance once things go quiet between sentences.
   const currentLeadLang = interimLeaderLang ?? lastWinnerLang
+  // What the status chip is allowed to claim. "Bilingual" requires two
+  // engines to actually be alive — the preference asking for it is not
+  // evidence that the browser delivered it.
+  const liveEngineLabel =
+    activeEngines.length > 1
+      ? `Bilingual${currentLeadLang ? ` · ${ACTIVE_LANGUAGE_LABEL[currentLeadLang]}` : ''}`
+      : activeEngines.length === 1
+        ? ACTIVE_LANGUAGE_LABEL[activeEngines[0]]
+        : null
 
   // What the live strip says about itself. A stopped capture (the share
   // ended, or uploads kept failing) has to say so: an empty or frozen strip
@@ -2383,18 +2736,19 @@ export function MeetingIntelPanel({
                 </>
               ) : null}
             </span>
-            {showLiveText && liveEngine === 'webspeech' ? (
+            {showLiveText && liveEngine === 'webspeech' && liveEngineLabel ? (
               // Subtle, not a status announcement — which engine is currently
               // winning is a nicety to confirm bilingual mode is doing
               // something sensible, not worth interrupting a screen reader
               // for on every utterance. Web Speech only: the Gemini Live rung
               // transcribes both languages in one engine, and its own status
               // badge (in the live card) already says so.
-              <span className="text-xs text-muted-foreground">
-                {language === 'bilingual'
-                  ? `Bilingual${currentLeadLang ? ` · ${ACTIVE_LANGUAGE_LABEL[currentLeadLang]}` : ''}`
-                  : ACTIVE_LANGUAGE_LABEL[language]}
-              </span>
+              //
+              // The label is derived from the recognizers actually running,
+              // never from the preference that asked for them — a browser
+              // that refused the second engine must not still read
+              // "Bilingual".
+              <span className="text-xs text-muted-foreground">{liveEngineLabel}</span>
             ) : null}
           </>
         ) : null}
@@ -2481,6 +2835,19 @@ export function MeetingIntelPanel({
           transcribed segments.
         </p>
       ) : null}
+
+      {/* A specific reason always beats the generic one: "Sinhala live text
+          isn't available in this browser" is the thing a Safari user needs to
+          read, not "live text stopped". These stack under the generic lines
+          above rather than replacing one another — a browser can owe the user
+          two of these facts at once (no Sinhala model AND no dual mode). */}
+      {recording && liveEngine === 'webspeech'
+        ? notices.map((notice) => (
+            <p key={notice} className="text-xs text-muted-foreground">
+              {notice}
+            </p>
+          ))
+        : null}
 
       {/* What the shared screen showed, as it is captured. Visible DURING the
           recording rather than only in the write-up, because the one thing a
@@ -2582,14 +2949,22 @@ export function MeetingIntelPanel({
               'max-h-56 min-h-20 w-full resize-none whitespace-pre-wrap bg-transparent px-3 py-2.5 text-sm outline-none placeholder:italic placeholder:text-muted-foreground focus-visible:bg-muted/30',
             )}
           />
-          {interimText ? (
+          {provisional || interimText ? (
             /* Provisional words stay OUTSIDE the editable text — they may
                still be revised or discarded by the engine, so letting them
                into the textarea would put words in the user's mouth that
                were never committed (and make edits race the recognizer).
                aria-live="off": this updates on every partial result, far too
                chatty for a screen reader; the committed text above is the
-               readable record. */
+               readable record.
+
+               TWO provisional tiers share this line: the buffered utterance
+               that has been finalized but is still waiting on the other
+               engine's read of the same speech, and the partial being spoken
+               right now. Waiting for a pair is allowed to change which words
+               get committed; it must never be the reason there are no words
+               on screen, which is what the buffer used to cause for up to the
+               length of the pairing window. */
             <p
               aria-live="off"
               className={cn(
@@ -2597,6 +2972,8 @@ export function MeetingIntelPanel({
                 'border-t border-dashed border-border px-3 py-1.5 text-sm text-muted-foreground italic',
               )}
             >
+              {provisional?.text}
+              {provisional && interimText ? ' ' : ''}
               {interimText}
             </p>
           ) : null}

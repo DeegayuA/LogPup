@@ -2,13 +2,9 @@
 
 import { useMemo, useOptimistic, useRef, useState, useTransition, type ReactNode } from 'react'
 import {
-  DndContext,
   DragOverlay,
-  PointerSensor,
   useDraggable,
   useDroppable,
-  useSensor,
-  useSensors,
   type Announcements,
   type DragEndEvent,
   type DragStartEvent,
@@ -27,12 +23,14 @@ import {
 import { toast } from 'sonner'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DragSurface } from '@/components/shared/drag-surface'
 import { HolidayIcons, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
 import { getLkHoliday, isLkSunday } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
 import { rescheduleMeeting } from '@/features/meetings/actions'
 import { meetingTiming } from '@/features/meetings/components/meeting-glance'
 import { MeetingDetailDialog } from '@/features/meetings/components/meeting-detail-dialog'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingNotesDialog } from '@/features/meetings/components/meeting-notes-dialog'
 import { dayKeyToDate, moveMeetingToDay } from '@/features/meetings/reschedule'
 import type { MeetingSummary } from '@/features/meetings/queries'
@@ -83,12 +81,12 @@ const DAY_KEY = 'yyyy-MM-dd'
     only starts once the pointer has actually travelled. */
 const DRAG_ACTIVATION_DISTANCE = 8
 
-/* dnd-kit's default instructions describe a keyboard drag ("press the space
-   bar to lift…"), which would be a lie here — only a PointerSensor is
-   registered. These say what is actually true, and point at the keyboard
-   route: the detail panel's start/end fields. */
+/* Now backed by the shared drag kit's Space-to-lift KeyboardSensor, so
+   dnd-kit's own default instructions are almost right — this just adds the
+   detail panel as the alternative for anyone who'd rather type exact
+   times. */
 const DRAG_INSTRUCTIONS =
-  'Meetings can be dragged with a mouse or by touch onto another day, keeping their time and length. To move a meeting with the keyboard, open it and edit its start and end fields.'
+  'Meetings can be dragged with a mouse, by touch, or with a keyboard — focus a meeting and press Space to lift it, arrow keys to move it, Space to drop it. Or open it and edit its start and end fields directly.'
 
 type Entry = { meeting: MeetingSummary; isPast: boolean }
 type ReschedulePatch = { meetingId: string; startsAt: Date; endsAt: Date; isPast: boolean }
@@ -124,6 +122,10 @@ export function MeetingsMonthCalendar({
   past: MeetingSummary[]
   currentUserId: string
   isAdmin: boolean
+  /** Also the attendee list for the "New meeting" form an empty-cell click
+   *  opens — `ActiveUser` is this same `{ id, name }` shape, so the grid does
+   *  not take a second people prop that would only ever be handed the same
+   *  array. */
   users?: { id: string; name: string }[]
   apps?: { id: string; name: string }[]
   /** Hands a day back to the parent so a chip can drop into the filtered list. */
@@ -153,6 +155,7 @@ export function MeetingsMonthCalendar({
   // fetch effects waiting to fire.
   const [notesId, setNotesId] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [newMeetingDay, setNewMeetingDay] = useState<Date | null>(null)
   const [, startTransition] = useTransition()
 
   const entries = useMemo<Entry[]>(
@@ -198,12 +201,6 @@ export function MeetingsMonthCalendar({
     }
     return map
   }, [visible])
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE },
-    }),
-  )
 
   const announcements = useMemo<Announcements>(
     () => ({
@@ -277,6 +274,27 @@ export function MeetingsMonthCalendar({
     setDraggingId(String(event.active.id))
   }
 
+  /**
+   * A day cell click names a DAY, not an instant — `day` is that day at
+   * midnight. MeetingForm takes a supplied start as an exact time, which is
+   * right for the day/week grid (a slot click really is a time) and wrong
+   * here: it would propose a meeting at the stroke of 12am. Carry the current
+   * wall-clock time onto the clicked day instead, and let the form round it
+   * up to the next step exactly as it rounds "now".
+   */
+  function openNewMeetingOn(day: Date) {
+    const clicked = new Date()
+    setNewMeetingDay(
+      new Date(
+        day.getFullYear(),
+        day.getMonth(),
+        day.getDate(),
+        clicked.getHours(),
+        clicked.getMinutes(),
+      ),
+    )
+  }
+
   const monthStart = startOfMonth(cursor)
   const monthEnd = endOfMonth(cursor)
   const days = eachDayOfInterval({
@@ -346,12 +364,12 @@ export function MeetingsMonthCalendar({
       {/* Says out loud what the grid offers, for anyone who can't see a chip
           lift under the cursor — and names the keyboard equivalent. */}
       <p className="text-xs text-muted-foreground">
-        Select a meeting for its full details, attendees and notes. Drag one onto another day to move
-        it — or reschedule it from its details, which works by keyboard.
+        Select a meeting for its full details, attendees and notes, or click an empty day to schedule
+        one. Drag one onto another day to move it — with a mouse, by touch, or by keyboard (Space to
+        lift, arrow keys to move) — or reschedule it from its details instead.
       </p>
 
-      <DndContext
-        sensors={sensors}
+      <DragSurface
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragCancel={() => setDraggingId(null)}
@@ -383,6 +401,7 @@ export function MeetingsMonthCalendar({
                     entries={entriesForDay}
                     isExpanded={isExpanded}
                     onToggleExpanded={() => setExpanded(isExpanded ? null : key)}
+                    onEmptyClick={() => openNewMeetingOn(day)}
                   >
                     {(isExpanded ? entriesForDay : entriesForDay.slice(0, MAX_VISIBLE)).map(
                       (entry) => (
@@ -418,7 +437,24 @@ export function MeetingsMonthCalendar({
             </div>
           ) : null}
         </DragOverlay>
-      </DndContext>
+      </DragSurface>
+
+      {/* Opened by a click on the empty space in a day cell. Keyed on the
+          seeded instant so each cell mounts a form carrying its own date —
+          the same remount-to-reseed pattern the day/week grid's slot `+`
+          uses, rather than a controlled `open` prop the form does not take. */}
+      {newMeetingDay ? (
+        <MeetingForm
+          key={newMeetingDay.toISOString()}
+          apps={apps}
+          activeUsers={users}
+          defaultStart={newMeetingDay}
+          defaultOpen
+          onOpenChange={(next) => {
+            if (!next) setNewMeetingDay(null)
+          }}
+        />
+      ) : null}
 
       <MeetingDetailDialog
         meeting={open}
@@ -469,6 +505,7 @@ function DayCell({
   entries,
   isExpanded,
   onToggleExpanded,
+  onEmptyClick,
   children,
 }: {
   dayKey: string
@@ -477,6 +514,8 @@ function DayCell({
   entries: Entry[]
   isExpanded: boolean
   onToggleExpanded: () => void
+  /** Opens the "New meeting" form prefilled with this day. */
+  onEmptyClick: () => void
   children: ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: dayKey })
@@ -530,6 +569,19 @@ function DayCell({
         </span>
       </div>
       {children}
+      {/* Fills whatever's left of the cell below the chips. Deliberately NOT
+          a tab stop: a month grid has 30-42 of these, and most days have no
+          meeting — one new tab stop per empty cell would badly clutter
+          keyboard navigation for a click-to-prefill convenience that
+          already has a real keyboard route (the page's own "New meeting"
+          button, just without the date prefilled). Mouse/touch only, same
+          reasoning as the roadmap's edge-resize handles. */}
+      <div
+        aria-hidden
+        onClick={onEmptyClick}
+        title={`New meeting on ${format(day, 'EEEE, MMMM d')}`}
+        className="min-h-4 flex-1 rounded-sm transition-colors duration-150 hover:bg-accent/60"
+      />
       {/* One button across both states — rendering "+N more" and "Show less" as
           separate elements unmounted the control the user was standing on,
           dropping focus to <body>. */}

@@ -22,6 +22,7 @@ import {
   type DragMoveEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import {
   differenceInCalendarDays,
   eachMonthOfInterval,
@@ -33,10 +34,14 @@ import {
   startOfWeek,
 } from 'date-fns'
 import { toast } from 'sonner'
+import { GripVertical } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { DragSurface, buildDragAnnouncements } from '@/components/shared/drag-surface'
 import { cn } from '@/lib/utils'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
-import { updateSprint } from '@/features/sprints/actions'
+import { SORT_GAP, sortOrderForIndex } from '@/lib/sort-order'
+import { reorderSprint, resortSprintsByDate, updateSprint } from '@/features/sprints/actions'
+import { dropIndexIn } from '@/features/sprints/board-view'
 import { SprintEditDialog } from '@/features/sprints/components/sprint-edit-dialog'
 import {
   PX_PER_DAY,
@@ -201,6 +206,12 @@ export function RoadmapTimeline({
   const scrollRef = useRef<HTMLDivElement>(null)
   const [, startTransition] = useTransition()
   const [overrides, setOverrides] = useState<ReadonlyMap<string, SprintRange>>(() => new Map())
+  /** The same explicit-overlay contract as `overrides`, for the other thing
+   *  a sprint row carries: its position in the index below. Kept apart from
+   *  `overrides` because the two never interact — a reorder must not disturb
+   *  a date drag, which is the entire point of a row order that is not the
+   *  date order. */
+  const [orderOverrides, setOrderOverrides] = useState<ReadonlyMap<string, number>>(() => new Map())
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null)
   const [editing, setEditing] = useState<Sprint | null>(null)
   const [liveMessage, setLiveMessage] = useState('')
@@ -225,8 +236,10 @@ export function RoadmapTimeline({
   if (sprints !== syncedSprints) {
     setSyncedSprints(sprints)
     // Fresh server data supersedes every optimistic range; keeping them would
-    // mean showing a stale local guess over a known-good answer.
+    // mean showing a stale local guess over a known-good answer. The row
+    // order is the same bargain, and drops on the same render.
     if (overrides.size > 0) setOverrides(new Map())
+    if (orderOverrides.size > 0) setOrderOverrides(new Map())
   }
 
   /*
@@ -305,6 +318,31 @@ export function RoadmapTimeline({
     [sprints],
   )
 
+  /**
+   * The same sprints in MANUAL row order, with any un-confirmed reorder
+   * already applied. Deliberately a second list rather than a re-sort of
+   * `ordered`: the bars above are laid out by date and always will be, and
+   * `sprints.sortOrder` is a stored column that answers a different question
+   * ("which sprint does the team read first?").
+   *
+   * `getSprintsForApp` already returns rows in `sortOrder` order, so with
+   * nothing in flight this hands the prop straight back. The re-sort is on
+   * `sortOrder` ALONE, leaning on `Array.prototype.sort` being stable, so
+   * that rows sharing a sortOrder keep the server's own relative order — the
+   * query orders by that one column too, and inventing a tiebreaker here
+   * would make the client and the server disagree about ties.
+   */
+  const byRowOrder = useMemo(() => {
+    if (orderOverrides.size === 0) return sprints
+    return sprints
+      .map((sprint) => {
+        const sortOrder = orderOverrides.get(sprint.id)
+        return sortOrder === undefined ? sprint : { ...sprint, sortOrder }
+      })
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+  }, [sprints, orderOverrides])
+  const rowOrderIds = useMemo(() => byRowOrder.map((sprint) => sprint.id), [byRowOrder])
+
   const setZoom = useCallback(
     (next: Zoom) => {
       const params = new URLSearchParams(searchParams.toString())
@@ -326,6 +364,137 @@ export function RoadmapTimeline({
       return next
     })
   }, [])
+
+  const revertOrder = useCallback((sprintId: string) => {
+    setOrderOverrides((current) => {
+      const next = new Map(current)
+      next.delete(sprintId)
+      return next
+    })
+  }, [])
+
+  /**
+   * Writes a row's new position.
+   *
+   * The grip that calls this is only shown to admins, and that is all the
+   * `isAdmin` gate is: `reorderSprint` re-checks for admin itself, exactly as
+   * `updateSprint` does for the dates. Hiding the control is a courtesy so
+   * nobody is offered an interaction that will fail; it is not the
+   * permission, and nothing here should ever be written as though it were.
+   */
+  const commitReorder = useCallback(
+    (sprint: Sprint, sortOrder: number) => {
+      setOrderOverrides((current) => new Map(current).set(sprint.id, sortOrder))
+      startTransition(async () => {
+        try {
+          const res = await reorderSprint(sprint.id, sortOrder)
+          if (!res.ok) {
+            revertOrder(sprint.id)
+            toast.error(res.error)
+          }
+        } catch {
+          // Same reasoning as `write`: the action can reject outright, not
+          // only resolve with `{ ok: false }`, and without this the row
+          // would sit in its new place forever with nothing written.
+          revertOrder(sprint.id)
+          toast.error('Could not save that order — the row snapped back')
+        }
+      })
+    },
+    [revertOrder],
+  )
+
+  /**
+   * Move `sprintId` to where `overId` currently sits. Returns where it landed
+   * so a caller can say so out loud, or undefined when nothing changed.
+   *
+   * THE DIRECTION RULE IS BORROWED, NOT REWRITTEN. `dropIndexIn` is the
+   * board's drop maths and already returns an index into the list with the
+   * dragged row REMOVED — precisely the shape `sortOrderForIndex` wants —
+   * and it is the only version of this rule with tests behind it. Writing it
+   * out again here is exactly how it shipped broken the first time: a row
+   * moving DOWN has already vacated its own slot, so "insert before the row
+   * below" resolves to the slot it is standing in, `sortOrderForIndex`
+   * returns the value already stored, the no-op guard fires, and every
+   * downward drop is silently nothing while upward ones work.
+   */
+  const moveRow = useCallback(
+    (sprintId: string, overId: string) => {
+      const sprint = byRowOrder.find((row) => row.id === sprintId)
+      if (!sprint) return undefined
+      const index = dropIndexIn(byRowOrder, sprintId, overId)
+      const neighbours = byRowOrder.filter((row) => row.id !== sprintId)
+      const sortOrder = sortOrderForIndex(neighbours, index)
+      // A drop that resolves to the row's own slot writes nothing, rather
+      // than spending a request to store the number already stored.
+      if (sortOrder === sprint.sortOrder) return undefined
+      commitReorder(sprint, sortOrder)
+      return { name: sprint.name, position: index + 1, total: byRowOrder.length }
+    },
+    [byRowOrder, commitReorder],
+  )
+
+  /**
+   * The keyboard route to the same move: up/down on a focused grip, no
+   * pick-up step.
+   *
+   * dnd-kit's own KeyboardSensor (space to lift, arrows to move, space to
+   * drop) still works on that button — see the grip's own key handler for
+   * how the two are kept from both acting on one press. This direct path
+   * exists because the timeline above already teaches ← → as "move this
+   * sprint's dates"; a reorder that demanded a lift-then-move ritual right
+   * next to that would be the odd one out.
+   */
+  const nudgeRow = useCallback(
+    (sprintId: string, direction: -1 | 1) => {
+      const from = byRowOrder.findIndex((row) => row.id === sprintId)
+      if (from === -1) return
+      const to = from + direction
+      if (to < 0 || to >= byRowOrder.length) {
+        setLiveMessage(`${byRowOrder[from].name} is already ${direction === -1 ? 'first' : 'last'}.`)
+        return
+      }
+      const landed = moveRow(sprintId, byRowOrder[to].id)
+      if (landed) setLiveMessage(`${landed.name} moved to position ${landed.position} of ${landed.total}.`)
+    },
+    [byRowOrder, moveRow],
+  )
+
+  /**
+   * Puts the row order back in step with the dates.
+   *
+   * Without this a manual order is a one-way door: once a few rows have been
+   * dragged there is no way back to chronological short of dragging every
+   * one of them. The optimistic patch reproduces `resortSprintsByDate`'s own
+   * seeding — `(index + 1) * SORT_GAP` over `(startDate, id)`, the same
+   * ordering the action's SQL uses — so the rows do not visibly re-settle a
+   * second time when the server's answer lands.
+   */
+  const sortRowsByDate = useCallback(() => {
+    // Read off the rows rather than taking an `appId` prop: the server shell
+    // hands this component `{ sprints, slug }` and every sprint on the page
+    // belongs to the same app, so there is nothing to widen.
+    const appId = sprints[0]?.appId
+    if (!appId) return
+    const chronological = [...sprints].sort(
+      (a, b) => a.startDate.localeCompare(b.startDate) || a.id.localeCompare(b.id),
+    )
+    setOrderOverrides(
+      new Map(chronological.map((sprint, index) => [sprint.id, (index + 1) * SORT_GAP])),
+    )
+    startTransition(async () => {
+      try {
+        const res = await resortSprintsByDate(appId)
+        if (!res.ok) {
+          setOrderOverrides(new Map())
+          toast.error(res.error)
+        }
+      } catch {
+        setOrderOverrides(new Map())
+        toast.error('Could not sort those sprints — the order snapped back')
+      }
+    })
+  }, [sprints])
 
   const write = useCallback(
     (sprint: Sprint, range: SprintRange) => {
@@ -450,6 +619,26 @@ export function RoadmapTimeline({
       },
     }
   }, [byId])
+
+  // The reorder surface's ids are bare sprint ids, so naming one is a lookup
+  // and nothing more. useCallback so the memo below depends on the function
+  // rather than reaching past it to `byRowOrder` — same reasoning as the
+  // announcements memo above it.
+  const rowNameForId = useCallback(
+    (id: string) => byRowOrder.find((row) => row.id === id)?.name ?? 'the sprint',
+    [byRowOrder],
+  )
+  const reorderAnnouncements = useMemo(() => buildDragAnnouncements(rowNameForId), [rowNameForId])
+
+  function handleReorderEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || over.id === active.id) return
+    // Nothing is spoken from here on purpose: this drop arrived through
+    // dnd-kit, whose announcements already describe it. The live region at
+    // the bottom of this component is for the paths that bypass a sensor
+    // entirely — the date nudges, and `nudgeRow`.
+    moveRow(String(active.id), String(over.id))
+  }
 
   function handleDragStart(event: DragStartEvent) {
     const parsed = parseDragId(String(event.active.id))
@@ -690,63 +879,69 @@ export function RoadmapTimeline({
       </p>
 
       {/*
-        Every sprint, in one scannable list.
+        Every sprint, in one scannable list — and the roadmap's row order.
+
         A packed timeline puts names inside bars, and a two-day sprint at
         quarter zoom is nine pixels wide — legible as a mark, useless as a
         label. This is the index: it names every sprint regardless of scale,
         and gets you to one that is scrolled far off screen.
+
+        It is also the ONLY place row order can be expressed. Up in the
+        timeline a "row" is a lane `packRows` assigned by date — two sprints
+        that don't overlap share one — so there is no third row up there to
+        drag a sprint into, and if there were, moving it would be a claim
+        about its dates. Down here every sprint owns exactly one row, which
+        is the thing `sprints.sortOrder` orders, and moving it changes no
+        date at all.
       */}
       <div className="rounded-xl border">
-        <h3 className="border-b px-3 py-2 font-heading text-sm font-semibold">Every sprint</h3>
-        <ul className="divide-y divide-border/60">
-          {ordered.map((sprint) => {
-            const range = committedRange(sprint)
-            return (
-              <li
-                key={sprint.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm"
-              >
-                <span className="inline-flex shrink-0 items-center gap-1.5">
-                  <span aria-hidden className={cn('size-2 rounded-full', STATUS_BAR[sprint.status])} />
-                  <span className="sr-only">{STATUS_LABEL[sprint.status]}: </span>
-                  <span className="font-medium">{sprint.name}</span>
-                </span>
-                <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {formatRange(range)}
-                </span>
-                <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {inclusiveDayCount(range.startDate, range.endDate)}d
-                </span>
-                <span className="ml-auto flex shrink-0 items-center gap-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => focusSprint(sprint.id)}
-                  >
-                    Find on timeline
-                  </Button>
-                  {isAdmin ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openEditor(sprint)}
-                    >
-                      Edit
-                    </Button>
-                  ) : null}
-                  <Link
-                    href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
-                    className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
-                  >
-                    Board
-                  </Link>
-                </span>
-              </li>
-            )
-          })}
-        </ul>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-3 py-2">
+          <h3 className="font-heading text-sm font-semibold">Every sprint</h3>
+          {isAdmin ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-xs text-muted-foreground">
+                Drag a grip to reorder, or focus one and use ↑ ↓. Row order is yours to set and
+                changes no dates.
+              </p>
+              <Button type="button" size="sm" variant="outline" onClick={sortRowsByDate}>
+                Sort by date
+              </Button>
+            </div>
+          ) : null}
+        </div>
+
+        {/*
+          Its own DndContext, separate from the timeline's.
+
+          That one is horizontal by construction: a 4px PointerSensor, a
+          drag-move handler that reads `delta.x` as days, and ids of the form
+          `<uuid>|move`. Threading a vertical sortable through it would mean
+          teaching all three of those to recognise and then ignore a fourth
+          kind of drag — new branches in exactly the code that reschedules
+          sprints. dnd-kit contexts are independent, so a second one is both
+          cheaper and the reason the date paths are untouched by this.
+        */}
+        <DragSurface
+          onDragEnd={handleReorderEnd}
+          accessibility={{ announcements: reorderAnnouncements }}
+        >
+          <SortableContext items={rowOrderIds} strategy={verticalListSortingStrategy}>
+            <ul className="divide-y divide-border/60">
+              {byRowOrder.map((sprint) => (
+                <SprintIndexRow
+                  key={sprint.id}
+                  sprint={sprint}
+                  range={committedRange(sprint)}
+                  slug={slug}
+                  isAdmin={isAdmin}
+                  onFind={focusSprint}
+                  onEdit={openEditor}
+                  onNudgeRow={nudgeRow}
+                />
+              ))}
+            </ul>
+          </SortableContext>
+        </DragSurface>
       </div>
 
       <SprintEditDialog
@@ -951,5 +1146,121 @@ function ResizeHandle({
         'focus-visible:bg-foreground/25 focus-visible:ring-2 focus-visible:ring-ring',
       )}
     />
+  )
+}
+
+/**
+ * One row of the index, and the one control in this component that changes
+ * a sprint's position rather than its dates.
+ *
+ * The grip is a control of its own rather than the whole row being
+ * draggable. The row already holds three other targets — find, edit, board —
+ * and a drag surface wrapped around them would eat the first few pixels of
+ * every click on all three before deciding it was not a drag after all.
+ */
+function SprintIndexRow({
+  sprint,
+  range,
+  slug,
+  isAdmin,
+  onFind,
+  onEdit,
+  onNudgeRow,
+}: {
+  sprint: Sprint
+  range: SprintRange
+  slug: string
+  isAdmin: boolean
+  onFind: (sprintId: string) => void
+  onEdit: (sprint: Sprint) => void
+  onNudgeRow: (sprintId: string, direction: -1 | 1) => void
+}) {
+  // Destructured at the call site, not held whole and reached into from the
+  // JSX below: `setNodeRef` IS a ref setter and the result object carries
+  // dnd-kit's own `node` ref beside it, so reading them during render is a
+  // ref access during render — which React 19 does not forgive. Same rule,
+  // for the same reason, as BarBody and ResizeHandle above.
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } =
+    useSortable({ id: sprint.id, disabled: !isAdmin })
+
+  return (
+    <li
+      ref={setNodeRef}
+      // Only the y component is taken. This is a vertical list, and letting a
+      // row wander sideways under the pointer suggests a horizontal move that
+      // has no meaning here.
+      style={{ transform: transform ? `translate3d(0, ${Math.round(transform.y)}px, 0)` : undefined }}
+      className={cn(
+        'relative flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm',
+        // dnd-kit also hands back a `transition` string, and it is
+        // deliberately not used: it would be an inline style, and an inline
+        // transition cannot be switched off by `motion-reduce`. Expressed as
+        // classes, the reduced-motion override actually wins. Suppressed
+        // outright on the row being dragged, which has to track the pointer —
+        // the same call the bars above make.
+        !isDragging && 'transition-transform duration-150 motion-reduce:transition-none',
+        isDragging && 'z-10 bg-card shadow-md',
+      )}
+    >
+      {isAdmin ? (
+        <button
+          ref={setActivatorNodeRef}
+          type="button"
+          {...attributes}
+          {...listeners}
+          aria-label={`Reorder ${sprint.name}. Use the up and down arrow keys.`}
+          onKeyDown={(event) => {
+            // Forward to dnd-kit FIRST — `{...listeners}` above spreads its
+            // keyboard activator and a bare onKeyDown here would replace it.
+            // Same trap, same fix, as BarBody.
+            listeners?.onKeyDown?.(event)
+            // While the row is LIFTED, the arrows belong to dnd-kit's
+            // KeyboardSensor, which is moving a preview and will report the
+            // result through onDragEnd. Acting on them here as well would
+            // commit one write per keypress underneath that, and then a
+            // second, contradictory one on the drop.
+            if (isDragging) return
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+            event.preventDefault()
+            onNudgeRow(sprint.id, event.key === 'ArrowUp' ? -1 : 1)
+          }}
+          className={cn(
+            'shrink-0 cursor-grab touch-none rounded-sm text-muted-foreground/60 outline-none',
+            'transition-colors duration-150 motion-reduce:transition-none',
+            'hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+            'active:cursor-grabbing',
+          )}
+        >
+          <GripVertical aria-hidden className="size-3.5" />
+        </button>
+      ) : null}
+      <span className="inline-flex shrink-0 items-center gap-1.5">
+        <span aria-hidden className={cn('size-2 rounded-full', STATUS_BAR[sprint.status])} />
+        <span className="sr-only">{STATUS_LABEL[sprint.status]}: </span>
+        <span className="font-medium">{sprint.name}</span>
+      </span>
+      <span className="font-mono text-xs tabular-nums text-muted-foreground">
+        {formatRange(range)}
+      </span>
+      <span className="font-mono text-xs tabular-nums text-muted-foreground">
+        {inclusiveDayCount(range.startDate, range.endDate)}d
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-1">
+        <Button type="button" size="sm" variant="ghost" onClick={() => onFind(sprint.id)}>
+          Find on timeline
+        </Button>
+        {isAdmin ? (
+          <Button type="button" size="sm" variant="outline" onClick={() => onEdit(sprint)}>
+            Edit
+          </Button>
+        ) : null}
+        <Link
+          href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
+          className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
+        >
+          Board
+        </Link>
+      </span>
+    </li>
   )
 }

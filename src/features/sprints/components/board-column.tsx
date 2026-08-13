@@ -113,6 +113,12 @@ export function BoardColumn({
                     currentUser.id,
                     task.assignee?.id ?? null,
                   )}
+                  // The card's quick menu edits the same task the drag moves,
+                  // so it is gated on the same `canMoveTask` answer — with the
+                  // destructive item held back for admins, and the roster the
+                  // reassign items need passed straight through.
+                  isAdmin={currentUser.role === 'admin'}
+                  team={team}
                   selected={selectedIds.has(task.id)}
                   selectionMode={selectionMode}
                   todayIso={todayIso}

@@ -2,6 +2,7 @@
 
 import { useState, useTransition, type FormEvent } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -35,7 +36,7 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { deleteSprint, updateSprint, updateSprintStatus } from '@/features/sprints/actions'
-import { sprintDurationLabel } from '@/features/sprints/sprint-date-range'
+import { shiftEndDate, sprintDurationLabel } from '@/features/sprints/sprint-date-range'
 import type { Sprint } from '@/features/sprints/queries'
 
 type Status = 'planned' | 'active' | 'done'
@@ -45,6 +46,8 @@ const STATUS_OPTIONS: { value: Status; label: string }[] = [
   { value: 'active', label: 'Active' },
   { value: 'done', label: 'Done' },
 ]
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 type FormState = { name: string; goal: string; startDate: string; endDate: string; status: Status }
 
@@ -73,7 +76,9 @@ const EMPTY: FormState = {
  * were the entire surface, so a typo in a name or a wrong end date could
  * only be fixed in the database. This dialog is also the roadmap's
  * conventional keyboard route: every drag it offers (move the bar, drag
- * either edge) is a pair of ordinary date fields here.
+ * either edge) is a pair of ordinary date fields here — and, like dragging
+ * the bar's body, moving the start date carries the end date with it so the
+ * sprint keeps its length (see `handleStartDateChange`).
  *
  * Status still goes through `updateSprintStatus` rather than being folded
  * into `updateSprint` — activating a sprint demotes any other active sprint
@@ -88,9 +93,14 @@ export function SprintEditDialog({
   slug: string
   onOpenChange: (open: boolean) => void
 }) {
+  const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(() => (sprint ? toFormState(sprint) : EMPTY))
   const [rangeError, setRangeError] = useState<string | null>(null)
+  /** Whether the end date has been typed by hand this time round. Once it
+   *  has, moving the start date stops dragging it along: an explicit end date
+   *  is an answer, and re-deriving it from a duration would overwrite it. */
+  const [endDateTouched, setEndDateTouched] = useState(false)
 
   // Re-seed whenever a different sprint is opened. Adjusting state during
   // render rather than in an effect is React's own recommendation for
@@ -99,7 +109,32 @@ export function SprintEditDialog({
   if (sprint !== syncedSprint) {
     setSyncedSprint(sprint)
     setRangeError(null)
+    setEndDateTouched(false)
     if (sprint) setForm(toFormState(sprint))
+  }
+
+  /**
+   * Moving the start date moves the end date by the same number of days —
+   * the keyboard equivalent of dragging the bar's body on the roadmap, which
+   * is a move, not a resize. Guarded on both dates already being real ISO
+   * days because a `type="date"` input reports '' (and every partial state in
+   * between) while it is being typed into, and `shiftEndDate` would turn that
+   * into a nonsense range.
+   */
+  function handleStartDateChange(newStart: string) {
+    setForm((f) => {
+      const canShift =
+        !endDateTouched &&
+        ISO_DATE_RE.test(f.startDate) &&
+        ISO_DATE_RE.test(f.endDate) &&
+        ISO_DATE_RE.test(newStart)
+      return {
+        ...f,
+        startDate: newStart,
+        endDate: canShift ? shiftEndDate(f.startDate, f.endDate, newStart) : f.endDate,
+      }
+    })
+    setRangeError(null)
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -133,6 +168,7 @@ export function SprintEditDialog({
             // dialog and the timeline behind it show what is actually stored,
             // instead of leaving the status select reading like a change that
             // took while the fields it sits beside have quietly moved on.
+            router.refresh()
             return
           }
         }
@@ -211,10 +247,7 @@ export function SprintEditDialog({
                 id="sprint-edit-start"
                 type="date"
                 value={form.startDate}
-                onChange={(e) => {
-                  setRangeError(null)
-                  setForm((f) => ({ ...f, startDate: e.target.value }))
-                }}
+                onChange={(e) => handleStartDateChange(e.target.value)}
                 required
                 className="h-9 font-mono hover:border-ring/40"
               />
@@ -236,6 +269,7 @@ export function SprintEditDialog({
                 type="date"
                 value={form.endDate}
                 onChange={(e) => {
+                  setEndDateTouched(true)
                   setRangeError(null)
                   setForm((f) => ({ ...f, endDate: e.target.value }))
                 }}

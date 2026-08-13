@@ -20,25 +20,34 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('@/features/activity/log', () => ({ logActivity: logActivityMock }))
 
 let meetingQueue: unknown[][] = []
-let attendeeReturningQueue: unknown[][] = []
+// respondToMeeting now reads membership BEFORE writing rather than inferring
+// it from a zero-row `.returning()`: the write is a db.batch, every statement
+// in a batch runs, so "you're not on the invite list" has to be an early
+// return. That second read needs its own queue.
+let attendeeQueue: unknown[][] = []
 
 vi.mock('@/db', () => ({
   db: {
     select: () => ({
       from: (table: unknown) => ({
-        where: async () => (table === liveMeetings ? meetingQueue.shift() ?? [] : []),
+        where: async () =>
+          table === liveMeetings ? (meetingQueue.shift() ?? []) : (attendeeQueue.shift() ?? []),
       }),
     }),
+    // Statements handed to a batch are BUILT, not awaited, so the spy fires at
+    // construction. Returning a bare object is enough — the batch stub below
+    // never inspects what it was given.
     update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({
-        where: () => ({
-          returning: async () => {
-            writeSpy(table, values)
-            return attendeeReturningQueue.shift() ?? []
-          },
-        }),
+        where: () => {
+          writeSpy(table, values)
+          return {}
+        },
       }),
     }),
+    insert: () => ({ values: () => ({}) }),
+    delete: () => ({ where: () => ({}) }),
+    batch: async () => [],
   },
 }))
 
@@ -54,7 +63,7 @@ beforeEach(() => {
   writeSpy.mockReset()
   logActivityMock.mockReset()
   meetingQueue = []
-  attendeeReturningQueue = []
+  attendeeQueue = []
 })
 
 describe('respondToMeeting', () => {
@@ -72,7 +81,7 @@ describe('respondToMeeting', () => {
   it('records the RSVP and logs activity with the real meeting title when the meeting is live', async () => {
     asUser()
     meetingQueue = [[{ title: 'Sprint planning' }]]
-    attendeeReturningQueue = [[{ userId: USER_ID }]]
+    attendeeQueue = [[{ userId: USER_ID }]]
 
     const res = await respondToMeeting(MEETING_ID, 'going')
 

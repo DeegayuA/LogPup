@@ -318,6 +318,13 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
   // the meeting" has no soft state to be in — the row's absence IS the fact.
   'src/features/meetings/actions.ts': 'updateMeeting',
 
+  // why: the same hard delete of the same never-soft table, reached from the
+  // per-attendee control rather than the edit form. Nothing is lost by it —
+  // meeting_attendee_history keeps the interval this person was on the
+  // meeting for, plus a 'removed' tombstone carrying the RSVP they had, so
+  // "who was on this meeting on date X" still answers correctly afterwards.
+  'src/features/meetings/rsvp-actions.ts': 'removeMeetingAttendee',
+
   // why: clearMeetingAiNotes drops the generated write-up (meeting_ai_notes)
   // and the follow-ups this meeting raised (meeting_followups), both
   // rebuildable from the transcript that survives. The typed note segments it

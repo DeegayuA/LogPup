@@ -23,8 +23,8 @@ export type SpeakerMapping = {
 }
 
 /**
- * Resolves a speaker label ("Speaker 1", or an attendee name the model
- * recognized) to a real user id.
+ * Resolves a speaker label to a real user id — and ONLY ever from an explicit
+ * `meeting_speakers` row. No row means no person: `null`.
  *
  * Resolves ONLY through an explicit, human-confirmed `meeting_speakers`
  * mapping. No mapping means no user: the caller must render the raw label,
@@ -99,6 +99,52 @@ export function resolveSpeakerNameForLabel(
     displayName: mapping?.displayName,
     label,
   })
+}
+
+export type SpeakerAssignmentPlan = {
+  /** The user the label now resolves to; null = "not a listed attendee". */
+  userId: string | null
+  /** Whether a `meeting_attendees` row (+ its open history row) is needed. */
+  addAttendee: boolean
+  /** Whether an `assignments` row (+ its history pair) is needed. */
+  addAssignment: boolean
+}
+
+/**
+ * Decides which writes assigning a speaker label to a person implies.
+ *
+ * Assigning a label is allowed to reach past the meeting: naming someone who
+ * wasn't on the invite list means they WERE in the room, so they belong on
+ * the attendee list; and if the meeting belongs to an app they carry no
+ * assignment for, they were doing that app's work. Both are real membership
+ * claims, so both are written — but only when they're actually missing, which
+ * is the whole job of this function.
+ *
+ * Pure so the branching is testable without a database. The server action
+ * (assignSpeaker) turns the plan into one db.batch, which is what makes the
+ * cascade all-or-nothing: no reachable state has a label mapped to someone
+ * who isn't an attendee.
+ */
+export function planSpeakerAssignment(input: {
+  userId: string | null
+  /** Current `meeting_attendees` user ids for this meeting. */
+  attendeeIds: string[]
+  /** The meeting's app, or null when it isn't linked to one. */
+  appId: string | null
+  /** App ids this user already has an `assignments` row for. */
+  assignedAppIds: string[]
+}): SpeakerAssignmentPlan {
+  // "Not a listed attendee" resolves to nobody, so there is nobody to add
+  // anywhere — it is a statement about the label, not about a person.
+  if (!input.userId) return { userId: null, addAttendee: false, addAssignment: false }
+
+  return {
+    userId: input.userId,
+    addAttendee: !input.attendeeIds.includes(input.userId),
+    // A meeting with no app has no project to belong to; an assignment row
+    // would have nothing to point at.
+    addAssignment: input.appId !== null && !input.assignedAppIds.includes(input.appId),
+  }
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/

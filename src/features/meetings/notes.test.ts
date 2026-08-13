@@ -4,6 +4,7 @@ import {
   resolveSpeakerName,
   resolveSpeakerNameForLabel,
   normalizeDueDate,
+  planSpeakerAssignment,
   suggestionToTaskPayload,
   orderNoteSegments,
   shouldAutoAssign,
@@ -23,6 +24,20 @@ import {
 // attendee list at all. "Kasun Silva" below is a name that IS a real attendee
 // in this file's other fixtures — that is exactly the point of the guard.
 describe('resolveSpeakerUserId', () => {
+  // These are the meeting's attendees. Their names are used as LABELS below
+  // on purpose: the point of every "returns null" case is that a label
+  // matching a real attendee's name is still only a guess.
+  const ATTENDEE_NAMES = ['Nadeesha Perera', 'Kasun Silva']
+
+  // Structural half of the regression guard. The function does not take the
+  // attendee list at all, so it cannot name-match even by accident — a
+  // behavioural assertion alone could be satisfied by a fallback that simply
+  // wasn't handed any attendees. Re-adding that parameter is the regression,
+  // and this fails the moment someone does.
+  it('cannot see the attendee list — it takes only a label and mappings', () => {
+    expect(resolveSpeakerUserId.length).toBe(2)
+  })
+
   it('returns null for a null/empty label', () => {
     expect(resolveSpeakerUserId(null, [])).toBeNull()
     expect(resolveSpeakerUserId('', [])).toBeNull()
@@ -33,30 +48,38 @@ describe('resolveSpeakerUserId', () => {
     expect(resolveSpeakerUserId('Speaker 1', mappings)).toBe('u2')
   })
 
-  it('honors an explicit "not a listed attendee" mapping (null) without falling back to name-matching', () => {
+  it('honors an explicit "not a listed attendee" mapping (null)', () => {
     const mappings = [{ label: 'Nadeesha Perera', userId: null }]
     expect(resolveSpeakerUserId('Nadeesha Perera', mappings)).toBeNull()
   })
 
-  // REGRESSION GUARD. The model frequently emits, as a diarization label, a
-  // name it heard *mentioned* rather than the name of whoever was speaking.
-  // Auto-matching that label against the attendee list attributed notes to
-  // people who were talked ABOUT — and, via suggestedAssigneeLabel, pre-
-  // assigned real tasks to them. An exact attendee-name match is the most
-  // tempting case and must STILL resolve to null without a confirmed mapping.
-  it('returns null for an unmapped label that exactly matches an attendee name', () => {
-    expect(resolveSpeakerUserId('Kasun Silva', [])).toBeNull()
+  // THE REGRESSION GUARD. A speaker label is a model guess — the analysis
+  // prompt asks Gemini to map speakers to attendee names, so a label matching
+  // an attendee's name is evidence of nothing. This function used to
+  // name-match here, which rendered a guess as fact: in production a note was
+  // attributed to someone who was talked ABOUT, not talking, and the same
+  // call pre-assigned a real task to them. No mapping row, no person. Ever.
+  it('returns null for an unmapped label that EXACTLY matches an attendee name', () => {
+    const [exactAttendeeName] = ATTENDEE_NAMES
+    expect(exactAttendeeName).toBe('Nadeesha Perera')
+    expect(resolveSpeakerUserId(exactAttendeeName, [])).toBeNull()
   })
 
-  it('returns null for an unmapped first name that would previously have matched', () => {
+  it('returns null for an unmapped label matching an attendee first name', () => {
+    expect(ATTENDEE_NAMES[1].startsWith('Kasun')).toBe(true)
     expect(resolveSpeakerUserId('Kasun', [])).toBeNull()
   })
 
-  it('returns null for a generic "Speaker N" label with no mapping and no name match', () => {
+  it('returns null for a generic "Speaker N" label with no mapping', () => {
     expect(resolveSpeakerUserId('Speaker 2', [])).toBeNull()
   })
 
-  it('prefers the mapping for one label over a same-meeting mapping for a different label', () => {
+  it('ignores a mapping for a DIFFERENT label rather than treating it as a near-miss', () => {
+    const mappings = [{ label: 'Speaker 1', userId: 'u1' }]
+    expect(resolveSpeakerUserId('Speaker 2', mappings)).toBeNull()
+  })
+
+  it('picks the right mapping when several labels are mapped in the same meeting', () => {
     const mappings = [
       { label: 'Speaker 1', userId: 'u1' },
       { label: 'Speaker 2', userId: 'u2' },

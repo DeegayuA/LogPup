@@ -48,7 +48,8 @@ export function MeetingsViews({
   currentUserId: string
   isAdmin: boolean
   users: MentionUser[]
-  /** Apps the row-level edit dialog can move a meeting to. */
+  /** Apps the row-level edit dialog can move a meeting to, and what the
+   *  calendar's "click an empty slot" New meeting form offers. */
   apps?: { id: string; name: string }[]
   /** Parsed from the page's awaited `searchParams`, so the first server paint
    *  is already the view the URL asked for rather than a default that flips

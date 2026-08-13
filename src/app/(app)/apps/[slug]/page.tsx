@@ -156,6 +156,14 @@ export default async function AppDetailPage(props: {
     today,
   )
 
+  // `sprints` now comes back in roadmap order (`sortOrder` — drag-reorderable,
+  // independent of dates), not date order, so picking `sprints[0]` here would
+  // hand the board the OLDEST sprint by default instead of the most recent
+  // one the moment a workspace's rows stop being in chronological order.
+  // `sprintsByDateDesc` (newest first) is what both the board's default
+  // fallback and the sprint switcher dropdown actually want.
+  const sprintsByDateDesc = [...sprints].sort((a, b) => b.startDate.localeCompare(a.startDate))
+
   // A `sprint=backlog` query param is a synthetic selection, not a real
   // sprint id: it maps to `getBoard(appId, null)`, which returns tasks that
   // aren't attached to any sprint.
@@ -164,7 +172,7 @@ export default async function AppDetailPage(props: {
     ? undefined
     : (sprintParam ? sprints.find((s) => s.id === sprintParam) : undefined) ??
       sprints.find((s) => s.status === 'active') ??
-      sprints[0]
+      sprintsByDateDesc[0]
   const showBoard = tab === 'roadmap' && (isBacklog || Boolean(selectedSprint))
   const boardSprintId = isBacklog ? null : (selectedSprint?.id ?? null)
 

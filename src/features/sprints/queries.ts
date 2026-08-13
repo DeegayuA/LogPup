@@ -65,11 +65,15 @@ export type UpcomingSprintSummary = {
 }
 
 export async function getSprintsForApp(appId: string): Promise<Sprint[]> {
+  // Ordered by `sortOrder`, not `startDate`: the roadmap is drag-reorderable
+  // and its row order is independent of dates. Migration 0029 seeded the
+  // column chronologically per app, so a fresh app still reads oldest-first
+  // until somebody actually reorders it.
   return db
     .select()
     .from(liveSprints)
     .where(eq(liveSprints.appId, appId))
-    .orderBy(desc(liveSprints.startDate))
+    .orderBy(asc(liveSprints.sortOrder))
 }
 
 /**

@@ -3,10 +3,13 @@
 import { z } from 'zod'
 import { format } from 'date-fns'
 import { revalidatePath } from 'next/cache'
-import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm'
+import { and, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql } from 'drizzle-orm'
+import type { BatchItem } from 'drizzle-orm/batch'
 import { alias } from 'drizzle-orm/pg-core'
 import { put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
+import { allowedDomains, emailAllowed } from '@/lib/allowed-domains'
+import { orgForEmail } from '@/lib/org-from-domain'
 import { db } from '@/db'
 import {
   liveMeetings,
@@ -18,8 +21,10 @@ import {
 } from '@/db/live'
 import {
   apps,
+  assignmentHistory,
   assignments,
   meetingAiNotes,
+  meetingAttendeeHistory,
   meetingAttendees,
   meetingFollowups,
   meetingNoteSegments,
@@ -35,6 +40,8 @@ import {
   tasks,
   users,
 } from '@/db/schema'
+import { buildHistoryEntry } from '@/features/people/allocation-history'
+import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 import {
   DEFAULT_GEMINI_MODEL,
   callGemini,
@@ -55,7 +62,7 @@ import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { createTask } from '@/features/sprints/task-actions'
 import {
-  matchPersonToAttendee,
+  buildFollowupRows,
   selectCarriedForward,
   selectUnattributed,
   findMatchingFollowup,
@@ -71,6 +78,7 @@ import {
 import {
   resolveSpeakerUserId,
   normalizeDueDate,
+  planSpeakerAssignment,
   suggestionToTaskPayload,
   orderNoteSegments,
   shouldAutoAssign,
@@ -96,6 +104,7 @@ import {
   reconcileActionItems,
   type ActionRow,
 } from '@/features/meetings/components/meeting-notes-model'
+import { matchPersonToAttendee } from '@/features/meetings/followups'
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
 // Re-exported below (not just imported) — existing callers, including this
 // file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
@@ -377,6 +386,10 @@ async function insertAutoNotesAndSuggestions(
       meetingId,
       source: 'voice',
       speakerLabel: segment.speaker,
+      // Only an existing meeting_speakers mapping resolves a label to a
+      // person. A brand-new label stays unresolved (speakerId null) and
+      // renders as a label until a human says who it was — the model's guess
+      // that a label IS an attendee's name is not evidence.
       speakerId: resolveSpeakerUserId(segment.speaker, mappingRows),
       content: segment.text,
       // The model gives no per-chunk timing — a monotonic counter still
@@ -859,42 +872,18 @@ async function fetchApprovedUsers(): Promise<FollowupPersonOption[]> {
 /** Derives person-linked follow-ups from the model's per-person notes and inserts them. */
 async function deriveAndInsertFollowups(
   sourceMeetingId: string,
-  attendees: AttendeeRef[],
   perPerson: PerPersonNote[],
   questions: QuestionNote[],
 ): Promise<void> {
-  const rows: {
-    sourceMeetingId: string
-    userId: string | null
-    personName: string
-    text: string
-    kind: FollowupKind
-  }[] = []
+  // Attribution comes from confirmed speaker mappings ONLY — never from
+  // name-matching the model's output against the attendee list. See
+  // buildFollowupRows.
+  const mappingRows: SpeakerMapping[] = await db
+    .select({ label: meetingSpeakers.label, userId: meetingSpeakers.userId })
+    .from(meetingSpeakers)
+    .where(eq(meetingSpeakers.meetingId, sourceMeetingId))
 
-  for (const person of perPerson) {
-    if (!person.name) continue
-    const userId = matchPersonToAttendee(person.name, attendees)
-    for (const action of person.actionItems ?? []) {
-      if (!action) continue
-      rows.push({ sourceMeetingId, userId, personName: person.name, text: action, kind: 'action' })
-    }
-  }
-
-  for (const entry of questions) {
-    if (!entry.person) continue
-    const userId = matchPersonToAttendee(entry.person, attendees)
-    for (const question of entry.questions ?? []) {
-      if (!question) continue
-      rows.push({
-        sourceMeetingId,
-        userId,
-        personName: entry.person,
-        text: question,
-        kind: 'question',
-      })
-    }
-  }
-
+  const rows = buildFollowupRows(sourceMeetingId, perPerson, questions, mappingRows)
   if (rows.length > 0) await db.insert(meetingFollowups).values(rows)
 }
 
@@ -1213,7 +1202,8 @@ async function persistMeetingAnalysis(
     .values(values)
     .onConflictDoUpdate({ target: meetingAiNotes.meetingId, set: values })
 
-  await deriveAndInsertFollowups(id, attendees, perPerson, questions)
+  await deriveAndInsertFollowups(id, perPerson, questions)
+
 
   // "Intelligently think" about carry-forward: check whether any follow-up
   // items owed by this meeting's attendees (from earlier meetings) were
@@ -2714,6 +2704,38 @@ export type TaskSuggestionView = {
   appSlug: string | null
 }
 
+/** Someone in the org who is NOT on this meeting — the picker's second tier. */
+export type OrgPersonOption = { id: string; name: string; email: string }
+
+/**
+ * Everything the speaker-assignment control needs. Bundled as its own type so
+ * the control can be mounted somewhere that has no note timeline (see
+ * getSpeakerAssignmentData) as well as inside one.
+ */
+export type SpeakerAssignmentData = {
+  /** Distinct speaker labels the transcript produced for this meeting. */
+  labels: string[]
+  speakers: SpeakerRow[]
+  attendees: AttendeeRef[]
+  orgPeople: OrgPersonOption[]
+  /** Whether the caller may create a brand-new person (admins only). */
+  canAddPeople: boolean
+}
+
+/**
+ * A follow-up the AI derived but could not attribute to a real person — its
+ * `personName` is the model's raw guess, kept verbatim and rendered as a
+ * LABEL. Until someone says who it belongs to it carries forward to nobody,
+ * which is the point: an item owed by "whoever the model thought" is worse
+ * than one visibly waiting to be assigned.
+ */
+export type UnassignedFollowupView = {
+  id: string
+  personName: string
+  text: string
+  kind: FollowupKind
+}
+
 export type NoteTimelineData = {
   segments: NoteSegmentView[]
   speakers: SpeakerRow[]
@@ -2726,6 +2748,54 @@ export type NoteTimelineData = {
    */
   approvedUsers: AttendeeRef[]
   appId: string | null
+  /** Active org members who aren't on this meeting — picker tier 2. */
+  orgPeople: OrgPersonOption[]
+  /** Whether the caller may create a brand-new person — picker tier 3. */
+  canAddPeople: boolean
+  /** AI-derived follow-ups from THIS meeting with nobody attributed yet. */
+  unassignedFollowups: UnassignedFollowupView[]
+}
+
+/**
+ * Active, approved org members who are NOT already on this meeting — the
+ * "anyone else in the org" tier of the speaker picker.
+ *
+ * Filtered to active+approved because those are the people who can actually
+ * hold work: a rejected or deactivated account showing up as a speaker option
+ * would let an attribution create membership for someone who can't sign in.
+ */
+async function fetchOrgPeople(meetingId: string): Promise<OrgPersonOption[]> {
+  const attendeeIds = db
+    .select({ userId: meetingAttendees.userId })
+    .from(meetingAttendees)
+    .where(eq(meetingAttendees.meetingId, meetingId))
+
+  return db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(
+      and(
+        eq(users.active, true),
+        eq(users.status, 'approved'),
+        notInArray(users.id, attendeeIds),
+      ),
+    )
+    .orderBy(users.name)
+}
+
+/** The distinct speaker labels a meeting's voice segments carry. */
+async function fetchSpeakerLabels(meetingId: string): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ label: liveNoteSegments.speakerLabel })
+    .from(liveNoteSegments)
+    .where(
+      and(
+        eq(liveNoteSegments.meetingId, meetingId),
+        eq(liveNoteSegments.source, 'voice'),
+        isNotNull(liveNoteSegments.speakerLabel),
+      ),
+    )
+  return rows.map((row) => row.label as string).sort((a, b) => a.localeCompare(b))
 }
 
 const speakerUsers = alias(users, 'note_speaker_users')
@@ -2877,6 +2947,122 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
     attendees,
     approvedUsers,
     appId: meeting.appId,
+    orgPeople: await fetchOrgPeople(id),
+    canAddPeople: session.user.role === 'admin',
+    unassignedFollowups: await db
+      .select({
+        id: meetingFollowups.id,
+        personName: meetingFollowups.personName,
+        text: meetingFollowups.text,
+        kind: meetingFollowups.kind,
+      })
+      .from(meetingFollowups)
+      .where(
+        and(
+          eq(meetingFollowups.sourceMeetingId, id),
+          isNull(meetingFollowups.userId),
+          eq(meetingFollowups.status, 'open'),
+        ),
+      ),
+  })
+}
+
+const assignFollowupInput = z.object({ followupId: z.uuid(), userId: z.uuid() })
+
+/**
+ * Attributes an unresolved follow-up to a real person — the human confirmation
+ * that replaces the name-match this used to do automatically.
+ *
+ * Same gate as every other follow-up write (authorizeFollowupWrite): an admin,
+ * the source meeting's creator, or the person it is already attributed to.
+ * Since these rows have no attribution yet, in practice that is admin or
+ * organizer — the people who were in a position to know who was talking.
+ *
+ * Only ever fills in a MISSING attribution. Re-pointing an item that already
+ * names someone is a different, louder operation than finishing an incomplete
+ * one, and quietly allowing it here would let a mis-click rewrite work someone
+ * has already responded to.
+ */
+export async function assignFollowupPerson(
+  followupId: string,
+  userId: string,
+): Promise<ActionResult> {
+  const parsed = assignFollowupInput.safeParse({ followupId, userId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const authorized = await authorizeFollowupWrite(parsed.data.followupId, 'assign')
+  if (!authorized.ok) return authorized
+  const { row } = authorized.data
+  if (row.userId) return err('That follow-up is already assigned')
+
+  const [person] = await db
+    .select({ id: users.id, active: users.active })
+    .from(users)
+    .where(eq(users.id, parsed.data.userId))
+  if (!person) return err('That person no longer exists')
+  if (!person.active) return err('That person is no longer active')
+
+  await db
+    .update(meetingFollowups)
+    .set({ userId: person.id })
+    .where(eq(meetingFollowups.id, row.id))
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+/**
+ * The speaker-assignment control's data on its own, for hosts that render it
+ * without a note timeline (the meeting Intelligence panel's "By person"
+ * section). The timeline already carries all of this in its own payload — it
+ * passes it down rather than calling this and paying for a second round trip.
+ *
+ * Same read gate as the timeline: this exposes the org directory and the
+ * meeting's speaker labels.
+ */
+export async function getSpeakerAssignmentData(
+  meetingId: string,
+): Promise<ActionResult<SpeakerAssignmentData>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const idParsed = idInput.safeParse(meetingId)
+  if (!idParsed.success) return err(idParsed.error.issues[0].message)
+  const id = idParsed.data
+
+  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, id))
+  if (!meeting) return err('Meeting not found')
+  if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
+
+  // Four independent reads, batched. All key on the already-validated id, and
+  // on the Neon HTTP driver each serial await is a full round trip — this was
+  // four sequential hops before the panel could paint.
+  const [speakers, labels, attendees, orgPeople] = await Promise.all([
+    db
+      .select({
+        label: meetingSpeakers.label,
+        userId: meetingSpeakers.userId,
+        userName: users.name,
+        // Required by SpeakerRow: a voice belonging to nobody on the invite is
+        // named through this column rather than users.name. It arrived in
+        // migration 0026, and this query came from a branch that forked before
+        // it — so without this the panel could never show a typed-in name.
+        displayName: meetingSpeakers.displayName,
+      })
+      .from(meetingSpeakers)
+      .leftJoin(users, eq(meetingSpeakers.userId, users.id))
+      .where(eq(meetingSpeakers.meetingId, id)),
+    fetchSpeakerLabels(id),
+    fetchAttendees(id),
+    fetchOrgPeople(id),
+  ])
+
+  return ok({
+    labels,
+    speakers,
+    attendees,
+    orgPeople,
+    canAddPeople: session.user.role === 'admin',
   })
 }
 
@@ -3098,6 +3284,401 @@ export async function clearMeetingAiNotes(meetingId: string): Promise<ActionResu
 
   revalidatePath('/meetings')
   return ok(undefined)
+}
+
+const assignSpeakerInput = z
+  .object({
+    meetingId: z.uuid(),
+    label: z.string().trim().min(1).max(60),
+    // Tier 1 (attendee) and tier 2 (anyone else in the org) both arrive as a
+    // user id; null is the explicit "not a listed attendee" answer.
+    userId: z.uuid().nullable().optional(),
+    // Tier 3 — admins only, checked in the action, not here.
+    newPerson: z
+      .object({
+        name: z.string().trim().min(2).max(80),
+        email: z.email().max(160),
+      })
+      .optional(),
+    // The role and allocation to open a NEW app assignment with, for the case
+    // where attributing this label also puts someone on the meeting's app for
+    // the first time. Absent on the first call — the action answers
+    // 'needs-assignment' and the admin is asked, rather than a number being
+    // invented for them (see assignSpeaker). Same bounds as the admin
+    // allocation dialog (people/actions.ts assignInput) because it lands in
+    // exactly the same table and the same capacity totals.
+    assignment: z
+      .object({
+        role: z.string().trim().min(2).max(40),
+        allocationPct: z.number().int().min(5).max(100),
+      })
+      .optional(),
+  })
+  .refine((data) => (data.userId === undefined) !== (data.newPerson === undefined), {
+    message: 'Pick someone, or add a new person — not both',
+  })
+
+/**
+ * The two statements an `assignment_history` change appends: close the
+ * interval currently open for this (userId, appId), then open one describing
+ * the resulting state. Both take the SAME `at`, so the intervals abut exactly.
+ *
+ * A local copy of features/people/actions.ts' `historyStatements` because a
+ * `'use server'` module can only export async functions — the shared helper
+ * cannot be imported across the boundary. The RULE lives in one place either
+ * way: both call `buildHistoryEntry`, which is what decides the row's shape.
+ */
+function assignmentHistoryStatements(input: {
+  userId: string
+  appId: string
+  role: string
+  allocationPct: number
+  changeKind: 'assigned' | 'updated' | 'removed'
+  changedBy: string
+  at: Date
+  note?: string | null
+}) {
+  return [
+    db
+      .update(assignmentHistory)
+      .set({ effectiveTo: input.at })
+      .where(
+        and(
+          eq(assignmentHistory.userId, input.userId),
+          eq(assignmentHistory.appId, input.appId),
+          isNull(assignmentHistory.effectiveTo),
+        ),
+      ),
+    db.insert(assignmentHistory).values(buildHistoryEntry(input)),
+  ] as const
+}
+
+/**
+ * The membership equivalent of the pair above, for `meeting_attendee_history`.
+ * Same rule, same single `at`, same reason it must be one batch. A local copy
+ * of rsvp-actions.ts' helper for the same `'use server'` export restriction —
+ * the shape itself is decided in one place, by buildAttendanceEntry.
+ */
+function attendanceHistoryStatements(input: {
+  meetingId: string
+  userId: string
+  response: 'pending' | 'going' | 'maybe' | 'declined'
+  changeKind: 'added' | 'updated' | 'removed'
+  changedBy: string
+  at: Date
+  note?: string | null
+}) {
+  return [
+    db
+      .update(meetingAttendeeHistory)
+      .set({ effectiveTo: input.at })
+      .where(
+        and(
+          eq(meetingAttendeeHistory.meetingId, input.meetingId),
+          eq(meetingAttendeeHistory.userId, input.userId),
+          isNull(meetingAttendeeHistory.effectiveTo),
+        ),
+      ),
+    db.insert(meetingAttendeeHistory).values(buildAttendanceEntry(input)),
+  ] as const
+}
+
+/**
+ * What assignSpeaker answers.
+ *
+ * 'needs-assignment' is NOT an error and NOT a partial write — nothing at all
+ * was written. Attributing this label would also open the person's first
+ * assignment on the meeting's app, and there is no honest default for what
+ * that assignment claims: an invented percentage is indistinguishable from a
+ * decided one once it is in `assignments`, and every capacity total that
+ * includes it silently inherits the guess. So the action stops and asks, and
+ * the caller retries with `assignment` filled in.
+ */
+export type AssignSpeakerResult =
+  | {
+      status: 'assigned'
+      userId: string | null
+      /** Set when this write put the person over 100% across all their apps. */
+      warning?: string
+      /**
+       * An app assignment was missing but the caller isn't an admin, so the
+       * label mapping and meeting attendance were written and the assignment
+       * was left alone. Allocations are admin-only everywhere else
+       * (people/actions.ts assignUser), and this is not the place to make an
+       * exception — least of all by inventing the number.
+       */
+      assignmentDeferred?: { appName: string }
+    }
+  | {
+      status: 'needs-assignment'
+      personName: string
+      appName: string
+      /** Their current total across all apps, so the admin is deciding with
+       *  the capacity picture in front of them rather than blind. */
+      currentPct: number
+    }
+
+/**
+ * Maps a speaker label to a person — and follows that claim everywhere it
+ * leads, in ONE server action.
+ *
+ * Saying "this voice is Kasun" on a meeting Kasun isn't listed for is a
+ * statement that he WAS in the room; if the meeting belongs to an app he
+ * carries no assignment for, it's a statement that he was doing that app's
+ * work. Both are real membership facts, so both get written. The alternative
+ * — mapping the label and leaving the rest to be noticed later — is how a
+ * speaker ends up attributed on a meeting they're not on, which is a fresh
+ * version of the bug this whole change exists to fix.
+ *
+ * Everything goes in one db.batch. neon-http has no interactive transactions,
+ * but a batch IS one transaction, so no half-applied state is reachable:
+ * there is no moment where the label is mapped to a non-attendee, or an
+ * attendee exists with no membership history.
+ *
+ * Also backfills speakerId on every segment already carrying that label, so
+ * assigning "Speaker 1" once relabels everything they said, past and future.
+ */
+export async function assignSpeaker(input: {
+  meetingId: string
+  label: string
+  userId?: string | null
+  newPerson?: { name: string; email: string }
+  assignment?: { role: string; allocationPct: number }
+}): Promise<ActionResult<AssignSpeakerResult>> {
+  const parsed = assignSpeakerInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Not allowed')
+  const { session, meeting } = ctx
+  const isAdmin = session.user.role === 'admin'
+
+  // Statements are collected in FK-safe order: a new user row must precede
+  // anything that references it.
+  const statements: BatchItem<'pg'>[] = []
+  let targetUserId: string | null = null
+  // Only needed to name the person in the "what should this assignment say?"
+  // prompt, so it is whatever the caller already made us look up.
+  let targetUserName = ''
+
+  if (parsed.data.newPerson) {
+    if (!isAdmin) return err('Only an admin can add someone new')
+
+    const email = parsed.data.newPerson.email.trim().toLowerCase()
+    // Sign-in is domain-gated (every provider funnels through emailAllowed),
+    // so an account outside the allowlist would be a locked door — the same
+    // refusal admin createUser makes.
+    if (!emailAllowed(email)) {
+      const domain = email.slice(email.lastIndexOf('@') + 1)
+      return err(
+        `${domain} isn’t an allowed sign-in domain — this person could never log in. Allowed: ${allowedDomains().join(', ') || '(none configured)'}`,
+      )
+    }
+
+    const [clash] = await db.select({ id: users.id }).from(users).where(eq(users.email, email))
+    // Deliberately not "adopt the existing account": two people can share a
+    // name, and silently attributing a transcript to whoever already holds
+    // this email is exactly the kind of confident guess being removed here.
+    if (clash) return err('Someone already uses that email — pick them from the list instead')
+
+    const derivedOrg = orgForEmail(email)
+    targetUserId = crypto.randomUUID()
+    statements.push(
+      db.insert(users).values({
+        id: targetUserId,
+        email,
+        name: parsed.data.newPerson.name,
+        role: 'member',
+        active: true,
+        orgTags: derivedOrg ? [derivedOrg] : [],
+        // An admin adding them IS the vetting step; 'pending' exists for open
+        // Google self-signup only (src/lib/auth.ts). No starter password is
+        // minted — they sign in with Google when they first need to, and this
+        // row exists now so attribution has something true to point at.
+        status: 'approved',
+      }),
+    )
+    targetUserName = parsed.data.newPerson.name
+  } else if (parsed.data.userId) {
+    const [person] = await db
+      .select({ id: users.id, name: users.name, active: users.active })
+      .from(users)
+      .where(eq(users.id, parsed.data.userId))
+    if (!person) return err('That person no longer exists')
+
+    if (!person.active) {
+      // A deactivated account is still a legitimate answer for a PAST
+      // meeting they attended — just not a way to create new membership.
+      const [attendee] = await db
+        .select({ userId: meetingAttendees.userId })
+        .from(meetingAttendees)
+        .where(
+          and(
+            eq(meetingAttendees.meetingId, meeting.id),
+            eq(meetingAttendees.userId, person.id),
+          ),
+        )
+      if (!attendee) return err('That person is no longer active')
+    }
+    targetUserId = person.id
+    targetUserName = person.name
+  }
+
+  // What the assignment already looks like, so the plan only adds what's
+  // genuinely missing.
+  const [attendeeRows, assignmentRows] = await Promise.all([
+    db
+      .select({ userId: meetingAttendees.userId })
+      .from(meetingAttendees)
+      .where(eq(meetingAttendees.meetingId, meeting.id)),
+    targetUserId
+      ? db
+          // allocationPct comes along so the over-allocation total can be
+          // computed without a second round trip — both to show the admin
+          // what they're adding to, and to warn afterwards.
+          .select({ appId: assignments.appId, allocationPct: assignments.allocationPct })
+          .from(assignments)
+          .where(eq(assignments.userId, targetUserId))
+      : Promise.resolve([] as { appId: string; allocationPct: number }[]),
+  ])
+
+  const plan = planSpeakerAssignment({
+    userId: targetUserId,
+    attendeeIds: attendeeRows.map((row) => row.userId),
+    appId: meeting.appId,
+    assignedAppIds: assignmentRows.map((row) => row.appId),
+  })
+
+  // The new assignment needs a role and an allocation, and nobody has said
+  // what they are. STOP — before any statement runs — and ask. Returning here
+  // writes nothing at all, so a cancelled prompt leaves the meeting exactly as
+  // it was rather than half-attributed.
+  //
+  // Non-admins are the one case that proceeds without one: creating an
+  // assignment is admin-only everywhere else (people/actions.ts assignUser),
+  // so there is nothing to prompt them for. They still get the two claims they
+  // ARE allowed to make — the label mapping and the attendance row — and the
+  // caller is told the assignment is outstanding.
+  const needsAssignment = plan.addAssignment && meeting.appId !== null && !parsed.data.assignment
+  const [appRow] = needsAssignment
+    ? await db.select({ name: apps.name }).from(apps).where(eq(apps.id, meeting.appId!))
+    : [undefined]
+
+  if (needsAssignment && isAdmin) {
+    return ok({
+      status: 'needs-assignment',
+      personName: targetUserName,
+      appName: appRow?.name ?? 'this app',
+      currentPct: assignmentRows.reduce((total, row) => total + row.allocationPct, 0),
+    })
+  }
+
+  const writeAssignment = plan.addAssignment && Boolean(parsed.data.assignment)
+
+  // ONE instant for every interval boundary this batch writes, so the closing
+  // and opening rows abut exactly instead of leaving a gap or an overlap.
+  const at = new Date()
+
+  statements.push(
+    db
+      .insert(meetingSpeakers)
+      .values({ meetingId: meeting.id, label: parsed.data.label, userId: plan.userId })
+      .onConflictDoUpdate({
+        target: [meetingSpeakers.meetingId, meetingSpeakers.label],
+        set: { userId: plan.userId },
+      }),
+    db
+      .update(meetingNoteSegments)
+      .set({ speakerId: plan.userId })
+      .where(
+        and(
+          eq(meetingNoteSegments.meetingId, meeting.id),
+          eq(meetingNoteSegments.speakerLabel, parsed.data.label),
+        ),
+      ),
+  )
+
+  if (plan.userId && plan.addAttendee) {
+    statements.push(
+      db
+        .insert(meetingAttendees)
+        .values({ meetingId: meeting.id, userId: plan.userId, response: 'pending' }),
+      // CLOSE FIRST. Someone absent from meeting_attendees may still have an
+      // OPEN history row — the tombstone left by an earlier removal. Inserting
+      // without closing it would leave two open intervals for the same
+      // (meetingId, userId), which the one-open partial unique index rejects
+      // and which would make "as of" ambiguous. Re-adding after a removal has
+      // to close the tombstone, exactly as re-assigning closes an allocation's.
+      ...attendanceHistoryStatements({
+        meetingId: meeting.id,
+        userId: plan.userId,
+        // They were in the room but never RSVP'd — 'pending' is the honest
+        // value, not a retroactive "going" nobody clicked.
+        response: 'pending',
+        changeKind: 'added',
+        changedBy: session.user.id,
+        at,
+        note: 'Added automatically when a meeting speaker was attributed to this person.',
+      }),
+    )
+  }
+
+  if (plan.userId && writeAssignment && meeting.appId && parsed.data.assignment) {
+    const { role, allocationPct } = parsed.data.assignment
+    statements.push(
+      db.insert(assignments).values({
+        userId: plan.userId,
+        appId: meeting.appId,
+        role,
+        allocationPct,
+      }),
+      ...assignmentHistoryStatements({
+        userId: plan.userId,
+        appId: meeting.appId,
+        role,
+        allocationPct,
+        changeKind: 'assigned',
+        changedBy: session.user.id,
+        at,
+        // No "placeholder" caveat any more: an admin typed this role and this
+        // percentage when they attributed the speaker, so the history entry
+        // records a decision rather than a guess to be corrected later.
+        note: `Set when this person was attributed as a speaker in “${meeting.title}”.`,
+      }),
+    )
+  }
+
+  try {
+    // The batch is one transaction: the mapping, the attendee row, the
+    // assignment and every history row commit together or not at all.
+    await db.batch(statements as [BatchItem<'pg'>, ...BatchItem<'pg'>[]])
+  } catch (error) {
+    console.error('[meeting-speakers] assignSpeaker batch failed:', error)
+    return err('Could not save that — try again')
+  }
+
+  revalidatePath('/meetings')
+  if (writeAssignment) {
+    revalidatePath('/people')
+    revalidatePath('/')
+  }
+
+  // Same over-allocation check the admin allocation dialog makes — an
+  // assignment opened from here counts towards capacity identically, so it
+  // should be just as loud about pushing someone past 100%.
+  const totalPct = writeAssignment
+    ? assignmentRows.reduce((total, row) => total + row.allocationPct, 0) +
+      (parsed.data.assignment?.allocationPct ?? 0)
+    : 0
+
+  return ok({
+    status: 'assigned',
+    userId: plan.userId,
+    ...(totalPct > 100 ? { warning: `Now at ${totalPct}% allocation` } : {}),
+    ...(needsAssignment && !isAdmin
+      ? { assignmentDeferred: { appName: appRow?.name ?? 'this app' } }
+      : {}),
+  })
 }
 
 const setSpeakerMappingInput = z.object({
