@@ -24,23 +24,6 @@ function todayISODate(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-/** Fills one of MeetingForm's two date/time fields by its visible label
- * ("Starts" / "Ends"), picking today's date from the calendar popover
- * (today's cell is always in the initially-displayed month, so this needs
- * no next/previous-month navigation regardless of what day the suite runs). */
-async function fillMeetingDateTime(page: Page, dialog: Locator, label: 'Starts' | 'Ends', time: string) {
-  const field = page.getByText(label, { exact: true }).locator('xpath=..')
-  await field.getByRole('button', { name: 'Pick a date' }).click()
-  await page.getByRole('button', { name: /^Today,/ }).click()
-  // Dismiss via an outside click (Escape doesn't reliably close this
-  // popover) before the next field opens its own calendar — otherwise both
-  // popovers' "Today" buttons are simultaneously in the DOM and every
-  // `getByRole('button', { name: /^Today,/ })` lookup is ambiguous.
-  await dialog.getByRole('heading', { name: 'New meeting' }).click()
-  await expect(page.getByRole('button', { name: /^Today,/ })).toHaveCount(0)
-  await field.getByLabel(label).fill(time)
-}
-
 /** Drags a task card between board columns via raw pointer events. dnd-kit's
  * PointerSensor requires an 8px move before it activates (see
  * src/features/sprints/components/board.tsx), and only tracks the drag
@@ -113,13 +96,15 @@ test.describe('LogPup smoke', () => {
     await dialog.getByRole('button', { name: 'Add member' }).click()
 
     await expect(dialog).not.toBeVisible()
-    // Scoped to <main>: the signed-in user's own name also renders in the
-    // sidebar's account-menu trigger, so a page-wide getByText for it is a
-    // strict-mode violation on every page of the app, not just this one.
+    // Scope to the Team panel first — the sidebar account menu AND the app's
+    // activity feed ("Team change: deeghayus … QA") both contain the same
+    // text, so anything less specific is a strict-mode coin flip that depends
+    // on which sections have rendered by assertion time.
     const teamRow = page
-      .getByRole('main')
-      .getByText('deeghayus', { exact: true })
-      .locator('xpath=../..')
+      .getByRole('listitem')
+      .filter({ hasText: 'deeghayus' })
+      .filter({ hasText: 'QA' })
+      .filter({ hasNotText: 'Team change' })
     await expect(teamRow).toBeVisible()
     await expect(teamRow.getByText('50%')).toBeVisible()
   })
@@ -127,6 +112,9 @@ test.describe('LogPup smoke', () => {
   test('create a sprint, quick-add a task, drag it to In progress, and it survives reload', async ({
     page,
   }) => {
+    // Deliberately the RETIRED `tab=board` value: Board and Roadmap merged
+    // into one plan surface, and this asserts the legacy alias still lands
+    // people on it rather than bouncing them to Overview.
     await page.goto(`/apps/${APP_SLUG}?tab=board`)
     // Two "New sprint" triggers render before the first sprint exists (the
     // toolbar's SprintFormDialog and the empty-state's) — both open the
@@ -142,12 +130,14 @@ test.describe('LogPup smoke', () => {
     await dialog.getByRole('button', { name: 'Create sprint' }).click()
 
     await expect(page.getByText('Sprint created')).toBeVisible()
-    // The board's own heading, not a bare getByText: the new sprint's name
-    // renders TWICE on this page (the heading and the sprint selector's
-    // current value), so an untargeted match is a strict-mode violation.
-    // Naming the heading is also the stronger assertion — it proves the board
-    // actually switched to the sprint that was just created.
-    await expect(page.getByRole('heading', { name: SPRINT_NAME })).toBeVisible()
+    // The redesigned board shows the new sprint's name in the sprint-switcher
+    // trigger AND in the board header, so a bare getByText is a strict-mode
+    // violation. The switcher's combobox is the load-bearing assertion: it
+    // proves the new sprint became the SELECTED one, not merely that its
+    // name got painted somewhere.
+    await expect(
+      page.getByRole('combobox', { name: 'Select sprint or backlog' }),
+    ).toContainText(SPRINT_NAME)
 
     const quickAdd = page.getByLabel('Add task to To do')
     await expect(quickAdd).toBeVisible()
@@ -155,20 +145,23 @@ test.describe('LogPup smoke', () => {
     await quickAdd.press('Enter')
     await expect(quickAdd).toHaveValue('')
 
-    // Each board column is a <section aria-labelledby> (board-column.tsx), so
-    // the column IS a named region. Addressing it that way rather than as
-    // "the parent element of the quick-add box" means a wrapper div added for
-    // layout can't silently move the task list out of the locator's subtree.
+    // The redesigned board exposes each column as a labelled region landmark
+    // — anchor on that instead of the composer textbox's parent, whose DOM
+    // position (inside its own form) stopped containing the task list.
     const todoColumn = page.getByRole('region', { name: 'To do' })
     const inProgressColumn = page.getByRole('region', { name: 'In progress' })
-    const task = todoColumn.getByText(TASK_TITLE, { exact: true }).locator('xpath=..')
-    await expect(task).toBeVisible()
+    // Drag from the card's dedicated reorder handle — the stable, purpose-built
+    // affordance — rather than the title text's parent, which detaches when the
+    // board re-renders as the optimistic create settles (boundingBox → null).
+    const handle = todoColumn.getByRole('button', { name: `Reorder ${TASK_TITLE}` })
+    await expect(handle).toBeVisible()
 
-    // An empty column's placeholder fills its droppable area, so it is the
-    // thing to drop onto (board-column.tsx renders this exact copy).
     const dropTarget = inProgressColumn.getByText('Nothing here yet', { exact: false })
     await expect(dropTarget).toBeVisible()
-    await dragTaskTo(page, task, dropTarget)
+    // Let the post-create refresh finish so the handle we grab is the settled
+    // element, not the optimistic one about to be swapped out.
+    await page.waitForLoadState('networkidle')
+    await dragTaskTo(page, handle, dropTarget)
 
     await expect(inProgressColumn.getByText(TASK_TITLE, { exact: true })).toBeVisible()
     await expect(todoColumn.getByText(TASK_TITLE, { exact: true })).toHaveCount(0)
@@ -190,8 +183,10 @@ test.describe('LogPup smoke', () => {
     const dialog = page.getByRole('dialog')
     await expect(dialog.getByRole('heading', { name: 'New meeting' })).toBeVisible()
     await dialog.getByLabel('Title').fill(MEETING_TITLE)
-    await fillMeetingDateTime(page, dialog, 'Starts', '10:00')
-    await fillMeetingDateTime(page, dialog, 'Ends', '11:00')
+    // Starts/Ends arrive pre-filled with the next sensible slot in the
+    // redesigned form (the old "Pick a date" popover is gone), and this
+    // test's subject — the missing-calendar-grant warning — doesn't depend
+    // on WHICH times the meeting has. Defaults are the realistic path.
 
     await dialog.getByRole('button', { name: 'Add attendee' }).click()
     await page.getByRole('option', { name: 'deeghayus' }).click()
