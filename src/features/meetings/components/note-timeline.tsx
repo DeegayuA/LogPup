@@ -47,6 +47,7 @@ import {
   SkeletonBlock,
 } from '@/features/meetings/components/meeting-chips'
 import { isSameNoteText } from '@/features/meetings/components/meeting-notes-model'
+import { usePanels } from '@/features/meetings/components/meeting-panels'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
 import { diffSingleWord } from '@/features/meetings/text-replace'
@@ -150,6 +151,14 @@ export function NoteTimeline({
 
   const [speakerBusyLabel, setSpeakerBusyLabel] = useState<string | null>(null)
   const [speakerPending, startSpeakerPending] = useTransition()
+
+  // The write-up's density control, read straight from the panels context
+  // rather than threaded down as a prop: this timeline is the bulk of what is
+  // on screen, and it used to pass `compact={false}` unconditionally — so the
+  // Comfortable/Compact toggle changed a few gaps in the panels around it and
+  // left the actual record untouched, which read as a broken control.
+  const { density } = usePanels()
+  const compact = density === 'compact'
 
   const mentionPool = mentionUsers ?? attendees
   const assigneePool: MentionUser[] = buildAssigneePool(attendees, mentionUsers)
@@ -474,7 +483,7 @@ export function NoteTimeline({
           </p>
         </div>
       ) : (
-        <ol className="flex flex-col gap-2">
+        <ol className={cn('flex flex-col', compact ? 'gap-1' : 'gap-2')}>
           {segments.map((segment) => {
             const meta = SOURCE_META[segment.source]
             const Icon = meta.icon
@@ -493,7 +502,11 @@ export function NoteTimeline({
               <li
                 key={segment.id}
                 className={cn(
-                  'flex flex-col gap-1.5 rounded-lg border border-border bg-card p-2.5',
+                  'flex flex-col rounded-lg border border-border bg-card',
+                  // The whole point of Compact: more of the record on screen at
+                  // once. Padding and the gap between a turn's own lines are
+                  // what actually buy that back, not a smaller font.
+                  compact ? 'gap-1 p-1.5' : 'gap-1.5 p-2.5',
                   // The model's own write-up reads as a different kind of
                   // thing from a person's typed note, so it gets a rule rather
                   // than a fill — a tint here would have to borrow one of the
@@ -662,7 +675,7 @@ export function NoteTimeline({
         meetingTitle={meetingTitle}
         deadlines={deadlines}
         canManage={canManage}
-        compact={false}
+        compact={compact}
         autoAssignCappedCount={autoAssignCappedCount}
         actions={actionItemActions}
       />
