@@ -98,7 +98,18 @@ export default async function AppDetailPage(props: {
   // Admins get an "Edit app" dialog in the header on every tab, and that
   // dialog needs both the roster (for the Lead select) and the workspace tag
   // vocabulary — so those two follow the permission, not the tab.
-  const needsUsers = isAdmin || TABS_NEEDING_USERS.includes(tab)
+  /*
+   * Roadmap needs the ROSTER but not the tag vocabulary, so the two queries
+   * that used to share one flag no longer can.
+   *
+   * Its column composers resolve a typed "@name" against the whole workspace
+   * rather than this app's team: resolving against the team alone answered a
+   * correctly spelled teammate with "no one here called shanika", which sends
+   * you hunting for a typo that isn't there. Tech tags are only ever wanted by
+   * the editor dialogs, so fetching them here would be a query nothing reads.
+   */
+  const needsUsers = isAdmin || tab === 'roadmap' || TABS_NEEDING_USERS.includes(tab)
+  const needsTechTags = isAdmin || TABS_NEEDING_USERS.includes(tab)
 
   // Overview shows a teaser; Activity shows the feed; every other tab needs
   // none of it, and 0 is how they say so.
@@ -130,7 +141,7 @@ export default async function AppDetailPage(props: {
     tab === 'discussion' ? listAppComments(app.id) : Promise.resolve([]),
     tab === 'meetings' ? getMeetingsForApp(app.id) : Promise.resolve([]),
     tab === 'meetings' ? listAssignableApps() : Promise.resolve([]),
-    needsUsers ? listDistinctTechTags() : Promise.resolve([]),
+    needsTechTags ? listDistinctTechTags() : Promise.resolve([]),
     activityLimit > 0 ? getAppActivity(app.id, activityLimit) : Promise.resolve([]),
     // Overview is the only tab that renders it; every other tab would pay
     // three aggregate queries for a panel it never shows.
@@ -252,6 +263,29 @@ export default async function AppDetailPage(props: {
       sprintCounts.get(sprint.id) ?? { todo: 0, in_progress: 0, done: 0 },
     ]),
   )
+
+  /*
+   * Who a name typed into a board composer may resolve to.
+   *
+   * The whole workspace, each flagged by whether they are on THIS app, so the
+   * preview can distinguish "that name is nobody" from "that is Shanika, who
+   * isn't on this app" — two different problems that used to share one wrong
+   * message. createTask only requires the assignee to be a real user, so the
+   * wider list is assignable, not merely displayable.
+   *
+   * The fallback matters: if the roster query is ever gated off this tab
+   * again, falling back to the team keeps name resolution working instead of
+   * silently answering every name with "no one in the workspace called…".
+   */
+  const teamUserIds = new Set(team.map((member) => member.userId))
+  const composerPeople =
+    activeUsers.length > 0
+      ? activeUsers.map((user) => ({
+          id: user.id,
+          name: user.name,
+          onTeam: teamUserIds.has(user.id),
+        }))
+      : team.map((member) => ({ id: member.userId, name: member.name, onTeam: true }))
 
   const boardTasks = board ? [...board.todo, ...board.in_progress, ...board.done] : []
   const selectedRead = selectedSprint
@@ -497,6 +531,7 @@ export default async function AppDetailPage(props: {
             <Board
               initialBoard={board}
               team={team.map((member) => ({ userId: member.userId, name: member.name }))}
+              composerPeople={composerPeople}
               appId={app.id}
               sprintId={boardSprintId}
               currentUser={{ id: session.user.id, role: session.user.role }}

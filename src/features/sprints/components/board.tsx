@@ -101,12 +101,18 @@ function applyMove(tasks: TaskWithAssignee[], move: OptimisticMove): TaskWithAss
 export function Board({
   initialBoard,
   team,
+  composerPeople,
   appId,
   sprintId,
   currentUser,
 }: {
   initialBoard: BoardData
+  /** This app's members — the roster the cards' reassign menus offer. */
   team: { userId: string; name: string }[]
+  /** Everyone a name typed into a column composer may resolve to: the whole
+   *  workspace, flagged by app membership. Wider than `team` on purpose — see
+   *  TaskComposer. */
+  composerPeople: { id: string; name: string; onTeam: boolean }[]
   appId: string
   sprintId: string | null
   currentUser: { id: string; role: 'admin' | 'member' }
@@ -491,6 +497,7 @@ export function Board({
               share={summary.total === 0 ? 0 : group.tasks.length / summary.total}
               composerPatch={patchForGroup(view.groupBy, group.id) ?? {}}
               team={team}
+              composerPeople={composerPeople}
               appId={appId}
               sprintId={sprintId}
               currentUser={currentUser}

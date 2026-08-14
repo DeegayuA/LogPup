@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.169",
+  "current": "v0.0.254",
   "versions": [
     {
       "version": "v0.0.1",
@@ -796,224 +796,734 @@
     {
       "version": "v0.0.133",
       "date": "2026-08-11",
+      "hash": "10a8d8e",
+      "change": "feat: truthful speaker attribution and meeting membership history"
+    },
+    {
+      "version": "v0.0.134",
+      "date": "2026-08-11",
+      "hash": "6e675a5",
+      "change": "feat: direct manipulation for board, roadmap and calendar"
+    },
+    {
+      "version": "v0.0.135",
+      "date": "2026-08-11",
+      "hash": "9166ae4",
+      "change": "fix: live transcription reliability and data loss on stop"
+    },
+    {
+      "version": "v0.0.136",
+      "date": "2026-08-11",
+      "hash": "56a3e80",
+      "change": "merge: attribution truth and membership history"
+    },
+    {
+      "version": "v0.0.137",
+      "date": "2026-08-11",
+      "hash": "4aa2e6a",
+      "change": "merge: direct manipulation for board, roadmap and calendar"
+    },
+    {
+      "version": "v0.0.138",
+      "date": "2026-08-11",
+      "hash": "d128912",
+      "change": "merge: live transcription fixes"
+    },
+    {
+      "version": "v0.0.139",
+      "date": "2026-08-11",
+      "hash": "4ca0bb3",
+      "change": "feat: mount speaker assignment; ask for allocation instead of inventing one"
+    },
+    {
+      "version": "v0.0.140",
+      "date": "2026-08-11",
       "hash": "c4e03ce",
       "change": "feat: icon-only install button, brand mark opens mobile navigation"
     },
     {
-      "version": "v0.0.134",
+      "version": "v0.0.141",
+      "date": "2026-08-11",
+      "hash": "82b3e8e",
+      "change": "fix: stop reading dnd-kit ref containers during render on the roadmap"
+    },
+    {
+      "version": "v0.0.142",
       "date": "2026-08-11",
       "hash": "f1343cf",
       "change": "."
     },
     {
-      "version": "v0.0.135",
+      "version": "v0.0.143",
+      "date": "2026-08-12",
+      "hash": "c7381b9",
+      "change": "fix: client-side navigation for the roadmap quick menu; add verification notes"
+    },
+    {
+      "version": "v0.0.144",
       "date": "2026-08-12",
       "hash": "d95efa6",
       "change": "."
     },
     {
-      "version": "v0.0.136",
+      "version": "v0.0.145",
       "date": "2026-08-12",
       "hash": "513b83f",
       "change": "docs: dashboard redesign + activity trail design spec"
     },
     {
-      "version": "v0.0.137",
+      "version": "v0.0.146",
       "date": "2026-08-12",
       "hash": "91861fe",
       "change": "fix: invite-failure toast said the fallback three times"
     },
     {
-      "version": "v0.0.138",
+      "version": "v0.0.147",
+      "date": "2026-08-12",
+      "hash": "b047b0d",
+      "change": "fix: task-card Space-to-lift was clobbered by the card's own onKeyDown"
+    },
+    {
+      "version": "v0.0.148",
       "date": "2026-08-12",
       "hash": "86744ab",
       "change": "docs: attendee recommender design spec (sub-project A)"
     },
     {
-      "version": "v0.0.139",
+      "version": "v0.0.149",
       "date": "2026-08-12",
       "hash": "139166f",
       "change": "docs: meeting load reduction design spec (sub-project B)"
     },
     {
-      "version": "v0.0.140",
+      "version": "v0.0.150",
+      "date": "2026-08-12",
+      "hash": "2e54c73",
+      "change": "fix: downward reorders were silently impossible on roadmap and board"
+    },
+    {
+      "version": "v0.0.151",
       "date": "2026-08-12",
       "hash": "a084ada",
       "change": "docs: app-wide soft deletes design spec (sub-project D)"
     },
     {
-      "version": "v0.0.141",
+      "version": "v0.0.152",
       "date": "2026-08-12",
       "hash": "dad797c",
       "change": "feat: auto-assign identified tasks with manual override"
     },
     {
-      "version": "v0.0.142",
+      "version": "v0.0.153",
       "date": "2026-08-12",
       "hash": "fb6e4c3",
       "change": "docs: people work history, observed load and KPIs design spec (sub-project C)"
     },
     {
-      "version": "v0.0.143",
+      "version": "v0.0.154",
+      "date": "2026-08-12",
+      "hash": "c1eec7a",
+      "change": "docs: browser verification round 2 — board, roadmap, touch, calendar"
+    },
+    {
+      "version": "v0.0.155",
       "date": "2026-08-12",
       "hash": "600e845",
       "change": "docs: soft-delete implementation plan (D, 7 tasks)"
     },
     {
-      "version": "v0.0.144",
+      "version": "v0.0.156",
+      "date": "2026-08-12",
+      "hash": "fe87207",
+      "change": "docs: record why the main merge was stopped, complete verification log"
+    },
+    {
+      "version": "v0.0.157",
       "date": "2026-08-12",
       "hash": "21445d6",
       "change": "."
     },
     {
-      "version": "v0.0.145",
+      "version": "v0.0.158",
       "date": "2026-08-12",
       "hash": "99fbe9c",
       "change": "."
     },
     {
-      "version": "v0.0.146",
+      "version": "v0.0.159",
       "date": "2026-08-12",
       "hash": "4c74b95",
       "change": "."
     },
     {
-      "version": "v0.0.147",
+      "version": "v0.0.160",
+      "date": "2026-08-12",
+      "hash": "4f0579b",
+      "change": "chore: adopt parallel-session WIP as build base (activity log, nav, dashboard)"
+    },
+    {
+      "version": "v0.0.161",
+      "date": "2026-08-12",
+      "hash": "560cede",
+      "change": "feat: soft-delete columns and live partial indexes (D1)"
+    },
+    {
+      "version": "v0.0.162",
       "date": "2026-08-12",
       "hash": "040457c",
       "change": "chore: reconcile drizzle migration ledger with live schema"
     },
     {
-      "version": "v0.0.148",
+      "version": "v0.0.163",
+      "date": "2026-08-12",
+      "hash": "4a9cb71",
+      "change": "fix: declare soft-delete partial indexes in schema (D1 review)"
+    },
+    {
+      "version": "v0.0.164",
       "date": "2026-08-12",
       "hash": "67547e3",
       "change": "."
     },
     {
-      "version": "v0.0.149",
+      "version": "v0.0.165",
       "date": "2026-08-12",
       "hash": "1663dce",
       "change": "."
     },
     {
-      "version": "v0.0.150",
+      "version": "v0.0.166",
       "date": "2026-08-12",
       "hash": "3bfcb6b",
       "change": "."
     },
     {
-      "version": "v0.0.151",
+      "version": "v0.0.167",
+      "date": "2026-08-12",
+      "hash": "cb03930",
+      "change": "feat: live-query subqueries and CI enforcement of soft-delete reads (D2)"
+    },
+    {
+      "version": "v0.0.168",
       "date": "2026-08-12",
       "hash": "9e7d229",
       "change": "Install Vercel Web Analytics Integration"
     },
     {
-      "version": "v0.0.152",
+      "version": "v0.0.169",
+      "date": "2026-08-12",
+      "hash": "d49d781",
+      "change": "feat: soft-delete the five delete paths (D3)"
+    },
+    {
+      "version": "v0.0.170",
       "date": "2026-08-12",
       "hash": "62acf81",
       "change": "Merge pull request #2 from DeegayuA/vercel/install-vercel-web-analytics-i-04xkl2"
     },
     {
-      "version": "v0.0.153",
+      "version": "v0.0.171",
       "date": "2026-08-12",
       "hash": "cf0326d",
       "change": "."
     },
     {
-      "version": "v0.0.154",
+      "version": "v0.0.172",
       "date": "2026-08-12",
       "hash": "c030f19",
       "change": "Install Vercel Speed Insights"
     },
     {
-      "version": "v0.0.155",
+      "version": "v0.0.173",
       "date": "2026-08-12",
       "hash": "c144150",
       "change": "fix: calendar grid review findings"
     },
     {
-      "version": "v0.0.156",
+      "version": "v0.0.174",
+      "date": "2026-08-12",
+      "hash": "5159f84",
+      "change": "fix: cover undoAutoAcceptedSuggestion, make enforcement checks reportable (D3 review)"
+    },
+    {
+      "version": "v0.0.175",
+      "date": "2026-08-12",
+      "hash": "18f5114",
+      "change": "feat: route all reads through live subqueries; backlog builder (D4)"
+    },
+    {
+      "version": "v0.0.176",
+      "date": "2026-08-12",
+      "hash": "5e585ce",
+      "change": "feat: admin trash queries, restore and purge actions (D5)"
+    },
+    {
+      "version": "v0.0.177",
+      "date": "2026-08-12",
+      "hash": "084fb5c",
+      "change": "fix: share neutral note labels, close trash test gaps (D5 review)"
+    },
+    {
+      "version": "v0.0.178",
+      "date": "2026-08-12",
+      "hash": "dd5c5d6",
+      "change": "fix: stop rendering AI speaker guesses as confirmed attributions"
+    },
+    {
+      "version": "v0.0.179",
       "date": "2026-08-12",
       "hash": "ae841b8",
       "change": "fix: disarm the roadmap keydown trap; correct the DragOverlay comment"
     },
     {
-      "version": "v0.0.157",
+      "version": "v0.0.180",
       "date": "2026-08-12",
       "hash": "316f124",
       "change": "fix: make 0023_sprint_checkins replay-safe like its neighbours"
     },
     {
-      "version": "v0.0.158",
+      "version": "v0.0.181",
       "date": "2026-08-12",
       "hash": "37f6c36",
       "change": "feat: panelled meeting write-up with tags, filters and language control"
     },
     {
-      "version": "v0.0.159",
+      "version": "v0.0.182",
+      "date": "2026-08-12",
+      "hash": "1a4f5c0",
+      "change": "feat: admin trash card with restore and typed-confirm purge (D6)"
+    },
+    {
+      "version": "v0.0.183",
+      "date": "2026-08-12",
+      "hash": "0dbf86d",
+      "change": "fix: renumber soft-delete migration to 0025 and add statement breakpoints"
+    },
+    {
+      "version": "v0.0.184",
       "date": "2026-08-12",
       "hash": "660f029",
       "change": "feat: edit assignee, due date and title on meeting action items"
     },
     {
-      "version": "v0.0.160",
+      "version": "v0.0.185",
+      "date": "2026-08-12",
+      "hash": "8870442",
+      "change": "test: soft-delete e2e coverage (D7)"
+    },
+    {
+      "version": "v0.0.186",
       "date": "2026-08-12",
       "hash": "c55cc35",
       "change": "refactor: one editable source of truth for meeting action items"
     },
     {
-      "version": "v0.0.161",
+      "version": "v0.0.187",
       "date": "2026-08-12",
       "hash": "bc0cd33",
       "change": "."
     },
     {
-      "version": "v0.0.162",
+      "version": "v0.0.188",
+      "date": "2026-08-12",
+      "hash": "518190e",
+      "change": "fix: preserve sprint task membership on soft delete; close review findings (D final)"
+    },
+    {
+      "version": "v0.0.189",
       "date": "2026-08-12",
       "hash": "d6c8f0d",
       "change": "Merge pull request #3 from DeegayuA/vercel/install-vercel-speed-insights-oh410m"
     },
     {
-      "version": "v0.0.163",
+      "version": "v0.0.190",
+      "date": "2026-08-12",
+      "hash": "6cf652c",
+      "change": "fix: sprint delete dialog no longer promises tasks move to the backlog"
+    },
+    {
+      "version": "v0.0.191",
       "date": "2026-08-12",
       "hash": "eb102f1",
       "change": "docs: attendee recommender implementation plan (A1, 9 tasks)"
     },
     {
-      "version": "v0.0.164",
+      "version": "v0.0.192",
+      "date": "2026-08-12",
+      "hash": "5ad5fa6",
+      "change": "feat: attendee recommendation schema and optional-attendee plumbing (A1-1)"
+    },
+    {
+      "version": "v0.0.193",
       "date": "2026-08-12",
       "hash": "b10cd85",
       "change": "feat: suggest a meeting title from project and start time"
     },
     {
-      "version": "v0.0.165",
+      "version": "v0.0.194",
       "date": "2026-08-12",
       "hash": "b25c584",
       "change": "."
     },
     {
-      "version": "v0.0.166",
+      "version": "v0.0.195",
+      "date": "2026-08-12",
+      "hash": "4b69fb1",
+      "change": "feat: pure seriesKey normaliser for inferred meeting series (A1-2)"
+    },
+    {
+      "version": "v0.0.196",
+      "date": "2026-08-12",
+      "hash": "d18ec7b",
+      "change": "feat: agenda topic buckets with full role coverage lint (A1-3)"
+    },
+    {
+      "version": "v0.0.197",
+      "date": "2026-08-12",
+      "hash": "f902796",
+      "change": "fix: tighten agenda keywords that manufactured false required floors (A1-3 review)"
+    },
+    {
+      "version": "v0.0.198",
+      "date": "2026-08-12",
+      "hash": "705e964",
+      "change": "fix: close the bare-keyword class with a denylist guard test (A1-3 review round 2)"
+    },
+    {
+      "version": "v0.0.199",
+      "date": "2026-08-12",
+      "hash": "72d80c6",
+      "change": "test: fix the quote-ordering fixture to use two real multi-word keywords"
+    },
+    {
+      "version": "v0.0.200",
       "date": "2026-08-12",
       "hash": "732d4ac",
       "change": "."
     },
     {
-      "version": "v0.0.167",
+      "version": "v0.0.201",
+      "date": "2026-08-12",
+      "hash": "252b392",
+      "change": "feat: deterministic attendee scoring ledger (A1-4)"
+    },
+    {
+      "version": "v0.0.202",
       "date": "2026-08-12",
       "hash": "58db0aa",
       "change": "."
     },
     {
-      "version": "v0.0.168",
+      "version": "v0.0.203",
       "date": "2026-08-13",
       "hash": "162db7d",
       "change": "docs: meeting load reduction implementation plan (B, 18 tasks)"
     },
     {
-      "version": "v0.0.169",
+      "version": "v0.0.204",
       "date": "2026-08-13",
       "hash": "469d5cc",
       "change": "docs: people work history, observed load and KPIs implementation plan (C, 10 tasks)"
+    },
+    {
+      "version": "v0.0.205",
+      "date": "2026-08-13",
+      "hash": "607c6b2",
+      "change": "fix: monotone E5, clamp E4, gate A1 and series signals, honest reason text (A1-4 review)"
+    },
+    {
+      "version": "v0.0.206",
+      "date": "2026-08-13",
+      "hash": "81b95c7",
+      "change": "fix: renumber soft-delete migration to 0027 to clear a collision with main"
+    },
+    {
+      "version": "v0.0.207",
+      "date": "2026-08-13",
+      "hash": "5423315",
+      "change": "fix: renumber migrations to 0027/0028 to clear collisions with main"
+    },
+    {
+      "version": "v0.0.208",
+      "date": "2026-08-13",
+      "hash": "0988e34",
+      "change": "test: assert the legacy-notes probe is still called, not just present"
+    },
+    {
+      "version": "v0.0.209",
+      "date": "2026-08-13",
+      "hash": "6fe571b",
+      "change": "."
+    },
+    {
+      "version": "v0.0.210",
+      "date": "2026-08-13",
+      "hash": "f27ce41",
+      "change": "fix: restore E5 recency decay, honest spoke citation, gate E7 on series (A1-4 review round 2)"
+    },
+    {
+      "version": "v0.0.211",
+      "date": "2026-08-13",
+      "hash": "ed1bb0d",
+      "change": "merge: stop rendering AI speaker guesses as confirmed attributions"
+    },
+    {
+      "version": "v0.0.212",
+      "date": "2026-08-13",
+      "hash": "5baa0ef",
+      "change": "merge: soft deletes with admin trash and restore"
+    },
+    {
+      "version": "v0.0.213",
+      "date": "2026-08-13",
+      "hash": "97afa15",
+      "change": "."
+    },
+    {
+      "version": "v0.0.214",
+      "date": "2026-08-13",
+      "hash": "6bcbbbc",
+      "change": "fix: restore main's side of four files the soft-deletes merge took wholesale"
+    },
+    {
+      "version": "v0.0.215",
+      "date": "2026-08-13",
+      "hash": "cffb050",
+      "change": "fix: repair three call sites the soft-deletes merge broke"
+    },
+    {
+      "version": "v0.0.216",
+      "date": "2026-08-13",
+      "hash": "a80bf63",
+      "change": "."
+    },
+    {
+      "version": "v0.0.217",
+      "date": "2026-08-13",
+      "hash": "a8003d4",
+      "change": "docs: daily work-done log implementation plan"
+    },
+    {
+      "version": "v0.0.218",
+      "date": "2026-08-13",
+      "hash": "7e7dc90",
+      "change": "."
+    },
+    {
+      "version": "v0.0.219",
+      "date": "2026-08-13",
+      "hash": "359538f",
+      "change": "merge: attendee recommender"
+    },
+    {
+      "version": "v0.0.220",
+      "date": "2026-08-13",
+      "hash": "7d492ac",
+      "change": "chore: renumber attribution/sort-order migrations to 0029/0030"
+    },
+    {
+      "version": "v0.0.221",
+      "date": "2026-08-13",
+      "hash": "8beba1a",
+      "change": "feat: daily work-done log schema, migration and activity entity type"
+    },
+    {
+      "version": "v0.0.222",
+      "date": "2026-08-13",
+      "hash": "e65c476",
+      "change": "feat: daily work log with AI-drafted notes"
+    },
+    {
+      "version": "v0.0.223",
+      "date": "2026-08-13",
+      "hash": "70da3e1",
+      "change": "."
+    },
+    {
+      "version": "v0.0.224",
+      "date": "2026-08-13",
+      "hash": "a9e9966",
+      "change": "merge: direct manipulation, membership history and live transcription"
+    },
+    {
+      "version": "v0.0.225",
+      "date": "2026-08-13",
+      "hash": "5e9073c",
+      "change": "."
+    },
+    {
+      "version": "v0.0.226",
+      "date": "2026-08-13",
+      "hash": "5d6faed",
+      "change": "fix: stop hiding the roadmap editor behind a closed disclosure"
+    },
+    {
+      "version": "v0.0.227",
+      "date": "2026-08-13",
+      "hash": "dbc2060",
+      "change": "."
+    },
+    {
+      "version": "v0.0.228",
+      "date": "2026-08-13",
+      "hash": "1a4e98c",
+      "change": "feat: require a work log for every working day, Saturday included"
+    },
+    {
+      "version": "v0.0.229",
+      "date": "2026-08-13",
+      "hash": "7bd94b9",
+      "change": "feat: per-project roles with PM manage rights, and call/WhatsApp everywhere"
+    },
+    {
+      "version": "v0.0.230",
+      "date": "2026-08-13",
+      "hash": "d8f6857",
+      "change": "feat: one-click Google Meet link, and a share sheet for the invite"
+    },
+    {
+      "version": "v0.0.231",
+      "date": "2026-08-13",
+      "hash": "7afea33",
+      "change": "feat: resize meetings by dragging their start and end edges"
+    },
+    {
+      "version": "v0.0.232",
+      "date": "2026-08-13",
+      "hash": "c98e98b",
+      "change": "fix: recording again no longer waits for the write-up to finish"
+    },
+    {
+      "version": "v0.0.233",
+      "date": "2026-08-13",
+      "hash": "3dcd86a",
+      "change": "feat: Meet-style popup that follows a live recording to other tabs"
+    },
+    {
+      "version": "v0.0.234",
+      "date": "2026-08-13",
+      "hash": "a15661c",
+      "change": "fix: serve meeting keyframes through the missing proxy route"
+    },
+    {
+      "version": "v0.0.235",
+      "date": "2026-08-13",
+      "hash": "b6edc48",
+      "change": "feat: /people says what each person is doing now and what they have done"
+    },
+    {
+      "version": "v0.0.236",
+      "date": "2026-08-13",
+      "hash": "e955039",
+      "change": "feat: live drag previews, notes-first meeting popup, visible roadmap handles"
+    },
+    {
+      "version": "v0.0.237",
+      "date": "2026-08-13",
+      "hash": "9d1e4e7",
+      "change": "fix: Compact density now changes the record it is meant to compact"
+    },
+    {
+      "version": "v0.0.238",
+      "date": "2026-08-13",
+      "hash": "4f702b1",
+      "change": "feat: color meetings by their people, and projects by their app hue"
+    },
+    {
+      "version": "v0.0.239",
+      "date": "2026-08-13",
+      "hash": "d0910df",
+      "change": "fix: render Google avatars by suppressing the referrer"
+    },
+    {
+      "version": "v0.0.240",
+      "date": "2026-08-13",
+      "hash": "d472dee",
+      "change": "feat: passkeys — biometric one-tap sign-in after the first login"
+    },
+    {
+      "version": "v0.0.241",
+      "date": "2026-08-13",
+      "hash": "3c82482",
+      "change": "fix: stop telling users to re-consent when Calendar API is disabled"
+    },
+    {
+      "version": "v0.0.242",
+      "date": "2026-08-13",
+      "hash": "ebcd3d3",
+      "change": "docs: logpup-development skill — the rules code comments can't teach"
+    },
+    {
+      "version": "v0.0.243",
+      "date": "2026-08-13",
+      "hash": "29a2bdf",
+      "change": "."
+    },
+    {
+      "version": "v0.0.244",
+      "date": "2026-08-13",
+      "hash": "53a6129",
+      "change": "feat: point first-time passkey users at the door that opens"
+    },
+    {
+      "version": "v0.0.245",
+      "date": "2026-08-13",
+      "hash": "8d1d370",
+      "change": "feat: calendar block opens the notes, and Edit goes straight to the form"
+    },
+    {
+      "version": "v0.0.246",
+      "date": "2026-08-13",
+      "hash": "2308a22",
+      "change": "fix: make the sign-in ring animation actually visible"
+    },
+    {
+      "version": "v0.0.247",
+      "date": "2026-08-13",
+      "hash": "d714ebe",
+      "change": "docs: speaker identification from the meeting record (design)"
+    },
+    {
+      "version": "v0.0.248",
+      "date": "2026-08-13",
+      "hash": "7bdec77",
+      "change": "feat: Compact lays the write-up out in two columns on a wide screen"
+    },
+    {
+      "version": "v0.0.249",
+      "date": "2026-08-13",
+      "hash": "385ee0a",
+      "change": "feat: require a PM on every app and record PM changes"
+    },
+    {
+      "version": "v0.0.250",
+      "date": "2026-08-13",
+      "hash": "50b2946",
+      "change": "."
+    },
+    {
+      "version": "v0.0.251",
+      "date": "2026-08-13",
+      "hash": "796a6f4",
+      "change": "docs: app PM/lead history implementation report"
+    },
+    {
+      "version": "v0.0.252",
+      "date": "2026-08-13",
+      "hash": "684b302",
+      "change": "docs: activity page redesign spec"
+    },
+    {
+      "version": "v0.0.253",
+      "date": "2026-08-13",
+      "hash": "3504be7",
+      "change": "feat: redesign the activity trail"
+    },
+    {
+      "version": "v0.0.254",
+      "date": "2026-08-14",
+      "hash": "7246dde",
+      "change": "."
     }
   ]
 }

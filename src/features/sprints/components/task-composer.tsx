@@ -1,93 +1,22 @@
 'use client'
 
 import { useId, useMemo, useState, useTransition, type KeyboardEvent } from 'react'
-import { CalendarDays, CornerDownLeft, Flag, Loader2, Text as TextIcon, UserRound } from 'lucide-react'
+import {
+  CalendarDays,
+  CornerDownLeft,
+  Flag,
+  Loader2,
+  Text as TextIcon,
+  UserRound,
+  UserRoundPlus,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { createTask } from '@/features/sprints/task-actions'
-import { parseTaskIntent, type IntentPerson } from '@/lib/task-intent'
+import { planFor } from '@/features/sprints/composer-plan'
+import type { IntentPerson } from '@/lib/task-intent'
 import type { GroupPatch } from '@/features/sprints/board-view'
-
-/** What Enter will actually do — shown to the user before it does it. */
-type ComposerPlan = {
-  title: string
-  assignee: IntentPerson | null
-  /** Everyone selected — more than one means one task per person on Enter. */
-  assignees: IntentPerson[]
-  /** A name that matched several teammates. Blocks Enter until it's narrowed. */
-  ambiguousQuery: string | null
-  ambiguousNames: string[]
-  /** A name that matched nobody on this app's team. Still creates, unassigned. */
-  unresolvedQuery: string | null
-  due: string | null
-  dueLabel: string | null
-  priority: number | null
-  priorityLabel: string | null
-  description: string | null
-}
-
-/**
- * Reads the draft the same way the ⌘K palette does, then adapts the result to
- * a board column, where two things differ:
- *
- * - an "on <app>" hint is meaningless (this board IS the app), so those words
- *   go back into the title instead of disappearing;
- * - a name that resolves to nobody falls back to the text exactly as typed, so
- *   an unknown "@bob" is never silently deleted from the task.
- */
-function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan | null {
-  const text = raw.trim().replace(/\s+/g, ' ')
-  if (!text) return null
-
-  // The floor the parser refuses to read (too short, or nothing but a date):
-  // capture it verbatim rather than refusing the task.
-  const verbatim: ComposerPlan = {
-    title: text,
-    assignee: null,
-    assignees: [],
-    ambiguousQuery: null,
-    ambiguousNames: [],
-    unresolvedQuery: null,
-    due: null,
-    dueLabel: null,
-    priority: null,
-    priorityLabel: null,
-    description: null,
-  }
-
-  const intent = parseTaskIntent(text, people, today)
-  if (!intent) return verbatim
-
-  const title = intent.appQuery ? `${intent.title} on ${intent.appQuery}` : intent.title
-
-  if (intent.ambiguous.length > 1) {
-    return {
-      ...verbatim,
-      title,
-      ambiguousQuery: intent.assigneeQuery,
-      ambiguousNames: intent.ambiguous.map((p) => p.name),
-      due: intent.due,
-      dueLabel: intent.dueLabel,
-      priority: intent.priority,
-      priorityLabel: intent.priorityLabel,
-      description: intent.description,
-    }
-  }
-  if (intent.assigneeQuery) return { ...verbatim, unresolvedQuery: intent.assigneeQuery }
-
-  return {
-    ...verbatim,
-    title,
-    assignee: intent.assignee,
-    assignees: intent.assignees,
-    due: intent.due,
-    dueLabel: intent.dueLabel,
-    priority: intent.priority,
-    priorityLabel: intent.priorityLabel,
-    description: intent.description,
-  }
-}
 
 /**
  * The inline "Add a task…" field at the foot of every board column.
@@ -100,7 +29,7 @@ function planFor(raw: string, people: IntentPerson[], today: Date): ComposerPlan
 export function TaskComposer({
   patch,
   columnTitle,
-  team,
+  people,
   appId,
   sprintId,
 }: {
@@ -112,7 +41,18 @@ export function TaskComposer({
    */
   patch: GroupPatch
   columnTitle: string
-  team: { userId: string; name: string }[]
+  /**
+   * Everyone a typed name may resolve to — the whole workspace, not just this
+   * app's team.
+   *
+   * Resolving against the team alone answered "@shanika" with "no one here
+   * called shanika", which is false: she exists, she is simply not on this
+   * app. That message sends you looking for a typo in a correctly spelled
+   * name. `onTeam` keeps the distinction so the preview can say the true
+   * thing instead, and the server permits the assignment either way —
+   * createTask checks the assignee is a real user, not that they are a member.
+   */
+  people: { id: string; name: string; onTeam: boolean }[]
   appId: string
   sprintId: string | null
 }) {
@@ -121,13 +61,21 @@ export function TaskComposer({
   const [isPending, startTransition] = useTransition()
   const previewId = useId()
 
-  const people = useMemo<IntentPerson[]>(
-    () => team.map((member) => ({ id: member.userId, name: member.name })),
-    [team],
+  const intentPeople = useMemo<IntentPerson[]>(
+    () => people.map(({ id, name }) => ({ id, name })),
+    [people],
   )
   // Parsed on every keystroke — parseTaskIntent is pure and local, so there is
   // no round trip between typing and seeing what will happen.
-  const plan = useMemo(() => planFor(draft, people, new Date()), [draft, people])
+  const plan = useMemo(() => planFor(draft, intentPeople, new Date()), [draft, intentPeople])
+
+  /** Selected people who aren't on this app — named in the preview, still assigned. */
+  const offTeam = useMemo(() => {
+    if (!plan) return []
+    const teamIds = new Set(people.filter((person) => person.onTeam).map((person) => person.id))
+    const selected = plan.assignees.length > 0 ? plan.assignees : plan.assignee ? [plan.assignee] : []
+    return selected.filter((person) => !teamIds.has(person.id))
+  }, [plan, people])
 
   function submit() {
     if (!plan || isPending) return
@@ -242,7 +190,7 @@ export function TaskComposer({
               ) : plan.unresolvedQuery ? (
                 <span className="inline-flex items-center gap-1 text-destructive">
                   <UserRound className="size-3 shrink-0" aria-hidden />
-                  No one here called “{plan.unresolvedQuery}” — adding unassigned
+                  No one in the workspace called “{plan.unresolvedQuery}” — adding unassigned
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1">
@@ -250,6 +198,18 @@ export function TaskComposer({
                   Unassigned
                 </span>
               )}
+              {/* A real person who simply isn't on this app. Warning tone, not
+                  destructive: the task WILL be created and assigned to them —
+                  this says the thing worth knowing, rather than the false
+                  "no one here called shanika" that resolving against the app
+                  team alone used to produce. */}
+              {offTeam.length > 0 ? (
+                <span className="inline-flex items-center gap-1 text-warning">
+                  <UserRoundPlus className="size-3 shrink-0" aria-hidden />
+                  {offTeam.map((person) => person.name).join(', ')}
+                  {offTeam.length === 1 ? ' is not on this app' : ' are not on this app'}
+                </span>
+              ) : null}
               {plan.dueLabel ? (
                 <span className="inline-flex items-center gap-1">
                   <CalendarDays className="size-3 shrink-0" aria-hidden />

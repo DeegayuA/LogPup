@@ -31,6 +31,7 @@ export function BoardColumn({
   share,
   composerPatch,
   team,
+  composerPeople,
   appId,
   sprintId,
   currentUser,
@@ -44,7 +45,12 @@ export function BoardColumn({
   group: BoardGroup<TaskWithAssignee>
   share: number
   composerPatch: GroupPatch
+  /** This app's members — the roster the card's reassign menu offers. */
   team: { userId: string; name: string }[]
+  /** Everyone a name typed into the composer may resolve to: the whole
+   *  workspace, flagged by whether they are on this app. Wider than `team` on
+   *  purpose — see TaskComposer. */
+  composerPeople: { id: string; name: string; onTeam: boolean }[]
   appId: string
   sprintId: string | null
   currentUser: { id: string; role: 'admin' | 'member' }
@@ -134,7 +140,7 @@ export function BoardColumn({
       <TaskComposer
         patch={composerPatch}
         columnTitle={group.title}
-        team={team}
+        people={composerPeople}
         appId={appId}
         sprintId={sprintId}
       />
