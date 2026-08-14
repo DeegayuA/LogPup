@@ -1,14 +1,10 @@
-import Link from 'next/link'
+import type { CSSProperties, ReactNode } from 'react'
 import type { Metadata } from 'next'
-import {
-  AppWindow,
-  CalendarDays,
-  Mic,
-  ShieldCheck,
-  SquareKanban,
-  Users,
-} from 'lucide-react'
+import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { PlateBriefing, PlateCapacity, PlateWriteup } from './plates'
+import { RevealScope } from './reveal-scope'
 
 export const metadata: Metadata = {
   title: 'LogPup — engineering ops for Alta Vision teams',
@@ -20,155 +16,494 @@ export const metadata: Metadata = {
  * The public front door. Google's OAuth review team opens the "Application
  * home page" URL from the consent screen before it will approve the sensitive
  * `calendar.events` scope, and it must load with no session, describe what the
- * app does, and link to the privacy policy — all three are checked. Everything
- * below the fold exists to answer "what is this app and why does it want my
- * calendar", in that order.
+ * app does, and link to the privacy policy — all three are checked.
+ *
+ * It is set as an editorial record rather than as a landing page because
+ * LogPup is not for sale: there is no signup, no pricing and no funnel, so
+ * every persuasion device a marketing page reaches for would be describing a
+ * product that does not exist. The page documents instead. That is also what
+ * pays for the whitespace, the single call to action, and an index of
+ * capabilities with no icons on it — the numerals do the wayfinding, and
+ * icons are the thing that makes a feature list read as generic.
+ *
+ * Two hard constraints shaped the composition rather than fighting it. The
+ * <h1> has to be the literal string "LogPup" (a prior submission was rejected
+ * for a name mismatch against the consent screen), and an editorial page
+ * wants exactly one enormous headline — so the product name IS the nameplate.
+ * And the reviewer may arrive with no session and no scripting, which is why
+ * the reveal architecture is inverted: see reveal-scope.tsx.
  */
 
-const CAPABILITIES = [
+const RISE =
+  'motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-fill-mode:backwards]'
+
+const LINK =
+  'rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
+
+const CTA =
+  'focus-visible:ring-offset-2 focus-visible:ring-offset-background w-full sm:w-auto'
+
+/** Section eyebrows and dateline labels. A <span>, never a heading: the page
+ *  runs h1 then exactly eight h2s and an eyebrow promoted to h3 would put a
+ *  level below a level it does not belong to. */
+function Eyebrow({ children }: { children: ReactNode }) {
+  return (
+    <span className="font-mono text-2xs tracking-[0.18em] text-muted-foreground uppercase">
+      {children}
+    </span>
+  )
+}
+
+/**
+ * The section rules are real elements rather than a `border-t` utility
+ * because they animate: a border cannot be scaled from its left edge, and the
+ * draw is the page's second motion behaviour. `data-rule` is what
+ * reveal-scope.tsx looks for.
+ */
+function Rule({ className, style }: { className?: string; style?: CSSProperties }) {
+  return <div data-rule aria-hidden className={cn('h-px w-full bg-border', className)} style={style} />
+}
+
+function SectionHeading({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <h2
+      data-reveal
+      className={cn(
+        'max-w-[21ch] font-heading text-[clamp(2rem,5vw,3.5rem)] leading-[1.02] font-bold tracking-[-0.03em] text-foreground',
+        className,
+      )}
+    >
+      {children}
+    </h2>
+  )
+}
+
+/* --- §02 contents -------------------------------------------------------- */
+
+const INDEX = [
   {
-    icon: AppWindow,
-    title: 'Apps',
-    detail: 'One record per product a team runs — status, stack, lead, and the people on it.',
+    n: '01',
+    name: 'Dashboard',
+    detail:
+      "The morning briefing: what's due soon, what's overdue, what you still owe someone, and today's meetings.",
   },
   {
-    icon: Users,
-    title: 'People & capacity',
-    detail: 'Allocation percentages per person, so overload is visible before it becomes a delay.',
+    n: '02',
+    name: 'Work log',
+    detail: 'One entry a day, self-scored: what I did, and how much of the plan I got through.',
   },
   {
-    icon: SquareKanban,
-    title: 'Sprints',
-    detail: 'Kanban boards, backlog, and a roadmap for each app.',
+    n: '03',
+    name: 'Apps',
+    detail: 'A record per product: status, stack, lead, health, repo metadata, and the people on it.',
   },
   {
-    icon: CalendarDays,
-    title: 'Meetings',
-    detail: 'Schedule a meeting in LogPup and it creates the matching Google Calendar event.',
+    n: '04',
+    name: 'People',
+    detail:
+      'Allocation per person per app, and a bar that turns amber at 80% before anyone burns out.',
+  },
+  {
+    n: '05',
+    name: 'Sprints',
+    detail: 'A board you can drag, a backlog, check-ins, and per-role move permissions.',
+  },
+  { n: '06', name: 'Roadmap', detail: 'Every app on one timeline, with a line drawn through today.' },
+  {
+    n: '07',
+    name: 'Meetings',
+    detail: 'Schedule here; the Google Calendar event and the invitations follow.',
+  },
+  {
+    n: '08',
+    name: 'Meeting write-ups',
+    detail:
+      'Record in the browser, with or without your screen; get per-person notes, action items and deadlines in English and Sinhala.',
+  },
+  {
+    n: '09',
+    name: 'Command centre',
+    detail: '⌘K over every app, person, task, sprint and meeting.',
+  },
+  {
+    n: '10',
+    name: 'Access',
+    detail:
+      'Two roles, every change authorised on the server, and an audit log across apps, people, sprints, meetings and work logs.',
   },
 ] as const
 
+/* --- §00 dateline -------------------------------------------------------- */
+
+function DatelineCell({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1 lg:col-span-4">
+      <Eyebrow>{label}</Eyebrow>
+      <span className="text-sm text-foreground">{children}</span>
+    </div>
+  )
+}
+
 export default function PublicHomePage() {
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-14 px-6 py-16">
-      <section className="flex flex-col gap-5">
-        <span className="inline-flex w-fit items-center gap-2 rounded-full border border-border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
-          <ShieldCheck className="size-3.5 shrink-0 text-primary" aria-hidden />
-          An internal tool by Alta Vision (Pvt) Ltd
-        </span>
-        {/* The product name is the <h1>, not the tagline. Google's review
-            compares the consent screen's app name against the home page and
-            rejected the first submission for a mismatch — a name that appears
-            only in the header chrome is easy for that check to miss. The
-            tagline still leads visually; it just isn't the heading any more. */}
-        <h1 className="font-heading text-5xl leading-none font-bold tracking-tight text-foreground">
-          LogPup
-        </h1>
-        <p className="max-w-2xl font-heading text-2xl leading-tight font-bold tracking-tight text-foreground">
+    <div id="record-root" className="mx-auto w-full max-w-[76rem] px-6 md:px-10">
+      <RevealScope rootId="record-root" />
+
+      {/* §00 — MASTHEAD */}
+      <section className="flex flex-col justify-end pt-16 pb-16 sm:min-h-[78svh] sm:pb-20">
+        <div className={cn('flex flex-col gap-6', RISE)}>
+          <Eyebrow>Alta Vision (Pvt) Ltd · Colombo · Internal tool</Eyebrow>
+          {/* The product name is the <h1>, not the tagline. Google's review
+              compares the consent screen's app name against the home page and
+              rejected the first submission for a mismatch — a name that
+              appears only in the header chrome is easy for that check to miss.
+              Locked at weight 700, not 800 or 900: Cabinet Grotesk is a
+              variable face whose glyph WIDTH moves with weight, so line breaks
+              at 10rem would differ between environments where the axis
+              resolves differently, and its upper axis goes blobby at this
+              size anyway. */}
+          <h1 className="font-heading text-[clamp(4.5rem,15vw,10.5rem)] leading-[0.82] font-bold tracking-[-0.04em] text-foreground">
+            LogPup
+          </h1>
+        </div>
+
+        <p
+          className={cn(
+            'mt-6 max-w-[19ch] font-heading text-[clamp(1.75rem,4vw,3rem)] leading-[1.05] font-bold tracking-[-0.025em] text-foreground',
+            RISE,
+            'motion-safe:[animation-delay:60ms]',
+          )}
+        >
           The watchdog for your team&apos;s apps, people, and sprints.
         </p>
-        <p className="max-w-2xl text-base leading-relaxed text-muted-foreground">
-          LogPup is the engineering operations HQ Alta Vision runs its studio on. It keeps one
-          shared picture of every product in flight: who is building it, how loaded they are,
-          what ships this sprint, and what was decided in the last meeting. Teams use it to
-          track their apps, plan sprints, see who still has capacity, and schedule, record, and
-          write up the meetings that move that work along.
-        </p>
-        <div className="flex flex-wrap items-center gap-3">
-          {/* buttonVariants rather than <Button render={...}>: this is a
-              navigation, so the accessible element should be the anchor
-              itself, not a button wrapping one. */}
-          <Link href="/sign-in" className={buttonVariants({ size: 'lg' })}>
-            Sign in
-          </Link>
-          <p className="text-xs text-muted-foreground">
-            Access is granted by an Alta Vision administrator. New accounts land in a pending
-            queue until approved.
+
+        <div className={cn('mt-8 flex flex-col gap-6', RISE, 'motion-safe:[animation-delay:120ms]')}>
+          <p className="max-w-[56ch] text-base leading-relaxed text-muted-foreground">
+            An engineering-operations HQ for one software studio. Every product in flight, everyone
+            on it and how loaded they are, what ships this sprint, what each person actually did
+            today, and what was decided in every meeting — with the meeting write-ups produced in
+            both English and Sinhala (සිංහල).
+          </p>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            {/* buttonVariants rather than <Button render={...}>: this is a
+                navigation, so the accessible element should be the anchor
+                itself, not a button wrapping one. */}
+            <Link href="/sign-in" className={cn(buttonVariants({ size: 'lg' }), CTA)}>
+              Sign in
+            </Link>
+            <p className="text-sm text-muted-foreground">
+              Accounts are approved by an Alta Vision administrator.
+            </p>
+          </div>
+        </div>
+
+        {/* Drawn with a keyframe rather than through the IntersectionObserver:
+            this rule is above the fold, and reveal-scope.tsx deliberately never
+            touches anything already on screen. */}
+        <Rule className="mt-12 rule-draw" />
+
+        <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:gap-x-10 sm:gap-y-4 lg:grid lg:grid-cols-12 lg:gap-x-6">
+          <DatelineCell label="Operator">Alta Vision (Pvt) Ltd</DatelineCell>
+          <DatelineCell label="Access">Approved accounts only</DatelineCell>
+          <DatelineCell label="Google scope">
+            {/* An in-page anchor, so a reviewer reaches the scope disclosure in
+                one click from the first screen instead of scrolling past three
+                plates to find it. This link is what pays for the page being
+                longer than the one it replaces. */}
+            <a href="#notice" className={LINK}>
+              calendar.events
+            </a>
+          </DatelineCell>
+        </div>
+      </section>
+
+      {/* §01 — THE STATEMENT */}
+      <section>
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-20">
+          <div className="flex flex-col gap-6 lg:col-span-8">
+            <Eyebrow>01 — What this page is</Eyebrow>
+            <SectionHeading>
+              LogPup is not for sale. This page exists so Google can read it.
+            </SectionHeading>
+          </div>
+          {/* Body copy deliberately does not animate. Revealing paragraphs is
+              the fastest way to make an editorial page read as a template, and
+              it delays the reading it is supposed to be serving. */}
+          <p className="mt-6 max-w-[68ch] text-base leading-relaxed text-muted-foreground lg:col-span-5 lg:col-start-1 lg:mt-10">
+            LogPup is the internal system Alta Vision runs its studio on. There is no signup, no
+            pricing, no trial, and no public product. Signing in with Google creates a pending
+            account with zero access until an administrator approves it, and the email domains that
+            may sign in at all are configured in advance.
+          </p>
+          <p className="mt-6 max-w-[68ch] text-base leading-relaxed text-muted-foreground lg:col-span-5 lg:col-start-7 lg:mt-10">
+            It is published here because LogPup asks Google for permission to put meetings on your
+            calendar, and a person at Google opens this address, the privacy policy and the terms
+            before granting it. So the honest thing to do is describe the tool plainly, in public,
+            and let the description be the marketing.
           </p>
         </div>
       </section>
 
-      <section className="flex flex-col gap-4">
-        <h2 className="font-heading text-xl font-bold tracking-tight text-foreground">
-          What LogPup does
-        </h2>
-        <ul className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
-          {CAPABILITIES.map(({ icon: Icon, title, detail }) => (
-            <li key={title} className="flex items-start gap-3">
-              <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-              <div className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-foreground">{title}</span>
-                <span className="text-sm leading-relaxed text-muted-foreground">{detail}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {/* §02 — THE INDEX */}
+      <section>
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-20">
+          <div className="flex flex-col gap-6 lg:col-span-10">
+            <Eyebrow>02 — Contents</Eyebrow>
+            <SectionHeading>Ten things live in here.</SectionHeading>
+            <p className="max-w-[54ch] text-sm leading-relaxed text-muted-foreground">
+              The ten a new colleague meets first. There is more behind the sign-in —
+              notifications, admin tools, the activity feed, exports.
+            </p>
+          </div>
 
-      {/* Stated plainly and up front on purpose: the reviewer is looking for
-          the connection between the scope the consent screen asks for and a
-          feature a user can actually see. */}
-      <section className="flex flex-col gap-4 rounded-xl border border-border bg-card p-6">
-        <h2 className="font-heading text-xl font-bold tracking-tight text-foreground">
-          Why LogPup asks for your Google Calendar
-        </h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          When you schedule a meeting in LogPup, we create the corresponding event on your own
-          Google Calendar and invite the attendees you picked, so the meeting appears where your
-          team already looks. Editing or cancelling the meeting in LogPup updates the same event.
-          This uses the{' '}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
-            https://www.googleapis.com/auth/calendar.events
-          </code>{' '}
-          scope, and we use it for nothing else. LogPup never reads calendars it did not create
-          events on, never sells or transfers Google user data, and never uses it for advertising.
-        </p>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          You can withdraw this access at any time at{' '}
-          <a
-            href="https://myaccount.google.com/permissions"
-            className="font-medium text-primary underline underline-offset-4"
-            target="_blank"
-            rel="noreferrer"
-          >
-            myaccount.google.com/permissions
-          </a>
-          . See the{' '}
-          <Link href="/privacy" className="font-medium text-primary underline underline-offset-4">
-            Privacy Policy
-          </Link>{' '}
-          for the full detail, including our Google API Services Limited Use commitment.
-        </p>
-      </section>
-
-      <section className="flex flex-col gap-4">
-        <h2 className="font-heading text-xl font-bold tracking-tight text-foreground">
-          Meeting Intelligence
-        </h2>
-        <div className="flex items-start gap-3">
-          <Mic className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            LogPup can record a meeting in the browser and turn it into structured notes in English
-            and Sinhala — per-person notes, action items, deadlines, and follow-up questions that
-            resurface as prep before the next meeting. Recording is always started manually by a
-            participant, and whoever starts it is responsible for telling everyone in the room
-            first. Transcription runs on a Google Gemini API key that each user supplies themselves.
-          </p>
+          {/* No links and no hover state, on purpose: nothing in this list is
+              reachable without a session, so dressing the rows as interactive
+              would be a lie the design should not tell. */}
+          <div className="mt-10 lg:col-span-10 lg:col-start-1">
+            <ol>
+              {INDEX.map((row, i) => (
+                <li key={row.n}>
+                  {/* The cascade is on the RULES only, 40ms apart across ten
+                      rows. Staggering ten lines of text is the cheap version
+                      of this move: it would hold the list's content back for
+                      400ms to no purpose, so every name and description here
+                      is readable from the first frame. */}
+                  <Rule style={{ transitionDelay: `${i * 40}ms` }} />
+                  <div className="grid gap-x-6 py-4 md:grid-cols-[3.5rem_minmax(0,15rem)_1fr] md:py-5">
+                    {/* `md:contents` dissolves this wrapper into the grid above
+                        it, so the number and the name share a baseline on a
+                        phone and become their own columns from md — one markup
+                        shape instead of two. */}
+                    <div className="flex items-baseline gap-3 md:contents">
+                      <span className="font-mono text-sm text-muted-foreground">{row.n}</span>
+                      <span className="font-heading text-xl leading-snug font-bold text-foreground">
+                        {row.name}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground md:mt-0 md:text-base">
+                      {row.detail}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <Rule style={{ transitionDelay: `${INDEX.length * 40}ms` }} />
+          </div>
         </div>
       </section>
 
-      <section className="flex flex-col gap-3 border-t border-border pt-8">
-        <h2 className="font-heading text-xl font-bold tracking-tight text-foreground">Contact</h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Alta Vision (Pvt) Ltd, Sri Lanka — questions about LogPup, your data, or this site go to{' '}
-          <a
-            href="mailto:deeghayus@altavision.lk"
-            className="font-medium text-primary underline underline-offset-4"
-          >
-            deeghayus@altavision.lk
-          </a>
-          .
-        </p>
+      {/* §03 — PLATE I */}
+      <section>
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-20">
+          <div className="flex flex-col gap-6 lg:col-span-8">
+            <Eyebrow>03 — Plate I</Eyebrow>
+            <SectionHeading>Open it at nine and the day is already assembled.</SectionHeading>
+            <p className="max-w-[54ch] text-base leading-relaxed text-muted-foreground">
+              What&apos;s due, what&apos;s late, what you still owe someone, and what&apos;s on the
+              calendar in the next few hours — on one screen, before anyone has to ask for a status
+              update.
+            </p>
+          </div>
+          <div className="mt-10 lg:col-span-12 lg:col-start-1">
+            <PlateBriefing />
+          </div>
+        </div>
+      </section>
+
+      {/* §04 — PLATE II */}
+      <section>
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-20">
+          <div className="flex flex-col gap-6 lg:col-span-8">
+            <Eyebrow>04 — Plate II</Eyebrow>
+            <SectionHeading>The bar goes amber before the person does.</SectionHeading>
+            <p className="max-w-[56ch] text-base leading-relaxed text-muted-foreground">
+              Allocation is a real number per person per app, so &ldquo;she&apos;s fine&rdquo;
+              becomes 86%. Anything from 80% is amber, and 112% shows up as a separate overflow
+              segment instead of quietly clipping at full. You can ask what any week looked like as
+              of a date — and the colour is never the only signal: the band is written out in words
+              and read aloud to screen readers.
+            </p>
+          </div>
+          <div className="mt-10 lg:col-span-12 lg:col-start-1">
+            <PlateCapacity />
+          </div>
+        </div>
+      </section>
+
+      {/* §05 — PLATE III */}
+      <section>
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-20">
+          <div className="flex flex-col gap-6 lg:col-span-8">
+            <Eyebrow>05 — Plate III</Eyebrow>
+            <SectionHeading>Record the meeting. Get the meeting back as text.</SectionHeading>
+            <p className="max-w-[58ch] text-base leading-relaxed text-muted-foreground">
+              A participant starts the recording in the browser — audio, or audio with the shared
+              screen — and whoever starts it is responsible for telling everyone in the room first.
+              Gemini returns per-person notes, action items with deadlines, a glossary of the terms
+              that got thrown around, and the questions nobody answered, which resurface as prep
+              before the next meeting for the same app.
+            </p>
+            {/* Weight and colour carry the emphasis rather than size or a box.
+                The claim is deliberately narrow and deliberately checkable:
+                audio genuinely is never persisted, but screen keyframes are
+                (meeting_screenshots in src/db/schema.ts, private Blob storage
+                behind /api/meeting-keyframes), and a retention promise on the
+                page a reviewer reads while judging a sensitive scope has to be
+                true in both halves. */}
+            <p className="max-w-[58ch] text-base leading-relaxed font-medium text-foreground">
+              The audio is never kept — only the transcript text, and, if you shared your screen,
+              the frames where the screen changed.
+            </p>
+          </div>
+          <div className="mt-10 lg:col-span-12 lg:col-start-1">
+            <PlateWriteup />
+          </div>
+        </div>
+      </section>
+
+      {/* §06 — THE NOTICE */}
+      <section id="notice" className="scroll-mt-16">
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-20">
+          {/* The only block indented off column 1 — the exception is what makes
+              it read as a set-apart statement rather than one more section. */}
+          <div className="flex flex-col gap-6 lg:col-span-8 lg:col-start-2">
+            <Eyebrow>06 — Notice</Eyebrow>
+            <SectionHeading>Why LogPup asks for your calendar.</SectionHeading>
+            {/* Larger and un-muted, inverting the page's normal hierarchy. A
+                full-bleed inverted band was the more dramatic option and was
+                rejected: --primary at 0.44 lightness on a 0.22 ink ground is
+                unreadable in light theme, so every link inside would need
+                special-casing, and this is exactly the block where links must
+                be maximally obvious to a human reviewer. */}
+            <p className="max-w-[62ch] text-lg leading-relaxed text-foreground">
+              When you schedule a meeting in LogPup, we create the matching event on your Google
+              Calendar and invite the people you picked, so it lands where your team already looks.
+              Editing or cancelling the meeting in LogPup updates the same event.
+            </p>
+            {/* Plain text in the server HTML — no accordion, no dialog, no
+                "read more". `break-all` so the 48-character URL wraps inside
+                its own block instead of forcing the whole page to scroll
+                sideways at 375px. */}
+            <code className="w-fit max-w-full rounded-sm bg-muted px-2 py-1 font-mono text-sm break-all text-foreground">
+              https://www.googleapis.com/auth/calendar.events
+            </code>
+            <p className="max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+              That is the only Google scope LogPup requests, and it is used for nothing else. LogPup
+              creates, updates and deletes the events it made; it does not read your calendar, does
+              not sell or transfer Google user data, and does not use it for advertising or to train
+              models. You can withdraw this access at any time at{' '}
+              <a
+                href="https://myaccount.google.com/permissions"
+                className={LINK}
+                target="_blank"
+                rel="noreferrer"
+              >
+                myaccount.google.com/permissions
+              </a>
+              . The{' '}
+              <Link href="/privacy" className={LINK}>
+                Privacy Policy
+              </Link>{' '}
+              sets out the full detail, including our Google API Services Limited Use commitment,
+              and the{' '}
+              <Link href="/terms" className={LINK}>
+                Terms of Service
+              </Link>{' '}
+              cover the rest.
+            </p>
+          </div>
+        </div>
+        <Rule />
+      </section>
+
+      {/* §07 — THE DOOR */}
+      <section>
+        <div className="grid grid-cols-1 gap-x-6 py-20 lg:grid-cols-12 lg:py-32">
+          {/* Headline and CTA rise as one unit with no stagger between the two
+              columns: staggering them makes the deliberate bottom-alignment
+              look like a bug rather than a decision. */}
+          <div data-reveal className="flex flex-col gap-6 lg:col-span-7">
+            <Eyebrow>07 — Access</Eyebrow>
+            <h2 className="max-w-[21ch] font-heading text-[clamp(2rem,5vw,3.5rem)] leading-[1.02] font-bold tracking-[-0.03em] text-foreground">
+              Signing in gets you a pending account and nothing else.
+            </h2>
+            <p className="max-w-[52ch] text-base leading-relaxed text-muted-foreground">
+              Sign in with Google and LogPup creates an account with no access at all, then puts it
+              in a queue. Someone at Alta Vision approves it, or it stays where it is. There is no
+              public signup and never was. Passkeys, Google One Tap and administrator-issued
+              passwords sign you into an account that already exists — they are not a second way in.
+            </p>
+          </div>
+          <div className="mt-10 flex flex-col gap-4 lg:col-span-4 lg:col-start-9 lg:mt-0 lg:self-end">
+            {/* The second and final appearance of --primary at strength on the
+                whole page. Keeping the working colour to exactly two moments
+                is what makes both of them read as the action; a competing
+                "Learn more" was rejected because there is nowhere else to go. */}
+            <Link href="/sign-in" className={cn(buttonVariants({ size: 'lg' }), CTA)}>
+              Sign in
+            </Link>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {['Sign-in methods', 'Google', 'Passkey', 'One Tap', 'Password'].map(
+                (method, index) => (
+                  <span key={method} className="flex items-center gap-3">
+                    {index > 0 ? (
+                      <span aria-hidden className="hidden text-muted-foreground sm:inline">
+                        ·
+                      </span>
+                    ) : null}
+                    <span className="font-mono text-2xs tracking-[0.18em] text-muted-foreground uppercase">
+                      {method}
+                    </span>
+                  </span>
+                ),
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* §08 — COLOPHON */}
+      <section>
+        <Rule />
+        <div className="grid grid-cols-1 gap-x-6 py-16 lg:grid-cols-12 lg:py-24">
+          <div className="flex flex-col gap-4 lg:col-span-6">
+            <Eyebrow>08 — Colophon</Eyebrow>
+            {/* The page closes by getting smaller. After a 10rem nameplate a
+                second large gesture here would read as a second masthead. */}
+            <h2 className="font-heading text-2xl leading-snug font-bold tracking-tight text-foreground">
+              Built and operated by Alta Vision (Pvt) Ltd, Sri Lanka.
+            </h2>
+            <p className="max-w-[52ch] text-sm leading-relaxed text-muted-foreground">
+              LogPup is an internal tool. It is not sold, licensed, or offered to the public.
+              Questions about the tool, about this site, or about the data it holds go to{' '}
+              <a href="mailto:deeghayus@altavision.lk" className={LINK}>
+                deeghayus@altavision.lk
+              </a>
+              .
+            </p>
+          </div>
+          <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:gap-x-10 lg:col-span-6 lg:col-start-7 lg:mt-0">
+            <div className="flex flex-col gap-1">
+              <Eyebrow>Operator</Eyebrow>
+              <span className="text-sm text-foreground">Alta Vision (Pvt) Ltd</span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Eyebrow>Location</Eyebrow>
+              <span className="text-sm text-foreground">Colombo, Sri Lanka</span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Eyebrow>Set in</Eyebrow>
+              <span className="text-sm text-foreground">Cabinet Grotesk &amp; Satoshi</span>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
   )

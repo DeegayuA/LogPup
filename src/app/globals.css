@@ -384,3 +384,56 @@
     animation: none;
   }
 }
+
+/* Editorial reveal for the public /home page — four behaviours, no library.
+   Read src/app/(public)/home/reveal-scope.tsx before touching any of this.
+
+   The whole block is deliberately inverted from the usual scroll-reveal
+   recipe. Nothing here applies until `data-motion="on"` is stamped on the
+   page root by the client, so the server's HTML is the final, visible state
+   and there is no `opacity: 0` anywhere in it. That matters more on this
+   route than anywhere else in the app: Google's OAuth reviewer fetches /home
+   with no session, and a reveal that hides content before JS runs would show
+   them a blank page and cost the calendar.events scope — while looking
+   perfectly fine to any developer with scripting on.
+
+   Living inside a `no-preference` media query rather than being switched off
+   by a `reduce` one is the same idea a second time: for a reader who asked
+   for less motion there is nothing to turn off, because the transitions were
+   never declared. Same convention as the ~75 motion-reduce/motion-safe uses
+   elsewhere in the app. */
+@keyframes logpup-rule-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* For rules ABOVE the fold, which reveal-scope.tsx never touches on
+     purpose. A keyframe with fill-mode `both` needs no JS at all and still
+     settles at the drawn state, so the masthead does not depend on scripting. */
+  .rule-draw {
+    transform-origin: left;
+    animation: logpup-rule-draw 600ms ease-out both;
+  }
+
+  [data-motion="on"] [data-reveal] {
+    transition:
+      opacity 500ms ease-out,
+      transform 500ms ease-out;
+  }
+  [data-motion="on"] [data-reveal][data-pending] {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+  [data-motion="on"] [data-rule] {
+    transform-origin: left;
+    transition: transform 600ms ease-out;
+  }
+  [data-motion="on"] [data-rule][data-pending] {
+    transform: scaleX(0);
+  }
+}

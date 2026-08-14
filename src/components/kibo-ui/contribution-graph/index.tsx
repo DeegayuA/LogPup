@@ -174,24 +174,44 @@ const groupByWeeks = (
     );
 };
 
+/*
+  LOCAL FIX TO VENDORED CODE. Both departures from upstream kibo are marked
+  below. components.json declares no kibo registry (only `@animate-ui`) and
+  ActivityGraph is the only consumer of this primitive in the repo, so the edit
+  has no blast radius and cannot be silently clobbered by a registry re-pull —
+  but it is worth a reviewer knowing it is here rather than discovering it.
+*/
 const getMonthLabels = (
   weeks: Week[],
   monthNames: string[] = DEFAULT_MONTH_LABELS
 ): MonthLabel[] => {
   return weeks
     .reduce<MonthLabel[]>((labels, week, weekIndex) => {
-      const firstActivity = week.find((activity) => activity !== undefined);
+      // A column is labelled by its LAST day, not its first. Upstream anchors on
+      // the week's earliest defined day — its Sunday — so a new month's label
+      // lands on the first week lying WHOLLY inside that month, which is one
+      // column late whenever the 1st is not itself a Sunday. Anchoring on the
+      // Saturday makes "the first column whose week contains the 1st" true by
+      // construction: if this week's Saturday is in month M and the previous
+      // week's was in M-1, the 1st necessarily falls between them, i.e. inside
+      // this column. Measured over a six-month window ending 13 Aug 2026 the
+      // old rule put five of six labels 14px right of the month they name; the
+      // one that was correct (Mar) was correct only because 1 Mar 2026 happens
+      // to be a Sunday.
+      const lastActivity = week.findLast(
+        (activity): activity is Activity => activity !== undefined
+      );
 
-      if (!firstActivity) {
+      if (!lastActivity) {
         throw new Error(
           `Unexpected error: Week ${weekIndex + 1} is empty: [${week}].`
         );
       }
 
-      const month = monthNames[getMonth(parseISO(firstActivity.date))];
+      const month = monthNames[getMonth(parseISO(lastActivity.date))];
 
       if (!month) {
-        const monthName = new Date(firstActivity.date).toLocaleString("en-US", {
+        const monthName = new Date(lastActivity.date).toLocaleString("en-US", {
           month: "short",
         });
         throw new Error(
@@ -208,14 +228,23 @@ const getMonthLabels = (
       return labels;
     }, [])
     .filter(({ weekIndex }, index, labels) => {
-      const minWeeks = 3;
+      // Two guards, upstream conflates them at 3 columns each. The leading one
+      // stops the first label colliding with the NEXT label and is left alone.
+      // The trailing one only stops a label overhanging the right edge, and 3
+      // was over-cautious: it deleted "Aug" from a window ending 13 Aug 2026
+      // because the month began with 2 columns left, so the grid ran two
+      // columns past "Jul" with nothing above them. A three-letter month at
+      // fontSize 11 is ~22px and a column is 16px, so two columns of room is
+      // enough to paint one.
+      const minLeadWeeks = 3;
+      const minTrailWeeks = 2;
 
       if (index === 0) {
-        return labels[1] && labels[1].weekIndex - weekIndex >= minWeeks;
+        return labels[1] && labels[1].weekIndex - weekIndex >= minLeadWeeks;
       }
 
       if (index === labels.length - 1) {
-        return weeks.slice(weekIndex).length >= minWeeks;
+        return weeks.slice(weekIndex).length >= minTrailWeeks;
       }
 
       return true;

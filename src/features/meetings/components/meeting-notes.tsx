@@ -244,16 +244,10 @@ export function MeetingAiNotes({
   return (
     <div
       className={cn(
-        'grid gap-3',
-        // THIS is what Compact buys on a wide screen: two panels per row
-        // instead of one column of full-width cards with metres of empty
-        // gutter beside them. Tighter padding alone was a change you had to
-        // hunt for; halving the scroll length is not.
-        //
-        // `items-start` so a short panel keeps its own height rather than
-        // stretching to match whatever tall thing landed beside it — grid's
-        // default stretch is what makes two-column card layouts look broken.
-        compact && 'items-start lg:grid-cols-2',
+        // A column, not a grid. The summary and the AI byline are full-width
+        // siblings; the panels between them do their own two-column flow
+        // below, which a grid on this element would fight.
+        'flex flex-col gap-3',
       )}
     >
       {notes.summary ? (
@@ -261,8 +255,8 @@ export function MeetingAiNotes({
           id="summary"
           // Full width even in two-column mode. The summary is prose somebody
           // reads start to finish; prose in a half-width column beside a list
-          // of action items is harder to read, not denser.
-          className={compact ? 'lg:col-span-2' : undefined}
+          // of action items is harder to read, not denser. It sits OUTSIDE
+          // the column flow below, so it needs no span of its own.
           title="Summary"
           icon={Sparkles}
           // Reads exactly what is on screen — the language control below
@@ -356,6 +350,28 @@ export function MeetingAiNotes({
         </Panel>
       ) : null}
 
+      {/* THIS is what Compact buys on a wide screen: two panels per row
+          instead of one column of full-width cards with metres of empty gutter
+          beside them.
+
+          Multi-column FLOW rather than a two-column grid, because a grid lays
+          out in rows: a short panel beside a tall one leaves everything on the
+          next row stranded below the taller of the two. With seven action
+          items that dead zone under Discussion ran to hundreds of pixels and
+          grew with every item added. Columns balance by height instead, so a
+          short panel is followed immediately by the next one.
+
+          `break-inside-avoid` is what keeps a panel whole — without it a card
+          splits across the column boundary mid-list. `mb-3` rather than a gap,
+          since margins are what multi-column honours between siblings. DOM
+          order is untouched, so the reading order a screen reader and the tab
+          sequence follow is exactly what it was. */}
+      <div
+        className={cn(
+          compact && 'lg:columns-2 lg:gap-3',
+          '[&>*]:mb-3 [&>*]:break-inside-avoid lg:[&>*:last-child]:mb-0',
+        )}
+      >
       {totalActionCount > 0 && kindIncluded('action') ? (
         <Panel id="action-items" title="Action items" icon={ListChecks} kind="action" count={visibleActionCount}>
           {visibleActionCount > 0 ? (
@@ -496,6 +512,8 @@ export function MeetingAiNotes({
           </dl>
         </Panel>
       ) : null}
+
+      </div>
 
       <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
         <Sparkles className="size-3 shrink-0" aria-hidden />

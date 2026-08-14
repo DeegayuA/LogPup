@@ -241,6 +241,18 @@ export default async function AppDetailPage(props: {
     ),
   }))
 
+  // The same counts the spine reads, keyed for the full timeline below, which
+  // scores its own reads client-side so a dragged bar's verdict tracks the
+  // dates under the cursor. The gaps are filled HERE, once: the grouped query
+  // returns no row at all for a sprint with no tasks, and its `null` key is
+  // the backlog, which has no bar on either surface.
+  const sprintTaskCountsById = Object.fromEntries(
+    sprints.map((sprint) => [
+      sprint.id,
+      sprintCounts.get(sprint.id) ?? { todo: 0, in_progress: 0, done: 0 },
+    ]),
+  )
+
   const boardTasks = board ? [...board.todo, ...board.in_progress, ...board.done] : []
   const selectedRead = selectedSprint
     ? readSprint(
@@ -527,7 +539,7 @@ export default async function AppDetailPage(props: {
                   : 'every sprint, with dates'
               }
             >
-              <Roadmap sprints={sprints} slug={slug} />
+              <Roadmap sprints={sprints} slug={slug} counts={sprintTaskCountsById} />
             </LazyDisclosure>
           ) : null}
         </div>

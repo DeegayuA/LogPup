@@ -101,7 +101,23 @@ export async function beginPasskeyRegistration(): Promise<
     // Resident key: the credential itself remembers who it belongs to, which
     // is what makes login ONE tap — no email typed first, the authenticator
     // offers the account.
-    authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+    //
+    // `platform` is what makes this Touch ID / Face ID rather than "a passkey":
+    // without it the browser opens the full chooser — security key, phone via
+    // QR, another laptop — and the built-in sensor is one option among several.
+    // The cost is real and deliberate: a machine with no biometric sensor can
+    // no longer enrol at all. It filters REGISTRATION only, so anyone who
+    // already enrolled a roaming key keeps signing in with it.
+    //
+    // `required` over `preferred` for the same reason. Preferred lets an
+    // authenticator skip the biometric and still return a valid credential, so
+    // the account could end up protected by possession of an unlocked laptop —
+    // which is exactly the guarantee Touch ID was asked for.
+    authenticatorSelection: {
+      residentKey: 'preferred',
+      authenticatorAttachment: 'platform',
+      userVerification: 'required',
+    },
     // Re-registering the same authenticator would orphan the old row and
     // confuse "which of these is my MacBook" forever.
     excludeCredentials: existing.map((cred) => ({

@@ -12,8 +12,11 @@ import { cn } from '@/lib/utils'
  * channel. That transparency is what lets one file sit on both the light stone
  * and the dark pine sidebar without a white plate behind it, so replacing it
  * with a flattened export would break dark mode. width/height below are the
- * same 6.22:1 ratio scaled down — they set the aspect box, and callers pick the
- * real size with an `h-*` class.
+ * asset's NATIVE pixels, not a scaled-down pair. Every caller sizes with an
+ * `h-*` class and `w-auto`, so the browser derives the rendered width from
+ * this ratio alone — rounding it here stretches the mark. The previous 264x42
+ * is 6.286:1 against the true 6.218:1, which drew the logo ~1% too wide
+ * everywhere it appears, most visibly in the public footer.
  *
  * The dark-mode brightness lift is not decoration. Alta Vision publishes one
  * flat mark drawn for light backgrounds: its grey pyramid is #6f7878, which on
@@ -30,8 +33,8 @@ export function AltaVisionLogo({ className }: { className?: string }) {
     <Image
       src="/altavision-logo.webp"
       alt="Alta Vision"
-      width={264}
-      height={42}
+      width={3774}
+      height={607}
       className={cn('dark:brightness-[1.3]', className)}
     />
   )

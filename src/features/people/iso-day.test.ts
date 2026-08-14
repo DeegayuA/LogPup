@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isIsoDay, isoDayAdd, isoDayDiff, isoDayOf, isoDayRange } from './iso-day'
+import { isIsoDay, isoDayAdd, isoDayDiff, isoDayOf, isoDayRange, isoWeekStart } from './iso-day'
 
 describe('isIsoDay', () => {
   it('accepts a real calendar day', () => {
@@ -37,6 +37,28 @@ describe('isoDayAdd', () => {
 
   it('throws on a malformed day rather than sliding it', () => {
     expect(() => isoDayAdd('2026-02-31', 1)).toThrow(RangeError)
+  })
+})
+
+describe('isoWeekStart', () => {
+  it('walks back to the Sunday that starts the week', () => {
+    // 2026-02-13 is a Friday; the activity grid's first column has to begin on
+    // the Sunday before it or the calendar's bottom rows hang off the left edge.
+    expect(isoWeekStart('2026-02-13')).toBe('2026-02-08')
+    expect(isoWeekStart('2026-02-14')).toBe('2026-02-08')
+  })
+
+  it('leaves a Sunday alone', () => {
+    expect(isoWeekStart('2026-02-08')).toBe('2026-02-08')
+  })
+
+  it('crosses a month and a year boundary', () => {
+    expect(isoWeekStart('2026-03-03')).toBe('2026-03-01')
+    expect(isoWeekStart('2026-01-01')).toBe('2025-12-28')
+  })
+
+  it('throws on a malformed day rather than sliding it', () => {
+    expect(() => isoWeekStart('2026-02-31')).toThrow(RangeError)
   })
 })
 

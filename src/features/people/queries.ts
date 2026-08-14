@@ -51,7 +51,7 @@ import {
   type ActivityDay,
 } from '@/features/people/activity-levels'
 import { splitPersonFollowups, type PersonFollowups } from '@/features/people/followup-split'
-import { isoDayAdd, isoDayOf } from '@/features/people/iso-day'
+import { isoDayAdd, isoDayOf, isoWeekStart } from '@/features/people/iso-day'
 import { splitPersonMeetings, type PersonMeetings } from '@/features/people/meeting-window'
 import {
   summarizeOpenTasks,
@@ -605,7 +605,12 @@ export type PersonActivity = {
   toIso: string
 }
 
-/** 26 weeks, the window the contribution grid is sized for. */
+/**
+ * At least 26 weeks, then rounded back to the Sunday that starts the week, so
+ * the grid's left edge is square. Rounding OUT means the window is 26 or 27
+ * columns depending on which weekday it lands on; it can only ever add history,
+ * never clip it.
+ */
 const ACTIVITY_WEEKS = 26
 
 /**
@@ -618,7 +623,8 @@ const LK_TZ_SQL = sql.raw(`'${LK_TIMEZONE}'`)
 
 /**
  * Per-day task activity — tasks CREATED with this person as the assignee —
- * over the last 26 weeks, dense, for the contribution graph.
+ * over the last 26-or-27 whole weeks (see ACTIVITY_WEEKS), dense, for the
+ * contribution graph.
  *
  * DAY BOUNDARIES ARE ASIA/COLOMBO ON BOTH SIDES. `tasks.created_at` is a naive
  * `timestamp`; every writer stores UTC (drizzle serialises JS Dates as UTC, and
@@ -637,7 +643,17 @@ const LK_TZ_SQL = sql.raw(`'${LK_TIMEZONE}'`)
  */
 export async function getPersonActivity(userId: string): Promise<PersonActivity> {
   const toIso = isoDayOf(new Date())
-  const fromIso = isoDayAdd(toIso, -(ACTIVITY_WEEKS * 7 - 1))
+  // Week-aligned on the LEFT ONLY. The grid is a seven-row calendar, and a
+  // window that starts mid-week leaves its first column holding just the days
+  // from that weekday onward — the empty slots above render as literally
+  // nothing, so the bottom rows begin one column further left than the rows
+  // above them and the whole graph looks ragged at its corner. Deliberately NOT
+  // rounding the right edge up to Saturday: that would paint days that have not
+  // happened yet as level-0 cells, indistinguishable from "no tasks assigned",
+  // which is the same good-faith lie the caption below refuses to tell. The
+  // notch at the bottom-right is the current week being unfinished, and it
+  // should stay legible as exactly that.
+  const fromIso = isoWeekStart(isoDayAdd(toIso, -(ACTIVITY_WEEKS * 7 - 1)))
   const since = new Date(`${isoDayAdd(fromIso, -1)}T00:00:00.000Z`)
 
   const day = sql<string>`to_char((${liveTasks.createdAt} at time zone 'UTC') at time zone ${LK_TZ_SQL}, 'YYYY-MM-DD')`

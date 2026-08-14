@@ -13,7 +13,12 @@ import {
 } from '@/features/sprints/roadmap-layout'
 import { isoDayAdd } from '@/features/people/iso-day'
 import { SpineScroller } from '@/features/sprints/components/spine-scroller'
-import type { SprintHealth, SprintRead } from '@/features/sprints/plan-read'
+import {
+  HEALTH_WORD,
+  completionCount,
+  type SprintHealth,
+  type SprintRead,
+} from '@/features/sprints/plan-read'
 
 /**
  * The spine: this app's sprints on one line of time, and the control that
@@ -66,14 +71,6 @@ const HEALTH_FILL: Record<SprintHealth, string> = {
   behind: 'bg-warning/35',
   overdue: 'bg-destructive/30',
   complete: 'bg-success/30',
-}
-
-const HEALTH_WORD: Record<SprintHealth, string> = {
-  'not-started': 'Not started',
-  'on-track': 'On track',
-  behind: 'Behind',
-  overdue: 'Overdue',
-  complete: 'Complete',
 }
 
 const ROW_HEIGHT_PX = 44
@@ -221,7 +218,7 @@ export function RoadmapSpine({
             )
             const row = rows.get(sprint.id) ?? 0
             const selected = sprint.id === selectedId
-            const { health, donePct, done, total, progress } = sprint.read
+            const { health, donePct, progress } = sprint.read
 
             return (
               <li
@@ -275,7 +272,7 @@ export function RoadmapSpine({
                     <span className="truncate text-2xs text-muted-foreground">
                       {HEALTH_WORD[health]}
                       <span className="font-mono tabular-nums">
-                        {total > 0 ? ` · ${done}/${total}` : ' · empty'}
+                        {` · ${completionCount(sprint.read)}`}
                         {progress.phase === 'running' ? ` · ${remainingLabel(progress)}` : null}
                       </span>
                     </span>

@@ -52,6 +52,21 @@ export function PastMeetingsSection({
     if (dayKey && meetings.length > 0) setOpen(true)
   }
 
+  // The same trick for a meeting opened directly. `openMeetingId` reaches the
+  // list below, but the list only exists while `open` — so asking to open a
+  // PAST meeting mounted nothing at all unless a day filter happened to arrive
+  // with it. Expanding here is what makes "open the full meeting" also press
+  // "Show past meetings", instead of leaving the write-up behind a collapsed
+  // section. Membership-tested rather than assumed: this section also renders
+  // for days it has no meetings on, and opening an UPCOMING meeting must not
+  // expand it. Keyed on the id, so a manual collapse afterwards sticks until a
+  // DIFFERENT meeting is opened.
+  const [syncedOpenId, setSyncedOpenId] = useState(openMeetingId)
+  if (openMeetingId !== syncedOpenId) {
+    setSyncedOpenId(openMeetingId)
+    if (openMeetingId && meetings.some((meeting) => meeting.id === openMeetingId)) setOpen(true)
+  }
+
   return (
     <section className="flex flex-col gap-3">
       {/* This half of the page used to be a bare ghost button with no heading

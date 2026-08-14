@@ -72,6 +72,18 @@ const PCT_HINT = `Allocation must be a whole number between ${MIN_PCT} and ${MAX
 const chipClass =
   'inline-flex items-center justify-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground ring-1 ring-transparent transition-[color,background-color,box-shadow] duration-150 motion-reduce:transition-none hover:bg-secondary/70 hover:ring-ring/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-busy:ring-ring/40 disabled:pointer-events-none disabled:opacity-60 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-2.5 pointer-coarse:[&::after]:size-full'
 
+/**
+ * The app's identity swatch on a chip: one app, one colour, the same hue its
+ * meetings wear on the calendar and its chip wears in the people directory.
+ *
+ * The neutral fill is the fallback, not the default — `eventDotClasses` is
+ * merged over it and wins, and an app with no id keeps the grey rather than
+ * borrowing a real hue. Identity only: the amber capacity bar under these
+ * chips means "near capacity", and the badge next to the name is what carries
+ * that. This dot must never be read as agreeing with it.
+ */
+const APP_DOT_CLASS = 'size-1.5 shrink-0 rounded-full bg-muted-foreground/50'
+
 function parsePct(raw: string): number | null {
   const value = Number(raw)
   if (!Number.isInteger(value) || value < MIN_PCT || value > MAX_PCT) return null

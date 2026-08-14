@@ -49,6 +49,21 @@ export function isoDayAdd(iso: string, days: number): string {
   return new Date(toUtcMidnight(iso) + days * DAY_MS).toISOString().slice(0, 10)
 }
 
+/**
+ * The Sunday on or before `iso` — the start of the calendar week a day belongs
+ * to, for anything that has to line up with a seven-row grid.
+ *
+ * Weekday comes from the module's own UTC-midnight anchor rather than a local
+ * `Date`, which keeps it consistent with the rest of the arithmetic here and
+ * inherits the malformed-input throw for free. It is safe to pair with date-fns
+ * downstream: `parseISO('2026-02-08')` yields LOCAL midnight of that calendar
+ * date, so its `getDay()` and this `getUTCDay()` name the same weekday in every
+ * timezone — the two only diverge for instants, and this module has none.
+ */
+export function isoWeekStart(iso: string): string {
+  return isoDayAdd(iso, -new Date(toUtcMidnight(iso)).getUTCDay())
+}
+
 /** Whole days from `from` to `to`; negative when `to` is earlier. */
 export function isoDayDiff(to: string, from: string): number {
   return Math.round((toUtcMidnight(to) - toUtcMidnight(from)) / DAY_MS)

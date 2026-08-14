@@ -61,8 +61,20 @@ between *how far through the time we are* and *how far through the work we are*
 is a visible distance on screen rather than two numbers to compare in your head.
 A bar whose fill trails its today-marker is behind, and it looks behind.
 
-Nothing else on the page gets a fill. The bar is the one place colour carries a
+The fill belongs to the SPRINT BAR, wherever a sprint bar is drawn — the spine
+and the full timeline both get it, because a bar that shows progress in one
+place and not the other teaches people that the mark is decorative. Nothing
+that is not a sprint bar gets a fill: the bar is the one place colour carries a
 quantity.
+
+The two surfaces render it differently for one reason. The spine's fill is
+scored on health and coloured by it, because the spine's whole job is the
+time-versus-work read. The timeline's bars are already coloured by sprint
+STATUS (planned / active / done) and cannot take a second colour language, so
+their fill is drawn in `currentColor` at low alpha — a lightness step inside
+whatever colour the status gave the bar, which survives all three treatments in
+both themes. Both are the same quantity from the same `readSprint`, and both
+carry the health word beside them so the fill is never colour alone.
 
 ## 5. Intelligence — only what changes a decision
 

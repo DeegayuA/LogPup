@@ -64,6 +64,38 @@ export type SprintRead = {
 }
 
 /**
+ * The word that rides beside the fill, wherever the fill is drawn.
+ *
+ * It lives here rather than in whichever component happens to paint a bar
+ * because the fill and the word are ONE signal, not two: colour alone cannot
+ * carry "behind" versus "overdue" (WCAG 1.4.1), so any surface that draws the
+ * quantity is obliged to draw the word too. Two surfaces now do — the spine
+ * and the roadmap's Gantt bars — and a second private copy of these five
+ * strings is exactly how two bars describing the same sprint start
+ * disagreeing about it. Same placement rule as HEALTH_LABEL in app-health.ts,
+ * which sits beside HealthLevel for the same reason.
+ */
+export const HEALTH_WORD: Record<SprintHealth, string> = {
+  'not-started': 'Not started',
+  'on-track': 'On track',
+  behind: 'Behind',
+  overdue: 'Overdue',
+  complete: 'Complete',
+}
+
+/**
+ * Completion at a glance: "3/8", or "empty" when there is nothing to count.
+ *
+ * "0/0" is the shape this replaces, and it reads as a failure rather than as
+ * an unplanned sprint. The word matters more than usual next to a progress
+ * fill, because 0% and "no work at all" draw the identical empty bar — the
+ * count is the only thing that tells them apart.
+ */
+export function completionCount(read: SprintRead): string {
+  return read.total > 0 ? `${read.done}/${read.total}` : 'empty'
+}
+
+/**
  * The whole read on one sprint.
  *
  * Order matters and is the interesting part: "finished" outranks "late", and

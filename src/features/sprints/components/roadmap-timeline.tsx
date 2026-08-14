@@ -42,6 +42,13 @@ import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { SORT_GAP, sortOrderForIndex } from '@/lib/sort-order'
 import { reorderSprint, resortSprintsByDate, updateSprint } from '@/features/sprints/actions'
 import { dropIndexIn } from '@/features/sprints/board-view'
+import {
+  HEALTH_WORD,
+  completionCount,
+  readSprint,
+  type SprintRead,
+  type StatusCounts,
+} from '@/features/sprints/plan-read'
 import { SprintEditDialog } from '@/features/sprints/components/sprint-edit-dialog'
 import {
   PX_PER_DAY,
@@ -95,6 +102,20 @@ const PAD_DAYS: Record<Zoom, number> = { week: 21, month: 60, quarter: 150 }
  * A hairline is a drawing problem and gets a drawing fix.
  */
 const BAR_INSET_PX = 2
+
+/**
+ * Below this width a bar shows its name and nothing else.
+ *
+ * A clipped "Not st…" is worse than an absent word — it reads as a different
+ * status. Nothing is actually lost by dropping it: the index below names every
+ * sprint with its status word and count at every zoom, and the whole judgement
+ * is in the bar's own aria-label regardless of how many pixels it got.
+ */
+const META_MIN_BAR_PX = 180
+
+/** What a sprint with no tasks in it has. A shared frozen literal rather than
+ *  one written out at each `??`, so "empty" is one object and one idea. */
+const NO_TASKS: StatusCounts = { todo: 0, in_progress: 0, done: 0 }
 
 /** Keyboard nudges write through a debounce: holding an arrow key must not
  *  become one server round trip per repeat. */
@@ -188,10 +209,14 @@ export function RoadmapTimeline({
   sprints,
   slug,
   isAdmin,
+  counts,
 }: {
   sprints: Sprint[]
   slug: string
   isAdmin: boolean
+  /** Board counts per sprint id, raw. Scored into a read here rather than on
+   *  the server — see the note on `readFor`. */
+  counts: Record<string, StatusCounts>
 }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -290,6 +315,24 @@ export function RoadmapTimeline({
       return resizeSprintEnd(range.startDate, range.endDate, deltaDays)
     },
     [activeDrag, committedRange],
+  )
+
+  /**
+   * How this sprint is going, scored against a range the CALLER chooses.
+   *
+   * The range is a parameter rather than being looked up in here because the
+   * two surfaces below want different ones: a bar takes its preview range, so
+   * dragging a sprint's end date past today makes it say "Overdue" as the
+   * cursor crosses rather than four hundred milliseconds later; an index row
+   * takes its committed range, matching the dates that row is already
+   * printing beside it. Both go through `readSprint` — the same function the
+   * spine and the plan strip use — so no surface on this page can invent its
+   * own idea of "behind".
+   */
+  const readFor = useCallback(
+    (sprint: Sprint, range: SprintRange): SprintRead =>
+      readSprint({ ...range, status: sprint.status }, counts[sprint.id] ?? NO_TASKS, todayIso),
+    [counts, todayIso],
   )
 
   // The axis and the row packing are BOTH computed from committed dates. If
@@ -802,7 +845,12 @@ export function RoadmapTimeline({
         </div>
       </div>
 
+      {/* The legend above names three colours and would say nothing at all
+          about the fill inside each bar — a mark nobody has been told the
+          meaning of is a mark people work around rather than read. Same
+          sentence as the spine's, because it is the same mark. */}
       <p className="text-xs text-muted-foreground">
+        Each bar fills with the work done in it; the line is today.{' '}
         {isAdmin
           ? 'Everything snaps to whole days. With a keyboard: tab to a bar and use ← →  to move it, or tab to its start/end handle to change that date. Hold shift for a week at a time. Press enter on a bar to edit everything at once.'
           : 'Select a sprint to open its board. Only admins can reschedule sprints.'}
@@ -862,21 +910,27 @@ export function RoadmapTimeline({
             </div>
 
             <ul className="absolute inset-x-0 z-20 list-none" style={{ top: HEADER_HEIGHT }}>
-              {ordered.map((sprint) => (
-                <SprintBar
-                  key={sprint.id}
-                  sprint={sprint}
-                  range={previewRange(sprint)}
-                  row={rows.get(sprint.id) ?? 0}
-                  axis={axis}
-                  zoom={zoom}
-                  slug={slug}
-                  isAdmin={isAdmin}
-                  dragKind={activeDrag?.sprintId === sprint.id ? activeDrag.kind : null}
-                  onEdit={openEditor}
-                  onNudge={nudge}
-                />
-              ))}
+              {ordered.map((sprint) => {
+                const range = previewRange(sprint)
+                return (
+                  <SprintBar
+                    key={sprint.id}
+                    sprint={sprint}
+                    range={range}
+                    // Scored on the PREVIEW range, so the word on the bar and
+                    // the dates under the cursor are the same claim.
+                    read={readFor(sprint, range)}
+                    row={rows.get(sprint.id) ?? 0}
+                    axis={axis}
+                    zoom={zoom}
+                    slug={slug}
+                    isAdmin={isAdmin}
+                    dragKind={activeDrag?.sprintId === sprint.id ? activeDrag.kind : null}
+                    onEdit={openEditor}
+                    onNudge={nudge}
+                  />
+                )
+              })}
             </ul>
           </div>
         </div>
@@ -937,18 +991,25 @@ export function RoadmapTimeline({
         >
           <SortableContext items={rowOrderIds} strategy={verticalListSortingStrategy}>
             <ul className="divide-y divide-border/60">
-              {byRowOrder.map((sprint) => (
-                <SprintIndexRow
-                  key={sprint.id}
-                  sprint={sprint}
-                  range={committedRange(sprint)}
-                  slug={slug}
-                  isAdmin={isAdmin}
-                  onFind={focusSprint}
-                  onEdit={openEditor}
-                  onNudgeRow={nudgeRow}
-                />
-              ))}
+              {byRowOrder.map((sprint) => {
+                const range = committedRange(sprint)
+                return (
+                  <SprintIndexRow
+                    key={sprint.id}
+                    sprint={sprint}
+                    range={range}
+                    // Committed, not preview: this row prints the committed
+                    // dates, and a verdict scored on a different range to the
+                    // dates beside it is a row arguing with itself.
+                    read={readFor(sprint, range)}
+                    slug={slug}
+                    isAdmin={isAdmin}
+                    onFind={focusSprint}
+                    onEdit={openEditor}
+                    onNudgeRow={nudgeRow}
+                  />
+                )
+              })}
             </ul>
           </SortableContext>
         </DragSurface>
@@ -968,6 +1029,7 @@ export function RoadmapTimeline({
 function SprintBar({
   sprint,
   range,
+  read,
   row,
   axis,
   zoom,
@@ -979,6 +1041,8 @@ function SprintBar({
 }: {
   sprint: Sprint
   range: SprintRange
+  /** How the sprint is going, scored on `range`. */
+  read: SprintRead
   row: number
   axis: TimelineWindow
   zoom: Zoom
@@ -993,7 +1057,17 @@ function SprintBar({
 }) {
   const isDragging = dragKind !== null
   const geometry = barGeometry({ id: sprint.id, ...range }, axis, zoom)
-  const label = `${sprint.name}, ${formatRange(range)}, ${STATUS_LABEL[sprint.status]}`
+  // Two different vocabularies, both said out loud on purpose. STATUS_LABEL is
+  // the stored column the bar's COLOUR means (Planned / Active / Done);
+  // HEALTH_WORD is what readSprint derives and the fill means (Not started /
+  // On track / Behind / Overdue / Complete). They legitimately disagree — an
+  // active sprint past its end date is Active AND Overdue — so collapsing
+  // them into one word would make the label contradict either the colour or
+  // the fill. `read.summary` is already a finished sentence, which is what
+  // states the completion in words rather than as a bare ratio.
+  const label = `${sprint.name}, ${formatRange(range)}, ${STATUS_LABEL[sprint.status]}. ${HEALTH_WORD[read.health]}. ${read.summary}`
+  // Below this the bar is name-only; the index below still carries both facts.
+  const showMeta = geometry.width >= META_MIN_BAR_PX
 
   return (
     <li
@@ -1027,21 +1101,68 @@ function SprintBar({
           isDragging && 'z-10 shadow-md',
         )}
       >
+        {/*
+          The work done, inside the bar that is supposed to contain it.
+
+          Four things here are load-bearing and none of them is obvious:
+
+          — `currentColor`, not a status token. The bar already spends colour
+            on planned/active/done, and a --success or --warning fill inside
+            it would be two colour languages in one rectangle. currentColor is
+            whatever text each status already pairs with (foreground on the
+            pale planned/done fills, primary-foreground on the solid active
+            one), so the fill is a LIGHTNESS step that goes the right way in
+            BOTH themes with no per-status-per-theme table to keep in sync —
+            the same trick, for the same reason, as the resize grip below.
+          — `pointer-events-none`. Without it the fill swallows every
+            pointerdown on the bar and dragging stops working outright.
+          — The clip lives on this WRAPPER rather than as `overflow-hidden` on
+            the bar itself, because the drag date chip is a child of the bar
+            sitting at `-top-6` and would be clipped away with it.
+          — Suppressed entirely below 1%. A zero-width element still paints
+            its right border, so every untouched sprint would otherwise get a
+            stray hairline at its left edge — and 0/1 is exactly the case this
+            has to not lie about.
+
+          The border on the right edge is what keeps this from being a bare
+          wash: the boundary is a line you can locate against the Today
+          marker. The word beside it, and `read.summary` in the label, are
+          what keep it from being colour-only.
+        */}
+        {read.donePct > 0 ? (
+          <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-md">
+            <span
+              className="absolute inset-y-0 left-0 border-r-2 border-current/45 bg-current/15"
+              style={{ width: `${read.donePct}%` }}
+            />
+          </span>
+        ) : null}
+
         {isAdmin ? (
           <ResizeHandle sprint={sprint} range={range} kind="start" onNudge={onNudge} />
         ) : null}
 
         {isAdmin ? (
-          <BarBody sprint={sprint} label={label} onEdit={onEdit} onNudge={onNudge} />
+          <BarBody
+            sprint={sprint}
+            label={label}
+            read={read}
+            showMeta={showMeta}
+            onEdit={onEdit}
+            onNudge={onNudge}
+          />
         ) : (
           <Link
             href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
-            aria-label={`${label}. Open board.`}
-            className="flex h-full min-w-0 flex-1 items-center rounded-md px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`${label} Open board.`}
+            // `relative` for the same painting-order reason as BarBody's
+            // button — see the note there.
+            className="relative flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <span aria-hidden className="truncate text-xs font-medium">
               {sprint.name}
             </span>
+            {showMeta ? <BarMeta read={read} /> : null}
           </Link>
         )}
 
@@ -1086,16 +1207,43 @@ function SprintBar({
   )
 }
 
+/**
+ * The status word and the count, riding on the bar beside its name.
+ *
+ * The partner the fill cannot do without: colour alone cannot separate
+ * "Behind" from "Overdue" (WCAG 1.4.1), and an empty bar cannot separate 0%
+ * from "no work planned at all" — the count is the only thing that does.
+ *
+ * Hierarchy is carried by WEIGHT against the name's `font-medium`, not by
+ * `text-muted-foreground` or a lowered opacity: muted-foreground is close to
+ * unreadable on the solid active fill, and dropping opacity on 11px text puts
+ * it under the 4.5:1 floor. Word in sans, count in mono tabular-nums, the same
+ * split the spine and the index rows use.
+ */
+function BarMeta({ read }: { read: SprintRead }) {
+  return (
+    <span aria-hidden className="ml-auto shrink-0 truncate text-2xs font-normal">
+      {HEALTH_WORD[read.health]}
+      <span className="font-mono tabular-nums"> · {completionCount(read)}</span>
+    </span>
+  )
+}
+
 /** The bar itself: a real button, so enter opens the editor and arrow keys
  *  move the sprint. Pointer drags come from dnd-kit's listeners. */
 function BarBody({
   sprint,
   label,
+  read,
+  showMeta,
   onEdit,
   onNudge,
 }: {
   sprint: Sprint
   label: string
+  read: SprintRead
+  /** Whether the bar is wide enough to wear its words. */
+  showMeta: boolean
   onEdit: (sprint: Sprint) => void
   onNudge: (sprint: Sprint, kind: DragKind, event: KeyboardEvent) => void
 }) {
@@ -1110,7 +1258,7 @@ function BarBody({
       type="button"
       {...attributes}
       {...listeners}
-      aria-label={`${label}. Press enter to edit, or use the arrow keys to move this sprint.`}
+      aria-label={`${label} Press enter to edit, or use the arrow keys to move this sprint.`}
       onPointerDown={(event) => {
         pointerStart.current = { x: event.clientX, y: event.clientY }
         listeners?.onPointerDown?.(event)
@@ -1136,11 +1284,24 @@ function BarBody({
         listeners?.onKeyDown?.(event)
         onNudge(sprint, 'move', event)
       }}
-      className="flex h-full min-w-0 flex-1 cursor-grab items-center rounded-md px-1 text-left outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring"
+      /*
+        `relative` is not cosmetic here, and it is the one thing in this
+        change that would silently regress the drag affordances if it were
+        dropped. CSS paints positioned descendants AFTER in-flow content, so
+        the absolutely-positioned progress fill above would wash over the
+        sprint name and both resize grips no matter how early it appears in
+        the DOM. Because the fill is pointer-events-none, the clicks would
+        still land — which is the worst version of the bug: controls that look
+        disabled and are not. Making these siblings positioned too puts them
+        back in DOM order against the fill, which is also why the fill is
+        rendered first and why none of this needs a z-index.
+      */
+      className="relative flex h-full min-w-0 flex-1 cursor-grab items-center gap-2 rounded-md px-1 text-left outline-none active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span aria-hidden className="truncate text-xs font-medium">
         {sprint.name}
       </span>
+      {showMeta ? <BarMeta read={read} /> : null}
     </button>
   )
 }
@@ -1182,8 +1343,9 @@ function ResizeHandle({
       className={cn(
         // 10px wide — comfortably past the 8px floor for a pointer target on
         // its own, and on coarse pointers globals.css expands every <button>
-        // to a 44px hit area besides.
-        'flex h-full w-2.5 shrink-0 cursor-ew-resize items-center justify-center rounded-md outline-none',
+        // to a 44px hit area besides. `relative` for the painting-order
+        // reason spelled out on BarBody's button.
+        'relative flex h-full w-2.5 shrink-0 cursor-ew-resize items-center justify-center rounded-md outline-none',
         'bg-foreground/0 transition-colors duration-150 motion-reduce:transition-none',
         'hover:bg-foreground/25 group-hover/bar:bg-foreground/15',
         'focus-visible:bg-foreground/25 focus-visible:ring-2 focus-visible:ring-ring',
@@ -1223,6 +1385,7 @@ function ResizeHandle({
 function SprintIndexRow({
   sprint,
   range,
+  read,
   slug,
   isAdmin,
   onFind,
@@ -1231,6 +1394,8 @@ function SprintIndexRow({
 }: {
   sprint: Sprint
   range: SprintRange
+  /** Scored on the committed range this row prints. */
+  read: SprintRead
   slug: string
   isAdmin: boolean
   onFind: (sprintId: string) => void
@@ -1306,6 +1471,14 @@ function SprintIndexRow({
       </span>
       <span className="font-mono text-xs tabular-nums text-muted-foreground">
         {inclusiveDayCount(range.startDate, range.endDate)}d
+      </span>
+      {/* The fill's guaranteed textual twin. A bar narrower than
+          META_MIN_BAR_PX drops its word, and at quarter zoom most of them are
+          — this row is the only place every sprint is named at every scale,
+          so it is the only honest home for the facts the fill encodes. */}
+      <span className="text-xs text-muted-foreground">
+        {HEALTH_WORD[read.health]}
+        <span className="font-mono tabular-nums"> · {completionCount(read)}</span>
       </span>
       <span className="ml-auto flex shrink-0 items-center gap-1">
         <Button type="button" size="sm" variant="ghost" onClick={() => onFind(sprint.id)}>

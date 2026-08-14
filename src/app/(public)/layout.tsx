@@ -16,8 +16,15 @@ import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      {/* 76rem, matching /home's own container. The header and footer used to
+          be pinned at max-w-3xl, which left the chrome visibly narrower than
+          the page it framed — on a layout whose entire discipline is
+          alignment, that reads as an error rather than as a choice. /privacy
+          and /terms hold their prose at max-w-3xl inside their own 76rem
+          wrapper so they align to the same left edge; a wide masthead over a
+          narrow text column is the magazine convention anyway. */}
       <header className="border-b border-border">
-        <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-4 px-6 py-4">
+        <div className="mx-auto flex w-full max-w-[76rem] items-center justify-between gap-4 px-6 py-4 md:px-10">
           <Link href="/home" aria-label="LogPup home">
             <BrandMark />
           </Link>
@@ -37,8 +44,12 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
 
       <main className="flex-1">{children}</main>
 
+      {/* The border-t stays. /home closes on its own colophon rule and does
+          not need it, but this same footer also terminates /privacy and
+          /terms, which have no colophon — dropping it would leave those two
+          pages ending on nothing. */}
       <footer className="border-t border-border">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between md:px-10">
           <div className="flex flex-col gap-2">
             <AltaVisionLogo className="h-5 w-auto" />
             <p className="text-xs text-muted-foreground">
