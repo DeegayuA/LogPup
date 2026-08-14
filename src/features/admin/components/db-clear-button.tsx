@@ -46,8 +46,8 @@ export function DbClearButton() {
       className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4"
     >
       <p className="text-sm text-muted-foreground">
-        Deletes all apps, assignments, sprints, tasks and meetings. Users are kept. This
-        cannot be undone. Type{' '}
+        Deletes all apps, assignments, sprints, tasks, meetings and work logs. Users are
+        kept. This cannot be undone. Type{' '}
         <span className="font-mono text-xs font-medium text-foreground">CLEAR</span> to
         confirm.
       </p>

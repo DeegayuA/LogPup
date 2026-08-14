@@ -7,7 +7,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import {
   apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAttendeeRecommendations,
-  users,
+  dailyWorklogs, users,
 } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { hashPassword } from '@/lib/password'
@@ -51,9 +51,24 @@ export async function clearTestData(
   // rows they described, which is the whole reason they are denormalized.
   // If a wipe ever has to be total, the trail must be truncated explicitly
   // and visibly, not swept along by a list of business tables.
+  //
+  // daily_worklogs is the one per-person table this list has to name for
+  // itself, and it was missed for years because its neighbour isn't. Sprint
+  // check-ins vanish for free — they cascade from sprints, which is deleted
+  // below — but a work log hangs off nothing except users, and users are
+  // exactly what this tool keeps. Leaving it off the list left /worklog
+  // reading back a full history of a workspace that no longer contained
+  // anything: percentages and notes about apps and sprints that were gone.
+  // The alternative worth naming is giving daily_worklogs an app or sprint
+  // parent so it inherits a cascade like everything else here; that was
+  // rejected because a work log is a statement about a person's day, not
+  // about any one app, and inventing a parent to satisfy a delete list would
+  // be a lie in the schema. So it gets its own line, and every future
+  // per-person table will need one too.
   await db.delete(meetingAttendeeRecommendations)
   await db.delete(meetingAttendees)
   await db.delete(meetings)
+  await db.delete(dailyWorklogs)
   await db.delete(tasks)
   await db.delete(sprints)
   await db.delete(assignments)

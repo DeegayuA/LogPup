@@ -93,8 +93,8 @@ export default async function AdminPage() {
                 Clear database
               </CardTitle>
               <CardDescription>
-                Permanently deletes all apps, assignments, sprints, tasks and meetings
-                for the whole workspace. Users are kept. This cannot be undone.
+                Permanently deletes all apps, assignments, sprints, tasks, meetings and
+                work logs for the whole workspace. Users are kept. This cannot be undone.
               </CardDescription>
             </CardHeader>
             <CardContent>
