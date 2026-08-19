@@ -465,6 +465,32 @@ export const geminiKeys = pgTable('gemini_keys', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
+// One row per top-level Gemini call (not per internal retry): who spent
+// quota, on whose key, for which feature, and the token counts Gemini
+// reported. Usage accounting only — no prompt or response text is ever
+// stored here. key_owner_id and key_last4 are denormalized snapshots so
+// shared-key attribution survives key deletion (key_id goes NULL).
+// Rows older than 12 months are pruned (privacy-prune pattern; exempt
+// from the soft-delete rule — there is nothing to restore).
+export const aiUsageEvents = pgTable('ai_usage_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  keyId: uuid('key_id').references(() => geminiKeys.id, { onDelete: 'set null' }),
+  keyOwnerId: uuid('key_owner_id').references(() => users.id, { onDelete: 'set null' }),
+  keyLast4: text('key_last4'),
+  feature: text('feature').notNull(),
+  model: text('model').notNull(),
+  inputTokens: integer('input_tokens').notNull().default(0),
+  outputTokens: integer('output_tokens').notNull().default(0),
+  // 'ok' or the GeminiErrorCode that ended the call (e.g. 'AUTH_FAILED').
+  status: text('status').notNull().default('ok'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [
+  index('ai_usage_user_created_idx').on(t.userId, t.createdAt),
+  index('ai_usage_key_owner_created_idx').on(t.keyOwnerId, t.createdAt),
+  index('ai_usage_feature_created_idx').on(t.feature, t.createdAt),
+])
+
 // AI analysis of a recorded meeting (transcript + structured notes), one row
 // per meeting. jsonb shapes:
 //   perPerson:  [{ name, points: string[], actionItems: string[] }]

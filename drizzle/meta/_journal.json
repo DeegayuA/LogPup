@@ -239,6 +239,13 @@
       "when": 1786600003000,
       "tag": "0034_app_role_history",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1787155100000,
+      "tag": "0035_ai_usage_events",
+      "breakpoints": true
     }
   ]
 }
