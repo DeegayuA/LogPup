@@ -10,12 +10,15 @@
 // `server-only` package in this project to enforce that at build time, so the
 // import graph is the guard — do not import this from a 'use client' module.
 
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { geminiKeys } from '@/db/schema'
 import { decryptSecret } from '@/lib/crypto'
 import { GeminiError } from '@/features/gemini/client'
+import { orderKeysForRotation } from '@/features/gemini/rotation'
+import { recordAiUsage } from '@/features/gemini/usage'
 import { MAX_ATTEMPTS, backoffDelayMs, shouldRetry, sleep } from '@/features/gemini/retry'
+import { AUDIO_TOKENS_PER_SECOND } from '@/features/transcription/session-budget'
 import { LIVE_MODEL_FALLBACK_ORDER, buildSetupMessage } from './live-protocol'
 
 const AUTH_TOKENS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/auth_tokens'
@@ -134,14 +137,24 @@ export async function mintLiveToken(
 ): Promise<MintedLiveToken> {
   const models = opts?.model ? [opts.model] : LIVE_MODEL_FALLBACK_ORDER
 
-  const keys = await db
+  const rows = await db
     .select()
     .from(geminiKeys)
-    .where(and(eq(geminiKeys.userId, userId), eq(geminiKeys.active, true)))
-    .orderBy(sql`${geminiKeys.lastUsedAt} ASC NULLS FIRST`)
+    .where(
+      and(
+        eq(geminiKeys.active, true),
+        or(eq(geminiKeys.userId, userId), eq(geminiKeys.shared, true)),
+      ),
+    )
+  // Own keys first (LRU), then org-shared keys (LRU) — a caller with
+  // working keys of their own never drains a teammate's shared quota.
+  const keys = orderKeysForRotation(userId, rows)
 
   if (keys.length === 0) {
-    throw new GeminiError('NO_KEYS', 'No active Gemini API keys — add one in Profile.')
+    throw new GeminiError(
+      'NO_KEYS',
+      'No active Gemini API keys — add one in Profile (or ask a teammate to share one).',
+    )
   }
 
   let sawAuthFailure = false
@@ -167,6 +180,21 @@ export async function mintLiveToken(
           .update(geminiKeys)
           .set({ lastUsedAt: new Date(), failCount: 0 })
           .where(eq(geminiKeys.id, key.id))
+        // ESTIMATED, not measured: the Live socket runs browser-side, so the
+        // server's only handle on its usage is "one token ≈ one ≤10-minute
+        // session slice" at the session-budget rate. Every UI that surfaces
+        // live.session rows must say "approximately".
+        recordAiUsage({
+          userId,
+          keyId: key.id,
+          keyOwnerId: key.userId,
+          keyLast4: key.last4,
+          feature: 'live.session',
+          model,
+          inputTokens: AUDIO_TOKENS_PER_SECOND * (TOKEN_TTL_MS / 1000),
+          outputTokens: 0,
+          status: 'ok',
+        })
         return {
           token: result.token,
           model,
