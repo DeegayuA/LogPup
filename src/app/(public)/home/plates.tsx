@@ -357,7 +357,12 @@ const WRITEUP_BLOCKS = [
     accent: 'border-l-tag-action',
     ink: 'text-tag-action',
     line: 'Nuwan to unblock the migration journal before Thursday standup.',
-    chip: 'Due 14 Aug',
+    /* 13, not 14: AS_OF is Wednesday 12 Aug 2026, so "before Thursday
+       standup" is the 13th. The chip said the 14th — a Friday — so the
+       sample contradicted itself on a public page, which is exactly the sort
+       of detail a reader checks when deciding whether to trust the product
+       behind it. */
+    chip: 'Due 13 Aug',
     note: null,
   },
   {

@@ -44,6 +44,23 @@ export const metadata: Metadata = {
 const RISE =
   'motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-fill-mode:backwards]'
 
+/**
+ * The same entrance for the two elements that are the LCP candidates — minus
+ * the fade.
+ *
+ * Chrome does not count fully transparent text as painted, so an LCP element
+ * that starts at `opacity: 0` reports its paint only when the fade finishes.
+ * The h1 and the tagline were both doing exactly that, and the tagline held
+ * at zero for a further 60ms, so the page was charging itself roughly half a
+ * second of LCP for its own entrance — on the one route whose job is to make
+ * a first impression on a reviewer.
+ *
+ * Movement alone costs nothing: the text is opaque in the first frame and
+ * merely finishes travelling. Everything below the fold keeps the fade.
+ */
+const RISE_LCP =
+  'motion-safe:animate-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-fill-mode:backwards]'
+
 const LINK =
   'rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 
@@ -186,7 +203,7 @@ export default function PublicHomePage() {
 
       {/* §00 — MASTHEAD */}
       <section className="flex flex-col justify-end pt-16 pb-16 sm:min-h-[78svh] sm:pb-20">
-        <div className={cn('flex flex-col gap-6', RISE)}>
+        <div className={cn('flex flex-col gap-6', RISE_LCP)}>
           <Eyebrow>Alta Vision (Pvt) Ltd · Colombo · Internal tool</Eyebrow>
           {/* The product name is the <h1>, not the tagline. Google's review
               compares the consent screen's app name against the home page and
@@ -205,7 +222,7 @@ export default function PublicHomePage() {
         <p
           className={cn(
             'mt-6 max-w-[19ch] font-heading text-[clamp(1.75rem,4vw,3rem)] leading-[1.05] font-bold tracking-[-0.025em] text-foreground',
-            RISE,
+            RISE_LCP,
             'motion-safe:[animation-delay:60ms]',
           )}
         >
@@ -217,7 +234,12 @@ export default function PublicHomePage() {
             An engineering-operations HQ for one software studio. Every product in flight, everyone
             on it and how loaded they are, what ships this sprint, what each person actually did
             today, and what was decided in every meeting — with the meeting write-ups produced in
-            both English and Sinhala (සිංහල).
+            {/* lang="si" on the Sinhala word itself (WCAG 3.1.2, Language of
+                Parts). Without it a screen reader on an English page reads
+                these glyphs with an English voice, which is unintelligible.
+                PlateWriteup already does this correctly for its Sinhala
+                block — this one inline word was the exception. */}
+            both English and Sinhala (<span lang="si">සිංහල</span>).
           </p>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
