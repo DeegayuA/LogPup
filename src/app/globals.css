@@ -349,24 +349,44 @@
    by a media query without !important. Transform only — no opacity flicker,
    no filter, nothing that would force a repaint of the whole panel. */
 @keyframes logpup-ring-breathe {
-  0%,
+  0% {
+    transform: scale(1);
+    opacity: var(--ring-opacity, 1);
+    /* ASYMMETRY IS THE POINT of these two curves.
+       One ease-in-out across a symmetric out-and-back has no accent: the ring
+       spends equal time expanding and contracting at mirrored speeds, which
+       the eye reads as a metronome throb rather than as something moving.
+       This curve is the swell — it leaves quickly and then glides, the way a
+       wave loses energy as it travels outward. */
+    animation-timing-function: cubic-bezier(0.16, 0.7, 0.3, 1);
+  }
+  62% {
+    /* 1.045 was imperceptible: a 4.5% change spread over 14s falls below the
+       threshold at which motion is noticed at all, so the backdrop read as
+       static. 11% over this curve is legible as a swell without becoming a
+       distraction — still far below anything that pulls the eye off the
+       sign-in form.
+
+       62% rather than 50% is what makes the return quiet: the ring takes
+       nearly two thirds of the cycle to reach its peak and the remaining
+       third to fall back, so the recovery is slower than the swell and never
+       announces itself as a second, opposite movement. */
+    transform: scale(1.11);
+    /* A gentle dim as the ring expands, so the staggered cluster reads as a
+       ripple travelling OUTWARD rather than every ring inflating in place.
+
+       0.72, not the 0.55 this used to be: the outer rings rest at 0.16
+       opacity, and taking those to 0.09 and back made them read as flicker —
+       a faint line blinking, which is the cheapest-looking motion there is.
+       A ring should dim, not disappear. */
+    opacity: calc(var(--ring-opacity, 1) * 0.72);
+    /* The settle: slower out of the peak than into it, so the ring relaxes
+       rather than snapping back. */
+    animation-timing-function: cubic-bezier(0.5, 0, 0.72, 0.42);
+  }
   100% {
     transform: scale(1);
     opacity: var(--ring-opacity, 1);
-  }
-  50% {
-    /* 1.045 was imperceptible: a 4.5% change spread over 14s falls below the
-       threshold at which motion is noticed at all, so the backdrop read as
-       static. 12% over the same slow curve is legible as a swell without
-       becoming a distraction — still far below anything that pulls the eye
-       off the sign-in form. */
-    transform: scale(1.12);
-    /* Paired with the scale so each ring dims slightly as it expands, which
-       is what makes the staggered cluster read as a ripple travelling OUTWARD
-       rather than every ring inflating in place. This is a slow drift, not
-       the opacity flicker the note above warns against — one traversal per
-       ~13s, on a compositor-friendly property. */
-    opacity: calc(var(--ring-opacity, 1) * 0.55);
   }
 }
 

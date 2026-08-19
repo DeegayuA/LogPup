@@ -72,6 +72,14 @@ export function SignInBackdrop() {
               ry={ring.ry}
               stroke="currentColor"
               strokeWidth={1.25}
+              /* Without this the stroke scales with the ring: 1.25px at
+                 scale(1.11) paints at 1.39px, so every contour visibly
+                 THICKENS as it swells and thins as it settles. That reads as
+                 an image being zoomed rather than as light moving across
+                 terrain, and it is the largest single reason the motion felt
+                 cheap. A non-scaling stroke holds the line weight constant,
+                 so the only thing that changes is where the line is. */
+              vectorEffect="non-scaling-stroke"
               opacity={ring.opacity}
             />
           </g>
@@ -95,6 +103,14 @@ export function SignInBackdrop() {
               ry={ring.ry * 0.62}
               stroke="currentColor"
               strokeWidth={1.25}
+              /* Without this the stroke scales with the ring: 1.25px at
+                 scale(1.11) paints at 1.39px, so every contour visibly
+                 THICKENS as it swells and thins as it settles. That reads as
+                 an image being zoomed rather than as light moving across
+                 terrain, and it is the largest single reason the motion felt
+                 cheap. A non-scaling stroke holds the line weight constant,
+                 so the only thing that changes is where the line is. */
+              vectorEffect="non-scaling-stroke"
               opacity={ring.opacity * 0.8}
             />
           </g>
