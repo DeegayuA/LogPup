@@ -15,12 +15,12 @@ export type NavItem = {
   icon: ComponentType<{ className?: string }>
   /**
    * Letter for the "g then <key>" jump, if any. This is the single source of
-   * truth for the KEY ITSELF: the sidebar row renders it as a hint and the
-   * command center builds its key handler from the same field (GO_TARGETS in
-   * features/search/components/command-center.tsx), so a row cannot advertise
-   * a jump that nothing is listening for. The palette's own "Go to" LIST is
-   * still hand-written there — a new entry here needs adding to it by hand or
-   * it gets a working shortcut with no chip teaching it. Letters must be
+   * truth for it end to end: the sidebar row renders it as a hint, the command
+   * center builds its key handler from the same field (GO_TARGETS in
+   * features/search/components/command-center.tsx), and the palette's "Go to"
+   * list and its chips are derived from this array as well (navCommands in
+   * features/search/registry/commands.ts). One row here yields a destination,
+   * a working shortcut and a chip teaching it, together. Letters must be
    * unique across this list.
    */
   key?: string

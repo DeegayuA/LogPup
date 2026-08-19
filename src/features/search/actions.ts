@@ -7,6 +7,7 @@ import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
 import { apps, assignments, tasks, users } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { canAccessApp } from '@/lib/access-gate'
 import { parseTaskIntent } from '@/lib/task-intent'
 import { runProviders } from './registry/providers'
 import type { SearchGroup } from './registry/types'
@@ -21,10 +22,19 @@ import type { SearchGroup } from './registry/types'
  */
 export async function universalSearch(q: string): Promise<SearchGroup[]> {
   const session = await auth()
-  // The palette is behind the (app) shell, so this is a belt-and-braces check
-  // rather than the only one — but a server action is its own entry point and
-  // has to gate itself.
   if (!session?.user) return []
+  /**
+   * Approved, not merely signed in.
+   *
+   * Open signup means a pending account holds a real session while it waits
+   * for an admin (src/lib/access-gate.ts). The proxy pins those users to
+   * /pending, but a server action is its own entry point — it can be called
+   * directly, without ever loading a page the proxy guards. A bare "has a
+   * session" check therefore let an unapproved account enumerate every app,
+   * person, task, sprint and meeting in the workspace, one query at a time.
+   * Every provider inherits this gate; none re-checks it.
+   */
+  if (!canAccessApp(session.user.status, true)) return []
 
   return runProviders(q, { user: session.user })
 }

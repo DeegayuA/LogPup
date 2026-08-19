@@ -1,6 +1,16 @@
 # Command Center & Universal Search — Registry Design Spec
 
-Date: 2026-08-19 · Branch: main (shared worktree) · Status: draft
+Date: 2026-08-19 · Branch: main (shared worktree) · Status: **built** — the tree matches this
+document. Verified at the time of writing: `npx tsc --noEmit` clean, `npx vitest run` 128 files /
+2144 tests passing, `npm run lint` unchanged from its pre-existing 3 errors (all
+`react-hooks/set-state-in-effect` in meetings components, none in this work).
+
+A parallel session was editing `command-center.tsx` throughout. Its work is kept, not reverted:
+the `GO_TARGETS` derivation from `navItems`, the `key: 'V'` for Activity, the single
+`goShortcutsEnabled()` read that closed the in-palette opt-out gap, the state-naming toggle
+label, the natural-language placeholder, and the `hidden sm:inline` on jump chips. The one edit
+of theirs this supersedes is the hand-written Work log row in `pages` — destinations are derived
+now, so that row appears without anyone adding it.
 
 Supersedes the Architecture notes for this surface in
 `docs/superpowers/specs/2026-08-11-ui-redesign-design.md:43-61`, which designed the palette but
@@ -55,10 +65,24 @@ src/features/<feature>/commands.ts          ← CLIENT plane. Directive-less .ts
 src/features/<feature>/search-providers.ts  ← SERVER plane. Directive-less .ts.
 
 src/features/search/registry/types.ts         ← shared types, imported by both planes
-src/features/search/registry/commands.ts      ← explicit import list → ALL_COMMANDS
-src/features/search/registry/providers.ts     ← explicit import list → ALL_PROVIDERS
+src/features/search/registry/commands.ts      ← explicit import list → paletteCommands(ctx, q)
+src/features/search/registry/providers.ts     ← explicit import list → runProviders(q, ctx)
+src/features/search/registry/kinds.ts         ← CLIENT. icon + mono face per result kind
+src/features/search/registry/limits.ts        ← shared constants + likePattern()
 src/features/search/registry/registry.test.ts ← the drift guard
 ```
+
+`kinds.ts` exists because a provider runs on the server and **a React component cannot come back
+across that boundary** — passing one would throw "Functions cannot be passed directly to Client
+Components" at runtime, not at build time. So a hit says what *kind* of thing it is and the client
+decides how a kind looks. That table is also what finally makes recents render their own icons:
+the stored `type` has been there all along with nothing reading it.
+
+**A command module must import its server actions lazily.** `await import('…/actions')` inside
+`run`, never a static import at the top. This is not style: a static import pulls `next-auth` into
+the module graph of everything that reads the registry, and the first thing that breaks is the
+drift test, which runs in a plain node environment. Found by the guard failing on its own first
+run — `Cannot find module 'next/server' imported from next-auth/lib/env.js`.
 
 `registry/commands.ts` is imported by the palette (client). `registry/providers.ts` is imported
 only by `src/features/search/actions.ts` (`'use server'`). They share nothing but `types.ts`
@@ -276,10 +300,23 @@ Checks:
 | 1 | Every `src/features/<feature>/` either has `commands.ts` or is in `NO_COMMANDS` | the feature dir |
 | 2 | Every `commands.ts` on disk is imported by `registry/commands.ts` | the orphaned file |
 | 3 | Every `search-providers.ts` on disk is imported by `registry/providers.ts` | the orphaned file |
-| 4 | No `commands.ts` imports `@/db`, `*/queries`, `@/lib/auth`, `@/lib/crypto` or `next/headers` | the offending import |
-| 5 | Command ids are unique; `goKey`s are unique | the collision |
-| 6 | Every `goKey` command has a matching `shortcut` badge, and vice versa | the half-wired command |
-| 7 | Allowlist hygiene: every `NO_COMMANDS` / `NO_SEARCH` entry still exists | the stale entry |
+| 4 | Every feature either has a `search-providers.ts` or is in `NO_SEARCH` | the feature dir |
+| 5 | No `commands.ts` imports `@/db`, a `queries` module, a server-only lib or `next/headers` | the offending import |
+| 5b | No `'use client'` file anywhere in `src/` value-imports the provider plane | the offending file |
+| 6 | Command ids are unique and namespaced; provider ids unique and no two ranks tie | the collision |
+| 7 | Allowlist hygiene: every entry still exists, and none has since gained the file it was exempt from | the stale entry |
+
+Check 5b is the mirror of check 5 and closes the hazard check 5 alone does not: `commands.ts`
+files are not the only thing that can import the server plane. `CommandCenterProvider` wraps the
+whole `(app)` layout, so a single value-import of `registry/providers` from any client module puts
+drizzle, the Neon driver and the whole schema in the first-load JS of every authed page — and
+compiles clean while doing it. `import type` is exempt; types are erased.
+
+Plus eleven behavioural assertions on what the registry resolves to — that a member sees neither
+`/admin` nor "New app" and an admin sees both, that a jump chip appears only while the jumps are
+switched on, that Work log and Settings are offered at all, that the current theme is hidden, that
+the shortcuts row names the state it will move you to, that `log out` finds Sign out while the
+seam-spanning `out l` no longer does, and that Create sorts above destinations above Commands.
 
 `NO_COMMANDS` starts with the four features that own no actions and no entities — calendar,
 dashboard, pwa, settings — each with a `// why:` line. Forcing empty modules on them would make
@@ -305,20 +342,37 @@ Three layers, in the order a future session encounters them:
    the only agent-instruction path that is committed — `.gitignore:59-60` ignores `.claude/*`
    except skills, and `AGENTS.md`/`CLAUDE.md` are machine-rewritten by `next dev`.
 
-## Build order
+## A security fix that came with it
 
-Each step leaves the tree green and is a small, explicitly-staged commit — four sibling
-worktrees are live and the skill bans `git add -A`, `stash`, `reset --hard` and `checkout -- .`.
+`universalSearch` gated on "has a session". Open signup means a **pending** account holds a real
+session while it waits for an admin, and the proxy only pins those users to `/pending` — a server
+action is its own entry point and can be called without loading a page the proxy guards. So an
+unapproved or deactivated account could enumerate every app, person, task, sprint and meeting in
+the workspace, one query at a time.
 
-1. `registry/types.ts` + `registry/commands.ts` seeded from nav-items and the palette's current
-   literals. No consumer yet.
-2. `registry/registry.test.ts` with checks 1-7. Red until step 4 lands, by design.
-3. Per-feature `commands.ts` for the features that have real palette-shaped commands; the four
-   no-action features go into `NO_COMMANDS`.
-4. `command-center.tsx` reads the registry; delete its literal arrays. Machinery untouched.
-5. `search-providers.ts` per searchable feature, holding today's exact queries verbatim.
-6. `registry/providers.ts` + `universalSearch` iterating providers in one `Promise.all`.
-7. The SKILL.md pointer line.
+It now gates on `canAccessApp(session.user.status, true)` — the same predicate the proxy and the
+ICS route use. Every provider inherits it; none re-checks it, which is stated on `SearchContext`
+so the next provider author does not add a second, weaker gate.
+
+This bug predates the registry. It is fixed here because the registry rewrote exactly that line,
+and shipping a refactor that faithfully preserves a hole is not preservation.
+
+## What shipped
+
+1. `registry/types.ts`, `kinds.ts`, `limits.ts` — the contracts.
+2. `registry/commands.ts` — destinations derived from `navItems` + `settingsNavItem` +
+   `adminNavItems`, feature commands appended, one matching rule, one group order.
+3. `commands.ts` for apps, auth, meetings, notifications, people, settings. The other thirteen
+   features are in `NO_COMMANDS` with a reason each.
+4. `search-providers.ts` for apps, people, sprints (tasks + sprints) and meetings, holding the
+   previous queries verbatim — same tables, same joins, same ordering, same limit of 6.
+5. `registry/providers.ts` — one `Promise.all`, per-provider `.catch(() => [])`.
+6. `universalSearch` reduced to an auth gate plus `runProviders`.
+7. `command-center.tsx` renders two loops instead of ten hardcoded groups. Its keyboard model,
+   dedupers, debounces, sequence guards and prefetch wiring are untouched.
+8. `registry.test.ts` — the guard, proven to fail: adding an unregistered feature directory turned
+   checks 1 and 4 red with the fix named in the message, and removing it turned them green.
+9. One line in `.claude/skills/logpup-development/SKILL.md`.
 
 ## Testing
 
@@ -332,6 +386,32 @@ worktrees are live and the skill bans `git add -A`, `stash`, `reset --hard` and 
 - Existing suites must stay at 123 files / 2059 tests passing, and `npx tsc --noEmit` clean.
   Lint has 3 pre-existing errors, all `react-hooks/set-state-in-effect` in meetings components;
   the new code must not add a fourth — recents load through a `useState` initializer, not an effect.
+
+## Known limitations (stated, not hidden)
+
+1. **The guard runs on `npm test`, and nowhere else.** There is no CI in this repo — no
+   `.github`, no yml, no git hooks. Worth knowing before "fixing" it with a `prebuild` script:
+   that would not work either, because `vercel.json` sets `buildCommand: "next build"`, which
+   invokes the Next binary directly and never fires an npm lifecycle hook. (The proof is already
+   in the tree: `src/lib/changelog.data.json` is generated by `prebuild` and committed, precisely
+   because Vercel never regenerates it.) Real enforcement needs either
+   `"buildCommand": "npm run build"` or a workflow file — both change how deploys behave, so
+   neither is done here without asking.
+2. **The soft-delete scan is file-scoped, inherited from `src/db/live.test.ts`.** A provider
+   colocated in `meetings/search-providers.ts` could read a meeting child table with no liveness
+   join and satisfy every guard, because the file already names `liveMeetings`. Statement-scoping
+   it means resolving each read root back to its binding — worth doing, not done here.
+3. **Check 5 is one level deep.** It reads each `commands.ts`, not what those files import. A
+   command module importing a local helper that imports `@/db` still ships drizzle to the
+   browser. The durable fix is `import 'server-only'` in `src/db/index.ts`, which converts the
+   silent 245 KB regression into a build error — with the caveat that `server-only` is not in
+   `package.json` and `registry.test.ts` imports the provider plane at runtime, so that commit
+   needs a vitest alias in the same change.
+4. **Every provider is workspace-wide.** There is no row-scoping seam, because there is no
+   row-level visibility anywhere in the app today. The first per-user provider (a notifications
+   inbox, someone's worklogs) needs a `scope` field on `SearchProvider` and a check that an
+   `own-rows` provider actually references `ctx.user.id` — otherwise it will be written
+   workspace-wide by default, and nothing will notice.
 
 ## Rejected
 
@@ -351,8 +431,10 @@ worktrees are live and the skill bans `git add -A`, `stash`, `reset --hard` and 
 ## Assumptions (delegated decisions — veto here)
 
 1. `G W` starting to work, and Work log + Settings appearing in Go-to, is desired. This is the
-   drift being fixed, but it is user-visible.
-2. Profile stays in the palette even though it is not a sidebar nav item.
+   drift being fixed, but it is user-visible. (The `G W` half landed in the parallel session; the
+   Go-to rows land here.)
+2. Profile stays in the palette even though it is not a sidebar nav item — it now belongs to the
+   auth feature, which is the thing that owns your account.
 3. `import 'server-only'` is **not** added to `src/db/index.ts` in this change. It would convert
    the silent 245 KB client-bundle leak into a build error and is one line, but it touches a file
    outside this feature and every module that transitively imports it — worth doing, separately.

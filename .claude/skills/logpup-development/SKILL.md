@@ -38,6 +38,7 @@ Use codebase-memory MCP first (`search_graph`, `trace_path`, `get_code_snippet`)
 ## Product decisions already made (don't relitigate)
 
 - Frontend work must evaluate the 6 API skills: dedup, optimistic+rollback, streaming UI, SWR, smart polling, preloading.
+- A new feature registers itself with ⌘K — a `commands.ts` and/or `search-providers.ts` in its own directory, wired into `src/features/search/registry/`. `registry.test.ts` fails on a feature that does neither and does not say why, and its message names the fix. Never quiet it by widening the allowlist without a reason.
 - Worklog percent = self-scored "of what I planned today"; writes are **self-only** (no admin on-behalf — first-person record). Saturday = half working day; the ONE definition is `src/lib/working-days.ts` — never a private weekday check.
 - Per-project roles are free text; `src/lib/project-roles.ts` is the single manager/reviewer pattern; PM manages project+meetings via `managesApp`, leads/architects stay reviewers.
 - Identity colors: one system (`event-color.ts`, 8 slots, literal Tailwind classes, `text-background` on solids — dark tokens fail white text). Never add a second hash.

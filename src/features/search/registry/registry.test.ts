@@ -242,6 +242,67 @@ describe('check 5: no commands.ts pulls server code into the client bundle', () 
   }
 })
 
+// --- Check 5b: nothing on the client may import the server plane ---------
+
+/**
+ * The mirror of check 5, from the other direction.
+ *
+ * registry/providers.ts and every search-providers.ts import the database on
+ * purpose — they are the server plane. Nothing that ships to the browser may
+ * import them. This is not hypothetical tidiness: CommandCenterProvider wraps
+ * the whole (app) layout, so one value-import here puts drizzle, the Neon
+ * driver and the 928-line schema in the first-load JS of every authed page,
+ * and it does so WITHOUT failing the build. `import type` is fine — types are
+ * erased under isolatedModules — so the check ignores type-only imports.
+ */
+describe('check 5b: no client file imports the server search plane', () => {
+  const SRC_DIR = path.resolve(REPO_ROOT, 'src')
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full, out)
+      else if (
+        (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))
+        && !entry.name.endsWith('.test.ts')
+        && !entry.name.endsWith('.test.tsx')
+        && !entry.name.endsWith('.d.ts')
+      ) {
+        out.push(full)
+      }
+    }
+    return out
+  }
+
+  // A value import (not `import type`) of the provider plane.
+  const SERVER_PLANE_RE =
+    /import\s+(?!type\b)[^;]*from\s+'(?:@\/features\/[a-z-]+\/search-providers|(?:\.{1,2}\/)*registry\/providers|@\/features\/search\/registry\/providers)'/
+
+  const offenders = walk(SRC_DIR)
+    .map((absPath) => ({
+      relPath: path.relative(REPO_ROOT, absPath).split(path.sep).join('/'),
+      text: readFileSync(absPath, 'utf8'),
+    }))
+    .filter((file) => file.text.startsWith("'use client'") && SERVER_PLANE_RE.test(file.text))
+    .map((file) => file.relPath)
+
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders).toEqual([])
+    })
+  } else {
+    it.each(offenders)('%s', (relPath) => {
+      throw new Error(
+        `${relPath} is a 'use client' module that imports the search provider plane. Those modules `
+        + 'import @/db — importing one from the client ships drizzle, the Neon driver and the whole '
+        + 'schema to the browser without failing the build. Call the universalSearch server action '
+        + 'instead, or make the import `import type`.',
+      )
+    })
+  }
+})
+
 // --- Check 6: identity --------------------------------------------------
 
 describe('check 6: registry identity', () => {
