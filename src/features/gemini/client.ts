@@ -91,6 +91,7 @@ type GenerateContentResponse = {
   usageMetadata?: {
     promptTokenCount?: number
     candidatesTokenCount?: number
+    thoughtsTokenCount?: number
   }
 }
 
@@ -172,7 +173,14 @@ async function callModelWithRetry<T>(
         value,
         usage: {
           inputTokens: json.usageMetadata?.promptTokenCount ?? 0,
-          outputTokens: json.usageMetadata?.candidatesTokenCount ?? 0,
+          // Gemini 3.x thinking models bill reasoning tokens separately via
+          // thoughtsTokenCount, which is NOT folded into candidatesTokenCount —
+          // they're still output the caller pays for, so they belong in the
+          // same total. Dropping this "simplification" undercounts every
+          // dollar figure the usage ledger reports for a thinking-capable chain.
+          outputTokens:
+            (json.usageMetadata?.candidatesTokenCount ?? 0) +
+            (json.usageMetadata?.thoughtsTokenCount ?? 0),
         },
       }
     }
@@ -225,8 +233,14 @@ async function callModelWithRetry<T>(
 }
 
 /**
- * Calls generateContent with the user's own keys, rolling across active keys
- * least-recently-used first so free-tier rate limits spread out.
+ * Calls generateContent, rolling across active keys in this order: the
+ * caller's own keys first (least-recently-used first, never-used before
+ * used), then org-shared keys owned by teammates, same LRU rule — see
+ * orderKeysForRotation. A caller with working keys of their own never
+ * touches a teammate's shared quota; the pool is only reached once the
+ * caller's own keys are exhausted, and this function writes THAT key's
+ * failCount/lastUsedAt regardless of who owns it — a call can spend, and
+ * report against, a teammate's free-tier allowance.
  *
  * Reliability layers, in order, for a transient upstream failure:
  *  1. Retry with backoff on the same (key, model) — see retry.ts.
@@ -450,7 +464,9 @@ async function callGeminiCore<T>(
       models,
       new GeminiError(
         'AUTH_FAILED',
-        'Your Gemini key was rejected or has hit its usage limit — check Profile → Gemini API keys.',
+        usedSharedPool
+          ? "Your key and your team's shared keys were all rejected or have hit their usage limit — check Profile → Gemini API keys, or ask the teammate who shared a key to check theirs."
+          : 'Your Gemini key was rejected or has hit its usage limit — check Profile → Gemini API keys.',
       ),
     )
   }
@@ -461,7 +477,9 @@ async function callGeminiCore<T>(
       models,
       new GeminiError(
         'TRANSIENT_BUSY',
-        'All Gemini models are busy right now — your recording is saved, try Analyze again in a minute.',
+        usedSharedPool
+          ? "All Gemini models are busy right now, on your key and your team's shared keys — your recording is saved, try Analyze again in a minute."
+          : 'All Gemini models are busy right now — your recording is saved, try Analyze again in a minute.',
       ),
     )
   }
