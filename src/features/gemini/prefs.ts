@@ -31,7 +31,12 @@ export async function getAiPrefs(userId: string): Promise<Record<AiFeatureId, bo
 }
 
 export async function isAiFeatureEnabled(userId: string, id: AiFeatureId): Promise<boolean> {
-  return (await getAiPrefs(userId))[id]
+  // `?? true` is the runtime half of the compile-time guarantee: AiFeatureId is
+  // derived from AI_FEATURES, so a missing key cannot happen through the type
+  // system — but a caller reaching this with a stale id (a JS caller, a value
+  // off the wire) must fail toward the documented "absent = enabled" contract.
+  // Falling back to undefined would report an ENABLED feature as switched off.
+  return (await getAiPrefs(userId))[id] ?? true
 }
 
 /**

@@ -16,18 +16,14 @@ export type AiCallSlug =
   | 'speech.tts'
   | 'live.session'
 
-export type AiFeatureId =
-  | 'meeting-intel'
-  | 'meeting-assistant'
-  | 'live-captions'
-  | 'read-aloud'
-  | 'dictation'
-  | 'worklog-draft'
-  | 'sprint-draft'
-  | 'app-metadata'
-
-export type AiFeatureDef = {
-  id: AiFeatureId
+/**
+ * What a registry entry must look like. Only ever used to CHECK the entries
+ * below (`satisfies`), never to annotate them: annotating the array would
+ * widen every id back to `string` and make the derived AiFeatureId circular
+ * (TS2456/TS2502). The ids are read off the data instead — see below.
+ */
+type AiFeatureShape = {
+  id: string
   label: string
   description: string
   chain: 'Quick' | 'Analysis' | 'Synthesis' | 'Voice' | 'Live'
@@ -38,7 +34,7 @@ export type AiFeatureDef = {
   }
 }
 
-export const AI_FEATURES: readonly AiFeatureDef[] = [
+export const AI_FEATURES = [
   {
     id: 'meeting-intel',
     label: 'Meeting intelligence',
@@ -131,11 +127,31 @@ export const AI_FEATURES: readonly AiFeatureDef[] = [
       tokens: { model: 'gemini-3.5-flash-lite', inputTokens: 3_000, outputTokens: 200 },
     },
   },
-]
+] as const satisfies readonly AiFeatureShape[]
 
-const BY_SLUG = new Map<AiCallSlug, AiFeatureDef>(
-  AI_FEATURES.flatMap((f) => f.slugs.map((s) => [s, f] as const)),
-)
+/**
+ * DERIVED, never hand-written. A parallel union would drift the moment a
+ * feature is added or renamed, and the drift is silent where it hurts most:
+ * resolvePrefs would hand back `undefined` for the orphan id and the pref
+ * guard would read that as "off", refusing an ENABLED feature.
+ */
+export type AiFeatureId = (typeof AI_FEATURES)[number]['id']
+export type AiFeatureDef = (typeof AI_FEATURES)[number]
+
+/**
+ * The same guard from the slug side: every AiCallSlug must be claimed by some
+ * feature. An unclaimed slug would log usage that no Settings row, adoption
+ * row, or pref switch can ever account for — featureForSlug throws on it at
+ * runtime, and this makes it a build error instead.
+ */
+type UnmappedSlug = Exclude<AiCallSlug, (typeof AI_FEATURES)[number]['slugs'][number]>
+const _allSlugsMapped: UnmappedSlug extends never ? true : never = true
+void _allSlugsMapped
+
+const BY_SLUG = new Map<AiCallSlug, AiFeatureDef>()
+for (const feature of AI_FEATURES) {
+  for (const slug of feature.slugs) BY_SLUG.set(slug, feature)
+}
 
 export function featureForSlug(slug: AiCallSlug): AiFeatureDef {
   const feature = BY_SLUG.get(slug)

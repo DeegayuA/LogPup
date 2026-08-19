@@ -12,7 +12,15 @@
 
 import { AUDIO_TOKENS_PER_SECOND } from '@/features/transcription/session-budget'
 
-/** One key as the readiness check sees it — a slice of the geminiKeys row. */
+/**
+ * One key as the readiness check sees it — a slice of the geminiKeys row.
+ *
+ * A row here is any key the caller can actually transact on: their own, OR a
+ * teammate's org-shared one that rotation will fall through to. Nothing in
+ * this shape says which, and it must not: the copy below is read by someone
+ * who can pause, fix or delete their own keys and can do NONE of those things
+ * to a teammate's, so it never claims ownership of any of them.
+ */
 export type KeyHealth = {
   id: string
   label: string
@@ -77,7 +85,7 @@ export function assessRecordingReadiness(
       // Deliberately not "recording will fail": it won't. The audio is
       // captured and kept locally either way — what is unavailable is the
       // transcription, and that can be run later.
-      headline: 'No Gemini key is active, so nothing can be transcribed yet.',
+      headline: 'No Gemini key is available to you, so nothing can be transcribed yet.',
       advice:
         'Add a key in Profile → Gemini API keys. Recording still works; you can transcribe afterwards.',
     }
@@ -92,11 +100,15 @@ export function assessRecordingReadiness(
       // tell a rejected key from an exhausted one from a project without
       // access to a model this build asks for. Naming one of them would send
       // people to fix the wrong thing.
+      // Not "your keys": the pool can include a teammate's org-shared key,
+      // which the reader cannot see, pause or fix (listGeminiKeys is
+      // own-keys-only by design). "Available to you" is true either way.
       headline:
         failing.length === 1
-          ? 'Your only Gemini key keeps failing — it may be rejected, out of quota, or missing access.'
-          : `All ${failing.length} of your Gemini keys keep failing — rejected, out of quota, or missing access.`,
-      advice: 'Add another key, or wait for the daily quota to reset. Recording still works.',
+          ? 'The only Gemini key available to you keeps failing — it may be rejected, out of quota, or missing access.'
+          : `All ${failing.length} Gemini keys available to you keep failing — rejected, out of quota, or missing access.`,
+      advice:
+        'Add a key of your own, or wait for the daily quota to reset — a failing key may be a teammate’s shared one you cannot change. Recording still works.',
     }
   }
 

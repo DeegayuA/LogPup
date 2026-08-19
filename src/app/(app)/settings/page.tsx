@@ -18,7 +18,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
-import { listGeminiKeys } from '@/features/gemini/queries'
+import { listGeminiKeys, listPoolKeyHealth } from '@/features/gemini/queries'
 import { assessRecordingReadiness } from '@/features/gemini/readiness'
 import { AiFeaturesCard } from '@/features/gemini/components/ai-features-card'
 import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
@@ -58,13 +58,21 @@ export default async function SettingsPage() {
   const passkeysRes = await listPasskeys()
   const passkeys = passkeysRes.ok ? passkeysRes.data : []
 
-  const [geminiKeys, avatarUrl, title] = await Promise.all([
+  const [geminiKeys, poolKeys, avatarUrl, title] = await Promise.all([
     listGeminiKeys(user.id),
+    listPoolKeyHealth(user.id),
     getOwnAvatarUrl(user.id),
     getOwnTitle(user.id),
   ])
 
-  const readiness = assessRecordingReadiness(geminiKeys)
+  // Two row sets, two different questions, deliberately not interchangeable.
+  // `poolKeys` answers "can my AI run?" and must be the POOL — own keys plus
+  // teammates' active shared ones — because that is what a call actually draws
+  // on; assessing readiness over own keys alone told a user on a teammate's
+  // shared key "no key is active" while the recording panel, one click away,
+  // said "one key, working" and was right. `geminiKeys` stays own-keys-only:
+  // it is the count of keys this person can actually manage.
+  const readiness = assessRecordingReadiness(poolKeys)
   const status = describeAiStatus(readiness.level)
   const liveEnabled = isLiveTranscriptionEnabled()
   const release = findRelease(CURRENT_VERSION, VERSION_HISTORY)
@@ -144,7 +152,8 @@ export default async function SettingsPage() {
               <h2>AI &amp; voice</h2>
             </CardTitle>
             <CardDescription>
-              Transcription, meeting notes and read-aloud all run on your own Gemini keys.
+              Transcription, meeting notes and read-aloud run on your own Gemini keys first,
+              then on any key a teammate has shared with the org.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -153,8 +162,11 @@ export default async function SettingsPage() {
                 {/* The word carries the state; the badge colour only
                     reinforces it (WCAG 1.4.1). */}
                 <Badge variant={status.variant}>{status.word}</Badge>
+                {/* "of your own" because the verdict beside it can be carried
+                    by a teammate's shared key that is not in this count and
+                    never appears on this page. */}
                 <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {geminiKeys.length} key{geminiKeys.length === 1 ? '' : 's'} saved
+                  {geminiKeys.length} key{geminiKeys.length === 1 ? '' : 's'} of your own
                 </span>
               </div>
               <p className="text-sm">{readiness.headline}</p>
@@ -163,13 +175,20 @@ export default async function SettingsPage() {
               ) : null}
             </div>
 
+            {/* Own-keys empty state, but it has to agree with the pool-aware
+                verdict above it: someone running on a teammate's shared key
+                has no key here and yet nothing is waiting for them, so the
+                "only the transcript waits" line would be simply untrue. */}
             {geminiKeys.length === 0 ? (
               <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-border px-4 py-8 text-center">
                 <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
-                <p className="text-sm font-medium">No Gemini key yet.</p>
+                <p className="text-sm font-medium">
+                  {readiness.level === 'blocked' ? 'No Gemini key yet.' : 'No key of your own yet.'}
+                </p>
                 <p className="text-xs text-muted-foreground">
-                  Create a free one in Google AI Studio, then paste it into Profile → Gemini
-                  API keys. Recording works without it; only the transcript waits.
+                  {readiness.level === 'blocked'
+                    ? 'Create a free one in Google AI Studio, then paste it into Profile → Gemini API keys. Recording works without it; only the transcript waits.'
+                    : 'Your AI is running on a teammate’s org-shared key, so their Google project processes your recordings and pays for any paid usage. Add your own in Profile → Gemini API keys to stop drawing on theirs.'}
                 </p>
               </div>
             ) : null}

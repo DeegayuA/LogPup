@@ -506,8 +506,11 @@ export const geminiKeys = pgTable('gemini_keys', {
 // reported. Usage accounting only — no prompt or response text is ever
 // stored here. key_owner_id and key_last4 are denormalized snapshots so
 // shared-key attribution survives key deletion (key_id goes NULL).
-// Rows older than 12 months are pruned (privacy-prune pattern; exempt
-// from the soft-delete rule — there is nothing to restore).
+// RETENTION: none. Nothing prunes this table today — rows accumulate for as
+// long as the user exists (and are removed only with them, by the cascade).
+// Stated plainly because the previous note here promised a 12-month prune
+// that was never built. If one is added it is a hard delete: this table is
+// exempt from the soft-delete rule, there being nothing to restore.
 export const aiUsageEvents = pgTable('ai_usage_events', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

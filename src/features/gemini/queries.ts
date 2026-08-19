@@ -1,6 +1,7 @@
-import { and, asc, count, countDistinct, desc, eq, gte, max, ne, sql, sum } from 'drizzle-orm'
+import { and, asc, count, countDistinct, desc, eq, gte, max, ne, or, sql, sum } from 'drizzle-orm'
 import { db } from '@/db'
 import { aiUsageEvents, geminiKeys, users } from '@/db/schema'
+import type { KeyHealth } from '@/features/gemini/readiness'
 import type { AdoptionAggRow, UsageAggRow } from '@/features/gemini/usage-summary'
 
 export type GeminiKeyRow = {
@@ -42,6 +43,45 @@ export async function listGeminiKeys(userId: string): Promise<GeminiKeyRow[]> {
     .from(geminiKeys)
     .where(eq(geminiKeys.userId, userId))
     .orderBy(asc(geminiKeys.createdAt))
+}
+
+/**
+ * Health columns for every key this caller can actually transact on — THE one
+ * row set any "is my AI ready?" answer is allowed to be computed from.
+ *
+ * It exists because there used to be two: /settings assessed readiness over
+ * listGeminiKeys (own keys only) while the recording panel assessed it over
+ * the pool, so a user with no key of their own but a teammate's shared one was
+ * told "no key is active" on one screen and "one key, working" on the next —
+ * one click apart, and the pool answer was the true one, because their calls
+ * did succeed. Every readiness caller now reads this.
+ *
+ * Row selection mirrors callGeminiCore's own key set (client.ts): the caller's
+ * own keys, plus other people's keys that are BOTH active and shared. That
+ * "both" matters — a teammate's paused or private key is not part of the pool
+ * this caller can call into and must not inflate their readiness. The caller's
+ * OWN keys are unfiltered by `active`: a paused key of your own is worth
+ * surfacing as "there but off", whereas a teammate's paused key is simply not
+ * available to you at all.
+ *
+ * No key material, encrypted or otherwise, is selected.
+ */
+export async function listPoolKeyHealth(userId: string): Promise<KeyHealth[]> {
+  return db
+    .select({
+      id: geminiKeys.id,
+      label: geminiKeys.label,
+      active: geminiKeys.active,
+      failCount: geminiKeys.failCount,
+      lastUsedAt: geminiKeys.lastUsedAt,
+    })
+    .from(geminiKeys)
+    .where(
+      or(
+        eq(geminiKeys.userId, userId),
+        and(eq(geminiKeys.active, true), eq(geminiKeys.shared, true)),
+      ),
+    )
 }
 
 /**

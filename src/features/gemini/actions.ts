@@ -2,13 +2,14 @@
 
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
-import { and, eq, or } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { geminiKeys, userAiPrefs } from '@/db/schema'
 import { encryptSecret } from '@/lib/crypto'
 import { validateGeminiKey } from '@/features/gemini/client'
 import { assessRecordingReadiness, type RecordingReadiness } from '@/features/gemini/readiness'
+import { listPoolKeyHealth } from '@/features/gemini/queries'
 import { AI_FEATURES, type AiFeatureId } from '@/features/gemini/ai-features'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
@@ -85,18 +86,9 @@ export async function deleteGeminiKey(id: string): Promise<ActionResult> {
  * caller can actually draw on, as the recorder needs it before a long
  * meeting.
  *
- * Reads only health columns (active, failCount); no key material, encrypted
- * or otherwise, is involved. Row selection mirrors callGeminiCore's own key
- * set (client.ts): the caller's own keys, plus other people's keys that are
- * BOTH active and shared. That "both" matters — a teammate's paused or
- * private key is not part of the pool this caller can call into, and must
- * not inflate their readiness.
- *
- * The caller's OWN keys are still reported regardless of `active`
- * (deliberately unfiltered, same as before this became pool-aware) — a
- * paused key of the caller's own is still worth surfacing as "there but off",
- * whereas a teammate's paused key is simply not available to this caller at
- * all and must not appear.
+ * The row set comes from listPoolKeyHealth — the single source every
+ * readiness answer in the product is computed from, /settings included. See
+ * that function for why it is the pool and not just the caller's own keys.
  *
  * Deliberately does NOT probe each key with a live call: this runs whenever
  * a recording panel opens, and spending a request per key to ask "are you
@@ -107,23 +99,7 @@ export async function getRecordingReadiness(): Promise<ActionResult<RecordingRea
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
-  const rows = await db
-    .select({
-      id: geminiKeys.id,
-      label: geminiKeys.label,
-      active: geminiKeys.active,
-      failCount: geminiKeys.failCount,
-      lastUsedAt: geminiKeys.lastUsedAt,
-    })
-    .from(geminiKeys)
-    .where(
-      or(
-        eq(geminiKeys.userId, session.user.id),
-        and(eq(geminiKeys.active, true), eq(geminiKeys.shared, true)),
-      ),
-    )
-
-  return ok(assessRecordingReadiness(rows))
+  return ok(assessRecordingReadiness(await listPoolKeyHealth(session.user.id)))
 }
 
 export async function toggleGeminiKey(id: string, active: boolean): Promise<ActionResult> {

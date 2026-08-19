@@ -203,12 +203,25 @@ export function GeminiKeysCard({
                       <AlertDialogContent>
                         <AlertDialogHeader>
                           <AlertDialogTitle>Share this key with everyone here?</AlertDialogTitle>
+                          {/* Consent has two sides and this dialog used to
+                              show one. Outbound: what teammates can spend.
+                              INBOUND: their meeting audio and screen
+                              keyframes land in the OWNER's Google project and
+                              are retained there — a data-custody obligation
+                              the owner would otherwise accept without being
+                              told. Callers get the reciprocal sentence on the
+                              Settings AI features card. */}
                           <AlertDialogDescription>
                             Anyone in this LogPup org can spend &ldquo;{row.label}&rdquo;
                             (••••{row.last4}) on their own AI features once their own keys are
-                            exhausted. On the free tier, Google uses prompts to improve its
-                            products. You can see who used it, and you can stop sharing or
-                            delete the key at any time.
+                            exhausted. Their meeting recordings and screen keyframes are then
+                            uploaded into your Google Cloud project, which retains them via
+                            Gemini&rsquo;s Files API for about 48 hours.{' '}
+                            {row.tier === 'paid'
+                              ? 'On the paid tier, Google does not use prompts to improve its products — but their usage is billed to your account.'
+                              : 'On the free tier, Google uses prompts to improve its products.'}{' '}
+                            You can see who used it, and you can stop sharing or delete the key
+                            at any time.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
@@ -249,6 +262,17 @@ export function GeminiKeysCard({
                     </AlertDialogContent>
                   </AlertDialog>
                 </div>
+                {/* The one thing that materially changes when a key is paid,
+                    stated on the paid key itself: free-tier prompts feed
+                    Google's product improvement, paid-tier ones do not. Said
+                    here rather than once per card because it is a property of
+                    THIS key — a card can hold both tiers at once. */}
+                {row.tier === 'paid' ? (
+                  <p className="w-full text-xs text-muted-foreground">
+                    Paid tier: Google does not use prompts or responses sent with this key to
+                    improve its products.
+                  </p>
+                ) : null}
                 {row.shared && usedBy.some((u) => u.keyId === row.id) ? (
                   <p className="w-full text-xs text-muted-foreground">
                     Used in the last 30 days by{' '}
