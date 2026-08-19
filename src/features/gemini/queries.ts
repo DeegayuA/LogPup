@@ -1,6 +1,7 @@
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, count, countDistinct, desc, eq, gte, max, ne, sql, sum } from 'drizzle-orm'
 import { db } from '@/db'
-import { geminiKeys } from '@/db/schema'
+import { aiUsageEvents, geminiKeys, users } from '@/db/schema'
+import type { AdoptionAggRow, UsageAggRow } from '@/features/gemini/usage-summary'
 
 export type GeminiKeyRow = {
   id: string
@@ -41,4 +42,83 @@ export async function listGeminiKeys(userId: string): Promise<GeminiKeyRow[]> {
     .from(geminiKeys)
     .where(eq(geminiKeys.userId, userId))
     .orderBy(asc(geminiKeys.createdAt))
+}
+
+/**
+ * One person's ledger since `since`, grouped for summarizeUsage. Joins the
+ * key's CURRENT tier (deleted key -> null -> treated as free, i.e. $0
+ * charged — the honest floor, since a deleted key's tier is unknowable).
+ */
+export async function aggregateAiUsage(userId: string, since: Date): Promise<UsageAggRow[]> {
+  const rows = await db
+    .select({
+      feature: aiUsageEvents.feature,
+      model: aiUsageEvents.model,
+      keyTier: geminiKeys.tier,
+      calls: count(),
+      inputTokens: sum(aiUsageEvents.inputTokens).mapWith(Number),
+      outputTokens: sum(aiUsageEvents.outputTokens).mapWith(Number),
+    })
+    .from(aiUsageEvents)
+    .leftJoin(geminiKeys, eq(aiUsageEvents.keyId, geminiKeys.id))
+    .where(and(eq(aiUsageEvents.userId, userId), gte(aiUsageEvents.createdAt, since)))
+    .groupBy(aiUsageEvents.feature, aiUsageEvents.model, geminiKeys.tier)
+  return rows.map((r) => ({
+    ...r,
+    inputTokens: r.inputTokens ?? 0,
+    outputTokens: r.outputTokens ?? 0,
+  }))
+}
+
+/** Who spent an owner's shared keys — the per-key "used by" breakdown. */
+export async function sharedKeyUsageByCaller(ownerId: string, since: Date) {
+  return db
+    .select({
+      keyId: aiUsageEvents.keyId,
+      keyLast4: aiUsageEvents.keyLast4,
+      callerName: users.name,
+      calls: count(),
+      tokens: sql<number>`coalesce(sum(${aiUsageEvents.inputTokens} + ${aiUsageEvents.outputTokens}), 0)`.mapWith(Number),
+    })
+    .from(aiUsageEvents)
+    .innerJoin(users, eq(aiUsageEvents.userId, users.id))
+    .where(
+      and(
+        eq(aiUsageEvents.keyOwnerId, ownerId),
+        ne(aiUsageEvents.userId, ownerId),
+        gte(aiUsageEvents.createdAt, since),
+      ),
+    )
+    .groupBy(aiUsageEvents.keyId, aiUsageEvents.keyLast4, users.name)
+}
+
+/** Org-wide, per-slug: how many DISTINCT people used it and how often. */
+export async function aggregateAdoption(since: Date): Promise<AdoptionAggRow[]> {
+  return db
+    .select({
+      feature: aiUsageEvents.feature,
+      userCount: countDistinct(aiUsageEvents.userId),
+      calls: count(),
+      lastUsedAt: max(aiUsageEvents.createdAt),
+    })
+    .from(aiUsageEvents)
+    .where(gte(aiUsageEvents.createdAt, since))
+    .groupBy(aiUsageEvents.feature)
+}
+
+/** Per-person feature usage, for the admin drill-down. */
+export async function perUserFeatureUsage(since: Date) {
+  return db
+    .select({
+      userId: aiUsageEvents.userId,
+      userName: users.name,
+      feature: aiUsageEvents.feature,
+      calls: count(),
+      lastUsedAt: max(aiUsageEvents.createdAt),
+    })
+    .from(aiUsageEvents)
+    .innerJoin(users, eq(aiUsageEvents.userId, users.id))
+    .where(gte(aiUsageEvents.createdAt, since))
+    .groupBy(aiUsageEvents.userId, users.name, aiUsageEvents.feature)
+    .orderBy(desc(count()))
 }
