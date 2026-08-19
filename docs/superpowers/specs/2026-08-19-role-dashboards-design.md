@@ -33,7 +33,7 @@ The role's only role is priority: what this person came here to look at first.
 | `coverage` | `coverage.view` | who is logged, who is absent, gaps — the worklog/absence rollup |
 | `portfolio` | `app.view` at `scoped` or `all` | app health strip, sprint progress, roadmap slippage |
 | `approvals` | `user.approve` | pending sign-ups and change requests awaiting this actor |
-| `trail` | an activity-view-all action (see Dependencies) | recent activity across the org, filterable, with the AI catch-up digest |
+| `trail` | `activity.view` | recent activity across the org, filterable, with the AI catch-up digest |
 | `ai-usage` | always (own data) | compact strip: this person's AI usage and key health; the full view stays in Settings |
 
 Zones are **capability-gated, then scope-narrowed**. A manager's `team` zone shows their `scopeAppIds`, not the org. That narrowing already exists in the capability model (`GrantLevel` of `scoped`) and must be honored per zone, or a manager sees data they cannot act on.
@@ -95,7 +95,15 @@ Blocked on the seven-role capability layer being committed: `loadActor`, `Actor`
 Coordination status:
 - **Action spellings — CONFIRMED** against the file on disk: `coverage.view`, `user.approve`, `task.edit`, `app.view`, `user.view.directory` are all correct as written.
 - **`scopeAppIds` — CONFIRMED** for manager, editor and stakeholder, from three different sources; see "Where scope comes from" above.
-- **`trail` — STILL OPEN, and it is a hole in the matrix, not in this design.** There is no activity/audit-trail action anywhere in `capabilities.ts`. The auditor role holds `all` on `user.view.directory`, `user.view.detail`, `app.view`, `worklog.view`, `coverage.view`, `absence.view` and `trash.view` — but nothing that names the activity trail, which is the one surface an auditor would actually live in. The capabilities owner decides: add an action, or gate `trail` on an existing auditor-held action. **Do not invent one here**, and do not ship `trail` until it resolves. Every other zone is unblocked.
+- **`trail` — RESOLVED. Gates on `activity.view`.** The matrix now models the trail as two distinct questions, and this zone is the first of them:
+  - `activity.view` — the shared memory of what changed (`/activity`). Granted `all` to superadmin, admin, manager, editor, member and auditor; **`none` to stakeholder**, deliberately, so a client seat cannot sit and watch the studio work.
+  - `audit.view` — the compliance surface: the same table unfiltered, including trashed rows and self-approval metadata. `all` for superadmin, admin, auditor; `scoped` for manager; `none` for editor, member, stakeholder.
+
+  This zone renders the recent-activity feed and the catch-up digest, which is `activity.view` content, so that is its gate. `audit.view` belongs to a standalone compliance surface, not to a dashboard zone — if one is ever wanted here it is a SEPARATE zone, not this one widened.
+
+  **Implementation note for any future `audit.view` use:** a manager holds it at `scoped`, so the resource's `appId` must be passed to `can()` or the check fails closed.
+
+  **Product change to surface, not to bury:** gating `/activity` on `activity.view` removes it from stakeholders, who can reach it today. That is a deliberate decision by the capabilities owner, but it is a visible capability removal and must be presented as one — in release notes or an admin-facing note — rather than landing silently as plumbing. This design does not make that change; it inherits it, and `trail` is already absent from the stakeholder ordering below.
 
 ## Division of ownership with the KPI work
 
