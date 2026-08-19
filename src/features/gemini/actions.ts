@@ -5,10 +5,11 @@ import { revalidatePath } from 'next/cache'
 import { and, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
-import { geminiKeys } from '@/db/schema'
+import { geminiKeys, userAiPrefs } from '@/db/schema'
 import { encryptSecret } from '@/lib/crypto'
 import { validateGeminiKey } from '@/features/gemini/client'
 import { assessRecordingReadiness, type RecordingReadiness } from '@/features/gemini/readiness'
+import { AI_FEATURES, type AiFeatureId } from '@/features/gemini/ai-features'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
 const MAX_KEYS_PER_USER = 5
@@ -25,7 +26,13 @@ const toggleInput = z.object({
   active: z.boolean(),
 })
 
-export async function addGeminiKey(label: string, key: string): Promise<ActionResult> {
+const tierInput = z.enum(['free', 'paid'])
+
+export async function addGeminiKey(
+  label: string,
+  key: string,
+  opts?: { tier?: 'free' | 'paid' },
+): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
 
@@ -35,6 +42,9 @@ export async function addGeminiKey(label: string, key: string): Promise<ActionRe
   const parsed = addKeyInput.safeParse({ label: label.trim() || 'Gemini key', key: key.trim() })
   if (!parsed.success) return err(parsed.error.issues[0].message)
   const { label: trimmedLabel, key: trimmedKey } = parsed.data
+
+  const tier = tierInput.safeParse(opts?.tier ?? 'free')
+  if (!tier.success) return err('Invalid key tier')
 
   const existing = await db
     .select({ id: geminiKeys.id })
@@ -52,6 +62,7 @@ export async function addGeminiKey(label: string, key: string): Promise<ActionRe
     label: trimmedLabel,
     encryptedKey: encryptSecret(trimmedKey),
     last4: trimmedKey.slice(-4),
+    tier: tier.data,
   })
   revalidatePath('/profile')
   return ok(undefined)
@@ -110,5 +121,51 @@ export async function toggleGeminiKey(id: string, active: boolean): Promise<Acti
     .set({ active: parsed.data.active })
     .where(and(eq(geminiKeys.id, parsed.data.id), eq(geminiKeys.userId, session.user.id)))
   revalidatePath('/profile')
+  return ok(undefined)
+}
+
+export async function setGeminiKeySharing(id: string, shared: boolean): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+  const parsed = toggleInput.safeParse({ id, active: shared })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  await db
+    .update(geminiKeys)
+    .set({ shared: parsed.data.active })
+    .where(and(eq(geminiKeys.id, parsed.data.id), eq(geminiKeys.userId, session.user.id)))
+  revalidatePath('/profile')
+  return ok(undefined)
+}
+
+export async function setGeminiKeyTier(id: string, tier: 'free' | 'paid'): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+  const parsedId = idInput.safeParse(id)
+  const parsedTier = tierInput.safeParse(tier)
+  if (!parsedId.success) return err(parsedId.error.issues[0].message)
+  if (!parsedTier.success) return err('Invalid key tier')
+  await db
+    .update(geminiKeys)
+    .set({ tier: parsedTier.data })
+    .where(and(eq(geminiKeys.id, parsedId.data), eq(geminiKeys.userId, session.user.id)))
+  revalidatePath('/profile')
+  return ok(undefined)
+}
+
+export async function setAiFeaturePref(
+  feature: AiFeatureId,
+  enabled: boolean,
+): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+  if (!AI_FEATURES.some((f) => f.id === feature)) return err('Unknown AI feature')
+  await db
+    .insert(userAiPrefs)
+    .values({ userId: session.user.id, feature, enabled, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [userAiPrefs.userId, userAiPrefs.feature],
+      set: { enabled, updatedAt: new Date() },
+    })
+  revalidatePath('/settings')
   return ok(undefined)
 }

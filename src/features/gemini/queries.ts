@@ -7,6 +7,8 @@ export type GeminiKeyRow = {
   label: string
   last4: string
   active: boolean
+  shared: boolean
+  tier: string
   failCount: number
   lastUsedAt: Date | null
   createdAt: Date
@@ -20,6 +22,8 @@ export async function listGeminiKeys(userId: string): Promise<GeminiKeyRow[]> {
       label: geminiKeys.label,
       last4: geminiKeys.last4,
       active: geminiKeys.active,
+      shared: geminiKeys.shared,
+      tier: geminiKeys.tier,
       failCount: geminiKeys.failCount,
       lastUsedAt: geminiKeys.lastUsedAt,
       createdAt: geminiKeys.createdAt,
