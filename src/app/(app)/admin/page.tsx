@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { AddUserDialog } from '@/features/admin/components/add-user-dialog'
+import { AiAdoptionCard } from '@/features/admin/components/ai-adoption-card'
 import { DbClearButton } from '@/features/admin/components/db-clear-button'
 import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
 import { TrashCard } from '@/features/admin/components/trash-card'
@@ -36,6 +37,11 @@ export default async function AdminPage() {
 
   const existingOrgTags = Array.from(new Set(allUsers.flatMap((u) => u.orgTags)))
     .sort((a, b) => a.localeCompare(b))
+
+  // Same "active" predicate the Users table below toggles per-row on
+  // (users.active), over the same already-approved rows listAllUsers
+  // returns — no separate query, no invented notion of "active".
+  const activeUserCount = allUsers.filter((u) => u.active).length
 
   return (
     <div className="flex flex-1 flex-col p-6">
@@ -66,6 +72,8 @@ export default async function AdminPage() {
             <UserTable users={allUsers} currentUserId={session.user.id} />
           </CardContent>
         </Card>
+
+        <AiAdoptionCard activeUserCount={activeUserCount} />
 
         <Card>
           <CardHeader>
