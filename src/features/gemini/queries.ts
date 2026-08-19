@@ -48,6 +48,16 @@ export async function listGeminiKeys(userId: string): Promise<GeminiKeyRow[]> {
  * One person's ledger since `since`, grouped for summarizeUsage. Joins the
  * key's CURRENT tier (deleted key -> null -> treated as free, i.e. $0
  * charged — the honest floor, since a deleted key's tier is unknowable).
+ *
+ * The join is on keyId ALONE and therefore says nothing about who pays: when
+ * this caller's own keys are exhausted, rotation serves them on a teammate's
+ * org-shared key, and that key's tier arrives here unchanged. So the row also
+ * carries `isOwnKey`, computed from the ledger's own keyOwnerId snapshot —
+ * summarizeUsage charges the caller only for keys the caller owns. Without it
+ * a teammate's paid key would invoice the wrong person on screen.
+ *
+ * `status` rides along too, so blocked calls stay countable but stay out of
+ * the usage, token and dollar figures.
  */
 export async function aggregateAiUsage(userId: string, since: Date): Promise<UsageAggRow[]> {
   const rows = await db
@@ -55,6 +65,8 @@ export async function aggregateAiUsage(userId: string, since: Date): Promise<Usa
       feature: aiUsageEvents.feature,
       model: aiUsageEvents.model,
       keyTier: geminiKeys.tier,
+      keyOwnerId: aiUsageEvents.keyOwnerId,
+      status: aiUsageEvents.status,
       calls: count(),
       inputTokens: sum(aiUsageEvents.inputTokens).mapWith(Number),
       outputTokens: sum(aiUsageEvents.outputTokens).mapWith(Number),
@@ -62,9 +74,22 @@ export async function aggregateAiUsage(userId: string, since: Date): Promise<Usa
     .from(aiUsageEvents)
     .leftJoin(geminiKeys, eq(aiUsageEvents.keyId, geminiKeys.id))
     .where(and(eq(aiUsageEvents.userId, userId), gte(aiUsageEvents.createdAt, since)))
-    .groupBy(aiUsageEvents.feature, aiUsageEvents.model, geminiKeys.tier)
+    .groupBy(
+      aiUsageEvents.feature,
+      aiUsageEvents.model,
+      geminiKeys.tier,
+      aiUsageEvents.keyOwnerId,
+      aiUsageEvents.status,
+    )
   return rows.map((r) => ({
-    ...r,
+    feature: r.feature,
+    model: r.model,
+    keyTier: r.keyTier,
+    // A null owner (pre-ledger row, or a failure row that never reached a
+    // key) is not this person's bill — the honest floor is "not mine".
+    isOwnKey: r.keyOwnerId === userId,
+    ok: r.status === 'ok',
+    calls: r.calls,
     inputTokens: r.inputTokens ?? 0,
     outputTokens: r.outputTokens ?? 0,
   }))
@@ -92,21 +117,42 @@ export async function sharedKeyUsageByCaller(ownerId: string, since: Date) {
     .groupBy(aiUsageEvents.keyId, aiUsageEvents.keyLast4, users.name)
 }
 
-/** Org-wide, per-slug: how many DISTINCT people used it and how often. */
+/**
+ * Org-wide, per-slug: how many DISTINCT people used it and how often.
+ *
+ * Grouped by `status` as well as slug, so summarizeAdoption can keep blocked
+ * calls visible without letting them masquerade as adoption. The ledger holds
+ * a row per blocked call, so an ungrouped count would report a feature that
+ * failed for everybody as the most-used thing in the product.
+ */
 export async function aggregateAdoption(since: Date): Promise<AdoptionAggRow[]> {
-  return db
+  const rows = await db
     .select({
       feature: aiUsageEvents.feature,
+      status: aiUsageEvents.status,
       userCount: countDistinct(aiUsageEvents.userId),
       calls: count(),
       lastUsedAt: max(aiUsageEvents.createdAt),
     })
     .from(aiUsageEvents)
     .where(gte(aiUsageEvents.createdAt, since))
-    .groupBy(aiUsageEvents.feature)
+    .groupBy(aiUsageEvents.feature, aiUsageEvents.status)
+  return rows.map((r) => ({
+    feature: r.feature,
+    ok: r.status === 'ok',
+    userCount: r.userCount,
+    calls: r.calls,
+    lastUsedAt: r.lastUsedAt,
+  }))
 }
 
-/** Per-person feature usage, for the admin drill-down. */
+/**
+ * Per-person feature usage, for the admin drill-down — successful calls only.
+ * This list answers "who actually uses this"; someone whose every attempt was
+ * blocked has used nothing, and the per-feature table above reports their
+ * attempts. Dropping the status filter would list people as users of features
+ * that have never once run for them.
+ */
 export async function perUserFeatureUsage(since: Date) {
   return db
     .select({
@@ -118,7 +164,7 @@ export async function perUserFeatureUsage(since: Date) {
     })
     .from(aiUsageEvents)
     .innerJoin(users, eq(aiUsageEvents.userId, users.id))
-    .where(gte(aiUsageEvents.createdAt, since))
+    .where(and(gte(aiUsageEvents.createdAt, since), eq(aiUsageEvents.status, 'ok')))
     .groupBy(aiUsageEvents.userId, users.name, aiUsageEvents.feature)
     .orderBy(desc(count()))
 }

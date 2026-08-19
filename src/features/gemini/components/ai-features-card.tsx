@@ -4,7 +4,11 @@ import { AI_FEATURES } from '@/features/gemini/ai-features'
 import { getAiPrefs } from '@/features/gemini/prefs'
 import { estimateCostUsd, formatUsd } from '@/features/gemini/pricing'
 import { aggregateAiUsage, listGeminiKeys } from '@/features/gemini/queries'
-import { summarizeUsage, totalsFor } from '@/features/gemini/usage-summary'
+import {
+  summarizeUsage,
+  totalsFor,
+  type FeatureUsageSummary,
+} from '@/features/gemini/usage-summary'
 import { AiFeatureToggle } from '@/features/gemini/components/ai-feature-toggle'
 
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000
@@ -14,6 +18,31 @@ const WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 // estimate the ledger writes at session end (session-budget.ts), not a
 // measurement. Anywhere this feature's usage appears it must say so.
 const ESTIMATED_USAGE_FEATURE_ID = 'live-captions'
+
+/**
+ * The per-feature 30-day line. Successful calls lead; blocked attempts and
+ * calls on a model with no published price are appended as their own clauses
+ * rather than folded in — a feature that only ever failed must read as "not
+ * used", never as usage, and an unknown price must never read as $0.00.
+ */
+function describeUsage(
+  used: FeatureUsageSummary | undefined,
+  isEstimatedFeature: boolean,
+): string {
+  if (!used || (used.calls === 0 && used.failedCalls === 0)) return '30d: not used'
+  const parts: string[] = []
+  if (used.calls === 0) {
+    parts.push('30d: not used')
+  } else {
+    const estimated = isEstimatedFeature ? ' (estimated, not measured)' : ''
+    parts.push(
+      `30d: ${used.calls} call${used.calls === 1 ? '' : 's'} · ${used.tokens.toLocaleString('en-US')} tokens · ${formatUsd(used.valueUsd)} value${estimated}`,
+    )
+  }
+  if (used.unpricedCalls > 0) parts.push(`${used.unpricedCalls} unpriced`)
+  if (used.failedCalls > 0) parts.push(`${used.failedCalls} failed`)
+  return parts.join(' · ')
+}
 
 export async function AiFeaturesCard({ userId }: { userId: string }) {
   const now = new Date()
@@ -39,7 +68,9 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
         <CardDescription>
           Everything AI does here runs on your Gemini keys. Each switch covers one feature only —
           turning off drafting leaves dictation and read-aloud on. Dollar figures are indicative —
-          what the tokens would cost on Google&rsquo;s paid tier. Free keys are charged $0.
+          what the tokens would cost on Google&rsquo;s paid tier. Free keys are charged $0, and only
+          your own paid keys can charge you: work that falls through to a teammate&rsquo;s shared key
+          lands on their bill, not yours.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -57,7 +88,7 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
             <dd className="font-mono tabular-nums">{formatUsd(totals.valueUsd)}</dd>
           </div>
           <div>
-            <dt className="text-xs text-muted-foreground">Charged</dt>
+            <dt className="text-xs text-muted-foreground">Charged (your paid keys)</dt>
             <dd className="font-mono tabular-nums">
               {totals.paidChargeUsd > 0 ? formatUsd(totals.paidChargeUsd) : '$0.00'}
             </dd>
@@ -67,6 +98,20 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
           <p className="text-xs text-muted-foreground">
             Includes {liveUsage.calls} live-caption call{liveUsage.calls === 1 ? '' : 's'} — Live
             runs in your browser, so those tokens are an estimate, not a measurement.
+          </p>
+        ) : null}
+        {totals.unpricedCalls > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Value and charge cover priced calls only — {totals.unpricedCalls} call
+            {totals.unpricedCalls === 1 ? '' : 's'} ran on a model with no published price, so
+            their cost is unknown rather than zero.
+          </p>
+        ) : null}
+        {totals.failedCalls > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {totals.failedCalls} request{totals.failedCalls === 1 ? '' : 's'} never ran — blocked
+            before reaching Google, usually because no key was available. Nothing was spent on
+            {totals.failedCalls === 1 ? ' it' : ' them'}, so {totals.failedCalls === 1 ? 'it is' : 'they are'} not counted above.
           </p>
         ) : null}
         <p className="text-xs text-muted-foreground">
@@ -98,9 +143,7 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                       : 'price unknown'}
                   </span>
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                    {used
-                      ? `30d: ${used.calls} call${used.calls === 1 ? '' : 's'} · ${used.tokens.toLocaleString('en-US')} tokens · ${formatUsd(used.valueUsd)} value${isEstimatedFeature ? ' (estimated, not measured)' : ''}`
-                      : '30d: not used'}
+                    {describeUsage(used, isEstimatedFeature)}
                   </span>
                 </div>
                 <AiFeatureToggle feature={f.id} label={f.label} enabled={prefs[f.id]} />

@@ -4,6 +4,11 @@
 // card must render every one of them. Filtering down to only what appears
 // in the ledger would silently hide exactly the features the product owner
 // asked about.
+//
+// Blocked calls get their own columns rather than being hidden or counted as
+// use: "6 tried, 0 succeeded" is the most actionable row this panel can show,
+// and it is the exact row that reads as "used by most" if failures are folded
+// into the call count.
 
 import { ChartNoAxesColumn } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -41,7 +46,12 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
   const adoption = summarizeAdoption(adoptionRows, activeUserCount).sort(
     (a, b) => b.users - a.users,
   )
-  const unused = adoption.filter((a) => a.verdict === 'unused')
+  // Nobody has succeeded, yet people keep trying: broken or unconfigured,
+  // not unwanted — a different fix from "nobody knows it exists", so these are
+  // called out on their own and kept OUT of the untouched list below, which
+  // would otherwise call a feature people are actively reaching for untouched.
+  const failingForEveryone = adoption.filter((a) => a.users === 0 && a.failedUsers > 0)
+  const unused = adoption.filter((a) => a.verdict === 'unused' && a.failedUsers === 0)
 
   const slugToLabel = new Map(
     AI_FEATURES.flatMap((f) => f.slugs.map((s) => [s as string, f.label] as const)),
@@ -65,19 +75,21 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
         </CardTitle>
         <CardDescription>
           Who is actually using which AI feature, last 30 days, across {activeUserCount} active
-          {activeUserCount === 1 ? ' person' : ' people'}. Counts are calls, not sessions; a
-          feature nobody has touched is the one worth redesigning.
+          {activeUserCount === 1 ? ' person' : ' people'}. Counts are calls, not sessions, and only
+          calls that ran — requests blocked before reaching Google are counted as failed, never as
+          use. A feature nobody has touched is the one worth redesigning.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[32rem] text-sm">
+          <table className="w-full min-w-[36rem] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th className="py-2 font-normal">Feature</th>
                 <th className="py-2 font-normal">People</th>
                 <th className="py-2 font-normal">Share</th>
                 <th className="py-2 font-normal">Calls</th>
+                <th className="py-2 font-normal">Failed</th>
                 <th className="py-2 font-normal">Last used</th>
                 <th className="py-2 font-normal">State</th>
               </tr>
@@ -89,6 +101,9 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
                   <td className="py-2 font-mono tabular-nums">{row.users}</td>
                   <td className="py-2 font-mono tabular-nums">{row.adoptionPct}%</td>
                   <td className="py-2 font-mono tabular-nums">{row.calls}</td>
+                  <td className="py-2 font-mono tabular-nums">
+                    {row.failedCalls > 0 ? row.failedCalls : '—'}
+                  </td>
                   <td className="py-2 font-mono text-xs">
                     {row.lastUsedAt ? row.lastUsedAt.toISOString().slice(0, 10) : '—'}
                   </td>
@@ -102,6 +117,20 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
             </tbody>
           </table>
         </div>
+
+        {failingForEveryone.length > 0 ? (
+          <p className="rounded-lg border border-dashed p-3 text-sm">
+            <span className="font-medium">Tried but never worked:</span>{' '}
+            {failingForEveryone
+              .map(
+                (f) =>
+                  `${f.label} (${f.failedUsers} ${f.failedUsers === 1 ? 'person' : 'people'}, ${f.failedCalls} attempt${f.failedCalls === 1 ? '' : 's'}, 0 succeeded)`,
+              )
+              .join(', ')}
+            . People want these — something is stopping them, most often a missing or exhausted
+            Gemini key.
+          </p>
+        ) : null}
 
         {unused.length > 0 ? (
           <p className="rounded-lg border border-dashed p-3 text-sm">

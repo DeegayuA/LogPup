@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { estimateCostUsd, formatUsd, priceForModel } from '@/features/gemini/pricing'
+import {
+  ANALYSIS_MODELS,
+  ASSISTANT_MODELS,
+  LIVE_MODEL_FALLBACK_ORDER,
+  QUICK_MODELS,
+  SYNTHESIS_MODELS,
+  TTS_MODEL_FALLBACK_ORDER,
+} from '@/features/gemini/models'
 
 describe('priceForModel', () => {
   it('resolves the 3.6 flash promo price before 2027', () => {
@@ -45,6 +53,35 @@ describe('estimateCostUsd', () => {
       estimateCostUsd({ model: 'nope', inputTokens: 10, outputTokens: 10, at: new Date('2026-08-19') }),
     ).toBeNull()
   })
+})
+
+// The registry's ESTIMATE models are guarded in ai-features.test.ts, but those
+// are the models the cards ADVERTISE — not the ones the runtime actually calls.
+// Every chain below is walked at runtime and every model it lands on is written
+// to the ledger, so a model missing from PRICE_TABLE turns real spend into
+// "unknown price" on Settings. Bumping a chain without adding its price here
+// should fail this test, not ship silently.
+describe('every routed model has a price', () => {
+  const CHAINS: Record<string, readonly string[]> = {
+    ANALYSIS_MODELS,
+    SYNTHESIS_MODELS,
+    QUICK_MODELS,
+    ASSISTANT_MODELS,
+    TTS_MODEL_FALLBACK_ORDER,
+    LIVE_MODEL_FALLBACK_ORDER,
+  }
+
+  for (const [name, models] of Object.entries(CHAINS)) {
+    it(`prices every model in ${name}`, () => {
+      expect(models.length).toBeGreaterThan(0)
+      for (const model of models) {
+        expect(
+          priceForModel(model, new Date('2026-08-19')),
+          `${name} routes to "${model}", which PRICE_TABLE has no price for`,
+        ).not.toBeNull()
+      }
+    })
+  }
 })
 
 describe('formatUsd', () => {
