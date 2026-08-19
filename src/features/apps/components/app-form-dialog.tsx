@@ -158,6 +158,7 @@ export function AppFormDialog({
   workspaceTechTags = [],
   activeUsers = [],
   trigger,
+  aiGenerateEnabled,
 }: {
   appId?: string
   initialValues?: AppFormInitialValues
@@ -176,7 +177,11 @@ export function AppFormDialog({
   /** Overrides the default "New app" / "Edit app" button, so a page can put
    * this behind its own toolbar control without a second dialog. */
   trigger?: ReactElement
-} = {}) {
+  /** From getAiPrefs(userId)['app-metadata'] — hides the repo-URL Generate
+   *  button, its caption, and the whole README-paste fallback (button and
+   *  captions together) when the user has switched it off. */
+  aiGenerateEnabled: boolean
+}) {
   const isEdit = Boolean(appId)
   const submitLabel = isEdit ? 'Save changes' : 'Create app'
   const [open, setOpen] = useState(defaultOpen ?? false)
@@ -440,30 +445,32 @@ export function AppFormDialog({
                   admin's own Gemini quota and overwrites fields they may have
                   typed, and neither should happen as a side effect of leaving a
                   field. */}
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!form.repoUrl.trim() || generating}
-                onClick={handleGenerateFromRepo}
-                className="shrink-0 gap-1.5"
-              >
-                {generating ? (
-                  <Loader2 aria-hidden className="size-4 animate-spin" />
-                ) : (
-                  <Sparkles aria-hidden className="size-4" />
-                )}
-                {generating ? 'Reading…' : 'Generate'}
-              </Button>
+              {aiGenerateEnabled ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!form.repoUrl.trim() || generating}
+                  onClick={handleGenerateFromRepo}
+                  className="shrink-0 gap-1.5"
+                >
+                  {generating ? (
+                    <Loader2 aria-hidden className="size-4 animate-spin" />
+                  ) : (
+                    <Sparkles aria-hidden className="size-4" />
+                  )}
+                  {generating ? 'Reading…' : 'Generate'}
+                </Button>
+              ) : null}
             </div>
             {errors.repoUrl ? (
               <p id="app-repo-url-error" role="alert" className="text-xs text-destructive">
                 {errors.repoUrl}
               </p>
-            ) : (
+            ) : aiGenerateEnabled ? (
               <p className="text-xs text-muted-foreground">
                 Fills in the name, description, and tech tags from the repository.
               </p>
-            )}
+            ) : null}
           </div>
 
           {/* The private-repo path. GitHub answers a private repo with 404, so
@@ -472,7 +479,7 @@ export function AppFormDialog({
               and paste what it says. Appears only after a fetch has actually
               failed: offering it up front would be a second, confusing way to
               do the thing the button above already does. */}
-          {needsReadme ? (
+          {needsReadme && aiGenerateEnabled ? (
             <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-3">
               <div className="flex flex-col gap-1">
                 <Label htmlFor="app-readme" className="text-xs">

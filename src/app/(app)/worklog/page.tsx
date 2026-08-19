@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { LK_HOLIDAYS } from '@/lib/lk-holidays'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { loadActor } from '@/features/auth/actor'
-import { can } from '@/features/auth/capabilities'
+import { can, isAdminRole } from '@/features/auth/capabilities'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import {
   DeclareAbsenceDialog,
@@ -27,6 +27,7 @@ import { computeCoverage } from '@/features/worklog/coverage'
 import { patternForDay } from '@/features/worklog/schedules'
 import { MAX_BACKFILL_DAYS } from '@/features/worklog/missing-days'
 import { resolveWorkDay, summarizeWorklogs, worklogDaysBack } from '@/features/worklog/worklog-day'
+import { getAiPrefs } from '@/features/gemini/prefs'
 
 export const metadata = { title: 'Work log' }
 
@@ -59,7 +60,7 @@ export default async function WorklogPage() {
   if (!session?.user) return null
 
   const today = resolveWorkDay(new Date())
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -77,8 +78,7 @@ export default async function WorklogPage() {
           whole days and Saturday is a half day, unless your own work schedule says different. Days
           you missed wait above today&rsquo;s box, up to {MAX_BACKFILL_DAYS} at once; approved leave
           is not one of them. What you save appears in your own list below, and in the team view
-          that admins see. Only you can write your entries — an admin can read them, but cannot log
-          a day for you.
+          that admins see. Only you can write your entries — nobody else can log a day for you.
         </p>
       </div>
 
@@ -140,7 +140,7 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
   const from = shiftDay(today, -CATCH_UP_WINDOW_DAYS)
   const to = shiftDay(today, 1)
 
-  const [actor, joinedOn, loggedDays, pending, approved, schedule, companyHolidays] =
+  const [actor, joinedOn, loggedDays, pending, approved, schedule, companyHolidays, aiPrefs] =
     await Promise.all([
       loadActor(),
       getUserJoinDay(userId),
@@ -149,6 +149,7 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
       getMyApprovedAbsences(userId, from, today),
       getMyWorkSchedule(userId),
       getOrgHolidayDays(from, today),
+      getAiPrefs(userId),
     ])
   if (!joinedOn) return null
 
@@ -262,7 +263,7 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
                 </div>
                 {/* Draft with AI reads that day's own activity, so a forgotten
                     Tuesday is still recoverable from what LogPup saw. */}
-                <WorklogForm day={day} initial={null} />
+                <WorklogForm day={day} initial={null} aiDraftEnabled={aiPrefs['worklog-draft']} />
               </div>
             ))}
           </div>
@@ -316,12 +317,13 @@ function absenceDays(ranges: readonly MyAbsence[], from: string, to: string): Se
 }
 
 async function TodayEntry({ userId, today }: { userId: string; today: string }) {
-  const rows = await getMyWorklogs(userId, 1)
+  const [rows, aiPrefs] = await Promise.all([getMyWorklogs(userId, 1), getAiPrefs(userId)])
   const todayRow = rows.find((row) => row.day === today) ?? null
   return (
     <WorklogForm
       day={today}
       initial={todayRow ? { percent: todayRow.percent, note: todayRow.note } : null}
+      aiDraftEnabled={aiPrefs['worklog-draft']}
     />
   )
 }

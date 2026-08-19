@@ -23,9 +23,13 @@ import { draftWorklogNote } from '@/features/worklog/draft-actions'
 export function WorklogForm({
   day,
   initial,
+  aiDraftEnabled,
 }: {
   day: string
   initial: { percent: number; note: string | null } | null
+  /** From getAiPrefs(userId)['worklog-draft'] — hides Draft with AI (button
+   *  and its caption together) when the user has switched it off. */
+  aiDraftEnabled: boolean
 }) {
   const [percent, setPercent] = useState(initial?.percent ?? 50)
   const [note, setNote] = useState(initial?.note ?? '')
@@ -126,20 +130,22 @@ export function WorklogForm({
               label="Speak it"
               size="sm"
             />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={drafting || saving}
-              onClick={handleDraft}
-            >
-              {drafting ? (
-                <Loader2Icon className="animate-spin" aria-hidden />
-              ) : (
-                <SparklesIcon aria-hidden />
-              )}
-              {drafting ? 'Drafting…' : 'Draft with AI'}
-            </Button>
+            {aiDraftEnabled ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={drafting || saving}
+                onClick={handleDraft}
+              >
+                {drafting ? (
+                  <Loader2Icon className="animate-spin" aria-hidden />
+                ) : (
+                  <SparklesIcon aria-hidden />
+                )}
+                {drafting ? 'Drafting…' : 'Draft with AI'}
+              </Button>
+            ) : null}
           </div>
         </div>
         <Textarea
@@ -150,10 +156,12 @@ export function WorklogForm({
           maxLength={4000}
           rows={4}
         />
-        <p className="text-2xs text-muted-foreground">
-          Draft with AI writes a first version from what you did in LogPup today. Edit it — it is
-          your entry.
-        </p>
+        {aiDraftEnabled ? (
+          <p className="text-2xs text-muted-foreground">
+            Draft with AI writes a first version from what you did in LogPup today. Edit it — it
+            is your entry.
+          </p>
+        ) : null}
       </div>
 
       <div className="flex items-center justify-end gap-2">

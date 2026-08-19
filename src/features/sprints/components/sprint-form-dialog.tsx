@@ -57,7 +57,15 @@ function identifyField(message: string): keyof FieldErrors | null {
   return null
 }
 
-export function SprintFormDialog({ appId }: { appId: string }) {
+export function SprintFormDialog({
+  appId,
+  aiDraftEnabled,
+}: {
+  appId: string
+  /** From getAiPrefs(userId)['sprint-draft'] — hides Draft with AI when the
+   *  user has switched it off. No adjacent caption to gate here. */
+  aiDraftEnabled: boolean
+}) {
   const [open, setOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [form, setForm] = useState<FormState>(initialFormState)
@@ -171,20 +179,22 @@ export function SprintFormDialog({ appId }: { appId: string }) {
                   names and recent meeting write-ups (see suggest-actions.ts).
                   A draft, not a decision: both fields stay editable and
                   nothing is created until Create sprint. */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={suggesting || isPending}
-                onClick={handleSuggest}
-              >
-                {suggesting ? (
-                  <Loader2 className="animate-spin" aria-hidden />
-                ) : (
-                  <Sparkles aria-hidden />
-                )}
-                {suggesting ? 'Drafting…' : 'Draft with AI'}
-              </Button>
+              {aiDraftEnabled ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={suggesting || isPending}
+                  onClick={handleSuggest}
+                >
+                  {suggesting ? (
+                    <Loader2 className="animate-spin" aria-hidden />
+                  ) : (
+                    <Sparkles aria-hidden />
+                  )}
+                  {suggesting ? 'Drafting…' : 'Draft with AI'}
+                </Button>
+              ) : null}
             </div>
             <Input
               id="sprint-name"
