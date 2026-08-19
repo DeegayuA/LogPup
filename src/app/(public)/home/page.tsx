@@ -61,7 +61,16 @@ const CTA =
  *  level below a level it does not belong to. */
 function Eyebrow({ children }: { children: ReactNode }) {
   return (
-    <span className="font-mono text-2xs tracking-[0.18em] text-muted-foreground uppercase">
+    <span
+      /* Reveals FIRST in its section (index 0), before the heading it labels.
+         A section whose heading arrives alone reads as one element animating;
+         label, then title, then rule reads as a page being set. The order is
+         the one the eye takes anyway, so the motion follows reading instead of
+         competing with it. */
+      data-reveal
+      style={{ '--reveal-index': 0 } as CSSProperties}
+      className="font-mono text-2xs tracking-[0.18em] text-muted-foreground uppercase"
+    >
       {children}
     </span>
   )
@@ -74,13 +83,26 @@ function Eyebrow({ children }: { children: ReactNode }) {
  * reveal-scope.tsx looks for.
  */
 function Rule({ className, style }: { className?: string; style?: CSSProperties }) {
-  return <div data-rule aria-hidden className={cn('h-px w-full bg-border', className)} style={style} />
+  return (
+    <div
+      data-rule
+      aria-hidden
+      className={cn('h-px w-full bg-border', className)}
+      /* Last of the three (index 2), and on a longer curve than the text — the
+         rule should finish ruling off after the words have landed, not race
+         them. A caller-supplied style still wins, so a rule that needs its own
+         position in a sequence can say so. */
+      style={{ '--reveal-index': 2, ...style } as CSSProperties}
+    />
+  )
 }
 
 function SectionHeading({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <h2
       data-reveal
+      /* Second: one beat after the eyebrow that labels it. */
+      style={{ '--reveal-index': 1 } as CSSProperties}
       className={cn(
         'max-w-[21ch] font-heading text-[clamp(2rem,5vw,3.5rem)] leading-[1.02] font-bold tracking-[-0.03em] text-foreground',
         className,

@@ -74,6 +74,15 @@
    color, ember amber reserved for capacity/attention. See
    docs/superpowers/specs/2026-08-11-ui-redesign-design.md */
 :root {
+  /* ONE CURVE FOR THE WHOLE PAGE.
+     Every reveal, rule and arrival on the public page uses this, because a
+     page where each element picks its own easing has no rhythm — it reads as
+     a collection of animations rather than one document behaving. Leaves
+     decisively, arrives almost without stopping: the long tail (0.2, 1) is
+     what makes an element look like it settled rather than halted.
+     Deliberately not a named CSS keyword — `ease-out` is the browser default
+     everyone ships, and it is why most pages move identically. */
+  --ease-editorial: cubic-bezier(0.22, 0.68, 0.2, 1);
   --background: oklch(0.977 0.004 95);
   --foreground: oklch(0.22 0.012 155);
   --card: oklch(1 0 0);
@@ -437,21 +446,44 @@
      settles at the drawn state, so the masthead does not depend on scripting. */
   .rule-draw {
     transform-origin: left;
-    animation: logpup-rule-draw 600ms ease-out both;
+    animation: logpup-rule-draw 820ms var(--ease-editorial) both;
   }
 
+  /* OPACITY FINISHES FIRST, ON PURPOSE.
+     Fading and moving over the same 500ms means the element is still
+     translucent while it is still travelling, and it lands and solidifies in
+     the same instant — which is what makes a reveal read as mushy. Splitting
+     them (opacity done at 340ms, movement still settling until 760ms) means
+     the text is fully legible while it finishes arriving, so the eye starts
+     reading before the motion ends. That is the difference between an
+     animation you watch and one you simply read through.
+
+     Both curves are --ease-editorial, shared with the rule draw below, so
+     every reveal on the page belongs to one family instead of each element
+     choosing its own feel. */
   [data-motion="on"] [data-reveal] {
     transition:
-      opacity 500ms ease-out,
-      transform 500ms ease-out;
+      opacity 340ms var(--ease-editorial),
+      transform 760ms var(--ease-editorial);
+    /* Elements inside one group arrive in sequence rather than together. The
+       index is set in the markup; anything without one is simply first, so a
+       new element that forgets to declare a position still behaves. */
+    transition-delay: calc(var(--reveal-index, 0) * 65ms);
   }
   [data-motion="on"] [data-reveal][data-pending] {
     opacity: 0;
-    transform: translateY(0.75rem);
+    /* 0.5rem, not the 0.75rem this was: the distance is what makes a fade-up
+       look like every other landing page. Shortening the travel while
+       lengthening its settle keeps the arrival without the cliche. */
+    transform: translateY(0.5rem);
   }
   [data-motion="on"] [data-rule] {
     transform-origin: left;
-    transition: transform 600ms ease-out;
+    /* Slower than the text it separates. A rule that draws at the same speed
+       as the copy competes with it; one that lags slightly reads as the page
+       ruling itself off after the words have landed. */
+    transition: transform 820ms var(--ease-editorial);
+    transition-delay: calc(var(--reveal-index, 0) * 65ms);
   }
   [data-motion="on"] [data-rule][data-pending] {
     transform: scaleX(0);
