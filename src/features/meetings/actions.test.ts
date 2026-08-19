@@ -107,7 +107,7 @@ describe('deleteMeeting', () => {
     asOther()
     meetingQueue = [[baseMeeting()]]
     const res = await deleteMeeting(MEETING_ID)
-    expect(res).toEqual({ ok: false, error: 'Only an admin can delete meetings' })
+    expect(res).toEqual({ ok: false, error: 'Not allowed to delete this meeting' })
     expect(writeSpy).not.toHaveBeenCalled()
     expect(deleteSpy).not.toHaveBeenCalled()
     expect(logActivityMock).not.toHaveBeenCalled()
@@ -120,7 +120,7 @@ describe('deleteMeeting', () => {
     asCreator()
     meetingQueue = [[baseMeeting()]]
     const res = await deleteMeeting(MEETING_ID)
-    expect(res).toEqual({ ok: false, error: 'Only an admin can delete meetings' })
+    expect(res).toEqual({ ok: false, error: 'Not allowed to delete this meeting' })
     expect(writeSpy).not.toHaveBeenCalled()
     expect(deleteSpy).not.toHaveBeenCalled()
     expect(logActivityMock).not.toHaveBeenCalled()

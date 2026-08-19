@@ -159,7 +159,7 @@ const USER_ID = '33333333-3333-4333-8333-333333333333'
 const APP_ID = '44444444-4444-4444-8444-444444444444'
 const ADMIN_ID = 'admin-1'
 
-const asAdmin = () => authMock.mockResolvedValue({ user: { id: ADMIN_ID, role: 'admin' } })
+const asAdmin = () => authMock.mockResolvedValue({ user: { id: ADMIN_ID, role: 'superadmin' } })
 const asMember = () => authMock.mockResolvedValue({ user: { id: 'member-1', role: 'member' } })
 
 beforeEach(() => {

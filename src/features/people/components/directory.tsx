@@ -36,6 +36,7 @@ import {
   type PersonNow,
 } from '@/features/people/now'
 import type { UserCapacity } from '@/features/people/queries'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 type SortKey = 'name' | 'load-desc' | 'load-asc'
 
@@ -305,7 +306,7 @@ export function PeopleDirectory({
                   >
                     {user.name}
                   </Link>
-                  {user.role === 'admin' ? (
+                  {isAdminRole(user.role) ? (
                     // role="img" so the label is actually exposed: an <svg>
                     // has no implicit role, and several screen readers drop
                     // aria-label on an unroled element entirely.

@@ -1,5 +1,6 @@
 'use server'
 
+import { isAdminRole } from '@/features/auth/capabilities'
 import { z } from 'zod'
 import { and, eq, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
@@ -160,7 +161,7 @@ export async function removeMeetingAttendee(
     .from(liveMeetings)
     .where(eq(liveMeetings.id, parsed.data.meetingId))
   if (!meeting) return err('Meeting not found')
-  if (meeting.createdBy !== session.user.id && session.user.role !== 'admin') {
+  if (meeting.createdBy !== session.user.id && !isAdminRole(session.user.role)) {
     return err('Only the organizer can change the invite list')
   }
 
@@ -231,7 +232,7 @@ export async function setMeetingLink(meetingId: string, url: string): Promise<Ac
     .from(liveMeetings)
     .where(eq(liveMeetings.id, meetingId))
   if (!meeting) return err('Meeting not found')
-  if (meeting.createdBy !== session.user.id && session.user.role !== 'admin') {
+  if (meeting.createdBy !== session.user.id && !isAdminRole(session.user.role)) {
     return err('Only the organizer can set the link')
   }
 

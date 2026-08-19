@@ -253,6 +253,27 @@
       "when": 1787155200000,
       "tag": "0036_key_sharing_prefs",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787155300000,
+      "tag": "0037_user_role_expand",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787155400000,
+      "tag": "0038_rbac_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1787155500000,
+      "tag": "0039_admin_to_superadmin",
+      "breakpoints": true
     }
   ]
 }

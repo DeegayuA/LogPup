@@ -36,10 +36,20 @@ export type Actor = {
   scopeAppIds: ReadonlySet<string>
 }
 
-/** What is being acted on. Both fields optional; a missing one fails closed. */
+/**
+ * What is being acted on. Every field optional; a missing one fails closed.
+ *
+ * `appIds` exists because a resource may belong to more than one project — a
+ * meeting spanning several apps is the live case. A scoped actor reaches the
+ * resource if their scope covers ANY of them: being PM of one of the projects
+ * a meeting serves is enough to manage that meeting, and requiring all of
+ * them would mean a joint meeting could only be managed by someone who runs
+ * every project in it.
+ */
 export type Resource = {
   ownerId?: string | null
   appId?: string | null
+  appIds?: readonly string[] | null
 }
 
 const N = 'none'
@@ -78,7 +88,7 @@ export const ROLE_GRANTS = {
   'worklog.view':               { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: A },
   'worklog.write.own':          { superadmin: O, admin: O, manager: O, editor: O, member: O, stakeholder: N, auditor: N },
   'worklog.backfill':           { superadmin: O, admin: O, manager: O, editor: O, member: O, stakeholder: N, auditor: N },
-  'worklog.correct.request':    { superadmin: S, admin: A, manager: S, editor: S, member: N, stakeholder: N, auditor: N },
+  'worklog.correct.request':    { superadmin: A, admin: A, manager: S, editor: S, member: N, stakeholder: N, auditor: N },
   'coverage.view':              { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: A },
   // Tasks and sprints
   'task.create':                { superadmin: A, admin: A, manager: S, editor: S, member: S, stakeholder: N, auditor: N },
@@ -113,6 +123,17 @@ export const ROLE_GRANTS = {
   'trash.restore':              { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   'trash.purge':                { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   // Audit and danger
+  // TWO DIFFERENT QUESTIONS, deliberately two actions.
+  //
+  // 'activity.view' is /activity — the org's shared memory of what changed.
+  // Every signed-in person sees it today and keeps seeing it; narrowing that
+  // would be a product change smuggled in as plumbing. Stakeholder is the one
+  // exception: a client seat must not watch the studio work.
+  //
+  // 'audit.view' is the admin audit surface: the same table, but unfiltered,
+  // including trashed rows and self-approval metadata, with actor/entity/date
+  // filters. That is a compliance instrument, not a feed.
+  'activity.view':              { superadmin: A, admin: A, manager: A, editor: A, member: A, stakeholder: N, auditor: A },
   'audit.view':                 { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: A },
   'admin.view':                 { superadmin: A, admin: A, manager: A, editor: N, member: N, stakeholder: N, auditor: A },
   'danger.dbclear':             { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
@@ -125,6 +146,38 @@ export type Action = keyof typeof ROLE_GRANTS
  * needs is a denial, never an allow — a caller that forgot to pass the
  * resource must be told no rather than accidentally granted everything.
  */
+/**
+ * Where a role's app scope comes from.
+ *
+ * Lives here, beside the matrix, rather than in actor.ts: it is pure role
+ * knowledge, and keeping it out of the module that imports next-auth is what
+ * lets it be tested and imported anywhere.
+ */
+export type ScopeSource = 'none' | 'app_role_history' | 'assignments' | 'app_grants'
+
+export function scopeSourceFor(role: UserRole): ScopeSource {
+  switch (role) {
+    case 'manager':
+      // NOT managesApp(). That helper regex-matches the free-text
+      // assignments.role string ('manager', 'pm', product owner, scrum
+      // master) and returns FALSE for a lead. Scope decided by whatever
+      // somebody typed into an assignment is not auditable, and auditability
+      // is the whole reason these seats exist.
+      return 'app_role_history'
+    case 'editor':
+    case 'member':
+      // Deliberately a different source than manager: broader membership,
+      // narrower power — edit inside the scope, request outside it.
+      return 'assignments'
+    case 'stakeholder':
+      return 'app_grants'
+    case 'superadmin':
+    case 'admin':
+    case 'auditor':
+      return 'none'
+  }
+}
+
 export function can(actor: Actor, action: Action, resource?: Resource): boolean {
   const level: GrantLevel = ROLE_GRANTS[action][actor.role]
   if (level === 'none') return false
@@ -133,5 +186,47 @@ export function can(actor: Actor, action: Action, resource?: Resource): boolean 
   const owns = resource?.ownerId != null && resource.ownerId === actor.id
   if (level === 'own') return owns
   if (owns) return true
-  return resource?.appId != null && actor.scopeAppIds.has(resource.appId)
+
+  if (resource?.appId != null && actor.scopeAppIds.has(resource.appId)) return true
+  // Any-of, not all-of — see the Resource comment.
+  return resource?.appIds?.some((id) => actor.scopeAppIds.has(id)) ?? false
+}
+
+/**
+ * The admin FAMILY, for the handful of places that legitimately ask about a
+ * label rather than a power: nav sections, badges, "who is staff".
+ *
+ * PREFER `can(actor, action, resource)`. If the check gates something — a
+ * control, a route, a mutation — it is asking about a capability, and asking
+ * about a role instead is how the two drift apart. This exists for the
+ * remainder, where the question really is "is this person staff".
+ *
+ * It exists at all because widening the enum turned every surviving
+ * `role === 'admin'` into a silent false for superadmin: still compiling,
+ * still typechecking, just quietly hiding things from the highest-privilege
+ * seat. A predicate makes that class of bug a one-line fix instead of a hunt.
+ */
+export function isAdminRole(role: UserRole): boolean {
+  return role === 'superadmin' || role === 'admin'
+}
+
+/**
+ * Human-readable seat names, for badges and pickers.
+ *
+ * Needed because a widened enum otherwise renders a superadmin's own badge as
+ * whatever the old two-value ternary fell through to — reading as a demotion
+ * to the person looking at it.
+ */
+export const ROLE_LABELS: Record<UserRole, string> = {
+  superadmin: 'Superadmin',
+  admin: 'Admin',
+  manager: 'Manager',
+  editor: 'Editor',
+  member: 'Member',
+  stakeholder: 'Stakeholder',
+  auditor: 'Auditor',
+}
+
+export function roleLabel(role: UserRole): string {
+  return ROLE_LABELS[role] ?? role
 }

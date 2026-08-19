@@ -8,6 +8,8 @@ import { TaskCard } from '@/features/sprints/components/task-card'
 import { TaskComposer } from '@/features/sprints/components/task-composer'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 import type { BoardGroup, GroupPatch } from '@/features/sprints/board-view'
+import type { UserRole } from '@/features/auth/capabilities'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 /**
  * Column droppable ids are namespaced.
@@ -53,7 +55,7 @@ export function BoardColumn({
   composerPeople: { id: string; name: string; onTeam: boolean }[]
   appId: string
   sprintId: string | null
-  currentUser: { id: string; role: 'admin' | 'member' }
+  currentUser: { id: string; role: UserRole }
   todayIso: string
   selectedIds: ReadonlySet<string>
   selectionMode: boolean
@@ -123,7 +125,7 @@ export function BoardColumn({
                   // so it is gated on the same `canMoveTask` answer — with the
                   // destructive item held back for admins, and the roster the
                   // reassign items need passed straight through.
-                  isAdmin={currentUser.role === 'admin'}
+                  isAdmin={isAdminRole(currentUser.role)}
                   team={team}
                   selected={selectedIds.has(task.id)}
                   selectionMode={selectionMode}

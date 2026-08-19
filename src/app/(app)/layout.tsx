@@ -5,6 +5,7 @@ import { Header } from '@/components/shell/header'
 import { AccountMenu } from '@/components/shell/account-menu'
 import { CommandCenterProvider } from '@/features/search/components/command-center'
 import { getOwnTitle } from '@/features/auth/queries'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 export default async function AppLayout({
   children,
@@ -16,7 +17,7 @@ export default async function AppLayout({
   // necessarily excludes static-asset paths, so no authed page should rely on
   // it alone.
   if (!session?.user) redirect('/sign-in')
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   // Job role (users.title) isn't on the session/JWT (setUserTitle in
   // features/admin/actions.ts never re-mints the token) — read it here,
   // right alongside the session this layout already fetches, and thread it

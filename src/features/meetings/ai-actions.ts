@@ -106,6 +106,7 @@ import {
   type ActionRow,
 } from '@/features/meetings/components/meeting-notes-model'
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
+import { can, isAdminRole, type UserRole } from '@/features/auth/capabilities'
 import { managesApp } from '@/features/apps/project-manager'
 // Re-exported below (not just imported) — existing callers, including this
 // file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
@@ -113,6 +114,10 @@ import { managesApp } from '@/features/apps/project-manager'
 // dependency-free leaf module shared with src/features/admin/trash-grouping.ts
 // so the two neutral labels can never drift into two different strings.
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
+
+/** Meetings gates decide from the session alone; app reach comes from the
+ * managesApp arm beside them, not from a resolved scope set. */
+const EMPTY_SCOPE: ReadonlySet<string> = new Set()
 
 export { keyframeDeleteLabel, noteSegmentDeleteLabel }
 
@@ -559,7 +564,8 @@ export async function canReadMeetingIntel(
   user: { id: string; role?: string | null },
   meeting: { id: string; createdBy: string; appId?: string | null },
 ): Promise<boolean> {
-  if (user.role === 'admin' || meeting.createdBy === user.id) return true
+  if (can({ id: user.id, role: (user.role ?? 'member') as UserRole, scopeAppIds: EMPTY_SCOPE },
+          'meeting.intel.view', { ownerId: meeting.createdBy })) return true
   // The app's project manager reads their project's meetings without having
   // to be on every invite — running the project is their job.
   if (await managesApp(user.id, meeting.appId)) return true
@@ -584,9 +590,13 @@ export async function canManageMeeting(meetingId: string) {
   // Admin, the creator, or the app's PROJECT MANAGER: the PM manages
   // everything in their project and its meetings (see project-manager.ts);
   // the lead/architect stay reviewers and are deliberately not here.
+  // See the twin gate in actions.ts for why the managesApp arm survives the
+  // matrix conversion: free-text project roles and structured pm/lead are
+  // different sets, and narrowing this quietly would strip meeting management
+  // from PMs who only hold the title in free text.
   const allowed =
-    session.user.role === 'admin' ||
-    meeting.createdBy === session.user.id ||
+    can({ id: session.user.id, role: session.user.role as UserRole, scopeAppIds: EMPTY_SCOPE },
+        'meeting.manage', { ownerId: meeting.createdBy }) ||
     (await managesApp(session.user.id, meeting.appId))
   return allowed ? { session, meeting } : null
 }
@@ -1223,7 +1233,8 @@ async function persistMeetingAnalysis(
   // addressed here, and resolve them. Best-effort — a failure here must not
   // undo the analysis that already succeeded above.
   try {
-    const isAdmin = author.role === 'admin'
+    // author.role comes back from the select as a plain string.
+    const isAdmin = author.role != null && isAdminRole(author.role as UserRole)
     const openBefore = await fetchCarriedFollowups(
       { id, startsAt: meeting.startsAt },
       { id: createdBy, isAdmin },
@@ -1876,7 +1887,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
   // too (fetchOpenFollowupsBefore). Without this, any member could create a
   // throwaway meeting that happens to share an attendee with someone else's
   // confidential meeting and read that meeting's follow-up text here.
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   const attendees = await fetchAttendees(id)
   const attendeeIds = attendees.map((row) => row.id)
 
@@ -2230,7 +2241,7 @@ async function authorizeFollowupWrite(
     .where(eq(liveMeetings.id, row.sourceMeetingId))
   if (!sourceMeeting) return err('Not found')
 
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   const isCreator = sourceMeeting.createdBy === session.user.id
   const isSelf = row.userId === session.user.id
   if (!isAdmin && !isCreator && !isSelf) return err(`Not allowed to ${verb} this item`)
@@ -2969,7 +2980,7 @@ export async function getMeetingNoteTimeline(meetingId: string): Promise<ActionR
     approvedUsers,
     appId: meeting.appId,
     orgPeople: await fetchOrgPeople(id),
-    canAddPeople: session.user.role === 'admin',
+    canAddPeople: isAdminRole(session.user.role),
     unassignedFollowups: await db
       .select({
         id: meetingFollowups.id,
@@ -3083,7 +3094,7 @@ export async function getSpeakerAssignmentData(
     speakers,
     attendees,
     orgPeople,
-    canAddPeople: session.user.role === 'admin',
+    canAddPeople: isAdminRole(session.user.role),
   })
 }
 
@@ -3472,7 +3483,7 @@ export async function assignSpeaker(input: {
   const ctx = await canManageMeeting(parsed.data.meetingId)
   if (!ctx) return err('Not allowed')
   const { session, meeting } = ctx
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
 
   // Statements are collected in FK-safe order: a new user row must precede
   // anything that references it.

@@ -7,6 +7,7 @@ import { liveMeetings } from '@/db/live'
 import { meetingAttendees, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 export type MeetingShareInfo = {
   title: string
@@ -53,7 +54,7 @@ export async function getMeetingShareInfo(
     .from(liveMeetings)
     .where(eq(liveMeetings.id, parsed.data))
   if (!meeting) return err('Meeting not found')
-  if (meeting.createdBy !== session.user.id && session.user.role !== 'admin') {
+  if (meeting.createdBy !== session.user.id && !isAdminRole(session.user.role)) {
     return err('Only the organiser can share the invite')
   }
 

@@ -2,6 +2,7 @@ import { getSession } from '@/lib/session'
 import { RoadmapTimeline } from '@/features/sprints/components/roadmap-timeline'
 import type { StatusCounts } from '@/features/sprints/plan-read'
 import type { Sprint } from '@/features/sprints/queries'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 /**
  * Server shell for the roadmap.
@@ -40,7 +41,7 @@ export async function Roadmap({
   counts: Record<string, StatusCounts>
 }) {
   const session = await getSession()
-  const isAdmin = session?.user?.role === 'admin'
+  const isAdmin = (session?.user?.role != null && isAdminRole(session?.user?.role))
 
   return <RoadmapTimeline sprints={sprints} slug={slug} isAdmin={isAdmin} counts={counts} />
 }

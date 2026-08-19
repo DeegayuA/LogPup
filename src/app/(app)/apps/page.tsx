@@ -8,6 +8,7 @@ import { browseHref, parseBrowseParams } from '@/features/apps/browse'
 import { AppsBrowser } from '@/features/apps/components/apps-browser'
 import { PortfolioSummaryStrip } from '@/features/apps/components/portfolio-summary'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 export default async function AppsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
@@ -28,7 +29,7 @@ export default async function AppsPage(props: {
     listDistinctTechTags(),
     listActiveUsers(),
   ])
-  const isAdmin = session?.user?.role === 'admin'
+  const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   const params = parseBrowseParams(rawParams)
 
   // One shared "today" for the whole page: the header strip, every card's

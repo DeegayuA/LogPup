@@ -5,7 +5,7 @@ import { and, eq, exists, isNull, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { apps, assignmentHistory, assignments, users } from '@/db/schema'
-import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { summarizeAllocations } from '@/features/people/allocation'
@@ -28,11 +28,9 @@ const assignmentUpdateInput = z
   })
   .partial()
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
+// other files. Every guard now names the capability it needs and the matrix
+// answers; the contract is unchanged (Actor on success, null on refusal).
 
 /**
  * Walks an error's `.cause` chain looking for a Postgres unique-violation.
@@ -200,8 +198,8 @@ function openIntervalFromAssignment(input: {
 }
 
 export async function assignUser(input: unknown): Promise<ActionResult<{ warning?: string }>> {
-  const session = await requireAdmin()
-  if (!session?.user?.id) return err('Admins only')
+  const actor = await requireCapability('app.assign')
+  if (!actor) return err('Not allowed')
   const parsed = assignInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -217,7 +215,7 @@ export async function assignUser(input: unknown): Promise<ActionResult<{ warning
       ...historyStatements({
         ...parsed.data,
         changeKind: 'assigned',
-        changedBy: session.user.id,
+        changedBy: actor.id,
         at,
       }),
     ])
@@ -230,7 +228,7 @@ export async function assignUser(input: unknown): Promise<ActionResult<{ warning
   const app = await slugForApp(parsed.data.appId)
   const personName = await nameForUser(parsed.data.userId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'assigned',
     entityType: 'assignment',
     entityId: assignmentId ?? parsed.data.userId,
@@ -249,8 +247,8 @@ export async function updateAssignment(
   assignmentId: string,
   input: unknown,
 ): Promise<ActionResult<{ warning?: string }>> {
-  const session = await requireAdmin()
-  if (!session?.user?.id) return err('Admins only')
+  const actor = await requireCapability('app.assign')
+  if (!actor) return err('Not allowed')
   const parsed = assignmentUpdateInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -285,7 +283,7 @@ export async function updateAssignment(
     openIntervalFromAssignment({
       assignmentId,
       changeKind: 'updated',
-      changedBy: session.user.id,
+      changedBy: actor.id,
       at,
     }),
   ])
@@ -304,7 +302,7 @@ export async function updateAssignment(
     metadata.allocationPct = { from: existing.allocationPct, to: parsed.data.allocationPct }
   }
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'assignment',
     entityId: assignmentId,
@@ -322,8 +320,8 @@ export async function updateAssignment(
 }
 
 export async function removeAssignment(assignmentId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session?.user?.id) return err('Admins only')
+  const actor = await requireCapability('app.assign')
+  if (!actor) return err('Not allowed')
 
   const [existing] = await db.select().from(assignments).where(eq(assignments.id, assignmentId))
   if (!existing) return err('Assignment not found')
@@ -344,7 +342,7 @@ export async function removeAssignment(assignmentId: string): Promise<ActionResu
     openIntervalFromAssignment({
       assignmentId,
       changeKind: 'removed',
-      changedBy: session.user.id,
+      changedBy: actor.id,
       at,
       allocationPct: sql<number>`0`,
     }),
@@ -358,7 +356,7 @@ export async function removeAssignment(assignmentId: string): Promise<ActionResu
   const app = await slugForApp(existing.appId)
   const personName = await nameForUser(existing.userId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'unassigned',
     entityType: 'assignment',
     entityId: assignmentId,

@@ -9,6 +9,7 @@ import { apps, sprintCheckins, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 const checkinInput = z.object({
   sprintId: z.uuid(),
@@ -71,7 +72,7 @@ export async function upsertSprintCheckin(
   const parsed = checkinInput.safeParse({ sprintId, percent, note, targetUserId })
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   const subjectId = parsed.data.targetUserId ?? session.user.id
   const onBehalf = subjectId !== session.user.id
   if (onBehalf && !isAdmin) return err('You can only check in for yourself')
@@ -161,7 +162,7 @@ export async function deleteSprintCheckin(
 
   const subjectId = parsedTarget?.success ? parsedTarget.data : session.user.id
   const onBehalf = subjectId !== session.user.id
-  if (onBehalf && session.user.role !== 'admin') {
+  if (onBehalf && !isAdminRole(session.user.role)) {
     return err('Only an admin can clear someone else’s check-in')
   }
 

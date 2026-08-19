@@ -5,16 +5,14 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveSprints } from '@/db/live'
 import { apps, sprints } from '@/db/schema'
-import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { getBoard, type Board, type TaskWithAssignee } from '@/features/sprints/queries'
 import { NotionParentError, upsertSprintPage, type SprintExportData } from '@/features/notion/export'
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
+// other files. Every guard now names the capability it needs and the matrix
+// answers; the contract is unchanged (Actor on success, null on refusal).
 
 function columnItems(tasks: TaskWithAssignee[]) {
   return tasks.map((task) => ({ title: task.title, assignee: task.assignee?.name ?? null }))
@@ -40,7 +38,7 @@ function buildExportData(
 }
 
 export async function exportSprintToNotion(sprintId: string): Promise<ActionResult<{ pageUrl: string }>> {
-  if (!(await requireAdmin())) return err('Admins only')
+  if (!(await requireCapability('app.edit'))) return err('Admins only')
 
   const [sprint] = await db.select().from(liveSprints).where(eq(liveSprints.id, sprintId))
   if (!sprint) return err('Sprint not found')

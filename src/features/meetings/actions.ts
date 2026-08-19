@@ -34,6 +34,8 @@ import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
 import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
+import { can, type UserRole } from '@/features/auth/capabilities'
+import { loadActor } from '@/features/auth/actor'
 import { managesApp } from '@/features/apps/project-manager'
 
 /**
@@ -168,13 +170,27 @@ async function revalidateMeetingPaths(appId: string | null) {
 // Async now: the third branch reads the caller's assignment on the meeting's
 // app. Every call site MUST await — an un-awaited call returns a Promise,
 // which is truthy, which is "always allowed".
+const EMPTY: ReadonlySet<string> = new Set()
+
 async function canManageMeeting(
   session: { user: { id: string; role: string } },
   meeting: { createdBy: string; appId?: string | null },
 ): Promise<boolean> {
-  if (session.user.role === 'admin' || meeting.createdBy === session.user.id) return true
+  // Admin family and the creator both come from the matrix now: 'meeting.manage'
+  // is 'all' for superadmin/admin and 'own' against createdBy for everyone
+  // else. Written as a role string this silently went false for superadmin.
+  if (can({ id: session.user.id, role: session.user.role as UserRole, scopeAppIds: EMPTY },
+          'meeting.manage', { ownerId: meeting.createdBy })) return true
   // The app's PROJECT MANAGER manages its meetings (see project-manager.ts);
   // leads/architects stay reviewers and are deliberately not here.
+  //
+  // DELIBERATELY still managesApp rather than the matrix's scoped arm.
+  // managesApp regex-matches the free-text assignments.role string; the
+  // matrix resolves manager scope from app_role_history's structured pm/lead.
+  // They are not the same set, and swapping this arm would silently strip
+  // meeting management from every PM who holds the title in free text but has
+  // never been recorded as pm on the app. That migration is a separate,
+  // visible piece of work — not a side effect of a permission refactor.
   return managesApp(session.user.id, meeting.appId)
 }
 
@@ -897,6 +913,10 @@ export async function updateMeetingNotes(meetingId: string, notes: string): Prom
 export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
   const session = await requireSession()
   if (!session) return err('Sign in required')
+  // Scope resolved from the session; the matrix decides below, once the
+  // meeting is known and its app can be named.
+  const actor = await loadActor()
+  if (!actor) return err('Sign in required')
 
   const existing = await meetingById(meetingId)
   if (!existing) return err('Meeting not found')
@@ -905,7 +925,13 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
   // and calendar event with it, so it follows the workspace rule that
   // destroying things is an admin's call, organiser or not. (Tasks, sprints
   // and assignments already work this way.)
-  if (session.user.role !== 'admin') return err('Only an admin can delete meetings')
+  // 'meeting.delete' is 'all' for superadmin/admin, 'scoped' for manager, and
+  // NONE for editor and below — an editor's delete opens a change request
+  // instead of mutating. Written as a role string this both hid the action
+  // from superadmin and gave managers no route to it at all.
+  if (!can(actor, 'meeting.delete', { ownerId: existing.createdBy, appId: existing.appId })) {
+    return err('Not allowed to delete this meeting')
+  }
 
   if (existing.googleEventId) {
     // Best-effort: the calendar invite is cleanup, not the source of truth —

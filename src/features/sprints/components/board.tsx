@@ -42,6 +42,8 @@ import {
 } from '@/features/sprints/board-view'
 import { compareRanked, planInsert } from '@/features/sprints/task-rank'
 import type { Board as BoardData, TaskWithAssignee } from '@/features/sprints/queries'
+import type { UserRole } from '@/features/auth/capabilities'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 export type { TaskStatus }
 
@@ -115,7 +117,7 @@ export function Board({
   composerPeople: { id: string; name: string; onTeam: boolean }[]
   appId: string
   sprintId: string | null
-  currentUser: { id: string; role: 'admin' | 'member' }
+  currentUser: { id: string; role: UserRole }
 }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -538,7 +540,7 @@ export function Board({
       <TaskDialog
         task={editingTask}
         team={team}
-        isAdmin={currentUser.role === 'admin'}
+        isAdmin={isAdminRole(currentUser.role)}
         currentUserId={currentUser.id}
         sprintOptions={sprintOptions}
         sprintOptionsFailed={sprintOptionsFailed}

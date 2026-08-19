@@ -2,11 +2,30 @@ import { Suspense } from 'react'
 import { format } from 'date-fns'
 import { getSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
+import { LK_HOLIDAYS } from '@/lib/lk-holidays'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
+import { loadActor } from '@/features/auth/actor'
+import { can } from '@/features/auth/capabilities'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
-import { getMyWorklogs, getTeamWorklogs, getUserJoinDay } from '@/features/worklog/queries'
-import { MAX_BACKFILL_DAYS, missingWorkDays } from '@/features/worklog/missing-days'
-import { isHalfWorkingDay } from '@/lib/working-days'
+import {
+  DeclareAbsenceDialog,
+  type FiledAbsence,
+} from '@/features/worklog/components/declare-absence-dialog'
+import { PendingAbsenceList } from '@/features/worklog/components/pending-absence-list'
+import {
+  getMyApprovedAbsences,
+  getMyPendingAbsences,
+  getMyWorkSchedule,
+  getMyWorklogDays,
+  getMyWorklogs,
+  getOrgHolidayDays,
+  getTeamWorklogs,
+  getUserJoinDay,
+  type MyAbsence,
+} from '@/features/worklog/queries'
+import { computeCoverage } from '@/features/worklog/coverage'
+import { patternForDay } from '@/features/worklog/schedules'
+import { MAX_BACKFILL_DAYS } from '@/features/worklog/missing-days'
 import { resolveWorkDay, summarizeWorklogs, worklogDaysBack } from '@/features/worklog/worklog-day'
 
 export const metadata = { title: 'Work log' }
@@ -14,6 +33,14 @@ export const metadata = { title: 'Work log' }
 /** How much history the personal list shows, and how far the team view looks back. */
 const MY_DAYS = 14
 const TEAM_DAYS = 7
+
+/**
+ * How far back the catch-up panel computes coverage — the same safety bound
+ * missing-days.ts walked. Long enough to still find MAX_BACKFILL_DAYS owed
+ * days on the far side of a long absence, short enough that the window is a
+ * fixed cost however long somebody has been here.
+ */
+const CATCH_UP_WINDOW_DAYS = 120
 
 /**
  * "What did I do today, and how much of what I planned did I get through?"
@@ -46,10 +73,12 @@ export default async function WorklogPage() {
             renders only for somebody already behind, so a person who has never
             missed a day would never be told how the days are counted. */}
         <p className="text-2xs text-muted-foreground">
-          Sundays and gazetted public holidays are not counted; Saturdays are, as half days. Days
-          you missed wait above today&rsquo;s box, up to {MAX_BACKFILL_DAYS} at once. What you save
-          appears in your own list below, and in the team view that admins see. Only you can
-          write your entries — an admin can read them, but cannot log a day for you.
+          Gazetted public holidays and company holidays never count. Otherwise Monday to Friday are
+          whole days and Saturday is a half day, unless your own work schedule says different. Days
+          you missed wait above today&rsquo;s box, up to {MAX_BACKFILL_DAYS} at once; approved leave
+          is not one of them. What you save appears in your own list below, and in the team view
+          that admins see. Only you can write your entries — an admin can read them, but cannot log
+          a day for you.
         </p>
       </div>
 
@@ -81,70 +110,209 @@ export default async function WorklogPage() {
 }
 
 /**
- * Earlier days with no entry yet, each with its own box.
+ * Earlier days with no entry, and what the person has already said about them.
  *
- * Renders nothing when there are none — a permanently-present catch-up
- * panel showing zero is noise that teaches people to ignore the area where
- * the real prompt appears. Deliberately not styled as a warning: people take
- * leave and spend days on other work, and a blank day is not a fault. The
- * list is kept short by missing-days.ts (weekends and gazetted holidays
- * never counted, window starts at the join date, capped) so it is always
- * something somebody can deal with in one sitting.
+ * TWO groups, because "I have not dealt with this day" and "I have dealt with
+ * it and somebody else has not" are different states, and only the first is a
+ * to-do list:
+ *
+ *   owed, nothing filed        a box to log it in
+ *   filed, awaiting approval   named below, with its kind and its dates
+ *   approved                   gone from the panel — the day is not owed
+ *
+ * Which days are owed now comes from `computeCoverage` rather than
+ * `missingWorkDays`. Not because the older one broke — it still answers the
+ * question it was asked — but because coverage answers more: approved leave,
+ * company holidays and a person's own work schedule, each as a status per
+ * day. That is what lets ONE filter (`status === 'missing'`) drop exempt, off
+ * and not-yet-due days at once, today's own day included, by rule rather than
+ * by a special case for today.
+ *
+ * Renders nothing when both groups are empty — a permanently-present panel
+ * showing zero is noise that teaches people to ignore the area where the real
+ * prompt appears. Deliberately not styled as a warning: people take leave and
+ * spend days on other work, and a blank day is not a fault.
  */
 async function CatchUp({ userId, today }: { userId: string; today: string }) {
-  const [joinedOn, recent] = await Promise.all([
-    getUserJoinDay(userId),
-    getMyWorklogs(userId, MAX_BACKFILL_DAYS * 3),
-  ])
+  // Half-open [from, to), and `to` is tomorrow so today sits INSIDE the window
+  // and falls out of the gap list as `not-yet-due` — the same rule that drops
+  // a Sunday, rather than a special case that has to be remembered.
+  const from = shiftDay(today, -CATCH_UP_WINDOW_DAYS)
+  const to = shiftDay(today, 1)
+
+  const [actor, joinedOn, loggedDays, pending, approved, schedule, companyHolidays] =
+    await Promise.all([
+      loadActor(),
+      getUserJoinDay(userId),
+      getMyWorklogDays(userId, from, today),
+      getMyPendingAbsences(userId),
+      getMyApprovedAbsences(userId, from, today),
+      getMyWorkSchedule(userId),
+      getOrgHolidayDays(from, today),
+    ])
   if (!joinedOn) return null
 
-  const missing = missingWorkDays({
-    today,
+  const orgHolidays = new Set(companyHolidays)
+  const coverage = computeCoverage({
+    from,
+    to,
+    loggedDays: new Set(loggedDays),
+    // APPROVED ONLY, deliberately. A pending absence exempts nothing, so
+    // nobody can lower their own denominator by typing.
+    exemptDays: absenceDays(approved, from, to),
+    // LK_HOLIDAYS is the gazetted map working-days.ts reads; company holidays
+    // compose on top of it through the same callback, so a studio shutdown
+    // needs no deploy and no second definition of "holiday".
+    isHoliday: (iso) => iso in LK_HOLIDAYS || orgHolidays.has(iso),
+    patternFor: (iso) => patternForDay(schedule, iso),
     joinedOn,
-    logged: new Set(recent.map((row) => row.day)),
+    today,
   })
-  if (missing.length === 0) return null
+
+  // A day covered by a pending absence has been dealt with, so it leaves the
+  // gap list — but coverage still counts it missing, which is exactly why the
+  // second group below says so out loud instead of letting it disappear.
+  const filedDays = absenceDays(pending, from, to)
+  const gaps = coverage.days
+    .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
+    // The most recent MAX_BACKFILL_DAYS, oldest first — the same cap
+    // missing-days.ts applied, for the same reason: an unclearable backlog is
+    // indistinguishable from disengagement.
+    .slice(-MAX_BACKFILL_DAYS)
+
+  if (gaps.length === 0 && pending.length === 0) return null
+
+  // The same check createAbsence makes, so the control appears exactly when
+  // the action would accept it — a stakeholder or auditor is not offered a
+  // button whose only possible answer is "Not allowed".
+  const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
+  // What a new absence could clash with. The server checks this again against
+  // every row; this set is only what the panel loaded, and exists so the
+  // common clash can be named before the roundtrip.
+  const filed: FiledAbsence[] = [
+    ...pending.map((row) => ({
+      startDate: row.startDate,
+      endDate: row.endDate,
+      kind: row.kind,
+      status: 'pending' as const,
+    })),
+    ...approved.map((row) => ({
+      startDate: row.startDate,
+      endDate: row.endDate,
+      kind: row.kind,
+      status: 'approved' as const,
+    })),
+  ]
+  // Every day in the window that is a working day for this person, whatever
+  // its status — today's included, so declaring leave for today is not
+  // mistaken for a no-op. A range containing none of them exempts nothing.
+  const owedDays = coverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
 
   return (
-    <section className="flex flex-col gap-3 rounded-xl border bg-muted/40 p-4">
-      <div className="flex flex-col gap-0.5">
-        <h2 className="font-heading text-sm font-semibold">
-          {missing.length === 1
-            ? '1 earlier day has no entry'
-            : `${missing.length} earlier days have no entry`}
-        </h2>
-        {/* How the days are counted is stated under the page header, so it is
-            not repeated here. */}
-        <p className="text-2xs text-muted-foreground">
-          Fill in the ones you worked. For a day of leave, a day off, or a day on another
-          project, log it as that — a day leaves this list once it has an entry, whatever the
-          entry says.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-3">
-        {missing.map((day) => (
-          <div key={day} className="flex flex-col gap-1.5">
-            <h3 className="flex items-baseline gap-2 font-mono text-xs tabular-nums text-muted-foreground">
-              {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
-              {/* Saturdays are half days here, and the percentage means "of
-                  what I planned" — so saying which days are half is what
-                  keeps a full Saturday from reading as an under-delivered
-                  weekday. */}
-              {isHalfWorkingDay(day) ? (
-                <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
-                  Half day
-                </span>
+    <section className="flex flex-col gap-4 rounded-xl border bg-muted/40 p-4">
+      {gaps.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="font-heading text-sm font-semibold">
+              {gaps.length === 1
+                ? '1 earlier day has no entry'
+                : `${gaps.length} earlier days have no entry`}
+            </h2>
+            {/* How the days are counted is stated under the page header, so it
+                is not repeated here. */}
+            <p className="text-2xs text-muted-foreground">
+              Fill in the ones you worked.
+              {canDeclare ? (
+                <>
+                  {' '}
+                  If you were not working — leave, sick, training, a day on another project —
+                  say so with{' '}
+                  <span className="font-medium text-foreground">Not a working day</span> rather
+                  than writing an entry for work that did not happen.
+                </>
               ) : null}
-            </h3>
-            {/* Draft with AI reads that day's own activity, so a forgotten
-                Tuesday is still recoverable from what LogPup saw. */}
-            <WorklogForm day={day} initial={null} />
+            </p>
           </div>
-        ))}
-      </div>
+
+          <div className="flex flex-col gap-3">
+            {gaps.map(({ day, fraction }) => (
+              <div key={day} className="flex flex-col gap-1.5">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="flex items-baseline gap-2 font-mono text-xs tabular-nums text-muted-foreground">
+                    {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
+                    {/* The fraction coverage already worked out for this
+                        person, not the studio default: the percentage means
+                        "of what I planned", so a half day has to be named or
+                        a full Saturday reads as an under-delivered weekday. */}
+                    {fraction === 0.5 ? (
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
+                        Half day
+                      </span>
+                    ) : null}
+                  </h3>
+                  {canDeclare ? (
+                    <DeclareAbsenceDialog
+                      day={day}
+                      filed={filed}
+                      owedDays={owedDays}
+                      knownFrom={from}
+                      knownTo={to}
+                    />
+                  ) : null}
+                </div>
+                {/* Draft with AI reads that day's own activity, so a forgotten
+                    Tuesday is still recoverable from what LogPup saw. */}
+                <WorklogForm day={day} initial={null} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {pending.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="font-heading text-sm font-semibold">Filed, waiting on approval</h2>
+            <p className="text-2xs text-muted-foreground">
+              Waiting on approval — a day still counts as unlogged until it&rsquo;s approved. It
+              left the list above because you have dealt with it, not because it has stopped
+              counting.
+            </p>
+          </div>
+          <PendingAbsenceList absences={pending} />
+        </div>
+      ) : null}
     </section>
   )
+}
+
+/**
+ * One ISO day, `days` steps away. Anchored at midday for the same reason
+ * worklog-day.ts and coverage.ts are: at ±05:30 no other hour survives a step
+ * across a date boundary intact. Calendar arithmetic only — which days are
+ * working days is decided in working-days.ts and nowhere else.
+ */
+function shiftDay(iso: string, days: number): string {
+  const cursor = new Date(`${iso}T12:00:00Z`)
+  cursor.setUTCDate(cursor.getUTCDate() + days)
+  return cursor.toISOString().slice(0, 10)
+}
+
+/**
+ * Every day an absence covers that falls inside the half-open window
+ * `[from, to)`.
+ *
+ * An absence's own bounds are INCLUSIVE on both ends — they are dates a person
+ * stated in words — so the two conventions are clipped against each other in
+ * exactly one place rather than wherever a day could be gained or lost.
+ */
+function absenceDays(ranges: readonly MyAbsence[], from: string, to: string): Set<string> {
+  const days = new Set<string>()
+  for (const range of ranges) {
+    let day = range.startDate < from ? from : range.startDate
+    for (; day <= range.endDate && day < to; day = shiftDay(day, 1)) days.add(day)
+  }
+  return days
 }
 
 async function TodayEntry({ userId, today }: { userId: string; today: string }) {

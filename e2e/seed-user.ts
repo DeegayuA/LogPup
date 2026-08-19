@@ -6,8 +6,9 @@ import './env'
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
+import type { UserRole } from '@/features/auth/capabilities'
 
-export type SeedResult = { id: string; email: string; role: 'admin' | 'member'; created: boolean }
+export type SeedResult = { id: string; email: string; role: UserRole; created: boolean }
 
 /**
  * Insert-or-ignore the E2E/dev-login admin user. The credentials auth

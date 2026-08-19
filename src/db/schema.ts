@@ -5,7 +5,23 @@ import {
   index, uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
 
-export const userRole = pgEnum('user_role', ['admin', 'member'])
+// The seven seats. Additive over the original admin|member: existing rows keep
+// their value and their meaning until 0039 remaps admin -> superadmin, which
+// is capability-preserving (today's admin can clear the database, so the
+// faithful destination is the seat that still can).
+//
+// NOT A LADDER. Nothing compares two roles — capability lives in one matrix,
+// src/features/auth/capabilities.ts, keyed by (action, role). A `role >= X`
+// comparison anywhere is a bug, which is why there is no ordering to compare.
+export const userRole = pgEnum('user_role', [
+  'superadmin',
+  'admin',
+  'manager',
+  'editor',
+  'member',
+  'stakeholder',
+  'auditor',
+])
 // Open self-signup + admin approval. New rows default to 'pending' — the
 // jwt/session gate (src/lib/auth.ts, src/proxy.ts) lets a pending user hold a
 // session (so they can complete onboarding at /pending) but blocks every
@@ -14,6 +30,18 @@ export const userRole = pgEnum('user_role', ['admin', 'member'])
 // the status column is what /pending shows to explain that.
 export const userStatus = pgEnum('user_status', ['pending', 'approved', 'rejected'])
 export const appStatus = pgEnum('app_status', ['active', 'paused', 'archived'])
+// Approval-gated edits. A change request closes by STATUS, never by deletion:
+// 'withdrawn' is the requester closing their own, 'rejected' is a reviewer
+// declining it. The row IS the audit trail, so there is nothing here a Trash
+// bin should hold and no deleted_at to add.
+export const changeRequestStatus = pgEnum('change_request_status', ['pending', 'approved', 'rejected', 'withdrawn'])
+export const changeRequestOp = pgEnum('change_request_op', ['edit', 'delete', 'restore'])
+// Why a person owed no work on a day. 'other_project' and 'no_work_assigned'
+// are deliberately in here: both are real answers to "why is there no log",
+// and both are the studio's problem rather than the person's, so neither may
+// count against them.
+export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other'])
+export const absenceStatus = pgEnum('absence_status', ['pending', 'approved', 'rejected', 'withdrawn'])
 // The two roles app_role_history tracks as-of intervals for. Closed set, like
 // every other "kind" column in this file, hence a pg enum rather than free
 // text (contrast assignments.role / assignmentHistory.role, which are
@@ -973,3 +1001,150 @@ export const webauthnLoginTokens = pgTable('webauthn_login_tokens', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   usedAt: timestamp('used_at', { withTimezone: true }),
 })
+
+// ---------------------------------------------------------------------------
+// RBAC, approvals and non-daily logging (migrations 0037-0039)
+// ---------------------------------------------------------------------------
+
+/** One weekday's share of a working day. 1 = full, 0.5 = half, 0 = not owed. */
+export type SchedulePattern = {
+  mon: number; tue: number; wed: number; thu: number
+  fri: number; sat: number; sun: number
+}
+
+// Every proposal, in both directions, in one table.
+//
+// An editor may not delete and may not edit outside their window; instead of
+// refusing outright, those paths open a row here and a reviewer signs it. The
+// middle state between "permitted" and "refused" is the whole point.
+//
+// payload is { before, after }. `before` is the pre-image captured when the
+// request was filed, and it is what makes stale-approval detection possible at
+// all: none of the target tables carries an updated_at to compare against, so
+// the applier diffs field by field against this and refuses loudly rather than
+// clobbering a newer value.
+//
+// CLOSES BY STATUS — see the enum comment above. No deleted_at, deliberately.
+export const changeRequests = pgTable('change_requests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  requesterId: uuid('requester_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  entityType: text('entity_type').notNull(),
+  entityId: uuid('entity_id').notNull(),
+  entityLabel: text('entity_label').notNull(),
+  operation: changeRequestOp('operation').notNull(),
+  payload: jsonb('payload').$type<{ before: Record<string, unknown>; after: Record<string, unknown> }>().notNull(),
+  reason: text('reason').notNull(),
+  status: changeRequestStatus('status').notNull().default('pending'),
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'cascade' }),
+  reviewerId: uuid('reviewer_id').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewNote: text('review_note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // The approvals inbox: pending, oldest first.
+  index('change_requests_status_created_idx').on(t.status, t.createdAt),
+  // "What has been proposed against this row" — the per-entity trail.
+  index('change_requests_entity_idx').on(t.entityType, t.entityId),
+  index('change_requests_requester_idx').on(t.requesterId, t.createdAt),
+])
+
+// What a person is expected to log, effective-dated.
+//
+// A row exists ONLY for someone who deviates from the studio default (Mon-Fri
+// full, Saturday half, Sunday none), which keeps living in exactly one place,
+// src/lib/working-days.ts. No row means the default, so this table stays
+// near-empty for a normal team and the default never forks.
+//
+// CLOSES BY effective_to, the same half-open [from, to) as appRoleHistory:
+// moving someone to part-time in June must not rewrite what was expected of
+// them in May, which is exactly what an in-place update would do.
+export const workSchedules = pgTable('work_schedules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  pattern: jsonb('pattern').$type<SchedulePattern>().notNull(),
+  effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull().defaultNow(),
+  effectiveTo: timestamp('effective_to', { withTimezone: true }),
+  changedBy: uuid('changed_by').notNull().references(() => users.id),
+  note: text('note'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('work_schedules_user_from_idx').on(t.userId, t.effectiveFrom),
+  // THE INVARIANT, same guard as app_role_history_one_open_idx: at most one
+  // open schedule per person. Two open rows would make "what was expected of
+  // them on 12 June" ambiguous, which is the one question coverage answers.
+  uniqueIndex('work_schedules_one_open_idx')
+    .on(t.userId)
+    .where(sql`${t.effectiveTo} is null`),
+])
+
+// Why a person owed no work on a range of days.
+//
+// Both bounds are INCLUSIVE — deliberately unlike the half-open intervals
+// above. These are dates a person states in words ("I am out Monday to
+// Wednesday"), not machine intervals, and an exclusive end is the classic
+// off-by-one in exactly that translation.
+//
+// Retroactive with no limit: filing leave for a past date is valid, and
+// approval flips those days to exempt immediately even if a report already
+// counted them missing. Coverage is truth-as-currently-known, never a frozen
+// snapshot.
+//
+// CLOSES BY STATUS. Overlap between approved rows is prevented in
+// absence-actions.ts rather than by an EXCLUDE constraint, which would need
+// btree_gist — unverified on this Neon instance, and a failed extension
+// install mid-migration is worse than an application check with a test.
+export const absences = pgTable('absences', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  startDate: date('start_date').notNull(),
+  endDate: date('end_date').notNull(),
+  kind: absenceKind('kind').notNull(),
+  reason: text('reason'),
+  status: absenceStatus('status').notNull().default('pending'),
+  reviewerId: uuid('reviewer_id').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewNote: text('review_note'),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('absences_user_start_idx').on(t.userId, t.startDate),
+  index('absences_status_start_idx').on(t.status, t.startDate),
+])
+
+// Company shutdown days, composed on top of the gazetted map through the same
+// isHoliday callback working-days.ts already takes. A company holiday used to
+// require a deploy; now it does not.
+//
+// REVOKED BY DELETE. A cancelled company holiday did not happen, and a
+// tombstone would make every coverage read filter for it forever. Named in
+// live.test.ts's DELETE_ALLOWED_FUNCTIONS with that rationale.
+export const orgHolidays = pgTable('org_holidays', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  day: date('day').notNull().unique(),
+  name: text('name').notNull(),
+  note: text('note'),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+// The stakeholder seat's reach: explicit, per-app, read-only.
+//
+// Deliberately not assignments — a client is not allocated to the project,
+// they are permitted to look at it, and conflating the two would put them in
+// capacity maths they have no business being in.
+//
+// REVOKED BY DELETE, for the same reason webauthn_credentials is exempted
+// from the soft-delete rule: this is an access key. A restorable grant is a
+// key that can come back from the dead, so revocation must be absolute.
+export const appGrants = pgTable('app_grants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  grantedBy: uuid('granted_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('app_grants_user_app_unique').on(t.userId, t.appId),
+  index('app_grants_user_idx').on(t.userId),
+])

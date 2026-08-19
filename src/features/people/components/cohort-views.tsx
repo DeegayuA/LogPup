@@ -1,0 +1,701 @@
+import Link from 'next/link'
+import { CalendarDays, Crown, LayersIcon, Link2, UsersIcon } from 'lucide-react'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+import { can, type Actor } from '@/features/auth/capabilities'
+import { dayDiff, sprintDayProgress } from '@/features/apps/app-health'
+import { HealthDot } from '@/features/apps/components/health-dot'
+import { eventDotClasses } from '@/features/meetings/event-color'
+import { SectionEmpty } from '@/features/people/components/section-empty'
+import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
+import { peopleHref, type CohortParams } from '@/features/people/cohort-params'
+import {
+  showsNumbers,
+  type CohortMember,
+  type NumberAccess,
+  type OverlapReport,
+  type ProjectCohort,
+  type SharedPerson,
+} from '@/features/people/cohorts'
+import type { AppPortfolioEntry } from '@/features/apps/queries'
+
+/**
+ * The three cohort views on /people — "By project", "Shared" and "Overlap".
+ *
+ * ALL SERVER COMPONENTS. Every one of them is a read, and the page's whole
+ * interactivity is the URL (cohort-params.ts), so nothing here ships to the
+ * browser. They render from two reads the page already makes — the capacity
+ * list and, for the project view only, the portfolio — folded into cohorts by
+ * features/people/cohorts.ts. There is no query in this file and no query per
+ * project or per person anywhere behind it.
+ *
+ * THE SHARED DISCIPLINE, same as history-views.tsx: nothing on screen may say
+ * more than the data behind it supports. A percentage the reader is not
+ * cleared to see is absent, not blurred; a sort order is named by what it
+ * actually sorted on; a health verdict is the one app-health.ts computed, never
+ * a second opinion assembled here.
+ */
+
+const linkFocus =
+  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring'
+
+/** The app's identity hue — one system, event-color.ts, everywhere it is named. */
+function ProjectDot({ appId }: { appId: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'size-2 shrink-0 rounded-full',
+        eventDotClasses(appId) ?? 'bg-muted-foreground/50',
+      )}
+    />
+  )
+}
+
+function PersonLink({
+  userId,
+  name,
+  title,
+  avatarUrl,
+}: {
+  userId: string
+  name: string
+  title: string | null
+  avatarUrl: string | null
+}) {
+  return (
+    <Link
+      href={`/people/${userId}`}
+      className={cn('flex min-w-0 items-center gap-2 rounded-md hover:underline', linkFocus)}
+    >
+      <Avatar className="size-7 shrink-0">
+        {avatarUrl ? <AvatarImage src={avatarUrl} alt="" /> : null}
+        <AvatarFallback>{name.slice(0, 1).toUpperCase()}</AvatarFallback>
+      </Avatar>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-sm font-medium">{name}</span>
+        {title ? <span className="truncate text-2xs text-muted-foreground">{title}</span> : null}
+      </span>
+    </Link>
+  )
+}
+
+/**
+ * A member row: who they are, what they are called on this project, and — only
+ * where the viewer is cleared for it — how much of them the project has.
+ *
+ * When the number is withheld the row does not leave a gap or a dash where it
+ * would have been: an em-dash in a percentage column reads as "zero" or
+ * "unknown", and it is neither. The row simply ends at the role, and the notice
+ * above the list is what explains why.
+ */
+function MemberRow({ member, showPct }: { member: CohortMember; showPct: boolean }) {
+  return (
+    <li className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+      <PersonLink
+        userId={member.userId}
+        name={member.name}
+        title={member.title}
+        avatarUrl={member.avatarUrl}
+      />
+      <span className="ml-auto flex shrink-0 items-center gap-3">
+        {member.role ? (
+          <span className="text-xs text-muted-foreground">{member.role}</span>
+        ) : null}
+        {showPct ? (
+          <span className={cn(PCT_CLASS, 'text-xs text-foreground')}>
+            {formatPct(member.allocationPct)}
+          </span>
+        ) : null}
+      </span>
+    </li>
+  )
+}
+
+/**
+ * Says, on screen, that the page is showing less than it holds.
+ *
+ * Rendered from what is ACTUALLY on this screen — the count of projects whose
+ * numbers were rendered, out of the count listed — rather than from the
+ * viewer's role, so the sentence cannot drift away from the page under it. It
+ * is deliberately not an error or a warning: being scoped is the normal state
+ * for most seats, and the view still answers the question it is for.
+ */
+function ScopedNotice({ access, visible, total }: { access: NumberAccess; visible: number; total: number }) {
+  if (access.all) return null
+  return (
+    <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+      {visible > 0 ? (
+        <>
+          Scoped view — allocation percentages are shown for the {visible} of {total} project
+          {total === 1 ? '' : 's'} you are assigned to or run. The rest show names and roles only.
+        </>
+      ) : (
+        <>
+          Scoped view — this page shows who is on what, in names and roles. Allocation percentages
+          follow the same access as a person&rsquo;s detail page, which you do not have for these
+          projects.
+        </>
+      )}
+    </p>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// By project
+// ---------------------------------------------------------------------------
+
+/**
+ * The sprint sentence under a project's name.
+ *
+ * `sprintDayProgress` is imported from app-health.ts, the module that already
+ * owns sprint arithmetic for the portfolio, so "day 6 of 10" means the same
+ * thing here as it does on /apps. `today` is the caller's Asia/Colombo day —
+ * never `new Date()` in this file, which renders on a UTC server.
+ */
+function SprintLine({ stats, todayIso }: { stats: AppPortfolioEntry['stats']; todayIso: string }) {
+  const current = stats.currentSprint
+  if (current) {
+    const progress = sprintDayProgress(current.startDate, current.endDate, todayIso)
+    // `dayDiff` rather than the progress fields for the upcoming case:
+    // `elapsedDays` is clamped to 0 before a sprint starts, so it cannot say
+    // how far off the start is. This branch is reachable because
+    // `pickCurrentSprint` trusts `isSprintRunningNow`, which can name a sprint
+    // marked active before its start date.
+    const untilStart = dayDiff(todayIso, current.startDate)
+    const overdueDays = -progress.remainingDays
+    const tail =
+      progress.phase === 'ended'
+        ? `ended ${overdueDays} day${overdueDays === 1 ? '' : 's'} ago and is still open`
+        : progress.phase === 'upcoming'
+          ? `starts in ${untilStart} day${untilStart === 1 ? '' : 's'}`
+          : `day ${progress.elapsedDays} of ${progress.totalDays}`
+    return (
+      <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <CalendarDays className="size-3 shrink-0" aria-hidden />
+        <span className="truncate text-foreground">{current.name}</span>
+        <span aria-hidden>·</span>
+        <span className="shrink-0">{tail}</span>
+      </span>
+    )
+  }
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <CalendarDays className="size-3 shrink-0" aria-hidden />
+      {stats.nextSprint ? (
+        <>
+          <span className="shrink-0">No sprint running · next is</span>
+          <span className="truncate text-foreground">{stats.nextSprint.name}</span>
+        </>
+      ) : (
+        <span>No sprint running, and none planned</span>
+      )}
+    </span>
+  )
+}
+
+export function ProjectCohortList({
+  apps,
+  cohorts,
+  access,
+  actor,
+  todayIso,
+}: {
+  /** Every project, from the portfolio read — including the ones with nobody on them. */
+  apps: AppPortfolioEntry[]
+  /** Who is on each project, keyed by app id. */
+  cohorts: Map<string, ProjectCohort>
+  access: NumberAccess
+  /** Only used to decide whether an empty state may offer its action. */
+  actor: Actor | null
+  todayIso: string
+}) {
+  if (apps.length === 0) {
+    return (
+      <Card>
+        <SectionEmpty
+          icon={LayersIcon}
+          title="No projects yet."
+          hint="Projects are what group people here — once one exists, everyone on it appears as a team."
+          action={
+            // Offered only to someone who can actually create one. An admin-only
+            // button under a member's empty state is a dead end wearing the
+            // costume of a next step.
+            actor && can(actor, 'app.create') ? (
+              <Button variant="outline" size="sm" render={<Link href="/apps" />}>
+                Go to projects
+              </Button>
+            ) : undefined
+          }
+        />
+      </Card>
+    )
+  }
+
+  const visible = apps.filter((app) => showsNumbers(access, app.id)).length
+
+  return (
+    <div className="flex flex-col gap-3">
+      <ScopedNotice access={access} visible={visible} total={apps.length} />
+      {apps.map((app) => {
+        const members = cohorts.get(app.id)?.members ?? []
+        const showPct = showsNumbers(access, app.id)
+        return (
+          <Card key={app.id}>
+            <CardHeader>
+              <CardTitle className="flex min-w-0 items-center gap-2">
+                <ProjectDot appId={app.id} />
+                <Link href={`/apps/${app.slug}`} className={cn('truncate hover:underline', linkFocus)}>
+                  {app.name}
+                </Link>
+              </CardTitle>
+              <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {/* PM and lead by NAME, from apps.pm_id / apps.lead_id — the
+                    structural columns, not a guess from anybody's free-text
+                    assignment role. A project always has a PM (pm_id is NOT
+                    NULL); a lead is optional, and "No lead" is a real answer
+                    the health verdict already counts against it. */}
+                <span className="flex items-center gap-1.5">
+                  <Crown className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="text-muted-foreground">PM</span>
+                  <span className="text-foreground">{app.pmName ?? 'Unknown'}</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Lead</span>
+                  <span className={app.leadName ? 'text-foreground' : undefined}>
+                    {app.leadName ?? 'No lead'}
+                  </span>
+                </span>
+                <SprintLine stats={app.stats} todayIso={todayIso} />
+              </CardDescription>
+              <CardAction>
+                {/* The verdict app-health.ts computed for the portfolio, passed
+                    through untouched. Recomputing it here — even with the same
+                    weights — would give /people its own opinion of "at risk",
+                    and two red dots that can disagree are worse than one. */}
+                <HealthDot health={app.health} />
+              </CardAction>
+            </CardHeader>
+            {/* SectionEmpty IS a CardContent (see section-empty.tsx), so it
+                stands in place of one rather than inside it. */}
+            {members.length === 0 ? (
+              <SectionEmpty
+                icon={UsersIcon}
+                title="Nobody is assigned."
+                hint="Nobody on the current roster holds an allocation on this project."
+                action={
+                  actor && can(actor, 'app.assign', { appId: app.id }) ? (
+                    <Button variant="outline" size="sm" render={<Link href={`/apps/${app.slug}`} />}>
+                      Assign people
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <CardContent>
+                <ul className="flex flex-col divide-y divide-border">
+                  {members.map((member) => (
+                    <MemberRow key={member.userId} member={member} showPct={showPct} />
+                  ))}
+                </ul>
+              </CardContent>
+            )}
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Shared
+// ---------------------------------------------------------------------------
+
+/**
+ * People carrying more than one project.
+ *
+ * The two things it has to get right: the SPLIT (which projects, and how much
+ * of them each one has) and the ORDER. The order is named in the description
+ * because it changes with what the reader may see — ranked by how evenly
+ * someone is split where the percentages are on screen, and by how many
+ * projects they are on where they are not. A list ranked on a number nobody
+ * can see is a list nobody can check.
+ */
+export function SharedPeopleList({
+  rows,
+  access,
+  params,
+  rankBySplit,
+}: {
+  rows: SharedPerson[]
+  access: NumberAccess
+  params: CohortParams
+  /** True when every number behind the ranking is on screen — see cohorts.ts. */
+  rankBySplit: boolean
+}) {
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <SectionEmpty
+          icon={UsersIcon}
+          title="Nobody is on more than one project."
+          hint="Everyone on the roster carries at most one project, so there is no split to show."
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              render={<Link href={peopleHref(params, { view: 'projects' })} />}
+            >
+              See the projects
+            </Button>
+          }
+        />
+      </Card>
+    )
+  }
+
+  // Counted over the projects actually named by the rows below, so the notice
+  // describes this list rather than the workspace.
+  const listed = new Set(rows.flatMap((row) => row.projects.map((project) => project.appId)))
+  const visible = [...listed].filter((appId) => showsNumbers(access, appId)).length
+
+  return (
+    <div className="flex flex-col gap-3">
+      <ScopedNotice access={access} visible={visible} total={listed.size} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Shared across projects</CardTitle>
+          <CardDescription>
+            {rankBySplit
+              ? 'Most evenly split first — the people with no single project holding most of their time.'
+              : 'Most projects first. Ranking by how evenly the time is split needs the allocation percentages, which are not shown here.'}
+          </CardDescription>
+          <CardAction>
+            <span className={cn(PCT_CLASS, 'text-xs text-muted-foreground')}>
+              {rows.length} {rows.length === 1 ? 'person' : 'people'}
+            </span>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <ul className="flex flex-col divide-y divide-border">
+            {rows.map((row) => (
+              <li key={row.person.user.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0">
+                <PersonLink
+                  userId={row.person.user.id}
+                  name={row.person.user.name}
+                  title={row.person.user.title}
+                  avatarUrl={row.person.user.avatarUrl}
+                />
+                <span className="flex min-w-0 flex-1 basis-64 flex-wrap items-center gap-1.5">
+                  {row.projects.map((project) => (
+                    <span
+                      key={project.appId}
+                      className="inline-flex min-w-0 items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-1.5 py-0.5 text-xs"
+                    >
+                      <ProjectDot appId={project.appId} />
+                      <span className="truncate text-foreground">{project.appName}</span>
+                      {showsNumbers(access, project.appId) ? (
+                        <span className={cn(PCT_CLASS, 'shrink-0')}>
+                          {formatPct(project.allocationPct)}
+                        </span>
+                      ) : null}
+                    </span>
+                  ))}
+                </span>
+                <span className="ml-auto flex shrink-0 items-center gap-2">
+                  {/* The judgement, and only where every number behind it is
+                      visible. It states the test it applied rather than a grade:
+                      three or more projects, none of them holding half the
+                      person. A reader can check it against the chips alongside. */}
+                  {access.all && row.noAnchor ? (
+                    <Badge variant="outline" className="border-warning text-foreground">
+                      No project has half their time
+                    </Badge>
+                  ) : null}
+                  <span className={cn(PCT_CLASS, 'text-xs text-muted-foreground')}>
+                    {row.projectCount} projects
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Overlap
+// ---------------------------------------------------------------------------
+
+/** The anchor picker: one link per project that has anybody on it. */
+function OverlapPicker({
+  cohorts,
+  anchorAppId,
+  params,
+}: {
+  cohorts: ProjectCohort[]
+  anchorAppId: string
+  params: CohortParams
+}) {
+  return (
+    <nav aria-label="Anchor project" className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted-foreground">Overlap with</span>
+      {cohorts.map((cohort) => (
+        <Button
+          key={cohort.appId}
+          variant={cohort.appId === anchorAppId ? 'secondary' : 'outline'}
+          size="sm"
+          aria-current={cohort.appId === anchorAppId ? 'page' : undefined}
+          render={<Link href={peopleHref(params, { view: 'overlap', project: cohort.slug })} />}
+        >
+          <ProjectDot appId={cohort.appId} />
+          {cohort.name}
+        </Button>
+      ))}
+    </nav>
+  )
+}
+
+export function ProjectOverlapView({
+  cohorts,
+  report,
+  access,
+  params,
+  unknownProject,
+}: {
+  /** Every project with at least one person — the pickable set. */
+  cohorts: ProjectCohort[]
+  /** Null only when nobody is on any project at all. */
+  report: OverlapReport | null
+  access: NumberAccess
+  params: CohortParams
+  /**
+   * A `project` param that matched no project WITH PEOPLE ON IT — an unknown
+   * slug, or a real project everybody has since left. Either way the first
+   * project is shown instead and the view says so.
+   */
+  unknownProject: boolean
+}) {
+  if (!report) {
+    return (
+      <Card>
+        <SectionEmpty
+          icon={Link2}
+          title="No project has anybody on it yet."
+          hint="Overlap is people two projects have in common, so it needs at least one project with a team."
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              render={<Link href={peopleHref(params, { view: 'projects' })} />}
+            >
+              See the projects
+            </Button>
+          }
+        />
+      </Card>
+    )
+  }
+
+  const { anchor, overlaps } = report
+  // The projects this view can actually name: the anchor and the ones that
+  // share people with it. Nothing else is on screen, so nothing else is
+  // counted in the notice.
+  const listed = [anchor, ...overlaps.map((overlap) => overlap.project)]
+  const visible = listed.filter((cohort) => showsNumbers(access, cohort.appId)).length
+
+  return (
+    <div className="flex flex-col gap-3">
+      {unknownProject ? (
+        // Said plainly rather than 404ing, because the link may simply predate
+        // the last person leaving that project — the same rule the capacity
+        // history's as-of picker follows for an unreadable date.
+        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          No project with anybody on it matched that link, so {anchor.name} is shown instead.
+        </p>
+      ) : null}
+
+      <OverlapPicker cohorts={cohorts} anchorAppId={anchor.appId} params={params} />
+
+      <ScopedNotice access={access} visible={visible} total={listed.length} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex min-w-0 items-center gap-2">
+            <ProjectDot appId={anchor.appId} />
+            <Link href={`/apps/${anchor.slug}`} className={cn('truncate hover:underline', linkFocus)}>
+              {anchor.name}
+            </Link>
+          </CardTitle>
+          <CardDescription>
+            {anchor.members.length} {anchor.members.length === 1 ? 'person' : 'people'} on it.{' '}
+            {overlaps.length > 0
+              ? `${overlaps.length} other ${overlaps.length === 1 ? 'project shares' : 'projects share'} at least one of them.`
+              : 'Nobody on it is on another project.'}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="flex flex-col divide-y divide-border">
+            {anchor.members.map((member) => (
+              <MemberRow
+                key={member.userId}
+                member={member}
+                showPct={showsNumbers(access, anchor.appId)}
+              />
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+
+      {overlaps.length === 0 ? (
+        <Card>
+          <SectionEmpty
+            icon={Link2}
+            title={`Nothing overlaps ${anchor.name}.`}
+            hint="Everyone on it works only on it, so a session about this project needs nobody else in the room."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                render={<Link href={peopleHref(params, { view: 'shared' })} />}
+              >
+                See who is shared elsewhere
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
+        overlaps.map((overlap) => (
+          <Card key={overlap.project.appId}>
+            <CardHeader>
+              <CardTitle className="flex min-w-0 items-center gap-2">
+                <ProjectDot appId={overlap.project.appId} />
+                <Link
+                  href={`/apps/${overlap.project.slug}`}
+                  className={cn('truncate hover:underline', linkFocus)}
+                >
+                  {overlap.project.name}
+                </Link>
+              </CardTitle>
+              <CardDescription>
+                {/* roomSize is |anchor ∪ other|, and it is said as exactly that:
+                    the number of distinct people a session covering both
+                    projects would have to include. It is not a recommendation
+                    and not a meeting — this page cannot schedule one. */}
+                {overlap.shared.length} shared with {anchor.name} · {overlap.roomSize} people
+                between the two projects
+              </CardDescription>
+              <CardAction>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  render={
+                    <Link href={peopleHref(params, { view: 'overlap', project: overlap.project.slug })} />
+                  }
+                >
+                  Anchor here
+                </Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              <ul className="flex flex-col divide-y divide-border">
+                {/* The allocation shown is the one on THIS project — the
+                    anchor's own figure is on the card above, and showing both
+                    on one row invites reading them as a single number. */}
+                {overlap.shared.map((member) => (
+                  <MemberRow
+                    key={member.userId}
+                    member={member}
+                    showPct={showsNumbers(access, overlap.project.appId)}
+                  />
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        ))
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+
+const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
+
+/**
+ * Stands in for the DATA only. The page's title and the view switch above it
+ * are rendered for real from the URL before anything is awaited, so a skeleton
+ * covering them would replace a working control with a grey box the moment
+ * somebody used it.
+ */
+export function CohortDataSkeleton() {
+  return (
+    <>
+      <span className="sr-only" role="status">
+        Loading cohorts
+      </span>
+      <div className="flex flex-col gap-3" aria-hidden>
+        {[0, 1, 2].map((card) => (
+          <div key={card} className={cn(shimmer, 'h-44')} />
+        ))}
+      </div>
+    </>
+  )
+}
+
+/**
+ * The directory's own stand-in, mirroring what it actually renders — stat
+ * strip, filter row, dense row list — so the switch back to "People" holds the
+ * same shape it is about to fill rather than three generic blocks.
+ *
+ * Deliberately a sibling of the route's loading.tsx rather than a shared
+ * export: that file covers COLD entry, where the header is shimmer too, and
+ * this one stands in only while the page's own Suspense boundary resolves,
+ * with the real header and view switch already on screen above it.
+ */
+export function DirectoryDataSkeleton() {
+  return (
+    <>
+      <span className="sr-only" role="status">
+        Loading people
+      </span>
+      <div className="flex flex-col gap-3" aria-hidden>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[0, 1, 2, 3].map((tile) => (
+            <div key={tile} className="flex flex-col gap-1.5 rounded-xl border bg-card p-3">
+              <div className={cn(shimmer, 'h-6 w-12')} />
+              <div className={cn(shimmer, 'h-3 w-20')} />
+            </div>
+          ))}
+        </div>
+        <div className={cn(shimmer, 'h-9 w-full max-w-xs rounded-lg')} />
+        <div className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((row) => (
+            <div key={row} className="flex items-center gap-4 px-4 py-3">
+              <div className={cn(shimmer, 'size-8 shrink-0 rounded-full')} />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <div className={cn(shimmer, 'h-4 w-32')} />
+                <div className={cn(shimmer, 'h-3 w-24')} />
+              </div>
+              <div className={cn(shimmer, 'h-2 w-40 shrink-0 rounded-full')} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}

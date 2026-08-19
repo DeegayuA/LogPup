@@ -10,6 +10,7 @@ import { summarizeMeetings } from '@/features/meetings/components/meeting-glance
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingsViews } from '@/features/meetings/components/meetings-views'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 export default async function MeetingsPage(props: {
   /** `view` and `date` drive the calendar surface — see calendar-view.ts. */
@@ -35,7 +36,7 @@ export default async function MeetingsPage(props: {
   const { upcoming, past } = splitByUpcoming(allMeetings)
 
   const currentUserId = session?.user?.id ?? ''
-  const isAdmin = session?.user?.role === 'admin'
+  const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   const appOptions = apps.map((app) => ({ id: app.id, name: app.name }))
   // Computed on the server, where reading the clock is free of the hydration
   // and purity constraints the client components live under.

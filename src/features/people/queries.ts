@@ -59,6 +59,7 @@ import {
   type TaskLoad,
 } from '@/features/people/task-workload'
 import { LK_TIMEZONE } from '@/lib/lk-holidays'
+import type { UserRole } from '@/features/auth/capabilities'
 
 export type TeamMember = {
   assignmentId: string
@@ -94,7 +95,7 @@ export type UserCapacity = {
     title: string | null
     phone: string | null
     avatarUrl: string | null
-    role: 'admin' | 'member'
+    role: UserRole
     orgTags: string[]
   }
   totalPct: number
@@ -126,7 +127,7 @@ export type PersonProfile = {
   title: string | null
   phone: string | null
   avatarUrl: string | null
-  role: 'admin' | 'member'
+  role: UserRole
   active: boolean
   status: 'pending' | 'approved' | 'rejected'
   orgTags: string[]

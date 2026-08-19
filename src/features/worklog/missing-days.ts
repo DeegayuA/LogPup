@@ -1,4 +1,6 @@
 import { isWorkingDay } from '@/lib/working-days'
+import { computeCoverage } from '@/features/worklog/coverage'
+import { STUDIO_DEFAULT_PATTERN, type SchedulePattern } from '@/features/worklog/schedules'
 
 /**
  * Which days a person still owes a work log for.
@@ -57,23 +59,47 @@ export function missingWorkDays(input: {
   /** Days already logged. */
   logged: Set<string>
   isHoliday?: (iso: string) => boolean
+  /** APPROVED absences. An approved leave day is never asked for. */
+  exempt?: ReadonlySet<string>
+  /** This person's working pattern; the studio default when they have no row. */
+  pattern?: SchedulePattern
 }): string[] {
-  const { today, joinedOn, logged, isHoliday } = input
-  const missing: string[] = []
+  const { today, joinedOn, logged, isHoliday, exempt, pattern } = input
 
-  // Walk backwards from yesterday, collecting required-but-unlogged days
-  // until the cap, the join date, or the safety bound is reached.
-  const cursor = new Date(`${today}T12:00:00Z`)
-  cursor.setUTCDate(cursor.getUTCDate() - 1)
+  // A THIN SELECTOR over computeCoverage, deliberately — not a second
+  // definition of "missing".
+  //
+  // These two used to disagree three ways: this function had no absence input
+  // at all (so approved leave was still demanded), it used the studio-wide
+  // week (so a part-time person was asked for every weekday), and its
+  // isHoliday was optional and its only caller passed nothing (so a company
+  // shutdown still read as owed). A coverage figure rendered beside this
+  // prompt told the same person they owed N days and N-k days at once.
+  //
+  // What survives unchanged is what callers depend on: whole ISO days, oldest
+  // first, today excluded, capped at MAX_BACKFILL_DAYS, never before the join
+  // date. Saturday's 0.5 belongs to the ratio, not to a backfill list — half
+  // a day is still a day you owe an entry for.
+  const from = new Date(`${today}T12:00:00Z`)
+  // 120 calendar days is the same safety bound the backwards walk used: wide
+  // enough to find MAX_BACKFILL_DAYS working days, bounded so a bad joinedOn
+  // cannot spin.
+  from.setUTCDate(from.getUTCDate() - 120)
+  const windowStart = from.toISOString().slice(0, 10)
 
-  // Bounded independently of the cap so a bad joinedOn cannot spin: at most
-  // a calendar quarter of walking to find MAX_BACKFILL_DAYS working days.
-  for (let step = 0; step < 120 && missing.length < MAX_BACKFILL_DAYS; step += 1) {
-    const iso = cursor.toISOString().slice(0, 10)
-    if (iso < joinedOn) break
-    if (isRequiredWorkDay(iso, isHoliday) && !logged.has(iso)) missing.push(iso)
-    cursor.setUTCDate(cursor.getUTCDate() - 1)
-  }
+  const { days } = computeCoverage({
+    from: windowStart > joinedOn ? windowStart : joinedOn,
+    to: today,
+    loggedDays: logged,
+    exemptDays: exempt ?? new Set(),
+    isHoliday: isHoliday ?? (() => false),
+    patternFor: () => pattern ?? STUDIO_DEFAULT_PATTERN,
+    joinedOn,
+    today,
+  })
 
-  return missing.reverse()
+  return days
+    .filter((d) => d.status === 'missing')
+    .slice(-MAX_BACKFILL_DAYS)
+    .map((d) => d.day)
 }

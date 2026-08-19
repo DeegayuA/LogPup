@@ -8,6 +8,7 @@ import { telHref, waHref } from '@/lib/phone'
 import { cn } from '@/lib/utils'
 import { eventDotClasses } from '@/features/meetings/event-color'
 import type { PersonOverview } from '@/features/people/queries'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 /**
  * Identity: who this is, what state their account is in, how to reach them,
@@ -52,7 +53,7 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
         <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-heading text-2xl font-bold tracking-tight">{user.name}</h1>
-            {user.role === 'admin' ? (
+            {isAdminRole(user.role) ? (
               <Badge variant="secondary">
                 <ShieldCheck aria-hidden /> Admin
               </Badge>

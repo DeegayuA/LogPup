@@ -10,6 +10,7 @@ import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { canManageMeeting } from '@/features/meetings/ai-actions'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 export type MoveFollowupsResult = {
   /** How many items were pinned to a meeting. */
@@ -70,7 +71,7 @@ export async function moveFollowupsToNextMeeting(
     .innerJoin(liveMeetings, eq(liveMeetings.id, meetingFollowups.sourceMeetingId))
     .where(inArray(meetingFollowups.id, parsed.data))
 
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   const movable = rows.filter(
     (row) =>
       row.status === 'open' &&
@@ -162,7 +163,7 @@ export async function moveFollowupsToNextMeeting(
 export async function deleteFollowup(followupId: unknown): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user?.id) return err('Sign in required')
-  if (session.user.role !== 'admin') return err('Only an admin can remove a follow-up')
+  if (!isAdminRole(session.user.role)) return err('Only an admin can remove a follow-up')
 
   const parsed = z.uuid().safeParse(followupId)
   if (!parsed.success) return err('Follow-up not found')
@@ -215,7 +216,7 @@ const editTextInput = z.object({
 export async function editFollowupText(input: unknown): Promise<ActionResult> {
   const session = await auth()
   if (!session?.user?.id) return err('Sign in required')
-  if (session.user.role !== 'admin') return err('Only an admin can edit a follow-up')
+  if (!isAdminRole(session.user.role)) return err('Only an admin can edit a follow-up')
 
   const parsed = editTextInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)

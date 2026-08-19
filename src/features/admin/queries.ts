@@ -2,13 +2,14 @@ import { cache } from 'react'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
+import type { UserRole } from '@/features/auth/capabilities'
 
 export type AdminUser = {
   id: string
   name: string
   email: string
   avatarUrl: string | null
-  role: 'admin' | 'member'
+  role: UserRole
   active: boolean
   orgTags: string[]
   title: string | null

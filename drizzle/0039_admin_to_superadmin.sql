@@ -1,0 +1,15 @@
+-- Capability-preserving remap of the existing two-role world.
+--
+-- Today's admin can clear the database, so the faithful destination is
+-- superadmin, not the new (narrower) admin seat. Mapping admin -> admin would
+-- silently strip a power every current admin holds, which is a security
+-- change wearing a rename's clothes.
+--
+-- Operators demote to admin/manager from the new panel once the seats exist.
+-- Nobody loses access at apply time: superadmin is a superset of what admin
+-- could do yesterday, and member is untouched.
+--
+-- Idempotent by construction: the WHERE clause stops matching once applied.
+-- Separate file from 0037 because Postgres refuses to use an enum value in
+-- the same transaction that added it.
+UPDATE "users" SET "role" = 'superadmin' WHERE "role" = 'admin';

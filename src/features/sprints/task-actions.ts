@@ -7,6 +7,7 @@ import { db } from '@/db'
 import { liveSprints, liveTasks } from '@/db/live'
 import { apps, meetingFollowups, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
@@ -14,6 +15,7 @@ import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
 import { decideFollowupResolutionOnTaskStatusChange } from '@/features/meetings/followups'
 import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
@@ -123,11 +125,9 @@ async function requireSession() {
   return session
 }
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
+// other files. Every guard now names the capability it needs and the matrix
+// answers; the contract is unchanged (Actor on success, null on refusal).
 
 /**
  * Walks an error's `.cause` chain looking for a Postgres foreign-key
@@ -356,7 +356,7 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   const existing = await taskById(taskId)
   if (!existing) return err('Task not found')
 
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   const isAssignee = existing.assigneeId !== null && existing.assigneeId === session.user.id
   if (!isAdmin && !isAssignee) return err('Not allowed')
 
@@ -652,8 +652,8 @@ export async function bulkUpdateTasks(
 }
 
 export async function deleteTask(taskId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('task.delete')
+  if (!actor) return err('Admins only')
   if (!z.uuid().safeParse(taskId).success) return err('Task not found')
 
   const existing = await taskById(taskId)
@@ -663,7 +663,7 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
   try {
     marked = await db
       .update(tasks)
-      .set({ deletedAt: new Date(), deletedBy: session.user.id })
+      .set({ deletedAt: new Date(), deletedBy: actor.id })
       .where(and(eq(tasks.id, taskId), isNull(tasks.deletedAt)))
       .returning({ id: tasks.id })
   } catch (error) {
@@ -676,7 +676,7 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
   // put two identical "deleted task" entries in the feed for every delete.
   // `existing` was read before the update, so the row can still be named.
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'deleted',
     entityType: 'task',
     entityId: taskId,

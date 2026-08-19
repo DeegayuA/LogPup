@@ -23,6 +23,7 @@ import { assessRecordingReadiness } from '@/features/gemini/readiness'
 import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
 import { AppearanceCard } from '@/features/settings/components/appearance-card'
 import { describeAiStatus, findRelease } from '@/features/settings/overview'
+import { isAdminRole, roleLabel } from '@/features/auth/capabilities'
 
 export const metadata: Metadata = {
   title: 'Settings',
@@ -66,7 +67,7 @@ export default async function SettingsPage() {
   const status = describeAiStatus(readiness.level)
   const liveEnabled = isLiveTranscriptionEnabled()
   const release = findRelease(CURRENT_VERSION, VERSION_HISTORY)
-  const roleLabel = user.role === 'admin' ? 'Admin' : 'Member'
+  const roleName = roleLabel(user.role)
   const initials = (user.name ?? '?').slice(0, 1).toUpperCase()
 
   return (
@@ -104,8 +105,8 @@ export default async function SettingsPage() {
                   <span className="font-heading text-base leading-tight font-semibold">
                     {user.name ?? '—'}
                   </span>
-                  <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                    {roleLabel}
+                  <Badge variant={isAdminRole(user.role) ? 'default' : 'secondary'}>
+                    {roleName}
                   </Badge>
                 </div>
                 {/* An address is a data value: mono so the dots and dashes

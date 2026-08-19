@@ -17,6 +17,16 @@ export const ACTIVITY_ENTITY_TYPES = [
   // thing a reader wants to click through to is that person's log, not one
   // day's row in isolation.
   'worklog',
+  // Approval-gated edits and the non-daily-logging entities. This union is
+  // CLOSED (no `(string & {})` escape hatch, unlike ActivityVerb below), so a
+  // new entity type must be named here or every logActivity call for it is a
+  // type error. The column is text, so this stays a code change.
+  'change_request',
+  'absence',
+  'work_schedule',
+  'org_holiday',
+  'app_grant',
+  'handover',
 ] as const
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number]

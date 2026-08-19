@@ -1,3 +1,4 @@
+import { isAdminRole } from '@/features/auth/capabilities'
 import { Suspense } from 'react'
 import { getSession } from '@/lib/session'
 import { PasskeyNudge } from '@/features/auth/components/passkey-nudge'
@@ -56,7 +57,7 @@ function ZoneLabel({ children }: { children: string }) {
 export default async function DashboardPage() {
   const session = await getSession()
   const user = session?.user
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = user ? isAdminRole(user.role) : false
 
   // Both the hour and the date resolve in the BUSINESS timezone, not the
   // server's. This renders on the server — UTC on Vercel — so `getHours()`

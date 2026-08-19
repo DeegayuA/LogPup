@@ -9,13 +9,14 @@ import {
   apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAttendeeRecommendations,
   dailyWorklogs, users,
 } from '@/db/schema'
-import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
+import { can, USER_ROLES, type UserRole } from '@/features/auth/capabilities'
 import { hashPassword } from '@/lib/password'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { normalizePhone } from '@/lib/phone'
 import { ok, err, type ActionResult } from '@/lib/action-result'
-import { canEditUser, wouldLeaveNoAdmins } from '@/features/admin/permissions'
+import { canEditUser, wouldLeaveNoSuperadmins } from '@/features/admin/permissions'
 import { jobRoleInput } from '@/features/auth/title-schema'
 import { personalEmailInput } from '@/features/auth/personal-email-schema'
 import { logActivity } from '@/features/activity/log'
@@ -25,18 +26,17 @@ import { logActivity } from '@/features/activity/log'
 // so the acting admin is not locked out.
 const dbClearEnabled = () => process.env.ENABLE_DB_CLEAR === '1'
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// The seven verbatim copies of `requireAdmin()` this file used to be one of
+// are gone: every guard now names the capability it needs, and the matrix
+// answers. Same contract as before — an Actor on success, null on refusal —
+// so every call site keeps its `if (!actor) return err(...)` shape.
 
 export async function clearTestData(
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('danger.dbclear')
+  if (!actor) return err('Admins only')
   if (!dbClearEnabled()) return err('DB clear is disabled (set ENABLE_DB_CLEAR=1)')
   if (String(formData.get('confirm') ?? '') !== 'CLEAR') {
     return err('Type CLEAR to confirm')
@@ -77,10 +77,10 @@ export async function clearTestData(
   // One row for the whole wipe — the deleted rows themselves are gone, so
   // there is nothing more granular worth naming.
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'deleted',
     entityType: 'user',
-    entityId: session.user.id,
+    entityId: actor.id,
     entityLabel: 'test data',
     pagePath: '/admin',
     detail: 'cleared all business data',
@@ -90,7 +90,7 @@ export async function clearTestData(
   return ok(undefined)
 }
 
-const roleInput = z.enum(['admin', 'member'])
+const roleInput = z.enum(USER_ROLES)
 
 function revalidateAdminPaths() {
   revalidatePath('/admin')
@@ -110,16 +110,17 @@ function revalidateUserDetailPaths() {
 
 // Counts active admins other than `excludeUserId` — used to check whether
 // demoting/deactivating that user would leave zero active admins.
-async function otherActiveAdminCount(excludeUserId: string): Promise<number> {
+async function otherActiveSuperadminCount(excludeUserId: string): Promise<number> {
   const [row] = await db
     .select({ count: count() })
     .from(users)
     .where(
       and(
-        eq(users.role, 'admin'),
+        eq(users.role, 'superadmin'),
         eq(users.active, true),
-        // A pending admin must not count toward "there is still another
-        // admin" — otherwise the last-admin guard below could be defeated.
+        // A pending superadmin must not count toward "there is still another
+        // one" — otherwise the last-superadmin guard could be defeated by
+        // inviting somebody who has not accepted yet.
         eq(users.status, 'approved'),
         ne(users.id, excludeUserId),
       ),
@@ -127,10 +128,17 @@ async function otherActiveAdminCount(excludeUserId: string): Promise<number> {
   return row?.count ?? 0
 }
 
-export async function setUserRole(userId: string, role: 'admin' | 'member'): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
-  if (!canEditUser(session.user.id, userId)) return err('Cannot change your own account')
+export async function setUserRole(userId: string, role: UserRole): Promise<ActionResult> {
+  const actor = await requireCapability('user.role.grant')
+  if (!actor) return err('Admins only')
+  if (!canEditUser(actor.id, userId)) return err('Cannot change your own account')
+
+  // Granting the top seat needs the top seat. This is the one place where a
+  // capability check depends on the VALUE being written rather than the row
+  // being written to, so it cannot live in the matrix lookup above.
+  if (role === 'superadmin' && !can(actor, 'user.role.grant.superadmin')) {
+    return err('Only a superadmin can grant superadmin')
+  }
 
   const parsed = roleInput.safeParse(role)
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -149,15 +157,19 @@ export async function setUserRole(userId: string, role: 'admin' | 'member'): Pro
     // admins could both pass the check — but this is an internal admin-only
     // tool, and JWT re-validation on every request shrinks the exploitable
     // window to essentially nothing in practice.
-    if (target?.role === 'admin') {
-      const otherAdmins = await otherActiveAdminCount(userId)
-      if (wouldLeaveNoAdmins(otherAdmins)) return err('Cannot remove the last admin')
+    // Specifically superadmin, not the admin family: superadmin is the only
+    // seat that can grant superadmin, so a workspace with none has no route
+    // back. An admin-less workspace is recoverable; a superadmin-less one is
+    // not. Checked against the TARGET's current role, not the actor's.
+    if (target?.role === 'superadmin') {
+      const others = await otherActiveSuperadminCount(userId)
+      if (wouldLeaveNoSuperadmins(others)) return err('Cannot remove the last superadmin')
     }
   }
 
   await db.update(users).set({ role: parsed.data }).where(eq(users.id, userId))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'user',
     entityId: userId,
@@ -171,9 +183,9 @@ export async function setUserRole(userId: string, role: 'admin' | 'member'): Pro
 }
 
 export async function setUserActive(userId: string, active: boolean): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
-  if (!canEditUser(session.user.id, userId)) return err('Cannot change your own account')
+  const actor = await requireCapability('user.deactivate', { ownerId: userId })
+  if (!actor) return err('Admins only')
+  if (!canEditUser(actor.id, userId)) return err('Cannot change your own account')
 
   const parsed = z.boolean().safeParse(active)
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -187,15 +199,19 @@ export async function setUserActive(userId: string, active: boolean): Promise<Ac
 
   if (parsed.data === false) {
     // Same check-then-write tradeoff as setUserRole above — see that comment.
-    if (target?.role === 'admin') {
-      const otherAdmins = await otherActiveAdminCount(userId)
-      if (wouldLeaveNoAdmins(otherAdmins)) return err('Cannot remove the last admin')
+    // Specifically superadmin, not the admin family: superadmin is the only
+    // seat that can grant superadmin, so a workspace with none has no route
+    // back. An admin-less workspace is recoverable; a superadmin-less one is
+    // not. Checked against the TARGET's current role, not the actor's.
+    if (target?.role === 'superadmin') {
+      const others = await otherActiveSuperadminCount(userId)
+      if (wouldLeaveNoSuperadmins(others)) return err('Cannot remove the last superadmin')
     }
   }
 
   await db.update(users).set({ active: parsed.data }).where(eq(users.id, userId))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'user',
     entityId: userId,
@@ -254,8 +270,8 @@ const createUserInput = z.object({
 export async function createUser(
   input: unknown,
 ): Promise<ActionResult<{ starterPassword: string }>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('user.create')
+  if (!actor) return err('Admins only')
 
   const parsed = createUserInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -307,7 +323,7 @@ export async function createUser(
   }
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'created',
     entityType: 'user',
     entityId: createdId,
@@ -321,8 +337,8 @@ export async function createUser(
 }
 
 export async function setUserOrgTags(userId: string, tags: unknown): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('user.profile.edit', { ownerId: userId })
+  if (!actor) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -337,7 +353,7 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
 
   await db.update(users).set({ orgTags: parsed.data }).where(eq(users.id, parsedId.data))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'user',
     entityId: parsedId.data,
@@ -355,8 +371,8 @@ export async function setUserOrgTags(userId: string, tags: unknown): Promise<Act
  * anyone; a user sets their own through setOwnPhone (features/auth/actions).
  */
 export async function setUserPhone(userId: string, phone: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('user.profile.edit', { ownerId: userId })
+  if (!actor) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -372,7 +388,7 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
 
   await db.update(users).set({ phone: value }).where(eq(users.id, parsedId.data))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'user',
     entityId: parsedId.data,
@@ -388,7 +404,7 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
 /**
  * Second, contact-only address (users.personal_email). Blank clears it.
  *
- * ADMIN-ONLY, and requireAdmin() below is the enforcement — there is no
+ * ADMIN-ONLY, and the capability guard below is the enforcement — there is no
  * self-service counterpart, same as setUserTitle. It re-reads the role from
  * the session on every call and fails closed.
  *
@@ -398,8 +414,8 @@ export async function setUserPhone(userId: string, phone: string): Promise<Actio
  * login nor collide with anyone else's account.
  */
 export async function setUserPersonalEmail(userId: string, email: unknown): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('user.profile.edit', { ownerId: userId })
+  if (!actor) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -417,7 +433,7 @@ export async function setUserPersonalEmail(userId: string, email: unknown): Prom
     .set({ personalEmail: parsed.data || null })
     .where(eq(users.id, parsedId.data))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'user',
     entityId: parsedId.data,
@@ -437,7 +453,7 @@ export async function setUserPersonalEmail(userId: string, email: unknown): Prom
  * ADMIN-ONLY, and this guard is the enforcement: there is no self-service
  * counterpart (the old setOwnTitle was deleted, not hidden — a server action
  * keeps a callable endpoint long after its button is gone). Hiding the control
- * for non-admins is presentation; requireAdmin() below is what actually stops
+ * for non-admins is presentation; the capability guard below is what actually stops
  * the write. It re-reads the role from the session on every call, so nothing
  * the client sends is trusted, and it fails closed: no session, an expired
  * session, or a member session all return before the update runs.
@@ -446,8 +462,8 @@ export async function setUserPersonalEmail(userId: string, email: unknown): Prom
  * their own account can't lock anyone out.
  */
 export async function setUserTitle(userId: string, title: unknown): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('user.profile.edit', { ownerId: userId })
+  if (!actor) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -462,7 +478,7 @@ export async function setUserTitle(userId: string, title: unknown): Promise<Acti
 
   await db.update(users).set({ title: parsed.data || null }).where(eq(users.id, parsedId.data))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'user',
     entityId: parsedId.data,
@@ -485,9 +501,9 @@ const approveUserInput = z.object({
 // role right there on the pending-approvals row, there's no separate step.
 // No canEditUser self-target guard: a pending user is never the acting
 // admin's own account (an admin session already implies status='approved').
-export async function approveUser(userId: string, role: 'admin' | 'member'): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+export async function approveUser(userId: string, role: UserRole): Promise<ActionResult> {
+  const actor = await requireCapability('user.approve')
+  if (!actor) return err('Admins only')
 
   const parsed = approveUserInput.safeParse({ userId, role })
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -502,7 +518,7 @@ export async function approveUser(userId: string, role: 'admin' | 'member'): Pro
     .set({ status: 'approved', role: parsed.data.role })
     .where(eq(users.id, parsed.data.userId))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'approved',
     entityType: 'user',
     entityId: parsed.data.userId,
@@ -518,8 +534,8 @@ export async function approveUser(userId: string, role: 'admin' | 'member'): Pro
 // from then on (see the signIn/jwt callbacks in src/lib/auth.ts) — there is
 // currently no "un-reject" path back to pending or approved from this UI.
 export async function rejectUser(userId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('user.approve')
+  if (!actor) return err('Admins only')
 
   const parsedId = z.uuid().safeParse(userId)
   if (!parsedId.success) return err('Invalid user')
@@ -531,7 +547,7 @@ export async function rejectUser(userId: string): Promise<ActionResult> {
 
   await db.update(users).set({ status: 'rejected' }).where(eq(users.id, parsedId.data))
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'rejected',
     entityType: 'user',
     entityId: parsedId.data,

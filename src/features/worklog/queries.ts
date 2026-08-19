@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gte, lte } from 'drizzle-orm'
 import { db } from '@/db'
-import { dailyWorklogs, users } from '@/db/schema'
+import { absences, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
+import type { ScheduleRow } from '@/features/worklog/schedules'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 
 /**
@@ -90,4 +91,138 @@ export async function getTeamWorklogs(fromIso: string, toIso: string): Promise<T
     .innerJoin(users, eq(dailyWorklogs.userId, users.id))
     .where(and(gte(dailyWorklogs.day, fromIso), lte(dailyWorklogs.day, toIso)))
     .orderBy(desc(dailyWorklogs.day), users.name)
+}
+
+// ---------------------------------------------------------------------------
+// Coverage inputs
+// ---------------------------------------------------------------------------
+//
+// `computeCoverage` (coverage.ts) is pure and takes everything as data, so the
+// fetching lives here. Four reads, one per thing that can make a day not owed:
+// what was logged, what leave was approved, what week the person works, and
+// which days the studio shut.
+
+/**
+ * The days this person logged inside `[fromIso, toIso]`, both ends inclusive.
+ *
+ * Bounded by date rather than by row count. A `limit N` read answers "was this
+ * day logged" only while the person has logged fewer than N days — for a
+ * diligent logger the oldest days in the window fall off the end of the limit
+ * and come back looking missing.
+ */
+export async function getMyWorklogDays(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ day: dailyWorklogs.day })
+    .from(dailyWorklogs)
+    .where(
+      and(
+        eq(dailyWorklogs.userId, userId),
+        gte(dailyWorklogs.day, fromIso),
+        lte(dailyWorklogs.day, toIso),
+      ),
+    )
+  return rows.map((row) => row.day)
+}
+
+/** One filed absence, as the work log needs to show it. */
+export type MyAbsence = {
+  id: string
+  /** INCLUSIVE, and so is `endDate` — see the `absences` table comment. */
+  startDate: string
+  endDate: string
+  kind: (typeof absences.$inferSelect)['kind']
+  reason: string | null
+}
+
+const absenceColumns = {
+  id: absences.id,
+  startDate: absences.startDate,
+  endDate: absences.endDate,
+  kind: absences.kind,
+  reason: absences.reason,
+}
+
+/**
+ * Every absence this person has filed that nobody has decided yet, oldest
+ * first.
+ *
+ * Deliberately NOT bounded by the catch-up window. A pending absence is an
+ * outstanding thing whatever days it covers, and this is the only screen that
+ * shows it to the person who filed it — one that aged out of the window would
+ * simply disappear, which is the failure the panel exists to avoid.
+ */
+export async function getMyPendingAbsences(userId: string): Promise<MyAbsence[]> {
+  return db
+    .select(absenceColumns)
+    .from(absences)
+    .where(and(eq(absences.userId, userId), eq(absences.status, 'pending')))
+    .orderBy(absences.startDate)
+}
+
+/**
+ * Approved absences overlapping `[fromIso, toIso]` — the ONLY ones that exempt
+ * a day. A pending one never does (absence-actions.ts), so filing cannot lower
+ * the filer's own denominator.
+ */
+export async function getMyApprovedAbsences(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<MyAbsence[]> {
+  return db
+    .select(absenceColumns)
+    .from(absences)
+    .where(
+      and(
+        eq(absences.userId, userId),
+        eq(absences.status, 'approved'),
+        lte(absences.startDate, toIso),
+        gte(absences.endDate, fromIso),
+      ),
+    )
+    .orderBy(absences.startDate)
+}
+
+/**
+ * This person's effective-dated schedule rows, newest first, as Colombo ISO
+ * days — the shape `patternForDay` takes.
+ *
+ * Empty for almost everyone: a row exists only for someone who deviates from
+ * the studio default, and `patternForDay` returns that default for any day no
+ * row covers. The column is a timestamp and the comparison is a day, so the
+ * conversion happens here rather than in the pure module.
+ */
+export async function getMyWorkSchedule(userId: string): Promise<ScheduleRow[]> {
+  const rows = await db
+    .select({
+      pattern: workSchedules.pattern,
+      effectiveFrom: workSchedules.effectiveFrom,
+      effectiveTo: workSchedules.effectiveTo,
+    })
+    .from(workSchedules)
+    .where(eq(workSchedules.userId, userId))
+    .orderBy(desc(workSchedules.effectiveFrom))
+  return rows.map((row) => ({
+    pattern: row.pattern,
+    effectiveFrom: toIsoDateInTimeZone(row.effectiveFrom, LK_TIMEZONE),
+    effectiveTo: row.effectiveTo ? toIsoDateInTimeZone(row.effectiveTo, LK_TIMEZONE) : null,
+  }))
+}
+
+/**
+ * Company shutdown days in `[fromIso, toIso]`, to be merged with the gazetted
+ * map by the caller — the same `isHoliday(iso)` callback working-days.ts and
+ * coverage.ts both take, so a company holiday needs no deploy and no second
+ * definition of "holiday".
+ */
+export async function getOrgHolidayDays(fromIso: string, toIso: string): Promise<string[]> {
+  const rows = await db
+    .select({ day: orgHolidays.day })
+    .from(orgHolidays)
+    .where(and(gte(orgHolidays.day, fromIso), lte(orgHolidays.day, toIso)))
+  return rows.map((row) => row.day)
 }

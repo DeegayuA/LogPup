@@ -14,7 +14,8 @@ import { GeminiKeysCard } from '@/features/gemini/components/gemini-keys-card'
 import { PhoneField } from '@/features/auth/components/phone-field'
 import { getOwnPhone, getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
 import { AvatarUpload } from '@/features/auth/components/avatar-upload'
-import { listGeminiKeys } from '@/features/gemini/queries'
+import { listGeminiKeys, sharedKeyUsageByCaller } from '@/features/gemini/queries'
+import { isAdminRole, roleLabel } from '@/features/auth/capabilities'
 
 export default async function ProfilePage(props: {
   searchParams: Promise<{ firstLogin?: string }>
@@ -22,14 +23,15 @@ export default async function ProfilePage(props: {
   const [session, { firstLogin }] = await Promise.all([getSession(), props.searchParams])
   const user = session?.user
   const role = user?.role ?? 'member'
-  const [geminiKeys, phone, avatarUrl, title] = user?.id
+  const [geminiKeys, usedBy, phone, avatarUrl, title] = user?.id
     ? await Promise.all([
         listGeminiKeys(user.id),
+        sharedKeyUsageByCaller(user.id, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
         getOwnPhone(user.id),
         getOwnAvatarUrl(user.id),
         getOwnTitle(user.id),
       ])
-    : [[], null, null, null]
+    : [[], [], null, null, null]
   const showFirstLoginBanner = firstLogin === '1' || user?.mustChangePassword === true
 
   return (
@@ -56,10 +58,9 @@ export default async function ProfilePage(props: {
                   {user?.name ?? '—'}
                 </span>
                 <Badge
-                  variant={role === 'admin' ? 'default' : 'secondary'}
-                  className="capitalize"
+                  variant={isAdminRole(role) ? 'default' : 'secondary'}
                 >
-                  {role}
+                  {roleLabel(role)}
                 </Badge>
               </div>
               <span className="truncate font-mono text-xs text-muted-foreground">
@@ -103,7 +104,7 @@ export default async function ProfilePage(props: {
 
         <SetPasswordForm />
 
-        <GeminiKeysCard keys={geminiKeys} />
+        <GeminiKeysCard keys={geminiKeys} usedBy={usedBy} />
 
         {/* The mirror of the footnote at the foot of /settings. The two pages
             split along edit-here / read-there, which is only guessable if each
@@ -118,8 +119,8 @@ export default async function ProfilePage(props: {
           >
             Settings
           </Link>{' '}
-          holds your theme, your passkeys, whether your Gemini keys are working, the
-          version you are on, and sign out.
+          holds your theme, your passkeys, whether your Gemini keys are working, per-feature
+          AI on/off switches with cost and usage, the version you are on, and sign out.
         </p>
       </div>
     </div>

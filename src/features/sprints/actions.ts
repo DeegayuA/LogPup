@@ -7,6 +7,7 @@ import { db } from '@/db'
 import { liveSprints, liveTasks } from '@/db/live'
 import { apps, sprints } from '@/db/schema'
 import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
@@ -55,11 +56,9 @@ const sprintDatesInput = z
     path: ['endDate'],
   })
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
+// other files. Every guard now names the capability it needs and the matrix
+// answers; the contract is unchanged (Actor on success, null on refusal).
 
 /**
  * Same contract as task-actions' `unexpected`: a server action returns
@@ -80,8 +79,8 @@ async function slugForApp(appId: string): Promise<string | null> {
 }
 
 export async function createSprint(input: unknown): Promise<ActionResult<{ sprintId: string }>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('sprint.manage')
+  if (!actor) return err('Admins only')
   const parsed = sprintInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -123,7 +122,7 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
 
   const slug = await slugForApp(appId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'created',
     entityType: 'sprint',
     entityId: sprintId,
@@ -155,8 +154,8 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
  * the person, via `updateSprintStatus`.
  */
 export async function updateSprint(sprintId: string, input: unknown): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('sprint.manage')
+  if (!actor) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const parsed = sprintUpdateInput.safeParse(input)
@@ -186,7 +185,7 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 
   const slug = await slugForApp(existing.appId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'sprint',
     entityId: sprintId,
@@ -229,8 +228,8 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 export async function deleteSprint(
   sprintId: string,
 ): Promise<ActionResult<{ backlogTasks: number }>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('sprint.manage')
+  if (!actor) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const [existing] = await db
@@ -256,7 +255,7 @@ export async function deleteSprint(
     // concurrent double-delete a 0-row no-op that touches nothing else.
     marked = await db
       .update(sprints)
-      .set({ deletedAt: new Date(), deletedBy: session.user.id })
+      .set({ deletedAt: new Date(), deletedBy: actor.id })
       .where(and(eq(sprints.id, sprintId), isNull(sprints.deletedAt)))
       .returning({ id: sprints.id })
   } catch (error) {
@@ -266,7 +265,7 @@ export async function deleteSprint(
 
   const slug = await slugForApp(existing.appId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'deleted',
     entityType: 'sprint',
     entityId: sprintId,
@@ -325,8 +324,8 @@ export async function updateSprintStatus(
   sprintId: string,
   status: SprintStatus,
 ): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('sprint.manage')
+  if (!actor) return err('Admins only')
   if (!SPRINT_STATUSES.includes(status)) return err('Invalid status')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
@@ -364,7 +363,7 @@ export async function updateSprintStatus(
 
   const slug = await slugForApp(existing.appId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'sprint',
     entityId: sprintId,
@@ -390,7 +389,7 @@ export async function updateSprintDates(
   startDate: string,
   endDate: string,
 ): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
   const parsed = sprintDatesInput.safeParse({ startDate, endDate })
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -414,7 +413,7 @@ export async function updateSprintDates(
  *  `sortOrder` is computed client-side via `sortOrderForIndex`, same
  *  fractional-midpoint-with-fallback strategy as the board's task drag. */
 export async function reorderSprint(sprintId: string, sortOrder: number): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
   if (!Number.isInteger(sortOrder)) return err('Invalid sort order')
 
   const [existing] = await db
@@ -439,7 +438,7 @@ export async function reorderSprint(sprintId: string, sortOrder: number): Promis
  * one-time backfill).
  */
 export async function resortSprintsByDate(appId: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
 
   const rows = await db
     .select({ id: liveSprints.id })
@@ -467,7 +466,7 @@ export async function resortSprintsByDate(appId: string): Promise<ActionResult> 
 
 /** Roadmap/board inline-rename target for a sprint's name. */
 export async function renameSprint(sprintId: string, name: string): Promise<ActionResult> {
-  if (!(await requireAdmin())) return err('Admins only')
+  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
   const parsed = z.string().min(2).max(60).safeParse(name)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 

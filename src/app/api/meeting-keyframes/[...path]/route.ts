@@ -5,6 +5,7 @@ import { db } from '@/db'
 import { meetingScreenshots, meetings } from '@/db/schema'
 import { canReadMeetingIntel } from '@/features/meetings/ai-actions'
 import { canServeKeyframe } from '@/features/meetings/keyframe-access'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 /**
  * Streams one screen-share keyframe out of the PRIVATE blob store.
@@ -69,7 +70,7 @@ export async function GET(
 
   if (!row) return new Response('Not found', { status: 404 })
 
-  const isAdmin = session.user.role === 'admin'
+  const isAdmin = isAdminRole(session.user.role)
   const canReadMeeting = await canReadMeetingIntel(session.user, {
     id: row.meetingId,
     createdBy: row.createdBy,

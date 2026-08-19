@@ -22,7 +22,7 @@ import {
   tasks,
   users,
 } from '@/db/schema'
-import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
@@ -40,11 +40,9 @@ import { PURGE_CONFIRM_PHRASE } from '@/features/admin/components/trash-card-log
 // from it here is free.
 const CONFIRM_PHRASE = PURGE_CONFIRM_PHRASE
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
+// other files. Every guard now names the capability it needs and the matrix
+// answers; the contract is unchanged (Actor on success, null on refusal).
 
 async function appNameById(appId: string | null): Promise<string | null> {
   if (!appId) return null
@@ -133,8 +131,8 @@ const uuidInput = z.uuid()
  * only way to get guests a fresh invite.
  */
 export async function restoreMeeting(meetingId: string): Promise<ActionResult<{ warning: string }>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(meetingId)
   if (!parsedId.success) return err('Invalid meeting')
 
@@ -147,7 +145,7 @@ export async function restoreMeeting(meetingId: string): Promise<ActionResult<{ 
   const [row] = restored
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'restored',
     entityType: 'meeting',
     entityId: row.id,
@@ -165,8 +163,8 @@ export async function restoreMeeting(meetingId: string): Promise<ActionResult<{ 
 }
 
 export async function restoreTask(taskId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(taskId)
   if (!parsedId.success) return err('Invalid task')
 
@@ -181,7 +179,7 @@ export async function restoreTask(taskId: string): Promise<ActionResult> {
   // Same shape as deleteTask's own logActivity call (task-actions.ts): no
   // appName/pagePath — tasks don't carry one there either.
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'restored',
     entityType: 'task',
     entityId: row.id,
@@ -193,8 +191,8 @@ export async function restoreTask(taskId: string): Promise<ActionResult> {
 }
 
 export async function restoreSprint(sprintId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(sprintId)
   if (!parsedId.success) return err('Invalid sprint')
 
@@ -210,7 +208,7 @@ export async function restoreSprint(sprintId: string): Promise<ActionResult> {
   // (sprints/actions.ts): a single slug lookup feeds pagePath, no appName.
   const slug = await slugForApp(row.appId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'restored',
     entityType: 'sprint',
     entityId: row.id,
@@ -224,8 +222,8 @@ export async function restoreSprint(sprintId: string): Promise<ActionResult> {
 }
 
 export async function restoreSegment(segmentId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(segmentId)
   if (!parsedId.success) return err('Invalid note')
 
@@ -254,7 +252,7 @@ export async function restoreSegment(segmentId: string): Promise<ActionResult> {
   if (restored.length === 0) return err('Not found, or it was already restored')
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'restored',
     entityType: 'meeting',
     entityId: existing.meetingId,
@@ -267,8 +265,8 @@ export async function restoreSegment(segmentId: string): Promise<ActionResult> {
 }
 
 export async function restoreKeyframe(screenshotId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(screenshotId)
   if (!parsedId.success) return err('Invalid screenshot')
 
@@ -304,7 +302,7 @@ export async function restoreKeyframe(screenshotId: string): Promise<ActionResul
   if (restored.length === 0) return err('Not found, or it was already restored')
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'restored',
     entityType: 'meeting',
     entityId: existing.meetingId,
@@ -324,8 +322,8 @@ export async function restoreKeyframe(screenshotId: string): Promise<ActionResul
  * this row IS the trash record.
  */
 export async function restoreAssignment(historyId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(historyId)
   if (!parsedId.success) return err('Invalid assignment')
 
@@ -401,7 +399,7 @@ export async function restoreAssignment(historyId: string): Promise<ActionResult
         role,
         allocationPct,
         changeKind: 'assigned',
-        changedBy: session.user.id,
+        changedBy: actor.id,
         effectiveFrom: at,
         effectiveTo: null,
         note: null,
@@ -417,7 +415,7 @@ export async function restoreAssignment(historyId: string): Promise<ActionResult
   const slug = await slugForApp(tombstone.appId)
   const personName = await nameForUser(tombstone.userId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'restored',
     entityType: 'assignment',
     entityId: assignmentId ?? tombstone.userId,
@@ -458,8 +456,8 @@ function checkConfirm(confirm: string): ActionResult<never> | null {
  * meeting purge with nothing left to clean it up.
  */
 export async function purgeMeeting(meetingId: string, confirm: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(meetingId)
   if (!parsedId.success) return err('Invalid meeting')
   const confirmError = checkConfirm(confirm)
@@ -490,7 +488,7 @@ export async function purgeMeeting(meetingId: string, confirm: string): Promise<
   }
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'purged',
     entityType: 'meeting',
     entityId: row.id,
@@ -504,8 +502,8 @@ export async function purgeMeeting(meetingId: string, confirm: string): Promise<
 }
 
 export async function purgeTask(taskId: string, confirm: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(taskId)
   if (!parsedId.success) return err('Invalid task')
   const confirmError = checkConfirm(confirm)
@@ -520,7 +518,7 @@ export async function purgeTask(taskId: string, confirm: string): Promise<Action
   const [row] = deleted
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'purged',
     entityType: 'task',
     entityId: row.id,
@@ -532,8 +530,8 @@ export async function purgeTask(taskId: string, confirm: string): Promise<Action
 }
 
 export async function purgeSprint(sprintId: string, confirm: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(sprintId)
   if (!parsedId.success) return err('Invalid sprint')
   const confirmError = checkConfirm(confirm)
@@ -551,7 +549,7 @@ export async function purgeSprint(sprintId: string, confirm: string): Promise<Ac
 
   const slug = await slugForApp(row.appId)
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'purged',
     entityType: 'sprint',
     entityId: row.id,
@@ -565,8 +563,8 @@ export async function purgeSprint(sprintId: string, confirm: string): Promise<Ac
 }
 
 export async function purgeSegment(segmentId: string, confirm: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(segmentId)
   if (!parsedId.success) return err('Invalid note')
   const confirmError = checkConfirm(confirm)
@@ -589,7 +587,7 @@ export async function purgeSegment(segmentId: string, confirm: string): Promise<
   if (deleted.length === 0) return err('Not found, or it was restored — nothing purged')
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'purged',
     entityType: 'meeting',
     entityId: existing.meetingId,
@@ -602,8 +600,8 @@ export async function purgeSegment(segmentId: string, confirm: string): Promise<
 }
 
 export async function purgeKeyframe(screenshotId: string, confirm: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
   const parsedId = uuidInput.safeParse(screenshotId)
   if (!parsedId.success) return err('Invalid screenshot')
   const confirmError = checkConfirm(confirm)
@@ -633,7 +631,7 @@ export async function purgeKeyframe(screenshotId: string, confirm: string): Prom
   }
 
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'purged',
     entityType: 'meeting',
     entityId: existing.meetingId,

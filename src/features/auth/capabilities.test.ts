@@ -4,6 +4,8 @@ import {
   ROLE_GRANTS,
   USER_ROLES,
   can,
+  isAdminRole,
+  roleLabel,
   type Action,
   type Actor,
   type UserRole,
@@ -96,6 +98,69 @@ describe('ROLE_GRANTS', () => {
   })
 })
 
+describe('the widening tripwire', () => {
+  it('fails at compile time if the union grows without this file being read', () => {
+    // A green suite proves nothing for this bug class: every role check in the
+    // app passes its tests today because the fixtures hand it a literal. This
+    // assertion is type-level on purpose — add an eighth seat and tsc fails
+    // here, before anyone discovers it as things quietly missing from a UI.
+    const exhaustive: Record<UserRole, true> = {
+      superadmin: true,
+      admin: true,
+      manager: true,
+      editor: true,
+      member: true,
+      stakeholder: true,
+      auditor: true,
+    }
+    expect(Object.keys(exhaustive).sort()).toEqual([...USER_ROLES].sort())
+  })
+
+  it('shows superadmin no less than admin, anywhere', () => {
+    // The failure this whole sweep exists to prevent: a check written for
+    // 'admin' going silently false for the seat above it.
+    const RANK: Record<string, number> = { none: 0, own: 1, scoped: 2, all: 3 }
+    for (const action of Object.keys(ROLE_GRANTS) as Action[]) {
+      expect(
+        RANK[ROLE_GRANTS[action].superadmin],
+        `superadmin must not trail admin on ${action}`,
+      ).toBeGreaterThanOrEqual(RANK[ROLE_GRANTS[action].admin])
+    }
+  })
+})
+
+describe('isAdminRole', () => {
+  it('includes superadmin, which is the whole point', () => {
+    // Widening the enum turned every surviving `role === 'admin'` into a
+    // silent false for superadmin — compiling, typechecking, and quietly
+    // hiding things from the highest-privilege seat.
+    expect(isAdminRole('superadmin')).toBe(true)
+    expect(isAdminRole('admin')).toBe(true)
+  })
+
+  it('is staff-only, not a ladder — the seats either side of it', () => {
+    // Testing only 'admin' cannot tell "staff predicate" from "rank >= admin".
+    expect(isAdminRole('superadmin')).toBe(true) // above
+    expect(isAdminRole('manager')).toBe(false) // immediately below, and NOT staff
+    expect(isAdminRole('editor')).toBe(false)
+  })
+
+  it('excludes every non-staff seat', () => {
+    for (const role of ['manager', 'editor', 'member', 'stakeholder', 'auditor'] as const) {
+      expect(isAdminRole(role), role).toBe(false)
+    }
+  })
+})
+
+describe('roleLabel', () => {
+  it('names every seat, so no badge falls through to a wrong default', () => {
+    for (const role of USER_ROLES) {
+      expect(roleLabel(role), role).toMatch(/^[A-Z]/)
+    }
+    expect(roleLabel('superadmin')).toBe('Superadmin')
+  })
+})
+
 describe('can', () => {
   it('resolves all without needing a resource', () => {
     expect(can(actor('admin'), 'user.create')).toBe(true)
@@ -120,6 +185,21 @@ describe('can', () => {
     // own is a subset of scoped: your own row is inside your scope even when
     // the row carries no appId at all.
     expect(can(actor('manager'), 'task.edit', { ownerId: 'actor-1', appId: null })).toBe(true)
+  })
+
+  it('resolves scoped against ANY app when a resource spans several', () => {
+    // A meeting can serve more than one project. Being PM of one of them is
+    // enough; requiring all of them would mean a joint meeting could only be
+    // managed by someone who runs every project in it.
+    const manager = actor('manager', ['app-2'])
+    expect(can(manager, 'meeting.manage', { appIds: ['app-1', 'app-2'] })).toBe(true)
+    expect(can(manager, 'meeting.manage', { appIds: ['app-1', 'app-3'] })).toBe(false)
+  })
+
+  it('fails closed on an empty or absent appIds list', () => {
+    const manager = actor('manager', ['app-1'])
+    expect(can(manager, 'meeting.manage', { appIds: [] })).toBe(false)
+    expect(can(manager, 'meeting.manage', { appIds: null })).toBe(false)
   })
 
   it('fails closed when own or scoped is asked without a resource', () => {

@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/select'
 import { approveUser, rejectUser } from '@/features/admin/actions'
 import type { PendingUser } from '@/features/admin/queries'
+import type { UserRole } from '@/features/auth/capabilities'
 
 function PendingRow({
   user,
@@ -43,10 +44,10 @@ function PendingRow({
 }: {
   user: PendingUser
   isPending: boolean
-  onApprove: (user: PendingUser, role: 'admin' | 'member') => void
+  onApprove: (user: PendingUser, role: UserRole) => void
   onReject: (user: PendingUser) => void
 }) {
-  const [role, setRole] = useState<'admin' | 'member'>('member')
+  const [role, setRole] = useState<UserRole>('member')
 
   function handleApprove() {
     onApprove(user, role)
@@ -91,7 +92,7 @@ function PendingRow({
         <Select
           value={role}
           disabled={isPending}
-          onValueChange={(value) => setRole(value as 'admin' | 'member')}
+          onValueChange={(value) => setRole(value as UserRole)}
         >
           <SelectTrigger size="sm" aria-label={`Role for ${user.name}`} className="w-28">
             <SelectValue />
@@ -177,7 +178,7 @@ export function PendingApprovalsCard({ users }: { users: PendingUser[] }) {
     })
   }
 
-  function handleApprove(user: PendingUser, role: 'admin' | 'member') {
+  function handleApprove(user: PendingUser, role: UserRole) {
     decide(user, () => approveUser(user.id, role), `${user.name} approved as ${role}`)
   }
 

@@ -1,3 +1,4 @@
+import { isAdminRole } from '@/features/auth/capabilities'
 /**
  * Pure authorization decision for serving one meeting keyframe image through
  * the /api/meeting-keyframes proxy (src/app/api/meeting-keyframes/[...path]/
@@ -17,7 +18,7 @@
  * in an unconditional "isAdmin always wins").
  */
 export type KeyframeAccessInput = {
-  /** session.user.role === 'admin'. */
+  /** isAdminRole(session.user.role). */
   isAdmin: boolean
   /** meeting_screenshots.deleted_at IS NOT NULL for this frame. */
   frameDeleted: boolean

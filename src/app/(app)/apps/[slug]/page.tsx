@@ -57,6 +57,7 @@ import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-
 import { ExportButton } from '@/features/notion/components/export-button'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 const SPRINT_STATUS_LABEL: Record<'planned' | 'active' | 'done', string> = {
   planned: 'Planned',
@@ -87,7 +88,7 @@ export default async function AppDetailPage(props: {
   const [app, session] = await Promise.all([getAppBySlug(slug), getSession()])
   if (!app) notFound()
 
-  const isAdmin = session?.user?.role === 'admin'
+  const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   // Settings is the only gated section, so availability is known the moment
   // the session is. Everything else is visible to any signed-in member.
   const available = APP_TAB_IDS.filter((id) => id !== 'settings' || isAdmin)

@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { KeyRound, Pause, Play, Plus, Trash2 } from 'lucide-react'
+import { CreditCard, KeyRound, Pause, Play, Plus, Trash2, Users } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,20 +19,33 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { addGeminiKey, deleteGeminiKey, toggleGeminiKey } from '@/features/gemini/actions'
+import {
+  addGeminiKey,
+  deleteGeminiKey,
+  setGeminiKeySharing,
+  setGeminiKeyTier,
+  toggleGeminiKey,
+} from '@/features/gemini/actions'
 import type { GeminiKeyRow } from '@/features/gemini/queries'
 
-export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
+export function GeminiKeysCard({
+  keys,
+  usedBy,
+}: {
+  keys: GeminiKeyRow[]
+  usedBy: { keyId: string | null; callerName: string; calls: number }[]
+}) {
   const [isPending, startTransition] = useTransition()
   const [label, setLabel] = useState('')
   const [key, setKey] = useState('')
+  const [tier, setTier] = useState<'free' | 'paid'>('free')
 
   function handleAdd(event: React.FormEvent) {
     event.preventDefault()
     if (!key.trim() || isPending) return
     startTransition(async () => {
       try {
-        const res = await addGeminiKey(label, key)
+        const res = await addGeminiKey(label, key, { tier })
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -40,6 +53,7 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
         toast.success('Gemini key added')
         setLabel('')
         setKey('')
+        setTier('free')
       } catch {
         toast.error('Something went wrong — try again')
       }
@@ -76,6 +90,36 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
     })
   }
 
+  function handleShare(id: string, shared: boolean) {
+    startTransition(async () => {
+      try {
+        const res = await setGeminiKeySharing(id, shared)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(shared ? 'Key shared with the org' : 'Key is personal again')
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  function handleTier(id: string, tier: 'free' | 'paid') {
+    startTransition(async () => {
+      try {
+        const res = await setGeminiKeyTier(id, tier)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(tier === 'paid' ? 'Marked as paid tier' : 'Marked as free tier')
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
   return (
     <Card id="gemini">
       <CardHeader>
@@ -83,16 +127,18 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
           <KeyRound className="size-4" aria-hidden /> Gemini API keys
         </CardTitle>
         <CardDescription>
-          Your personal keys power meeting transcription and AI notes. Requests roll across
-          your active keys automatically, so adding more keys spreads out free-tier rate
-          limits. Keys are encrypted at rest and never shown again after saving.
+          Your personal keys power every AI feature. Google&rsquo;s free-tier limits are per
+          <strong> project</strong>, not per key — to actually multiply your free quota, create
+          each key in its own project in Google AI Studio. Keys are encrypted at rest and never
+          shown again after saving.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {keys.length === 0 ? (
           <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
             No keys yet. Create a free key in Google AI Studio (aistudio.google.com), then
-            paste it here to unlock meeting intelligence.
+            paste it here to unlock meeting intelligence. Each key from a separate project
+            multiplies your free quota.
           </p>
         ) : (
           <ul className="flex flex-col divide-y">
@@ -112,6 +158,8 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
                 <Badge variant={row.active ? 'default' : 'secondary'}>
                   {row.active ? 'Active' : 'Paused'}
                 </Badge>
+                <Badge variant="outline">{row.tier === 'paid' ? 'Paid' : 'Free'}</Badge>
+                {row.shared ? <Badge variant="secondary">Shared</Badge> : null}
                 <div className="flex items-center gap-1">
                   <Button
                     variant="ghost"
@@ -123,6 +171,58 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
                     {row.active ? <Pause /> : <Play />}
                     <span className="sr-only">{row.active ? 'Pause key' : 'Resume key'}</span>
                   </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    disabled={isPending}
+                    onClick={() => handleTier(row.id, row.tier === 'paid' ? 'free' : 'paid')}
+                  >
+                    <CreditCard />
+                    <span className="sr-only">
+                      {row.tier === 'paid' ? 'Mark key as free tier' : 'Mark key as paid tier'}
+                    </span>
+                  </Button>
+                  {row.shared ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      type="button"
+                      disabled={isPending}
+                      onClick={() => handleShare(row.id, false)}
+                    >
+                      <Users />
+                      <span className="sr-only">Stop sharing key</span>
+                    </Button>
+                  ) : (
+                    <AlertDialog>
+                      <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
+                        <Users />
+                        <span className="sr-only">Share key with org</span>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Share this key with everyone here?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Anyone in this LogPup org can spend &ldquo;{row.label}&rdquo;
+                            (••••{row.last4}) on their own AI features once their own keys are
+                            exhausted. On the free tier, Google uses prompts to improve its
+                            products. You can see who used it, and you can stop sharing or
+                            delete the key at any time.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            disabled={isPending}
+                            onClick={() => handleShare(row.id, true)}
+                          >
+                            Share key
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
                   <AlertDialog>
                     <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
                       <Trash2 />
@@ -149,10 +249,29 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
                     </AlertDialogContent>
                   </AlertDialog>
                 </div>
+                {row.shared && usedBy.some((u) => u.keyId === row.id) ? (
+                  <p className="w-full text-xs text-muted-foreground">
+                    Used in the last 30 days by{' '}
+                    {usedBy
+                      .filter((u) => u.keyId === row.id)
+                      .map((u) => `${u.callerName} (${u.calls} call${u.calls === 1 ? '' : 's'})`)
+                      .join(', ')}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>
         )}
+
+        {keys.length === 1 &&
+        keys[0].failCount > 0 &&
+        keys[0].lastUsedAt !== null &&
+        Date.now() - keys[0].lastUsedAt.getTime() < 12 * 60 * 60 * 1000 ? (
+          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+            Your only key has been hitting its limits. One key = one project&rsquo;s quota — add
+            a second key from a new AI Studio project to keep AI features flowing.
+          </p>
+        ) : null}
 
         <form onSubmit={handleAdd} className="flex flex-col gap-3 rounded-lg border p-3">
           <div className="grid gap-3 sm:grid-cols-[1fr_2fr]">
@@ -180,10 +299,31 @@ export function GeminiKeysCard({ keys }: { keys: GeminiKeyRow[] }) {
               />
             </div>
           </div>
+          <fieldset className="flex items-center gap-4 text-sm">
+            <legend className="sr-only">Key tier</legend>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="gemini-key-tier"
+                checked={tier === 'free'}
+                onChange={() => setTier('free')}
+              />
+              Free tier
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="gemini-key-tier"
+                checked={tier === 'paid'}
+                onChange={() => setTier('paid')}
+              />
+              Paid (billing linked)
+            </label>
+          </fieldset>
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
-              Free tier is per-key (roughly 5–15 requests/min and a few hundred requests/day
-              depending on model — see ai.google.dev/rate-limits). Add up to 5 keys.
+              Free keys cost $0 and cover every LogPup feature (roughly 10&ndash;15 requests/min
+              and a few hundred/day per project). One key per AI Studio project; add up to 5.
             </p>
             <Button type="submit" size="sm" disabled={isPending || !key.trim()}>
               <Plus /> {isPending ? 'Checking…' : 'Add key'}

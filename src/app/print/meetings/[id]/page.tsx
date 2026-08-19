@@ -1,3 +1,4 @@
+import { isAdminRole } from '@/features/auth/capabilities'
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
@@ -342,7 +343,7 @@ export default async function MeetingPrintPage(props: {
   // Editing rights mirror editNoteSegment's own gate (canManageMeeting):
   // admin or the meeting's creator. Attendees can read this page but not
   // rewrite the record.
-  const canEdit = session.user.role === 'admin' || meeting.createdBy === session.user.id
+  const canEdit = isAdminRole(session.user.role) || meeting.createdBy === session.user.id
 
   const { en, si } = splitBilingualSummary(notes?.summary)
   const summaryBlocks: { lang: 'en' | 'si'; content: string }[] = []

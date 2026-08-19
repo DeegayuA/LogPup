@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.262",
+  "current": "v0.0.270",
   "versions": [
     {
       "version": "v0.0.1",
@@ -1572,6 +1572,54 @@
       "date": "2026-08-19",
       "hash": "86420e8",
       "change": "feat: gemini pricing table with promo windows and honest formatting"
+    },
+    {
+      "version": "v0.0.263",
+      "date": "2026-08-19",
+      "hash": "b693c30",
+      "change": "feat: ai_usage_events ledger table"
+    },
+    {
+      "version": "v0.0.264",
+      "date": "2026-08-19",
+      "hash": "de9b85c",
+      "change": "feat: gemini key sharing + tier columns, user_ai_prefs table"
+    },
+    {
+      "version": "v0.0.265",
+      "date": "2026-08-19",
+      "hash": "dc87593",
+      "change": "feat: AI feature registry and per-user pref resolution"
+    },
+    {
+      "version": "v0.0.266",
+      "date": "2026-08-19",
+      "hash": "365790d",
+      "change": "feat: usage recorder and own-then-shared key rotation ordering"
+    },
+    {
+      "version": "v0.0.267",
+      "date": "2026-08-19",
+      "hash": "9386d3d",
+      "change": "."
+    },
+    {
+      "version": "v0.0.268",
+      "date": "2026-08-19",
+      "hash": "7724277",
+      "change": "feat: live token mints use shared pool and log estimated session usage"
+    },
+    {
+      "version": "v0.0.269",
+      "date": "2026-08-19",
+      "hash": "3f80239",
+      "change": "fix(search): gate universal search on approved, not merely signed in"
+    },
+    {
+      "version": "v0.0.270",
+      "date": "2026-08-19",
+      "hash": "279f393",
+      "change": "fix: correct stale docs and terminal-error parity in live-token.ts"
     }
   ]
 }

@@ -18,6 +18,7 @@ import { QUICK_MODELS } from '@/features/gemini/models'
 import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
 import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
+import { isAdminRole } from '@/features/auth/capabilities'
 
 // Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
 // other files. Every guard now names the capability it needs and the matrix
@@ -369,7 +370,7 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   // the caller could render.
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
-  if (actor.role !== 'admin' && !(await managesApp(actor.id, parsedId.data))) {
+  if (!isAdminRole(actor.role) && !(await managesApp(actor.id, parsedId.data))) {
     return err('Only an admin or this project’s manager can edit it')
   }
 

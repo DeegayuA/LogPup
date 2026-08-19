@@ -50,7 +50,11 @@ function confirmForm(value = 'CLEAR'): FormData {
   return form
 }
 
-const asAdmin = () => authMock.mockResolvedValue({ user: { id: 'admin-1', role: 'admin' } })
+// Clearing the database is 'danger.dbclear', which is superadmin-only: it is
+// one of exactly three powers that separate superadmin from admin. The old
+// two-role model had no seat above admin, so this used to be an admin test.
+const asSuperadmin = () =>
+  authMock.mockResolvedValue({ user: { id: 'superadmin-1', role: 'superadmin' } })
 
 beforeEach(() => {
   authMock.mockReset()
@@ -77,14 +81,14 @@ describe('clearTestData table coverage', () => {
   ]
 
   it.each(mustClear)('clears %s', async (_name, table) => {
-    asAdmin()
+    asSuperadmin()
     const res = await clearTestData(null, confirmForm())
     expect(res.ok).toBe(true)
     expect(deletedTables()).toContain(table)
   })
 
   it('keeps users and the activity trail', async () => {
-    asAdmin()
+    asSuperadmin()
     await clearTestData(null, confirmForm())
     // Users survive so the admin who ran the wipe can still sign in;
     // activity_log survives because a wipe is the event an audit trail most
@@ -94,7 +98,7 @@ describe('clearTestData table coverage', () => {
   })
 
   it('deletes meeting children before meetings, so no FK is violated', async () => {
-    asAdmin()
+    asSuperadmin()
     await clearTestData(null, confirmForm())
     const order = deletedTables()
     expect(order.indexOf(meetingAttendeeRecommendations)).toBeLessThan(order.indexOf(meetings))
@@ -112,14 +116,14 @@ describe('clearTestData guards', () => {
 
   it('refuses when ENABLE_DB_CLEAR is unset and deletes nothing', async () => {
     vi.stubEnv('ENABLE_DB_CLEAR', '')
-    asAdmin()
+    asSuperadmin()
     const res = await clearTestData(null, confirmForm())
     expect(res.ok).toBe(false)
     expect(deleteSpy).not.toHaveBeenCalled()
   })
 
   it('refuses without the typed confirmation and deletes nothing', async () => {
-    asAdmin()
+    asSuperadmin()
     const res = await clearTestData(null, confirmForm('clear'))
     expect(res).toEqual({ ok: false, error: 'Type CLEAR to confirm' })
     expect(deleteSpy).not.toHaveBeenCalled()

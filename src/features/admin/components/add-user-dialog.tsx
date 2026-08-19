@@ -27,11 +27,12 @@ import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { createUser } from '@/features/admin/actions'
 import { PERSONAL_EMAIL_MAX_LENGTH } from '@/features/auth/personal-email-schema'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
+import type { UserRole } from '@/features/auth/capabilities'
 
 type FormState = {
   email: string
   name: string
-  role: 'admin' | 'member'
+  role: UserRole
   title: string
   phone: string
   personalEmail: string
@@ -130,7 +131,7 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
             <Select
               value={form.role}
               onValueChange={(value) =>
-                setForm((f) => ({ ...f, role: value as 'admin' | 'member' }))
+                setForm((f) => ({ ...f, role: value as UserRole }))
               }
             >
               <SelectTrigger id="new-user-role" className="w-full">
