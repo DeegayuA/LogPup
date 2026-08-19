@@ -118,10 +118,11 @@ async function mintWithKey(
 }
 
 /**
- * Mints an ephemeral Live token using the user's own keys, rolling
- * least-recently-used first exactly as callGemini does, with the same
- * failCount/lastUsedAt bookkeeping so a key that is failing here is also
- * deprioritised for ordinary Gemini calls.
+ * Mints an ephemeral Live token, rolling across the caller's own active keys
+ * least-recently-used first (never-used before used), then org-shared keys
+ * owned by others, LRU again — same ordering as callGeminiCore, via
+ * orderKeysForRotation — with the same failCount/lastUsedAt bookkeeping so a
+ * key that is failing here is also deprioritised for ordinary Gemini calls.
  *
  * Model fallback: each key walks LIVE_MODEL_FALLBACK_ORDER (primary Live
  * preview, then the older 2.5 native-audio preview). A mint the endpoint
@@ -149,6 +150,7 @@ export async function mintLiveToken(
   // Own keys first (LRU), then org-shared keys (LRU) — a caller with
   // working keys of their own never drains a teammate's shared quota.
   const keys = orderKeysForRotation(userId, rows)
+  const usedSharedPool = keys.some((key) => key.userId !== userId)
 
   if (keys.length === 0) {
     throw new GeminiError(
@@ -251,6 +253,8 @@ export async function mintLiveToken(
   }
   throw new GeminiError(
     'ALL_KEYS_FAILED',
-    'Could not reach Gemini Live with any saved key — recording continues without live transcription.',
+    usedSharedPool
+      ? 'Could not reach Gemini Live with any saved or org-shared key — recording continues without live transcription.'
+      : 'Could not reach Gemini Live with any saved key — recording continues without live transcription.',
   )
 }
