@@ -5,7 +5,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { appRoleHistory, apps, users } from '@/db/schema'
-import { auth } from '@/lib/auth'
+import { requireCapability } from '@/features/auth/actor'
 import { managesApp } from '@/features/apps/project-manager'
 import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -15,14 +15,13 @@ import { buildAppUpdate, summarizeAppChanges } from '@/features/apps/update-inpu
 import { buildAppRoleEntry, type AppRoleKind } from '@/features/apps/role-history'
 import { callGemini } from '@/features/gemini/client'
 import { QUICK_MODELS } from '@/features/gemini/models'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
 import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
 
-async function requireAdmin() {
-  const session = await auth()
-  if (session?.user?.role !== 'admin') return null
-  return session
-}
+// Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
+// other files. Every guard now names the capability it needs and the matrix
+// answers; the contract is unchanged (Actor on success, null on refusal).
 
 /** Same per-file helper other actions modules keep (see people/actions.ts,
  *  admin/trash-actions.ts) rather than a shared export — these files are all
@@ -191,8 +190,11 @@ export async function generateAppFromReadme(
   readme: unknown,
   repoUrl?: unknown,
 ): Promise<ActionResult<GeneratedApp>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('app.create')
+  if (!actor) return err('Admins only')
+
+  const disabled = await aiFeatureDisabledMessage(actor.id, 'app-metadata')
+  if (disabled) return err(disabled)
 
   const text = typeof readme === 'string' ? readme.trim() : ''
   if (text.length < 40) {
@@ -207,7 +209,7 @@ export async function generateAppFromReadme(
     .filter(Boolean)
     .join('\n\n')
 
-  return generateFromFacts(session.user.id, facts, parsedUrl?.repo ?? '')
+  return generateFromFacts(actor.id, facts, parsedUrl?.repo ?? '')
 }
 
 /**
@@ -224,8 +226,11 @@ export async function generateAppFromReadme(
 export async function generateAppFromRepo(
   repoUrl: unknown,
 ): Promise<ActionResult<GenerateOutcome>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('app.create')
+  if (!actor) return err('Admins only')
+
+  const disabled = await aiFeatureDisabledMessage(actor.id, 'app-metadata')
+  if (disabled) return err(disabled)
 
   const url = typeof repoUrl === 'string' ? repoUrl.trim() : ''
   if (!url) return err('Add a repository URL first')
@@ -257,14 +262,14 @@ export async function generateAppFromRepo(
     .filter(Boolean)
     .join('\n\n')
 
-  const generated = await generateFromFacts(session.user.id, facts, context.repo)
+  const generated = await generateFromFacts(actor.id, facts, context.repo)
   if (!generated.ok) return generated
   return ok({ status: 'generated', ...generated.data })
 }
 
 export async function createApp(input: unknown): Promise<ActionResult<{ slug: string }>> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('app.create')
+  if (!actor) return err('Admins only')
   const parsed = appCreateInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
   const slug = slugify(parsed.data.name)
@@ -308,14 +313,14 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
       // maybe a lead) with no recorded start, exactly the gap migration
       // 0034's backfill exists to paper over for apps that predate it.
       db.insert(appRoleHistory).values([
-        buildAppRoleEntry({ appId, userId: parsed.data.pmId, role: 'pm', changedBy: session.user.id, at }),
+        buildAppRoleEntry({ appId, userId: parsed.data.pmId, role: 'pm', changedBy: actor.id, at }),
         ...(parsed.data.leadId
           ? [
               buildAppRoleEntry({
                 appId,
                 userId: parsed.data.leadId,
                 role: 'lead',
-                changedBy: session.user.id,
+                changedBy: actor.id,
                 at,
               }),
             ]
@@ -331,7 +336,7 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
     // version of this note.
     const pmName = await nameForUser(parsed.data.pmId)
     await logActivity({
-      actorId: session.user.id,
+      actorId: actor.id,
       verb: 'created',
       entityType: 'app',
       entityId: appId,
@@ -351,18 +356,20 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
 }
 
 export async function updateApp(appId: string, input: unknown): Promise<ActionResult> {
-  // Admin OR the app's project manager: the PM manages everything in their
-  // project (see project-manager.ts). Editing is the widest thing they need;
-  // create/delete stay admin-only via requireAdmin below.
-  const session = await auth()
-  if (!session?.user) return err('Not signed in')
+  // Admin OR the app's project manager. This used to be an explicit
+  // admin-or-managesApp branch; the matrix now answers it — 'app.edit' is
+  // 'all' for admin and above and 'scoped' for a manager, and a manager's
+  // scope is the apps where they are the as-of pm or lead. Create and archive
+  // stay narrower, on their own capabilities.
+  const actor = await requireCapability('app.edit', { appId })
+  if (!actor) return err('Not allowed')
   // Every other action in the codebase validates the id shape before it
   // reaches the DB; this one used to pass the raw string through, so a
   // malformed id surfaced as a driver-level rejection rather than an error
   // the caller could render.
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
-  if (session.user.role !== 'admin' && !(await managesApp(session.user.id, parsedId.data))) {
+  if (actor.role !== 'admin' && !(await managesApp(actor.id, parsedId.data))) {
     return err('Only an admin or this project’s manager can edit it')
   }
 
@@ -407,7 +414,7 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
             appId: parsedId.data,
             userId: result.set.pmId as string,
             role: 'pm',
-            changedBy: session.user.id,
+            changedBy: actor.id,
             at,
           }),
         ),
@@ -431,7 +438,7 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
               appId: parsedId.data,
               userId: nextLeadId,
               role: 'lead',
-              changedBy: session.user.id,
+              changedBy: actor.id,
               at,
             }),
           ),
@@ -465,7 +472,7 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
     { pmName, leadName },
   )
   await logActivity({
-    actorId: session.user.id,
+    actorId: actor.id,
     verb: 'updated',
     entityType: 'app',
     entityId: parsedId.data,
@@ -482,8 +489,8 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
 }
 
 export async function archiveApp(appId: string): Promise<ActionResult> {
-  const session = await requireAdmin()
-  if (!session) return err('Admins only')
+  const actor = await requireCapability('app.archive')
+  if (!actor) return err('Admins only')
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
   try {
@@ -501,7 +508,7 @@ export async function archiveApp(appId: string): Promise<ActionResult> {
       .returning({ slug: apps.slug, name: apps.name })
     if (!archived) return err('App not found')
     await logActivity({
-      actorId: session.user.id,
+      actorId: actor.id,
       verb: 'updated',
       entityType: 'app',
       entityId: parsedId.data,

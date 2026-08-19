@@ -9,6 +9,7 @@ import {
   callGeminiWithAudio,
 } from '@/features/gemini/client'
 import { TTS_MODEL_FALLBACK_ORDER, TTS_VOICE } from '@/features/gemini/models'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import { truncateForSpeech } from '@/features/speech/spoken-text'
 import { MAX_SPEECH_CHUNKS, chunkForSpeech } from '@/features/speech/chunk-speech'
 
@@ -50,6 +51,9 @@ export type DictationResult = { text: string }
 export async function transcribeDictation(formData: FormData): Promise<ActionResult<DictationResult>> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'dictation')
+  if (disabled) return err(disabled)
 
   const audio = formData.get('audio')
   if (!(audio instanceof File) || audio.size === 0) return err('No audio received')
@@ -110,6 +114,9 @@ export async function synthesizeSpeech(
 ): Promise<ActionResult<SpokenAudio>> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'read-aloud')
+  if (disabled) return err(disabled)
 
   const parsed = speakInput.safeParse({ text })
   if (!parsed.success) return err('Nothing to read aloud')

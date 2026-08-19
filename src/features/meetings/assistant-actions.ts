@@ -17,6 +17,7 @@ import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { GeminiError, callGemini } from '@/features/gemini/client'
 import { ASSISTANT_MODELS } from '@/features/gemini/models'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import { canReadMeetingIntel } from '@/features/meetings/ai-actions'
 
 /**
@@ -70,6 +71,9 @@ export async function askMeeting(
   // Same gate as every other read of transcript-derived content: admin, the
   // meeting's creator, or someone who was actually there.
   if (!(await canReadMeetingIntel(session.user, meeting))) return err('Not available')
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'meeting-assistant')
+  if (disabled) return err(disabled)
 
   // Four independent context reads, batched — never serialize what can run
   // together (suggest-actions.ts's rule). On the Neon HTTP driver each await

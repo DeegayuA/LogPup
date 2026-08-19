@@ -8,6 +8,7 @@ import { meetingAiNotes } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { callGemini } from '@/features/gemini/client'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 
 export type SprintSuggestion = { name: string; goal: string }
 
@@ -47,6 +48,9 @@ const suggestionSchema = z.object({
 export async function suggestSprint(appId: unknown): Promise<ActionResult<SprintSuggestion>> {
   const session = await auth()
   if (!session?.user?.id) return err('Sign in required')
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'sprint-draft')
+  if (disabled) return err(disabled)
 
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')

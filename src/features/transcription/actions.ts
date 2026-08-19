@@ -3,6 +3,7 @@
 import { z } from 'zod'
 import { type ActionResult, err, ok } from '@/lib/action-result'
 import { GeminiError } from '@/features/gemini/client'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import { canManageMeeting } from '@/features/meetings/ai-actions'
 import { isLiveTranscriptionEnabled } from './flag'
 import { type MintedLiveToken, mintLiveToken } from './live-token'
@@ -32,6 +33,9 @@ export async function requestLiveToken(meetingId: string): Promise<ActionResult<
 
   const allowed = await canManageMeeting(parsed.data.meetingId)
   if (!allowed) return err('Not allowed to record this meeting.')
+
+  const disabled = await aiFeatureDisabledMessage(allowed.session.user.id, 'live-captions')
+  if (disabled) return err(disabled)
 
   try {
     const minted = await mintLiveToken(allowed.session.user.id)

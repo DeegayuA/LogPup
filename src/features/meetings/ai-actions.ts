@@ -51,6 +51,7 @@ import {
   type GeminiImageInput,
 } from '@/features/gemini/client'
 import { SYNTHESIS_MODELS } from '@/features/gemini/models'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import {
   estimateMinutesFromAudioBytes,
   summaryDepthInstruction,
@@ -1333,6 +1334,9 @@ async function transcribeSegmentInner(
   if (!ctx) return err('Only admins or the meeting creator can record analysis')
   const { session, meeting } = ctx
 
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'meeting-intel')
+  if (disabled) return err(disabled)
+
   const audio = formData.get('audio')
   if (!(audio instanceof File) || audio.size === 0) {
     return err(`No audio received for segment ${parsed.data.index + 1}`)
@@ -1467,6 +1471,9 @@ async function finalizeMeetingRecordingInner(
   const ctx = await canManageMeeting(id)
   if (!ctx) return err('Only admins or the meeting creator can record analysis')
   const { session, meeting } = ctx
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'meeting-intel')
+  if (disabled) return err(disabled)
 
   const segmentRows = await db
     .select({ index: meetingRecordingSegments.index, transcript: meetingRecordingSegments.transcript })

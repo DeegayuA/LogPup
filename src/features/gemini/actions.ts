@@ -2,7 +2,7 @@
 
 import { z } from 'zod'
 import { revalidatePath } from 'next/cache'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, or } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { geminiKeys, userAiPrefs } from '@/db/schema'
@@ -81,12 +81,22 @@ export async function deleteGeminiKey(id: string): Promise<ActionResult> {
 }
 
 /**
- * "Do I have enough left to record this?" — the state of the caller's OWN
- * keys, as the recorder needs it before a long meeting.
+ * "Do I have enough left to record this?" — the state of the POOL this
+ * caller can actually draw on, as the recorder needs it before a long
+ * meeting.
  *
  * Reads only health columns (active, failCount); no key material, encrypted
- * or otherwise, is involved. Scoped to the session user, because a key's
- * health is exactly as private as the key.
+ * or otherwise, is involved. Row selection mirrors callGeminiCore's own key
+ * set (client.ts): the caller's own keys, plus other people's keys that are
+ * BOTH active and shared. That "both" matters — a teammate's paused or
+ * private key is not part of the pool this caller can call into, and must
+ * not inflate their readiness.
+ *
+ * The caller's OWN keys are still reported regardless of `active`
+ * (deliberately unfiltered, same as before this became pool-aware) — a
+ * paused key of the caller's own is still worth surfacing as "there but off",
+ * whereas a teammate's paused key is simply not available to this caller at
+ * all and must not appear.
  *
  * Deliberately does NOT probe each key with a live call: this runs whenever
  * a recording panel opens, and spending a request per key to ask "are you
@@ -106,7 +116,12 @@ export async function getRecordingReadiness(): Promise<ActionResult<RecordingRea
       lastUsedAt: geminiKeys.lastUsedAt,
     })
     .from(geminiKeys)
-    .where(eq(geminiKeys.userId, session.user.id))
+    .where(
+      or(
+        eq(geminiKeys.userId, session.user.id),
+        and(eq(geminiKeys.active, true), eq(geminiKeys.shared, true)),
+      ),
+    )
 
   return ok(assessRecordingReadiness(rows))
 }

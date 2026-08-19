@@ -6,6 +6,7 @@ import { db } from '@/db'
 import { activityLog } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { GeminiError, callGemini } from '@/features/gemini/client'
+import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
 import { buildWorklogDraftPrompt, type DraftActivity } from './draft-prompt'
 import { WORK_DAY_PATTERN } from './worklog-day'
 
@@ -25,6 +26,10 @@ export async function draftWorklogNote(
 ): Promise<ActionResult<{ note: string; activityCount: number }>> {
   const session = await auth()
   if (!session?.user) return err('Not signed in')
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'worklog-draft')
+  if (disabled) return err(disabled)
+
   if (!WORK_DAY_PATTERN.test(day)) return err('That is not a day')
 
   // activity_log stores instants; the day is Asia/Colombo (+05:30), so the
