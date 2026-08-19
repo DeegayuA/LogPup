@@ -22,11 +22,15 @@ So the design's first commitment: **a time entry does not require a task.** Ever
 
 That still leaves derived percent meaning something different from today's. Derived answers *"how much of my scheduled day is accounted for"* — a coverage question. Self-scored answers *"how much of what I set out to do did I get done"* — a judgment question. A good day can be 100% on one and 60% on the other.
 
-**Recommendation: keep both, and stop calling them both "percent".**
+**Decision: keep both, and stop calling them both "percent".**
 - `hoursLogged / scheduledHours` becomes **Accounted** — computed, never typed, shown as a progress affordance rather than a score.
 - `percent` stays **self-scored** and unchanged in meaning, and remains what history views, averages and the coverage rollup read — so nothing downstream silently changes meaning under other people's work.
 
-If percent must instead be literally replaced by the derived value, that is a data-meaning migration touching every history view, every average, and the in-flight coverage work. It needs its own decision and its own migration, and must not ride in on this feature.
+**Naming is load-bearing here, not cosmetic.** Two numbers under two distinct names is healthy; two numbers under one name is the disease. `docs/kpi-inventory.md` found this repo already shipping `FOLLOWUP_STALE_DAYS` exported twice with different values (14 and 21) and `DUE_SOON_DAYS` twice (7 and 3), all four live simultaneously. So, as hard rules: **"Accounted" must never be labelled or exported as anything containing the word "percent", and the two numbers must never share a tile.**
+
+A day of code review that closed no ticket computing as 0% would be the app calling someone lazy for doing their job — and it would silently rewrite the meaning of every historical row and every average built on one.
+
+If percent must instead be literally replaced by the derived value, that is a data-meaning migration, not a feature: every average, every history view, the coverage rollup, and the interpretation of every stored row change at once. It needs its own decision and its own migration, and the old column should be **kept and renamed rather than overwritten**, so the two eras stay distinguishable in the data.
 
 ## Data model
 
@@ -53,12 +57,22 @@ Rules:
 
 The page becomes a month calendar of the person's own worklog, with the single-day form appearing for whichever day is selected. **Reuse the meetings calendar components rather than writing a second calendar** — `meetings-month-calendar.tsx`, `meetings-day-rail.tsx` and `meetings-agenda.tsx` already solve month layout, day selection and the Colombo day boundary. Extract what is shared instead of forking it; a second calendar implementation will drift from the first within a month.
 
+**Sequence the extraction with `logpup-49` before starting it.** They own a whole-app UI redesign that touches these same files, and two sessions extracting the same shared calendar in one week produces exactly the fork this rule exists to prevent. Also note those components already changed under `0040`: a meeting now has N projects via `meeting.apps`, and they use `formatAppNames` for the abbreviated form — the extraction must carry that, not revert it.
+
 Each day cell shows, at a glance:
 - **accounted hours against scheduled** (e.g. `6.5 / 8`), the primary number;
 - a **state** whose word carries the meaning, never colour alone — `Logged`, `Partial`, `Missing`, `Absence`, `Holiday`, `Non-working`;
 - self-scored percent as a secondary mark when present.
 
-Selecting a day opens that day's entries editor inline. This is also how backfill works, which makes the calendar the natural home for what the catch-up panel does today — **but the catch-up panel belongs to another session and is being rewired to `computeCoverage`; its fate is theirs to decide, not something this design removes.**
+Selecting a day opens that day's entries editor inline. This is also how backfill works.
+
+### The catch-up panel: subsumed, under three binding conditions
+
+The panel's owner has agreed the calendar may replace it — surfacing which days are owed — **only if all three of these hold.** They are conditions, not preferences; failing any one makes the calendar a worse tool wearing a better design.
+
+1. **An owed day is fillable IN PLACE.** Popover, inline row, expanding cell — whatever fits, but never a round trip per day. The panel's real value was never the list; it was that a person back from two weeks' leave clears the backlog on one screen without navigating away and back for each day. A calendar that costs a navigation per owed day loses the only thing worth keeping.
+2. **The pending-absence group survives, with its sentence verbatim:** *"Waiting on approval — a day still counts as unlogged until it's approved."* Pending never exempts. A calendar that paints a pending day as handled while the coverage rollup still counts it missing puts a person's own two numbers in disagreement with each other.
+3. **Day state comes from `computeCoverage`.** Not from `missing-days` directly (already a thin selector over coverage), and emphatically not from a third derivation over schedules + holidays + absences. One owner answers "was this person expected to log today".
 
 Non-working days, approved absences and holidays must render as themselves, not as failures. A person on approved leave seeing "Missing" for five days is the exact failure this app's coverage work exists to prevent.
 
@@ -79,6 +93,8 @@ Non-working days, approved absences and holidays must render as themselves, not 
 **It says "check", never "wrong".** The person was there; the app was not. Copy is observational — *"3 hours here have no matching activity, which is normal for heads-down work"* — never accusatory.
 
 **The pure-function commitment.** The discrepancies are found by a pure function over `(entries, evidence)`; the model is asked only to phrase what that function found, never to decide what is wrong. An AI that invents a discrepancy about someone's working day is worse than no check at all, and this is the structural guarantee that it cannot.
+
+**The person sees it first — always.** A discrepancy the check finds is shown to the person who wrote the entry, and is not surfaced to anyone else before they have seen it. Worklog writes are self-only by deliberate design: there is no `worklog.write.any` for any of the seven seats, and a test asserts the key does not exist, because the record is a **first-person statement**. An AI-flagged "your hours do not match your activity" that an admin reads before the author does converts that statement into an accusation they never had a chance to answer. The surveillance risk in this feature is not the data — it is who reads the conclusion first. This is why no observation appears in any admin rollup, and why the evidence limits above are not enough on their own.
 
 ## Coordination — three sessions work in this area
 
