@@ -100,7 +100,16 @@ Settings page (`/settings`) gains an **AI features** card (read-outs live on /se
 - Per-key row gains: tier badge (Free/Paid), Shared badge when shared, and (for own shared keys) a "used by" breakdown from the ledger.
 - Nudges: existing empty states already push free keys; add a "1 key = 1 quota — add a second key from a new project" hint when the user has exactly one key and any 429-driven failure in the last 12h.
 
-## A6. Migrations
+## A6. Admin feature-adoption panel
+
+Added 2026-08-19 from the owner requirement: *"I need to know which features people are using, which don't, to see how to improve less used features."* Needs no new schema — `ai_usage_events` already carries `user_id` + `feature`.
+
+- Admin-only card on `/admin`, 30-day rolling window: per feature, distinct people who used it, adoption share of active users, call count, last use, and a state badge whose **word** carries the meaning (Used by most / A few people / Nobody yet).
+- The registry drives the table, so **every** registered feature is listed including the ones with zero rows — an untouched feature is the finding, and a query-driven table would hide it. A dedicated "untouched in 30 days" line names them.
+- Per-person drill-down: who made how many calls, and which features each person has touched.
+- Audience note: all users are technical software engineers. Copy states mechanisms and raw counts plainly rather than simplifying them.
+
+## A7. Migrations
 
 Two hand-written SQL migrations + journal entries (model: 0031). Never `drizzle-kit generate`. Next number taken from every worktree's `_journal.json` (siblings: `../LogPup-sdd-*`). Verify with `information_schema` after `npm run db:migrate`, not exit code. `--> statement-breakpoint` between statements, never inside comments.
 
