@@ -154,13 +154,20 @@ export type SearchProvider = {
    * Runs its OWN hand-written query, colocated with the feature that owns the
    * table.
    *
-   * Not expressed as `{ table, columns }` on purpose, and this is the load-
-   * bearing decision of the whole registry: db/live.test.ts enforces soft
-   * deletes by REGEX-SCANNING source for reads of a soft-deleted table by
-   * name. Put the tables in a data structure and select from them through a
-   * variable and that scan sees nothing — the only guard against resurfacing
-   * trashed rows goes silently blind. Write the query out, and read
-   * soft-deleted tables through the live_* subqueries in db/live.ts.
+   * DO NOT refactor this into `{ table, columns }` descriptors, and do not
+   * hoist the tables of an existing provider into a config object either. Not
+   * a style preference — doing it DISABLES the repo's soft-delete guard, and
+   * disables it silently, on a green test run.
+   *
+   * Why: db/live.test.ts enforces soft deletes by REGEX-SCANNING source for
+   * reads of a soft-deleted table by name. It can only see a table it can read
+   * as a literal. Select through a variable instead and the scan matches
+   * nothing, reports no offenders, and passes — while the read it was meant to
+   * catch is now unguarded. The failure mode is a trashed meeting or task
+   * reappearing in ⌘K while the admin trash still lists it as deleted.
+   *
+   * So: write the query out, and read soft-deleted tables through the live_*
+   * subqueries in db/live.ts.
    *
    * (Written without naming those tables in code form on purpose: the scan
    * reads comments too, and a doc comment that demonstrates the offence is
