@@ -20,6 +20,7 @@ import {
 import { getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
 import { listGeminiKeys } from '@/features/gemini/queries'
 import { assessRecordingReadiness } from '@/features/gemini/readiness'
+import { AiFeaturesCard } from '@/features/gemini/components/ai-features-card'
 import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
 import { AppearanceCard } from '@/features/settings/components/appearance-card'
 import { describeAiStatus, findRelease } from '@/features/settings/overview'
@@ -191,6 +192,11 @@ export default async function SettingsPage() {
             </Button>
           </CardContent>
         </Card>
+
+        {/* 3b. AI features hub. Complements the AI & voice card above: that
+            one is a readiness read-out, this is the per-feature registry —
+            costs, 30-day measured usage, and the on/off switch for each. */}
+        <AiFeaturesCard userId={user.id} />
 
         {/* 4. About. The version had exactly one home — the desktop sidebar
             footer, which is `hidden md:flex` — so on a phone there was no way
