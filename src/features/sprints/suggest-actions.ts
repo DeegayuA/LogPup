@@ -109,7 +109,10 @@ export async function suggestSprint(appId: unknown): Promise<ActionResult<Sprint
   ].join('\n')
 
   try {
-    const { text } = await callGemini(session.user.id, [{ text: prompt }], { responseJson: true })
+    const { text } = await callGemini(session.user.id, [{ text: prompt }], {
+      responseJson: true,
+      feature: 'sprint.draft',
+    })
     const parsed = suggestionSchema.safeParse(JSON.parse(text))
     if (!parsed.success) return err('The draft came back malformed — try again')
     return ok(parsed.data)

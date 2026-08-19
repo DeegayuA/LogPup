@@ -57,7 +57,9 @@ export async function draftWorklogNote(
   })
 
   try {
-    const { text } = await callGemini(session.user.id, [{ text: prompt }])
+    const { text } = await callGemini(session.user.id, [{ text: prompt }], {
+      feature: 'worklog.draft',
+    })
     const note = text.trim()
     if (!note) return err('No draft came back — try again')
     // activityCount travels back so the UI can say the day looked empty,

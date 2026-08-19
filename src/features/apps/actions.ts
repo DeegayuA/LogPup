@@ -129,6 +129,7 @@ async function generateFromFacts(
     ;({ text } = await callGemini(userId, [{ text: prompt }], {
       models: QUICK_MODELS,
       responseJson: true,
+      feature: 'app.metadata',
     }))
   } catch (error) {
     // callGemini throws GeminiError with messages already written for users

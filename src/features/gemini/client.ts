@@ -243,15 +243,15 @@ async function callModelWithRetry<T>(
 export async function callGemini(
   userId: string,
   partsInput: GeminiPartsInput,
-  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean; feature?: AiCallSlug },
+  opts: { model?: string; models?: readonly string[]; responseJson?: boolean; feature: AiCallSlug },
 ): Promise<{ text: string; model: string }> {
   const { value: text, model } = await callGeminiCore(
     userId,
     partsInput,
     resolveModelChain(opts),
-    opts?.responseJson ? { responseMimeType: 'application/json' } : undefined,
+    opts.responseJson ? { responseMimeType: 'application/json' } : undefined,
     extractText,
-    opts?.feature,
+    opts.feature,
   )
   return { text, model }
 }
@@ -269,21 +269,18 @@ function resolveModelChain(opts?: { model?: string; models?: readonly string[] }
 }
 
 /**
- * Records a blocked-call ledger row (when `feature` is known) and returns
- * the error unchanged, so every throw site in callGeminiCore can wrap its
- * GeminiError in one call: `throw recordFailure(feature, userId, models, err)`.
- * A blocked call is exactly the kind of event Settings and the adoption
- * panel should count.
+ * Records a blocked-call ledger row and returns the error unchanged, so every
+ * throw site in callGeminiCore can wrap its GeminiError in one call:
+ * `throw recordFailure(feature, userId, models, err)`. A blocked call is
+ * exactly the kind of event Settings and the adoption panel should count.
  */
 function recordFailure(
-  feature: AiCallSlug | undefined,
+  feature: AiCallSlug,
   userId: string,
   models: readonly string[],
   error: GeminiError,
 ): GeminiError {
-  if (feature) {
-    recordAiUsage({ userId, feature, model: models[0] ?? 'unknown', status: error.code })
-  }
+  recordAiUsage({ userId, feature, model: models[0] ?? 'unknown', status: error.code })
   return error
 }
 
@@ -301,7 +298,7 @@ async function callGeminiCore<T>(
   models: readonly string[],
   generationConfig: Record<string, unknown> | undefined,
   extract: ResponseExtractor<T>,
-  feature?: AiCallSlug,
+  feature: AiCallSlug,
 ): Promise<{ value: T; model: string }> {
   const rows = await db
     .select()
@@ -387,19 +384,17 @@ async function callGeminiCore<T>(
           .update(geminiKeys)
           .set({ lastUsedAt: new Date(), failCount: 0 })
           .where(eq(geminiKeys.id, key.id))
-        if (feature) {
-          recordAiUsage({
-            userId,
-            keyId: key.id,
-            keyOwnerId: key.userId,
-            keyLast4: key.last4,
-            feature,
-            model,
-            inputTokens: result.usage.inputTokens,
-            outputTokens: result.usage.outputTokens,
-            status: 'ok',
-          })
-        }
+        recordAiUsage({
+          userId,
+          keyId: key.id,
+          keyOwnerId: key.userId,
+          keyLast4: key.last4,
+          feature,
+          model,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          status: 'ok',
+        })
         return { value: result.value, model }
       }
 
@@ -509,7 +504,7 @@ async function callGeminiCore<T>(
 export async function callGeminiSpeech(
   userId: string,
   text: string,
-  opts: { models: readonly string[]; voiceName?: string; feature?: AiCallSlug },
+  opts: { models: readonly string[]; voiceName?: string; feature: AiCallSlug },
 ): Promise<GeminiSpeechAudio & { model: string }> {
   const { value, model } = await callGeminiCore(
     userId,
@@ -646,7 +641,7 @@ export async function callGeminiWithAudio(
   textParts: { text: string }[],
   audioBytes: Buffer,
   mimeType: string,
-  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean; feature?: AiCallSlug },
+  opts: { model?: string; models?: readonly string[]; responseJson?: boolean; feature: AiCallSlug },
 ): Promise<{ text: string; model: string }> {
   return callGemini(
     userId,
@@ -676,7 +671,7 @@ export async function callGeminiWithImages(
   userId: string,
   textParts: { text: string }[],
   images: GeminiImageInput[],
-  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean; feature?: AiCallSlug },
+  opts: { model?: string; models?: readonly string[]; responseJson?: boolean; feature: AiCallSlug },
 ): Promise<{ text: string; model: string }> {
   return callGemini(
     userId,

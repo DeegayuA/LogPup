@@ -196,6 +196,7 @@ Rules:
   try {
     const { text, model } = await callGemini(session.user.id, [{ text: prompt }], {
       models: ASSISTANT_MODELS,
+      feature: 'meeting.assistant',
     })
     const answer = text.trim()
     if (!answer) return err('No answer came back — try asking again')

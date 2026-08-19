@@ -63,6 +63,7 @@ export async function transcribeDictation(formData: FormData): Promise<ActionRes
       [{ text: DICTATION_PROMPT }],
       Buffer.from(await audio.arrayBuffer()),
       audio.type || 'audio/webm',
+      { feature: 'speech.dictation' },
     )
     return ok({ text: text.trim() })
   } catch (error) {
@@ -130,6 +131,7 @@ export async function synthesizeSpeech(
     const spoken = await callGeminiSpeech(session.user.id, chunk, {
       models: TTS_MODEL_FALLBACK_ORDER,
       voiceName: TTS_VOICE,
+      feature: 'speech.tts',
     })
     return ok({ ...spoken, truncated, chunkCount: chunks.length, index })
   } catch (error) {

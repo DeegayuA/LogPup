@@ -967,7 +967,10 @@ return { "resolvedIds": [] }.`
 
   let raw: string
   try {
-    ;({ text: raw } = await callGemini(userId, [{ text: prompt }], { responseJson: true }))
+    ;({ text: raw } = await callGemini(userId, [{ text: prompt }], {
+      responseJson: true,
+      feature: 'meeting.followups',
+    }))
   } catch (error) {
     console.error('[meeting-followups] resolution check failed:', error)
     return
@@ -1106,7 +1109,7 @@ lists were given.`
       [{ text: prompt }],
       audioBytes,
       mimeType,
-      { responseJson: true },
+      { responseJson: true, feature: 'meeting.synthesis' },
     ))
   } catch (error) {
     // GeminiError.message is already an actionable, key-free string (see
@@ -1386,7 +1389,7 @@ across segments; a later pass reconciles identity across the whole meeting.`
       [{ text: prompt }],
       audioBytes,
       mimeType,
-      { responseJson: true },
+      { responseJson: true, feature: 'meeting.segment' },
     ))
   } catch (error) {
     if (error instanceof GeminiError) return err(error.message)
@@ -1635,10 +1638,12 @@ listed app clearly fits or when no app lists were given.`
         ? await callGeminiWithImages(session.user.id, [{ text: prompt }], images, {
             models: SYNTHESIS_MODELS,
             responseJson: true,
+            feature: 'meeting.synthesis',
           })
         : await callGemini(session.user.id, [{ text: prompt }], {
             models: SYNTHESIS_MODELS,
             responseJson: true,
+            feature: 'meeting.synthesis',
           }))
   } catch (error) {
     // Deliberately NOT falling back to transcript-only notes here (unlike
