@@ -1,0 +1,379 @@
+# Admin Panel Redesign — RBAC, Change Requests, Non-Daily Logging — Design
+
+Date: 2026-08-19
+Status: approved for planning
+
+## Purpose
+
+Three problems, one design, because they share a permission spine:
+
+1. **The role model is two values wide.** `user_role` is `admin | member`. Every
+   capability question in the app is therefore answered by a string comparison —
+   48 of them across 31 files. There is no seat for a project coordinator who may
+   fix data but must not delete it, no seat for a client who may look but not
+   touch, and no seat for a compliance reviewer who needs the audit trail without
+   the keys to the workspace.
+
+2. **There is no approval path for a destructive or out-of-scope change.** A
+   change is either permitted outright or refused. Corporate engineering practice
+   (SE and EPC alike) needs the middle state: propose the change, have someone
+   accountable sign it, then apply it with the signature attached.
+
+3. **"No worklog row for this date" means five different things and the app
+   cannot tell them apart** — on leave, on a public holiday, allocated to another
+   project, part-time and not expected today, or genuinely missing. Every
+   coverage number the panel could show today is wrong for anyone who does not
+   log daily, which is most people most weeks.
+
+## Users & roles
+
+Two orthogonal axes. Baking reach into the role enum produces combinatorial
+explosion the first time someone needs "admin, but only for these two projects";
+keeping them separate means a new reach requirement is data, not a migration.
+
+### Axis A — role (`user_role` widens 2 → 7)
+
+| Role | Capability |
+|---|---|
+| `superadmin` | Everything, including the danger zone (DB clear) and granting `superadmin`. |
+| `admin` | Org operations workspace-wide: approve signups, create/deactivate users, manage apps, review change requests, restore from trash. NOT the danger zone; cannot grant `superadmin`. |
+| `manager` | Everything `admin` can do **that has a scope**, restricted to it (Axis B). Workspace-level acts stay with `admin`: approving a self-signup, creating a user, and granting any role above `member`. A scoped seat cannot widen the workspace. |
+| `editor` | Edits freely inside assigned apps and on own records. Every delete, and every edit outside scope or outside the open window, opens a change request instead of mutating. |
+| `member` | Logs own work, edits own records in-window, reads assigned apps. Today's `member`, unchanged. |
+| `stakeholder` | Read-only, hard-scoped to explicitly granted apps. No people directory, no admin surfaces, no other apps. The client/owner seat in an EPC engagement. |
+| `auditor` | Read-only across everything including `activity_log` and trash. Zero write capability. Compliance review without handing out an admin seat. |
+
+Roles are NOT nested by integer level. `manager` is not "admin minus one" — it is
+admin capability with a scope predicate. The implementation is an explicit
+capability matrix; `role >= X` comparisons are forbidden.
+
+`contractor` is deliberately not a role: it is `member` plus a restricted app
+grant. If the label turns out to matter in the user table it is an additive enum
+value later, which costs one migration statement.
+
+### Axis B — scope
+
+| Role | Scope source |
+|---|---|
+| `manager` | Apps where the user holds `pm` or `lead`, resolved through the existing as-of read over `app_role_history` and `managesApp()`. No new table. |
+| `editor` | Apps the user is **assigned** to (`assignments`). Deliberately a different source than `manager`: broader membership, narrower power — edit inside the scope, request outside it. |
+| `stakeholder` | Explicit rows in a new `app_grants` table. Read-only reach only. |
+| `superadmin`, `admin`, `auditor` | Workspace-wide. |
+| `member` | Own records plus apps they are assigned to (`assignments`). |
+
+Per-project roles (`assignments.role` free text, `app_role_kind` `pm`/`lead`) are
+unchanged and remain orthogonal to global roles. A global `member` who is `pm` on
+an app keeps the project-management powers `managesApp()` already grants them
+today; the `manager` global role is what additionally grants people-administration
+inside that same scope.
+
+### Migration mapping — capability-preserving, not name-preserving
+
+Today's `admin` can clear the database. The faithful map is therefore:
+
+- existing `admin` → **`superadmin`**
+- existing `member` → `member`
+
+Mapping `admin` → `admin` would silently strip a power every current admin holds.
+Operators demote to `admin`/`manager` from the new panel once the roles exist.
+
+`wouldLeaveNoAdmins` generalizes to `wouldLeaveNoSuperadmins`: the workspace MUST
+always retain at least one active `superadmin`.
+
+## Architecture
+
+### Permission layer
+
+One module, two layers. The split is what makes exhaustive testing affordable.
+
+```
+// pure, synchronous, zero database access
+roleGrants(role: UserRole, action: Action): 'none' | 'own' | 'scoped' | 'all'
+
+// resolves a grant level against a concrete resource
+can(actor: Actor, action: Action, resource: Resource): Promise<boolean>
+```
+
+Layer 1 is a literal table keyed by `(role, action)`. Every cell is asserted by a
+single table-driven test, so "every role × action pair is covered" is one test
+file rather than a two-hundred-case slog, and an unfilled cell is a compile error
+rather than a silent `false`.
+
+Layer 2 resolves:
+
+- `own` → `resource.ownerId === actor.id`
+- `scoped` → `managesApp(actor.id, resource.appId)` or an `app_grants` row
+- `all` → `true`
+- `none` → `false`
+
+`Action` is a closed string union — `'user.role.grant'`, `'app.delete'`,
+`'worklog.write.own'`, `'worklog.correct.request'`, `'absence.approve'`,
+`'request.review'`, `'audit.view'`, `'trash.restore'`, `'danger.dbclear'`, and so
+on. A typo is a type error, never a permission hole.
+
+Location: `src/features/auth/permissions.ts` (the actor and its role come from
+the session, which `features/auth` already owns). `src/features/admin/permissions.ts`
+keeps `canEditUser` / `wouldLeaveNoSuperadmins` as admin-specific invariants and
+delegates capability questions upward. `src/features/sprints/permissions.ts`
+(`canMoveTask`) folds into the matrix as `task.move.own` / `task.move.any`.
+
+Enforcement is server-side in every server action and route. Client-side hiding
+is presentation only. Sections the actor cannot use MUST NOT render at all —
+never render-then-error.
+
+### Change requests
+
+One table serves every proposal, in both directions.
+
+Approval applies the proposed diff inside a transaction and writes `activity_log`
+with the reviewer as actor and the requester recorded in `metadata`. Rejection
+mutates nothing. Withdrawal is the requester closing their own request.
+
+Reviewer routing is policy, not a stored column:
+
+- `entityType = 'worklog'` → routes to the **row's owner**
+- everything else → routes to the actor's scope chain: managers of the app, then
+  admins, then superadmins
+
+`change_requests` has no delete action of its own — `withdrawn` is a status — so
+it is exempted from the soft-delete enforcement scan by name and documented in
+place, exactly as `daily_worklogs` and `webauthn_credentials` already are in
+`src/db/live.ts`.
+
+### Worklog corrections — the self-only rule survives
+
+`daily_worklogs.percent` means "of what I planned today", self-scored. A manager
+writing that number converts a self-report into a managed metric, at which point
+it stops measuring anything. The settled product rule — worklog writes are
+self-only, no admin on-behalf — therefore stands.
+
+Corporate correction power is delivered without breaking it: a manager or editor
+opens a **correction request** against the row, and it routes to the owner, who
+accepts (their own hand applies the diff) or rejects. The audit trail records
+both the proposal and the acceptance.
+
+Consequence for the capability matrix: there is no `worklog.write.any` action at
+any role, including `superadmin`. The matrix must make that absence explicit and
+a test must assert it.
+
+### Non-daily logging
+
+`src/lib/working-days.ts` already accepts an injectable `isHoliday(iso)`
+callback. That parameter is the seam this whole feature hangs from; nothing in
+the existing day math needs rewriting.
+
+**`work_schedules`** — effective-dated per user, half-open `[from, to)`, at most
+one open row per user, copying the `app_role_history` shape and its unique index
+exactly. Weekday fractions stored as jsonb (`{"mon":1,"tue":1,…,"sat":0.5,"sun":0}`).
+
+A row exists ONLY when someone deviates from the studio default (Mon–Fri 1.0,
+Saturday 0.5, Sunday 0, as defined in `working-days.ts`). No row means the
+default, so the table stays near-empty for a normal team and the default keeps
+living in exactly one place.
+
+**`absences`** — self-declared, manager-approved. Kinds: `annual`, `sick`,
+`unpaid`, `training`, `other_project`, `no_work_assigned`, `other`. An approved
+absence makes each covered day `exempt`. Approved `other_project` days are exempt
+— that work was logged in another system and LogPup must not count it as a miss.
+
+Gazetted holidays are NOT modelled here; `lk-holidays.ts` remains their source.
+
+**`org_holidays`** — admin-editable company shutdown days that compose on top of
+the gazetted map through the same `isHoliday` callback, so a company holiday no
+longer requires a deploy.
+
+**`src/features/worklog/coverage.ts`** — new pure module. Per `(user, date)`:
+
+| Status | Meaning |
+|---|---|
+| `logged` | A `daily_worklogs` row exists. |
+| `off` | Schedule fraction is 0, or the day is a gazetted or org holiday. |
+| `exempt` | An approved absence covers the day. |
+| `not-yet-due` | Today, or before the person's join date. |
+| `missing` | Expected and not logged. |
+
+`missing-days.ts` gains an injectable `isExempt(iso)` mirroring `isHoliday` — it
+is extended, not replaced, so `MAX_BACKFILL_DAYS` (10) and the join-date window
+keep working exactly as they do now.
+
+**Denominators are mandatory.** Every coverage figure renders as
+"18/20 expected days logged · 4 exempt", never a bare percentage. A percentage
+without its denominator is the bug this feature exists to fix.
+
+**Backfill window.** Logging or editing a day older than the cutoff opens a
+change request rather than writing silently. The cutoff reuses
+`MAX_BACKFILL_DAYS`.
+
+Half-day leave is out of scope for this pass (see YAGNI).
+
+## Data model (Postgres via Drizzle)
+
+New enums:
+
+- `change_request_status`: `pending | approved | rejected | withdrawn`
+- `change_request_op`: `edit | delete | restore`
+- `absence_kind`: `annual | sick | unpaid | training | other_project | no_work_assigned | other`
+- `absence_status`: `pending | approved | rejected | withdrawn`
+
+Widened enum:
+
+- `user_role`: `+ superadmin, manager, editor, stakeholder, auditor`
+
+New tables:
+
+**`change_requests`** — `id`, `requesterId`, `entityType`, `entityId`,
+`entityLabel`, `operation`, `payload` jsonb (proposed diff), `reason`, `status`,
+`reviewerId` nullable, `reviewedAt` nullable, `reviewNote` nullable, `appId`
+nullable (scope routing), `createdAt`, `updatedAt`.
+Indexes: `(status, createdAt)` for the inbox; `(entityType, entityId)` for the
+per-entity trail; `(requesterId, createdAt)` for "my requests".
+
+**`work_schedules`** — `id`, `userId`, `pattern` jsonb, `effectiveFrom`,
+`effectiveTo` nullable, `changedBy`, `note` nullable, `createdAt`.
+Unique partial index: one open row per user. Index on `(userId, effectiveFrom)`.
+
+**`absences`** — `id`, `userId`, `startDate`, `endDate`, `kind`, `reason`,
+`status`, `reviewerId` nullable, `reviewedAt` nullable, `reviewNote` nullable,
+`createdBy`, `createdAt`, `updatedAt`.
+Indexes: `(userId, startDate)`, `(status, startDate)`.
+
+**`org_holidays`** — `id`, `day` date unique, `name`, `note` nullable,
+`createdBy`, `createdAt`.
+
+**`app_grants`** — `id`, `userId`, `appId`, `grantedBy`, `createdAt`. Unique
+`(userId, appId)`.
+
+Soft-delete posture — decided, not deferred. **None of the five tables gets a
+`deletedAt`, and `SOFT_TABLES` stays at exactly five members.**
+
+`change_requests` and `absences` close via status (`withdrawn`, `rejected`);
+`work_schedules` closes via `effectiveTo`. None of the three is ever deleted, so
+there is nothing for a trash bin to hold.
+
+`org_holidays` and `app_grants` are revoked by a plain delete plus an
+`activity_log` entry. The repo's no-hard-delete rule protects *user content* —
+the things a person would be distressed to lose and expects to restore from
+Trash. A revoked stakeholder grant is the opposite: an access removal that must
+be absolute, for the same reason `webauthn_credentials` is exempted by name. A
+restorable grant is a key that can come back from the dead.
+
+`live.test.ts` permits this: its delete scan only fires on tables that *have* a
+`deletedAt`. Each of the five tables carries a comment stating which of the three
+closure mechanisms it uses and why, in the style of the existing schema comments.
+
+## Migrations
+
+Repo rule: `drizzle-kit generate` is forbidden until the snapshot chain is
+repaired. These are hand-written SQL plus journal entries, modelled on `0031`.
+Next free number is **0035**; journal `when` values must exceed 1786600003000 and
+strictly increase.
+
+1. **`0035_user_role_expand`** — enum widening only. Postgres cannot use a new
+   enum value in the same transaction that adds it, so this migration ships
+   alone and adds nothing else.
+2. **`0036_rbac_tables`** — the five new tables and four new enums.
+3. **`0037_admin_to_superadmin`** — remap existing `admin` rows to `superadmin`.
+
+Every migration verified against `information_schema`, never the runner's exit
+code — `npm run db:migrate` has reported success while applying nothing. Human
+approval required before any migration runs against any database.
+
+## Pages & flows
+
+`/admin` stops being one page and becomes a section area with nav in
+`src/app/(app)/admin/layout.tsx`. Each section is capability-guarded; a section
+the actor lacks does not render in the nav.
+
+| Route | Contents | Minimum capability |
+|---|---|---|
+| `/admin` | Overview: coverage with denominators, pending-approval counts, org health | `admin.view` |
+| `/admin/people` | Roles, status, schedules, scope, org tags | `user.view.all` |
+| `/admin/approvals` | Unified inbox: signups + change requests + absence requests | `request.review` |
+| `/admin/apps` | Apps, assignments, pm/lead, stakeholder grants | `app.edit` |
+| `/admin/absences` | Team calendar, absence review, work schedules, org holidays | `absence.approve` |
+| `/admin/audit` | `activity_log` reader with actor/entity/date filters | `audit.view` |
+| `/admin/trash` | Existing trash and restore | `trash.view` |
+| `/admin/danger` | DB clear, structurally separated | `danger.dbclear` |
+
+Flows:
+
+- **Editor proposes a delete** → change request created, requester sees it under
+  "my requests", reviewer sees it in the inbox, approval applies and logs.
+- **Manager proposes a worklog correction** → routes to the owner, who accepts or
+  rejects from their own worklog surface.
+- **Person books leave** → absence created `pending`, manager approves, covered
+  days flip to `exempt` and stop counting as missing.
+- **Stakeholder signs in** → sees only granted apps; every other route 404s.
+
+## UX
+
+Design system is "watchdog calm" (`docs/superpowers/specs/2026-08-10-logpup-design.md`).
+Build with the `designing-ui` skill and polish with `craft`.
+
+- Empty, loading, and error states for every surface. Skeletons, not spinners.
+- Suspense-split with controls rendering before data — `people/history` is the
+  pattern to copy.
+- Bilingual copy (Sinhala + English) where the existing surfaces are bilingual;
+  never force-translate.
+- Identity colours come from `event-color.ts`. No second hash, no new palette.
+- Destructive controls render only for actors who hold the capability.
+- Every coverage figure shows numerator and denominator.
+
+## Error handling
+
+- Server actions return the existing `ActionResult` shape; permission denial is a
+  refusal result, not a thrown exception, except on routes where 404 is the
+  correct answer (a stakeholder probing `/admin` must not learn it exists).
+- Change-request approval is transactional: diff application and `activity_log`
+  write succeed together or neither happens.
+- An approval whose target changed since the request was filed MUST fail loudly
+  with a conflict message rather than clobbering the newer state.
+- Absence approval on a day already logged does not delete the log — the day
+  reads `logged`, which outranks `exempt`.
+
+## Testing
+
+TDD via `superpowers:test-driven-development` for the two pure cores, which are
+where the correctness lives:
+
+1. **Capability matrix** — one table-driven test asserting every `(role, action)`
+   cell, both what each role CAN and CANNOT do. Explicit assertion that
+   `worklog.write.any` exists for nobody, `superadmin` included.
+2. **Coverage calculator** — a part-time user with a Saturday, a gazetted Poya
+   day, an org holiday, an approved `other_project` absence, and a genuinely
+   missing day, in one window, asserting all five statuses and the denominator.
+
+Integration-level, following existing `permissions.test.ts` and `trash-*.test.ts`
+patterns:
+
+- An `editor` calling a delete server action directly (bypassing the UI) creates
+  a pending request and mutates nothing.
+- A `stakeholder` calling any admin or people-directory action is refused
+  server-side.
+- Approving a stale change request fails with a conflict.
+- `grep -rn "role === 'admin'" src` returns hits only inside the permission
+  module.
+
+## Build order
+
+1. Capability matrix + scope resolver, with tests. No UI. Refactor the 48
+   existing call sites onto `can()`.
+2. `0035`–`0037` migrations, applied only after human approval and verified via
+   `information_schema`.
+3. Change-request table, actions, and approval application.
+4. Schedules, absences, org holidays, and `coverage.ts`; extend `missing-days.ts`.
+5. `/admin` section layout and the eight sections.
+6. Verification pass, then code review.
+
+## Out of scope (YAGNI)
+
+- Half-day leave. Absences are whole days this pass.
+- Multi-country holiday calendars. `LK_HOLIDAYS` plus `org_holidays` covers the
+  studio; a second country is a later table, not a speculative column now.
+- A `contractor` role. It is `member` plus a restricted grant until a real user
+  needs the label.
+- Time-boxed or expiring role grants.
+- Delegation ("approve on my behalf while I am away").
+- Any change to meetings, transcription, or speech features.
+- Resolving the still-open "private notes" question — unrelated, and it must not
+  ride along on these migrations.
