@@ -460,6 +460,14 @@ export const geminiKeys = pgTable('gemini_keys', {
   encryptedKey: text('encrypted_key').notNull(),
   last4: text('last4').notNull(),
   active: boolean('active').notNull().default(true),
+  // Org sharing: the owner explicitly opted this key into the org pool
+  // (consent dialog in the keys card). Selection order is always the
+  // caller's own keys first, then shared keys — see orderKeysForRotation.
+  shared: boolean('shared').notNull().default(false),
+  // 'free' | 'paid' — declared by the owner (Google exposes no way to
+  // detect it). Display-only: free keys show "$0 charged", paid keys show
+  // an indicative estimated charge.
+  tier: text('tier').notNull().default('free'),
   failCount: integer('fail_count').notNull().default(0),
   lastUsedAt: timestamp('last_used_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -489,6 +497,19 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   index('ai_usage_user_created_idx').on(t.userId, t.createdAt),
   index('ai_usage_key_owner_created_idx').on(t.keyOwnerId, t.createdAt),
   index('ai_usage_feature_created_idx').on(t.feature, t.createdAt),
+])
+
+// Per-user AI feature toggles. ABSENT ROW = ENABLED — the product default
+// is fully AI-enabled; a row exists only once the user has touched the
+// switch. Feature ids are the display-feature ids from
+// src/features/gemini/ai-features.ts, not per-call slugs.
+export const userAiPrefs = pgTable('user_ai_prefs', {
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  feature: text('feature').notNull(),
+  enabled: boolean('enabled').notNull(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ name: 'user_ai_prefs_pk', columns: [t.userId, t.feature] }),
 ])
 
 // AI analysis of a recorded meeting (transcript + structured notes), one row
