@@ -68,6 +68,7 @@ export async function clearTestData(
   await db.delete(meetingAttendeeRecommendations)
   await db.delete(meetingAttendees)
   await db.delete(meetings)
+  await db.delete(dailyWorklogs)
   await db.delete(tasks)
   await db.delete(sprints)
   await db.delete(assignments)

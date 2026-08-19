@@ -113,6 +113,24 @@ const BAR_INSET_PX = 2
  */
 const META_MIN_BAR_PX = 180
 
+/**
+ * Below META_MIN_BAR_PX but at or above this, the bar keeps the COUNT and
+ * drops only the word.
+ *
+ * One threshold was too blunt. PX_PER_DAY.month is 8, so a fortnight sprint is
+ * 112px and an eighteen-day one 144px — both under 180, which meant that at the
+ * default zoom essentially every real sprint wore no progress at all and the
+ * fill was the only thing distinguishing it. That is the opposite of what
+ * putting completion on the bar was for.
+ *
+ * The word is what has to go first: "Not st…" reads as a different status,
+ * which is the whole reason META_MIN_BAR_PX exists. A ratio cannot be misread
+ * that way — "0/1" is either legible or visibly clipped, never a plausible
+ * different number — so it survives into widths the word cannot. 96px is the
+ * name at a useful truncation plus the widest realistic ratio.
+ */
+const COUNT_MIN_BAR_PX = 96
+
 /** What a sprint with no tasks in it has. A shared frozen literal rather than
  *  one written out at each `??`, so "empty" is one object and one idea. */
 const NO_TASKS: StatusCounts = { todo: 0, in_progress: 0, done: 0 }
@@ -1066,8 +1084,15 @@ function SprintBar({
   // the fill. `read.summary` is already a finished sentence, which is what
   // states the completion in words rather than as a bare ratio.
   const label = `${sprint.name}, ${formatRange(range)}, ${STATUS_LABEL[sprint.status]}. ${HEALTH_WORD[read.health]}. ${read.summary}`
-  // Below this the bar is name-only; the index below still carries both facts.
-  const showMeta = geometry.width >= META_MIN_BAR_PX
+  // Full words, ratio only, or name only. The index below carries both facts at
+  // every zoom regardless, and the aria-label always carries the whole
+  // judgement, so this is purely how much the bar itself can afford to show.
+  const meta: BarMetaLevel =
+    geometry.width >= META_MIN_BAR_PX
+      ? 'full'
+      : geometry.width >= COUNT_MIN_BAR_PX
+        ? 'count'
+        : 'none'
 
   return (
     <li
@@ -1147,7 +1172,7 @@ function SprintBar({
             sprint={sprint}
             label={label}
             read={read}
-            showMeta={showMeta}
+            meta={meta}
             onEdit={onEdit}
             onNudge={onNudge}
           />
@@ -1162,7 +1187,7 @@ function SprintBar({
             <span aria-hidden className="truncate text-xs font-medium">
               {sprint.name}
             </span>
-            {showMeta ? <BarMeta read={read} /> : null}
+            {meta === 'none' ? null : <BarMeta read={read} level={meta} />}
           </Link>
         )}
 
@@ -1220,11 +1245,17 @@ function SprintBar({
  * it under the 4.5:1 floor. Word in sans, count in mono tabular-nums, the same
  * split the spine and the index rows use.
  */
-function BarMeta({ read }: { read: SprintRead }) {
+/** How much of its own progress a bar can afford to wear at this width. */
+type BarMetaLevel = 'full' | 'count' | 'none'
+
+function BarMeta({ read, level }: { read: SprintRead; level: Exclude<BarMetaLevel, 'none'> }) {
   return (
     <span aria-hidden className="ml-auto shrink-0 truncate text-2xs font-normal">
-      {HEALTH_WORD[read.health]}
-      <span className="font-mono tabular-nums"> · {completionCount(read)}</span>
+      {level === 'full' ? HEALTH_WORD[read.health] : null}
+      <span className="font-mono tabular-nums">
+        {level === 'full' ? ' · ' : null}
+        {completionCount(read)}
+      </span>
     </span>
   )
 }
@@ -1235,15 +1266,15 @@ function BarBody({
   sprint,
   label,
   read,
-  showMeta,
+  meta,
   onEdit,
   onNudge,
 }: {
   sprint: Sprint
   label: string
   read: SprintRead
-  /** Whether the bar is wide enough to wear its words. */
-  showMeta: boolean
+  /** How much the bar is wide enough to wear. */
+  meta: BarMetaLevel
   onEdit: (sprint: Sprint) => void
   onNudge: (sprint: Sprint, kind: DragKind, event: KeyboardEvent) => void
 }) {
@@ -1301,7 +1332,7 @@ function BarBody({
       <span aria-hidden className="truncate text-xs font-medium">
         {sprint.name}
       </span>
-      {showMeta ? <BarMeta read={read} /> : null}
+      {meta === 'none' ? null : <BarMeta read={read} level={meta} />}
     </button>
   )
 }
@@ -1473,9 +1504,11 @@ function SprintIndexRow({
         {inclusiveDayCount(range.startDate, range.endDate)}d
       </span>
       {/* The fill's guaranteed textual twin. A bar narrower than
-          META_MIN_BAR_PX drops its word, and at quarter zoom most of them are
-          — this row is the only place every sprint is named at every scale,
-          so it is the only honest home for the facts the fill encodes. */}
+          META_MIN_BAR_PX drops its word and keeps only the ratio, and one
+          under COUNT_MIN_BAR_PX drops that too; at quarter zoom nearly every
+          bar is in the second case. This row is the only place every sprint is
+          named at every scale, so it is the only honest home for the facts the
+          fill encodes. */}
       <span className="text-xs text-muted-foreground">
         {HEALTH_WORD[read.health]}
         <span className="font-mono tabular-nums"> · {completionCount(read)}</span>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BURN_GAP_THRESHOLD } from '@/features/apps/app-health'
-import { planGaps, readSprint, toTaskCounts } from './plan-read'
+import { completionCount, planGaps, readSprint, toTaskCounts } from './plan-read'
+import type { SprintRead } from './plan-read'
 
 describe('toTaskCounts', () => {
   it('totals the three statuses', () => {
@@ -124,5 +125,31 @@ describe('planGaps', () => {
 
   it('is zero on an empty sprint', () => {
     expect(planGaps([])).toEqual({ unassigned: 0, undated: 0 })
+  })
+})
+
+describe('completionCount', () => {
+  // Only the two counted fields matter here; the rest of SprintRead is along
+  // for the ride, so a partial cast keeps each case about the one thing it
+  // tests rather than about constructing a whole read.
+  const read = (done: number, total: number) => ({ done, total }) as SprintRead
+
+  it('reads as done-over-total once there is work to count', () => {
+    expect(completionCount(read(3, 8))).toBe('3/8')
+  })
+
+  it('says empty rather than 0/0 for a sprint with nothing planned', () => {
+    // The distinction the word exists for: 0% done and no work at all draw the
+    // identical empty fill, so "0/0" would read as a failed sprint instead of
+    // an unplanned one.
+    expect(completionCount(read(0, 0))).toBe('empty')
+  })
+
+  it('keeps the ratio when work is planned but none is finished', () => {
+    expect(completionCount(read(0, 5))).toBe('0/5')
+  })
+
+  it('keeps the ratio when everything is finished', () => {
+    expect(completionCount(read(8, 8))).toBe('8/8')
   })
 })

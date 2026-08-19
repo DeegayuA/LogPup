@@ -93,7 +93,7 @@ export default function PersonDetailLoading() {
               so the shape reads as a calendar while it loads. */}
           <div className="flex flex-col gap-1">
             {Array.from({ length: 7 }, (_, i) => (
-              <div key={i} className={cn(shimmer, 'h-2.5 w-full max-w-80 rounded-xs')} />
+              <div key={i} className={cn(shimmer, 'h-3 w-full max-w-80 rounded-xs')} />
             ))}
           </div>
           <div className={cn(shimmer, 'h-3 w-56')} />

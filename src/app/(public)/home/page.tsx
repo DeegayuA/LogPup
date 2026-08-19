@@ -7,7 +7,14 @@ import { PlateBriefing, PlateCapacity, PlateWriteup } from './plates'
 import { RevealScope } from './reveal-scope'
 
 export const metadata: Metadata = {
-  title: 'LogPup — engineering ops for Alta Vision teams',
+  // `absolute` rather than a plain string: the root layout sets
+  // template: "%s · LogPup" (src/app/layout.tsx), which a bare string opts
+  // into, and this title already opens with the product name — so the tab and
+  // the SERP entry both read "LogPup — engineering ops for Alta Vision teams ·
+  // LogPup". Google's brand verification compares this title against the name
+  // on the consent screen, and the doubled mark is exactly the kind of
+  // inconsistency that check exists to catch.
+  title: { absolute: 'LogPup — engineering ops for Alta Vision teams' },
   description:
     'LogPup tracks the apps a studio runs, who works on them, what each team ships this sprint, and what happened in every meeting.',
 }
@@ -40,8 +47,14 @@ const RISE =
 const LINK =
   'rounded-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 
+// `ring-ring` at full strength, not the `ring-ring/50` buttonVariants ships.
+// That half-opacity ring is tuned to sit directly against a button's own fill;
+// lifted onto an offset ring over --background it drops under the 3:1 that
+// WCAG 1.4.11 requires of a focus indicator. These are the only two CTAs on the
+// page, and LINK above already rings at full strength — the keyboard path to
+// the primary action should not be fainter than the one to a footnote.
 const CTA =
-  'focus-visible:ring-offset-2 focus-visible:ring-offset-background w-full sm:w-auto'
+  'focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background w-full sm:w-auto'
 
 /** Section eyebrows and dateline labels. A <span>, never a heading: the page
  *  runs h1 then exactly eight h2s and an eyebrow promoted to h3 would put a
@@ -234,8 +247,8 @@ export default function PublicHomePage() {
           <p className="mt-6 max-w-[68ch] text-base leading-relaxed text-muted-foreground lg:col-span-5 lg:col-start-1 lg:mt-10">
             LogPup is the internal system Alta Vision runs its studio on. There is no signup, no
             pricing, no trial, and no public product. Signing in with Google creates a pending
-            account with zero access until an administrator approves it, and the email domains that
-            may sign in at all are configured in advance.
+            account with zero access until an administrator approves it. Approval is the only gate:
+            any Google account can reach that queue, and none of them can reach anything else.
           </p>
           <p className="mt-6 max-w-[68ch] text-base leading-relaxed text-muted-foreground lg:col-span-5 lg:col-start-7 lg:mt-10">
             It is published here because LogPup asks Google for permission to put meetings on your
@@ -437,11 +450,14 @@ export default function PublicHomePage() {
             <p className="max-w-[52ch] text-base leading-relaxed text-muted-foreground">
               Sign in with Google and LogPup creates an account with no access at all, then puts it
               in a queue. Someone at Alta Vision approves it, or it stays where it is. There is no
-              public signup and never was. Passkeys, Google One Tap and administrator-issued
-              passwords sign you into an account that already exists — they are not a second way in.
+              public signup and never was. Google One Tap opens the same pending account the same way;
+              passkeys and administrator-issued passwords only sign you into one that already exists.
             </p>
           </div>
-          <div className="mt-10 flex flex-col gap-4 lg:col-span-4 lg:col-start-9 lg:mt-0 lg:self-end">
+          <div
+            data-reveal
+            className="mt-10 flex flex-col gap-4 lg:col-span-4 lg:col-start-9 lg:mt-0 lg:self-end"
+          >
             {/* The second and final appearance of --primary at strength on the
                 whole page. Keeping the working colour to exactly two moments
                 is what makes both of them read as the action; a competing
