@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { db } from '@/db'
 import { appGrants, appRoleHistory, assignments } from '@/db/schema'
-import { auth } from '@/lib/auth'
+import { cache } from 'react'
+import { getSession } from '@/lib/session'
 import {
   ROLE_GRANTS,
   can,
@@ -21,8 +22,13 @@ const EMPTY_SCOPE: ReadonlySet<string> = new Set()
  * against the set this returns — which is why `can` stays synchronous and can
  * be imported by client components.
  */
-export async function loadActor(): Promise<Actor | null> {
-  const session = await auth()
+export const loadActor = cache(async function loadActor(): Promise<Actor | null> {
+  // Deduplicated per request, for the same reason getSession exists: auth()'s
+  // jwt callback hits the database on EVERY call, and the (app) layout has
+  // already paid for it. Without this, every page that asks a capability
+  // question buys a second identical `select … from users where email = ?`,
+  // and a Suspense-split page buys one per streamed zone.
+  const session = await getSession()
   const user = session?.user
   if (!user?.id) return null
 
@@ -55,7 +61,7 @@ export async function loadActor(): Promise<Actor | null> {
             .where(eq(appGrants.userId, user.id))
 
   return { id: user.id, role, scopeAppIds: new Set(rows.map((r) => r.appId)) }
-}
+})
 
 /**
  * The guard every server action uses.
@@ -68,7 +74,7 @@ export async function requireCapability(
   action: Action,
   resource?: Resource,
 ): Promise<Actor | null> {
-  const session = await auth()
+  const session = await getSession()
   const user = session?.user
   if (!user?.id) return null
   const role = user.role as UserRole

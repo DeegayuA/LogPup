@@ -295,6 +295,15 @@ const DELETE_ALWAYS_ALLOWED_FILES = new Set([
 // file are still offenders (this is deliberately narrower than a file-level
 // allowlist).
 const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
+  // A cancelled company holiday did not happen. A tombstone would make every
+  // coverage read filter for it forever, and there is nothing here a person
+  // would be distressed to lose — the activity_log row is the record.
+  'src/features/worklog/org-holiday-actions.ts': 'revokeOrgHoliday',
+  // An access key, exactly like webauthn_credentials. Revocation must be
+  // absolute: a restorable grant is a key that can come back from the dead,
+  // and "we thought we removed that client's access" is not a sentence
+  // anyone wants to say.
+  'src/features/admin/app-grant-actions.ts': 'revokeAppGrant',
   // Verified by reading the file: every db.delete() in admin/actions.ts
   // today lives inside clearTestData (the ENABLE_DB_CLEAR-gated dev tool).
   'src/features/admin/actions.ts': 'clearTestData',

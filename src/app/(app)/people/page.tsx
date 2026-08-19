@@ -18,7 +18,6 @@ import {
   buildOverlapReport,
   buildProjectCohorts,
   buildSharedPeople,
-  resolveNumberAccess,
 } from '@/features/people/cohorts'
 import {
   COHORT_VIEW_HINT,
@@ -175,13 +174,8 @@ async function CohortData({ params }: { params: CohortParams }) {
   ])
 
   const cohorts = buildProjectCohorts(people)
-  // The viewer's own live assignment rows — already in `people`, so the
-  // per-project PM/lead rule costs nothing. See resolveNumberAccess for why
-  // this is `managesApp`'s rule without `managesApp`'s query.
-  const own = actor ? (people.find((person) => person.user.id === actor.id)?.breakdown ?? []) : []
 
   if (params.view === 'projects') {
-    const access = resolveNumberAccess(actor, own, apps.map((app) => app.id))
     // Membership comes from the capacity read, not from listApps' member rows:
     // that one joins `assignments` to every user, while getUserCapacities is
     // filtered to the active, approved roster. Using one source for all four
@@ -193,25 +187,21 @@ async function CohortData({ params }: { params: CohortParams }) {
       <ProjectCohortList
         apps={apps}
         cohorts={byApp}
-        access={access}
         actor={actor}
         todayIso={todayIso}
       />
     )
   }
 
-  const access = resolveNumberAccess(actor, own, cohorts.map((cohort) => cohort.appId))
-
   if (params.view === 'shared') {
     // The ranking follows what the reader can see: by how evenly someone is
-    // split where the percentages are on screen, by project count where they
-    // are not. The card's own description says which of the two it did.
+    // Ranked by how fragmented the person is, which is the question this
+    // view exists to answer. The card's own description says so.
     return (
       <SharedPeopleList
-        rows={buildSharedPeople(people, { rankBySplit: access.all })}
-        access={access}
+        rows={buildSharedPeople(people, { rankBySplit: true })}
         params={params}
-        rankBySplit={access.all}
+        rankBySplit
       />
     )
   }
@@ -227,7 +217,6 @@ async function CohortData({ params }: { params: CohortParams }) {
     <ProjectOverlapView
       cohorts={cohorts}
       report={anchor ? buildOverlapReport(cohorts, anchor.appId) : null}
-      access={access}
       params={params}
       unknownProject={Boolean(params.project) && !requested}
     />

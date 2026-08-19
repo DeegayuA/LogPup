@@ -24,13 +24,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   setUserActive,
   setUserOrgTags,
   setUserPersonalEmail,
@@ -44,6 +37,8 @@ import { OrgTagsField } from '@/features/admin/components/org-tags-field'
 import type { AdminUser } from '@/features/admin/queries'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { JobRoleSelect } from '@/components/shared/job-role-select'
+import { SeatSelect } from '@/features/admin/components/seat-select'
+import type { UserRole } from '@/features/auth/capabilities'
 
 const SELF_TITLE = 'Cannot change your own account'
 
@@ -269,7 +264,7 @@ export function UserTable({
     [users],
   )
 
-  function handleRoleChange(userId: string, role: 'admin' | 'member') {
+  function handleRoleChange(userId: string, role: UserRole) {
     startTransition(async () => {
       try {
         const res = await setUserRole(userId, role)
@@ -299,91 +294,160 @@ export function UserTable({
     })
   }
 
+  // One row's controls, rendered by BOTH layouts so the two can never drift
+  // apart into two different sets of affordances.
+  function seatControl(user: AdminUser, isSelf: boolean) {
+    return (
+      <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
+        <SeatSelect
+          value={user.role}
+          disabled={isSelf || isPending}
+          ariaLabel={`Seat for ${user.name}`}
+          onChange={(role) => handleRoleChange(user.id, role)}
+          className="w-full min-w-40"
+        />
+      </div>
+    )
+  }
+
+  function activeControl(user: AdminUser, isSelf: boolean) {
+    return (
+      <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
+        <Switch
+          checked={user.active}
+          disabled={isSelf || isPending}
+          aria-label={`Active status for ${user.name}`}
+          onCheckedChange={(checked) => handleActiveChange(user.id, checked)}
+        />
+      </div>
+    )
+  }
+
+  function identity(user: AdminUser) {
+    return (
+      <div className="flex min-w-0 items-center gap-2">
+        <Avatar size="sm">
+          {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
+          <AvatarFallback>{user.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+        </Avatar>
+        <div className="flex min-w-0 flex-col">
+          <span className="flex items-center gap-1.5 font-medium">
+            <span className="truncate">{user.name}</span>
+            {user.mustChangePassword ? (
+              <Badge
+                variant="outline"
+                title="Still on the starter password — they must change it on first sign-in"
+              >
+                starter password
+              </Badge>
+            ) : null}
+          </span>
+          <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (users.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Nobody here yet. Add a teammate by email to get started.
+      </p>
+    )
+  }
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>User</TableHead>
-          <TableHead>Job role</TableHead>
-          <TableHead>Phone</TableHead>
-          <TableHead>Personal email</TableHead>
-          <TableHead>Organizations</TableHead>
-          <TableHead>Role</TableHead>
-          <TableHead>Active</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
+    <>
+      {/* MOBILE: one card per person. A seven-column table on a phone is a
+          horizontal scroll nobody discovers, so the same fields stack instead
+          of shrinking to unreadable. */}
+      <ul className="flex flex-col gap-3 lg:hidden">
         {users.map((user) => {
           const isSelf = user.id === currentUserId
           return (
-            <TableRow key={user.id}>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <Avatar size="sm">
-                    {user.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={user.name} /> : null}
-                    <AvatarFallback>{user.name.slice(0, 1).toUpperCase()}</AvatarFallback>
-                  </Avatar>
-                  <div className="flex flex-col">
-                    <span className="flex items-center gap-1.5 font-medium">
-                      {user.name}
-                      {user.mustChangePassword ? (
-                        <Badge
-                          variant="outline"
-                          title="Still on the starter password — they must change it on first sign-in"
-                        >
-                          starter password
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{user.email}</span>
-                  </div>
-                </div>
-              </TableCell>
-              <TableCell>
-                <JobRoleCell user={user} />
-              </TableCell>
-              <TableCell>
-                <PhoneCell user={user} />
-              </TableCell>
-              <TableCell>
-                <PersonalEmailCell user={user} />
-              </TableCell>
-              <TableCell>
-                <OrgTagsCell user={user} suggestions={allOrgTags} />
-              </TableCell>
-              <TableCell>
-                <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
-                  <Select
-                    value={user.role}
-                    disabled={isSelf || isPending}
-                    onValueChange={(value) =>
-                      handleRoleChange(user.id, value as 'admin' | 'member')
-                    }
-                  >
-                    <SelectTrigger size="sm" aria-label={`Role for ${user.name}`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="member">Member</SelectItem>
-                      <SelectItem value="admin">Admin</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </TableCell>
-              <TableCell>
-                <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
-                  <Switch
-                    checked={user.active}
-                    disabled={isSelf || isPending}
-                    aria-label={`Active status for ${user.name}`}
-                    onCheckedChange={(checked) => handleActiveChange(user.id, checked)}
-                  />
-                </div>
-              </TableCell>
-            </TableRow>
+            <li key={user.id} className="flex flex-col gap-3 rounded-xl border border-border p-3">
+              <div className="flex items-start justify-between gap-3">
+                {identity(user)}
+                {activeControl(user, isSelf)}
+              </div>
+              <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Seat">{seatControl(user, isSelf)}</Field>
+                <Field label="Job role">
+                  <JobRoleCell user={user} />
+                </Field>
+                <Field label="Phone">
+                  <PhoneCell user={user} />
+                </Field>
+                <Field label="Personal email">
+                  <PersonalEmailCell user={user} />
+                </Field>
+                <Field label="Organizations" wide>
+                  <OrgTagsCell user={user} suggestions={allOrgTags} />
+                </Field>
+              </dl>
+            </li>
           )
         })}
-      </TableBody>
-    </Table>
+      </ul>
+
+      {/* DESKTOP: the table, in its own scroll container so wide content
+          scrolls here rather than pushing the whole page sideways. */}
+      <div className="hidden overflow-x-auto lg:block">
+        <Table className="min-w-[64rem]">
+          <TableHeader>
+            <TableRow>
+              <TableHead>User</TableHead>
+              <TableHead>Seat</TableHead>
+              <TableHead>Job role</TableHead>
+              <TableHead>Phone</TableHead>
+              <TableHead>Personal email</TableHead>
+              <TableHead>Organizations</TableHead>
+              <TableHead className="text-right">Active</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {users.map((user) => {
+              const isSelf = user.id === currentUserId
+              return (
+                <TableRow key={user.id}>
+                  <TableCell className="max-w-64">{identity(user)}</TableCell>
+                  <TableCell>{seatControl(user, isSelf)}</TableCell>
+                  <TableCell className="min-w-48">
+                    <JobRoleCell user={user} />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <PhoneCell user={user} />
+                  </TableCell>
+                  <TableCell className="max-w-56">
+                    <PersonalEmailCell user={user} />
+                  </TableCell>
+                  <TableCell className="min-w-44">
+                    <OrgTagsCell user={user} suggestions={allOrgTags} />
+                  </TableCell>
+                  <TableCell className="text-right">{activeControl(user, isSelf)}</TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </>
+  )
+}
+
+function Field({
+  label,
+  children,
+  wide,
+}: {
+  label: string
+  children: React.ReactNode
+  wide?: boolean
+}) {
+  return (
+    <div className={wide ? 'flex flex-col gap-1 sm:col-span-2' : 'flex flex-col gap-1'}>
+      <dt className="text-2xs text-muted-foreground">{label}</dt>
+      <dd className="min-w-0">{children}</dd>
+    </div>
   )
 }

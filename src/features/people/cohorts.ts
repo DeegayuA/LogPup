@@ -15,8 +15,6 @@
  * would be in a room next week.
  */
 
-import { can, type Action, type Actor } from '@/features/auth/capabilities'
-import { roleBadgeTone } from '@/lib/project-roles'
 import type { CapacityBreakdownEntry, UserCapacity } from '@/features/people/queries'
 
 // ---------------------------------------------------------------------------
@@ -238,74 +236,20 @@ export function buildOverlapReport(
 // Who may see the numbers
 // ---------------------------------------------------------------------------
 
-/**
- * The grant that governs an allocation percentage.
+/*
+ * NO VISIBILITY LAYER HERE, deliberately.
  *
- * WHY THIS ROW AND NOT ANOTHER. On the dashboard's capacity list, the per-app
- * percentages render on the admin path only; the read-only path shows app names
- * and the total, and says in so many words that "the per-app split is a click
- * away on the person page" (features/dashboard/components/capacity-heat.tsx).
- * The person page is what `user.view.detail` governs, so that row is already
- * the rule for this number — reusing it keeps one answer to "who may see how
- * somebody's time is carved up" instead of minting a second.
+ * An earlier draft gated allocation percentages per project and printed a
+ * "scoped view" notice. Both were false: /people/[id] renders AssignmentsCard
+ * with no capability check at all, and this page's own People tab prints the
+ * same percentages per project chip — so the notice told a reader they lacked
+ * an access the next click handed them. Worse, its per-project arm read the
+ * free-text assignments.role string, which granted a stakeholder — the one
+ * role user.view.detail sets to 'none' — every percentage on any project where
+ * somebody had typed "Director" or "Product Owner" next to their name.
  *
- * Deliberately NOT `user.view.directory`: that governs whether the roster
- * exists for you at all, which is a different question and a wider grant.
+ * If allocation numbers should be restricted, that is one decision enforced in
+ * one place (the person page and the directory first), not a fourth opinion
+ * invented here. Until then these views show what the rest of /people shows.
  */
-const NUMBERS_ACTION: Action = 'user.view.detail'
 
-export type NumberAccess = {
-  /** Every project's numbers, workspace-wide. */
-  all: boolean
-  /** The projects whose numbers are visible when `all` is false. */
-  appIds: ReadonlySet<string>
-}
-
-/**
- * Which projects' allocation percentages this viewer may see.
- *
- * THREE INPUTS, ONE ANSWER:
- *  1. `can(actor, NUMBERS_ACTION)` with NO resource is true only at grant level
- *     'all' — `can` fails closed for 'own'/'scoped' asked without a resource,
- *     which is exactly the test for "everywhere" and needs no peek at the
- *     matrix's shape.
- *  2. `can(actor, NUMBERS_ACTION, { appId })` per project resolves a 'scoped'
- *     grant against the actor's own scope set, which `loadActor` filled with
- *     ONE query for the whole request. Pure and synchronous, so asking it per
- *     project costs nothing.
- *  3. Per-project PM and lead see their own project's numbers whatever their
- *     workspace seat. That is `managesApp`'s rule, but not `managesApp` itself:
- *     that helper is one SELECT per (user, app) and calling it per project is
- *     the N+1 this page refuses. It reads `assignments.role` and runs it
- *     through lib/project-roles.ts — and the viewer's own assignment rows are
- *     already in hand as `own`, so the same shared predicate over the same
- *     column gives the same answer with no query at all. `roleBadgeTone` is
- *     that predicate: 'manager' is the PM family, 'reviewer' is the lead /
- *     architect family. No private regex, here or anywhere.
- *
- * A signed-out actor (null) gets nothing — the (app) layout redirects before
- * this can happen, so this arm is a fail-closed default, not a real state.
- */
-export function resolveNumberAccess(
-  actor: Actor | null,
-  own: readonly CapacityBreakdownEntry[],
-  appIds: readonly string[],
-): NumberAccess {
-  if (!actor) return { all: false, appIds: new Set() }
-  if (can(actor, NUMBERS_ACTION)) return { all: true, appIds: new Set(appIds) }
-
-  const visible = new Set<string>()
-  for (const appId of appIds) {
-    if (can(actor, NUMBERS_ACTION, { appId })) visible.add(appId)
-  }
-  for (const entry of own) {
-    const tone = roleBadgeTone(entry.role)
-    if (tone === 'manager' || tone === 'reviewer') visible.add(entry.appId)
-  }
-  return { all: false, appIds: visible }
-}
-
-/** Whether one project's percentages may be rendered. */
-export function showsNumbers(access: NumberAccess, appId: string): boolean {
-  return access.all || access.appIds.has(appId)
-}

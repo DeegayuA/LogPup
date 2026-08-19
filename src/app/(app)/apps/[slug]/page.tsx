@@ -58,6 +58,7 @@ import { ExportButton } from '@/features/notion/components/export-button'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
 import { isAdminRole } from '@/features/auth/capabilities'
+import { getAiPrefs } from '@/features/gemini/prefs'
 
 const SPRINT_STATUS_LABEL: Record<'planned' | 'active' | 'done', string> = {
   planned: 'Planned',
@@ -134,6 +135,7 @@ export default async function AppDetailPage(props: {
     activity,
     contributions,
     roleHistory,
+    aiPrefs,
   ] = await Promise.all([
     getSprintsForApp(app.id),
     getTeamForApp(app.id),
@@ -150,8 +152,14 @@ export default async function AppDetailPage(props: {
     // Settings is the only tab that shows PM/lead history — it sits right
     // under the form that edits them (AppFormDialog below).
     tab === 'settings' ? getAppRoleHistory(app.id) : Promise.resolve([]),
+    // Only the dialogs below read this, and only admins ever see those
+    // dialogs — a member pays nothing for a preference lookup they have no
+    // control that needs it.
+    isAdmin && session?.user ? getAiPrefs(session.user.id) : Promise.resolve(null),
   ])
   const tasks = counts.tasks
+  const sprintDraftEnabled = aiPrefs ? aiPrefs['sprint-draft'] : true
+  const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'] : true
 
   const sprintSnapshots: AppSprintSnapshot[] = sprints.map((sprint) => ({
     id: sprint.id,
@@ -343,6 +351,7 @@ export default async function AppDetailPage(props: {
               workspaceTechTags={workspaceTechTags}
               activeUsers={activeUsers}
               trigger={<Button variant="outline" size="sm" />}
+              aiGenerateEnabled={appMetadataEnabled}
             />
           ) : undefined
         }
@@ -496,7 +505,9 @@ export default async function AppDetailPage(props: {
               {isAdmin && !isBacklog && selectedSprint ? (
                 <ExportButton sprintId={selectedSprint.id} />
               ) : null}
-              {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              {isAdmin ? (
+                <SprintFormDialog appId={app.id} aiDraftEnabled={sprintDraftEnabled} />
+              ) : null}
             </div>
           </div>
 
@@ -560,7 +571,9 @@ export default async function AppDetailPage(props: {
                   ? 'This app has no sprints. Create the first one and LogPup will keep watch over the board.'
                   : 'No sprints planned for this app yet. LogPup is keeping an eye out — check back soon.'}
               </p>
-              {isAdmin ? <SprintFormDialog appId={app.id} /> : null}
+              {isAdmin ? (
+                <SprintFormDialog appId={app.id} aiDraftEnabled={sprintDraftEnabled} />
+              ) : null}
             </div>
           )}
 
@@ -654,6 +667,7 @@ export default async function AppDetailPage(props: {
                 }}
                 workspaceTechTags={workspaceTechTags}
                 activeUsers={activeUsers}
+                aiGenerateEnabled={appMetadataEnabled}
               />
             </div>
           </div>

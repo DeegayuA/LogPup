@@ -1,131 +1,98 @@
+import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { TriangleAlert } from 'lucide-react'
-import { getSession } from '@/lib/session'
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
-import { AddUserDialog } from '@/features/admin/components/add-user-dialog'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AiAdoptionCard } from '@/features/admin/components/ai-adoption-card'
-import { DbClearButton } from '@/features/admin/components/db-clear-button'
-import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
-import { TrashCard } from '@/features/admin/components/trash-card'
-import { UserTable } from '@/features/admin/components/user-table'
-import { AppsTable } from '@/features/admin/components/apps-table'
 import { listAllUsers, listPendingUsers } from '@/features/admin/queries'
 import { getTrash } from '@/features/admin/trash-queries'
-import { listApps } from '@/features/apps/queries'
-import { listActiveUsers } from '@/features/people/queries'
+import { listPendingAbsences } from '@/features/worklog/absence-queries'
+import { loadActor } from '@/features/auth/actor'
+import { can } from '@/features/auth/capabilities'
 
-export default async function AdminPage() {
-  const session = await getSession()
-  if (session?.user?.role !== 'admin') notFound()
+/**
+ * Org health at a glance, and what is waiting on somebody.
+ *
+ * Every tile links to the section that acts on it — a count you cannot act on
+ * is a decoration. Nothing here renders a bare percentage: coverage figures
+ * come from CoverageFigure, which cannot produce one.
+ */
+export default async function AdminOverviewPage() {
+  const actor = await loadActor()
+  if (!actor || !can(actor, 'admin.view')) notFound()
 
-  const dbClearEnabled = process.env.ENABLE_DB_CLEAR === '1'
-
-  const [pendingUsers, allUsers, allApps, activeUsers, trashGroups] = await Promise.all([
-    listPendingUsers(),
-    listAllUsers(),
-    listApps(),
-    listActiveUsers(),
-    getTrash(),
+  const [pendingUsers, allUsers, pendingAbsences, trashGroups] = await Promise.all([
+    can(actor, 'user.approve') ? listPendingUsers() : Promise.resolve([]),
+    can(actor, 'user.view.detail') ? listAllUsers() : Promise.resolve([]),
+    listPendingAbsences(actor),
+    can(actor, 'trash.view') ? getTrash() : Promise.resolve([]),
   ])
 
-  const existingOrgTags = Array.from(new Set(allUsers.flatMap((u) => u.orgTags)))
-    .sort((a, b) => a.localeCompare(b))
-
-  // Same "active" predicate the Users table below toggles per-row on
-  // (users.active), over the same already-approved rows listAllUsers
-  // returns — no separate query, no invented notion of "active".
   const activeUserCount = allUsers.filter((u) => u.active).length
+  const waiting = pendingUsers.length + pendingAbsences.length
+  const trashCount = trashGroups.reduce((sum, g) => sum + g.totalCount, 0)
 
   return (
-    <div className="flex flex-1 flex-col p-6">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-bold tracking-tight">Admin</h1>
-          <p className="text-sm text-muted-foreground">
-            Workspace-wide tools. These act on everyone&apos;s data — tread carefully.
-          </p>
-        </div>
-
-        <PendingApprovalsCard users={pendingUsers} />
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Users</CardTitle>
-            <CardDescription>
-              Approved teammates only — pending self-signups are above, and a rejected
-              account is gone from every list. Add teammates by email, tag their
-              organization, change roles or deactivate accounts. You can&apos;t change
-              your own role or active status here.
-            </CardDescription>
-            <CardAction>
-              <AddUserDialog existingOrgTags={existingOrgTags} />
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            <UserTable users={allUsers} currentUserId={session.user.id} />
-          </CardContent>
-        </Card>
-
-        <AiAdoptionCard activeUserCount={activeUserCount} />
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Apps</CardTitle>
-            <CardDescription>
-              Reassign an app&apos;s lead or archive it. Archived apps are shown muted below.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <AppsTable apps={allApps} activeUsers={activeUsers} />
-          </CardContent>
-        </Card>
-
-        <TrashCard groups={trashGroups} />
-
-        <section className="flex flex-col gap-3">
-          <h2 className="font-heading text-sm font-semibold text-destructive">
-            Danger zone
-          </h2>
-
-          <Card className="ring-destructive/30">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TriangleAlert aria-hidden className="size-4 text-destructive" />
-                Clear database
-              </CardTitle>
-              <CardDescription>
-                Permanently deletes all apps, assignments, sprints, tasks, meetings and
-                work logs for the whole workspace. Users are kept. This cannot be undone.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {dbClearEnabled ? (
-                <div className="flex flex-col gap-3">
-                  <p className="text-sm text-muted-foreground">
-                    Testing only — remove{' '}
-                    <span className="font-mono text-xs text-foreground">ENABLE_DB_CLEAR</span>{' '}
-                    from the environment when done.
-                  </p>
-                  <DbClearButton />
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  This tool is currently disabled. Set{' '}
-                  <span className="font-mono text-xs text-foreground">ENABLE_DB_CLEAR=1</span>{' '}
-                  to enable it (testing only).
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </section>
+    <div className="flex flex-col gap-6">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Stat
+          label="Waiting on someone"
+          value={waiting}
+          href="/admin/approvals"
+          detail={`${pendingUsers.length} signups · ${pendingAbsences.length} leave`}
+        />
+        <Stat
+          label="Active people"
+          value={activeUserCount}
+          href="/admin/people"
+          detail={`of ${allUsers.length} approved`}
+        />
+        <Stat
+          label="In the trash"
+          value={trashCount}
+          href="/admin/trash"
+          detail="restorable"
+        />
       </div>
+
+      {waiting === 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Nothing is waiting on you</CardTitle>
+            <CardDescription>
+              Signups, leave requests and change requests all land in Approvals. When one
+              arrives it shows up here with its age.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      <AiAdoptionCard activeUserCount={activeUserCount} />
     </div>
+  )
+}
+
+function Stat({
+  label,
+  value,
+  href,
+  detail,
+}: {
+  label: string
+  value: number
+  href: string
+  detail: string
+}) {
+  return (
+    <Link
+      href={href}
+      className="rounded-xl border border-border p-4 transition-colors duration-150 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      <CardContent className="flex flex-col gap-1 p-0">
+        <span className="text-2xs text-muted-foreground">{label}</span>
+        {/* Data values are mono and tabular, and never larger than text-lg —
+            hierarchy comes from weight and colour before size. */}
+        <span className="font-mono text-lg font-semibold tabular-nums">{value}</span>
+        <span className="text-2xs text-muted-foreground">{detail}</span>
+      </CardContent>
+    </Link>
   )
 }

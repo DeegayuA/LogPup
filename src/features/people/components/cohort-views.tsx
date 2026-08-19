@@ -20,9 +20,7 @@ import { SectionEmpty } from '@/features/people/components/section-empty'
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
 import { peopleHref, type CohortParams } from '@/features/people/cohort-params'
 import {
-  showsNumbers,
   type CohortMember,
-  type NumberAccess,
   type OverlapReport,
   type ProjectCohort,
   type SharedPerson,
@@ -122,34 +120,6 @@ function MemberRow({ member, showPct }: { member: CohortMember; showPct: boolean
   )
 }
 
-/**
- * Says, on screen, that the page is showing less than it holds.
- *
- * Rendered from what is ACTUALLY on this screen — the count of projects whose
- * numbers were rendered, out of the count listed — rather than from the
- * viewer's role, so the sentence cannot drift away from the page under it. It
- * is deliberately not an error or a warning: being scoped is the normal state
- * for most seats, and the view still answers the question it is for.
- */
-function ScopedNotice({ access, visible, total }: { access: NumberAccess; visible: number; total: number }) {
-  if (access.all) return null
-  return (
-    <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-      {visible > 0 ? (
-        <>
-          Scoped view — allocation percentages are shown for the {visible} of {total} project
-          {total === 1 ? '' : 's'} you are assigned to or run. The rest show names and roles only.
-        </>
-      ) : (
-        <>
-          Scoped view — this page shows who is on what, in names and roles. Allocation percentages
-          follow the same access as a person&rsquo;s detail page, which you do not have for these
-          projects.
-        </>
-      )}
-    </p>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // By project
@@ -207,7 +177,6 @@ function SprintLine({ stats, todayIso }: { stats: AppPortfolioEntry['stats']; to
 export function ProjectCohortList({
   apps,
   cohorts,
-  access,
   actor,
   todayIso,
 }: {
@@ -215,7 +184,6 @@ export function ProjectCohortList({
   apps: AppPortfolioEntry[]
   /** Who is on each project, keyed by app id. */
   cohorts: Map<string, ProjectCohort>
-  access: NumberAccess
   /** Only used to decide whether an empty state may offer its action. */
   actor: Actor | null
   todayIso: string
@@ -242,14 +210,11 @@ export function ProjectCohortList({
     )
   }
 
-  const visible = apps.filter((app) => showsNumbers(access, app.id)).length
-
   return (
     <div className="flex flex-col gap-3">
-      <ScopedNotice access={access} visible={visible} total={apps.length} />
       {apps.map((app) => {
         const members = cohorts.get(app.id)?.members ?? []
-        const showPct = showsNumbers(access, app.id)
+        const showPct = true
         return (
           <Card key={app.id}>
             <CardHeader>
@@ -333,12 +298,10 @@ export function ProjectCohortList({
  */
 export function SharedPeopleList({
   rows,
-  access,
   params,
   rankBySplit,
 }: {
   rows: SharedPerson[]
-  access: NumberAccess
   params: CohortParams
   /** True when every number behind the ranking is on screen — see cohorts.ts. */
   rankBySplit: boolean
@@ -367,11 +330,9 @@ export function SharedPeopleList({
   // Counted over the projects actually named by the rows below, so the notice
   // describes this list rather than the workspace.
   const listed = new Set(rows.flatMap((row) => row.projects.map((project) => project.appId)))
-  const visible = [...listed].filter((appId) => showsNumbers(access, appId)).length
 
   return (
     <div className="flex flex-col gap-3">
-      <ScopedNotice access={access} visible={visible} total={listed.size} />
       <Card>
         <CardHeader>
           <CardTitle>Shared across projects</CardTitle>
@@ -404,7 +365,7 @@ export function SharedPeopleList({
                     >
                       <ProjectDot appId={project.appId} />
                       <span className="truncate text-foreground">{project.appName}</span>
-                      {showsNumbers(access, project.appId) ? (
+                      {true ? (
                         <span className={cn(PCT_CLASS, 'shrink-0')}>
                           {formatPct(project.allocationPct)}
                         </span>
@@ -413,11 +374,10 @@ export function SharedPeopleList({
                   ))}
                 </span>
                 <span className="ml-auto flex shrink-0 items-center gap-2">
-                  {/* The judgement, and only where every number behind it is
-                      visible. It states the test it applied rather than a grade:
-                      three or more projects, none of them holding half the
-                      person. A reader can check it against the chips alongside. */}
-                  {access.all && row.noAnchor ? (
+                  {/* States the test it applied rather than a grade: three or
+                      more projects, none of them holding half the person. A
+                      reader can check it against the chips alongside. */}
+                  {row.noAnchor ? (
                     <Badge variant="outline" className="border-warning text-foreground">
                       No project has half their time
                     </Badge>
@@ -471,7 +431,6 @@ function OverlapPicker({
 export function ProjectOverlapView({
   cohorts,
   report,
-  access,
   params,
   unknownProject,
 }: {
@@ -479,7 +438,6 @@ export function ProjectOverlapView({
   cohorts: ProjectCohort[]
   /** Null only when nobody is on any project at all. */
   report: OverlapReport | null
-  access: NumberAccess
   params: CohortParams
   /**
    * A `project` param that matched no project WITH PEOPLE ON IT — an unknown
@@ -514,7 +472,6 @@ export function ProjectOverlapView({
   // share people with it. Nothing else is on screen, so nothing else is
   // counted in the notice.
   const listed = [anchor, ...overlaps.map((overlap) => overlap.project)]
-  const visible = listed.filter((cohort) => showsNumbers(access, cohort.appId)).length
 
   return (
     <div className="flex flex-col gap-3">
@@ -528,8 +485,6 @@ export function ProjectOverlapView({
       ) : null}
 
       <OverlapPicker cohorts={cohorts} anchorAppId={anchor.appId} params={params} />
-
-      <ScopedNotice access={access} visible={visible} total={listed.length} />
 
       <Card>
         <CardHeader>
@@ -552,7 +507,7 @@ export function ProjectOverlapView({
               <MemberRow
                 key={member.userId}
                 member={member}
-                showPct={showsNumbers(access, anchor.appId)}
+                showPct={true}
               />
             ))}
           </ul>
@@ -618,7 +573,7 @@ export function ProjectOverlapView({
                   <MemberRow
                     key={member.userId}
                     member={member}
-                    showPct={showsNumbers(access, overlap.project.appId)}
+                    showPct={true}
                   />
                 ))}
               </ul>

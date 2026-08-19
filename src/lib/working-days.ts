@@ -23,7 +23,12 @@ import { LK_HOLIDAYS } from '@/lib/lk-holidays'
 export type WorkingDayFraction = 0 | 0.5 | 1
 
 /** ISO `yyyy-mm-dd` → is it a gazetted Sri Lankan holiday? */
-function isGazettedHoliday(iso: string): boolean {
+/**
+ * Exported so callers that COMPOSE holidays (org_holidays on top of the
+ * gazetted calendar) can build one `isHoliday` predicate from the same source
+ * this module defaults to, rather than writing a second gazetted lookup.
+ */
+export function isGazettedHoliday(iso: string): boolean {
   return iso in LK_HOLIDAYS
 }
 

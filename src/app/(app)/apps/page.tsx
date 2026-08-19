@@ -9,6 +9,7 @@ import { AppsBrowser } from '@/features/apps/components/apps-browser'
 import { PortfolioSummaryStrip } from '@/features/apps/components/portfolio-summary'
 import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { isAdminRole } from '@/features/auth/capabilities'
+import { getAiPrefs } from '@/features/gemini/prefs'
 
 export default async function AppsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
@@ -31,6 +32,10 @@ export default async function AppsPage(props: {
   ])
   const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   const params = parseBrowseParams(rawParams)
+  // Only AppFormDialog reads this, and only admins ever see it — a member
+  // pays nothing for a preference lookup they have no control that needs it.
+  const aiPrefs = isAdmin && session?.user ? await getAiPrefs(session.user.id) : null
+  const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'] : true
 
   // One shared "today" for the whole page: the header strip, every card's
   // sprint bar and every health verdict must agree on which day it is, and
@@ -53,6 +58,7 @@ export default async function AppsPage(props: {
             defaultOpen={rawParams.new === '1'}
             workspaceTechTags={workspaceTechTags}
             activeUsers={activeUsers}
+            aiGenerateEnabled={appMetadataEnabled}
           />
         ) : null}
       </header>

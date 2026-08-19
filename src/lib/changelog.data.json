@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.270",
+  "current": "v0.0.283",
   "versions": [
     {
       "version": "v0.0.1",
@@ -1620,6 +1620,84 @@
       "date": "2026-08-19",
       "hash": "279f393",
       "change": "fix: correct stale docs and terminal-error parity in live-token.ts"
+    },
+    {
+      "version": "v0.0.271",
+      "date": "2026-08-19",
+      "hash": "6942a2a",
+      "change": "feat: every gemini call names its feature slug for the usage ledger"
+    },
+    {
+      "version": "v0.0.272",
+      "date": "2026-08-19",
+      "hash": "df77880",
+      "change": "feat: key sharing/tier actions and AI feature pref action"
+    },
+    {
+      "version": "v0.0.273",
+      "date": "2026-08-19",
+      "hash": "eba628f",
+      "change": "docs(search): say plainly what a descriptor refactor would break"
+    },
+    {
+      "version": "v0.0.274",
+      "date": "2026-08-19",
+      "hash": "820a001",
+      "change": "fix: anchor AI usage ledger writes with after() so rows survive function suspension"
+    },
+    {
+      "version": "v0.0.275",
+      "date": "2026-08-19",
+      "hash": "0b9bf2e",
+      "change": "fix: shared-pool wording on reachable error paths, honest callGemini docs, count thinking tokens"
+    },
+    {
+      "version": "v0.0.276",
+      "date": "2026-08-19",
+      "hash": "6b62f4d",
+      "change": "fix(search): palette admin gates go through isAdminRole, not role === 'admin'"
+    },
+    {
+      "version": "v0.0.277",
+      "date": "2026-08-19",
+      "hash": "72ec714",
+      "change": "feat: gate AI actions on per-user feature prefs; make key readiness pool-aware"
+    },
+    {
+      "version": "v0.0.278",
+      "date": "2026-08-19",
+      "hash": "a587687",
+      "change": "docs: role-shaped dashboard design — capability-composed zones, per-role ordering"
+    },
+    {
+      "version": "v0.0.279",
+      "date": "2026-08-19",
+      "hash": "2e126f8",
+      "change": "docs: role dashboards — grant-level narrowing rule, confirmed scope sources, KPI ownership split"
+    },
+    {
+      "version": "v0.0.280",
+      "date": "2026-08-19",
+      "hash": "57febc2",
+      "change": "feat: usage rollup, adoption math, and ledger aggregate queries"
+    },
+    {
+      "version": "v0.0.281",
+      "date": "2026-08-19",
+      "hash": "b28307d",
+      "change": "docs: role dashboards — trail zone gates on activity.view, audit.view scoped out"
+    },
+    {
+      "version": "v0.0.282",
+      "date": "2026-08-19",
+      "hash": "3492257",
+      "change": "feat: admin AI adoption panel — per-feature reach, unused features, per-person usage"
+    },
+    {
+      "version": "v0.0.283",
+      "date": "2026-08-19",
+      "hash": "d421674",
+      "change": "."
     }
   ]
 }
