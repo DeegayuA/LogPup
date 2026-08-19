@@ -1,4 +1,5 @@
 import { Plus } from 'lucide-react'
+import { isAdminRole } from '@/features/auth/capabilities'
 import type { CommandDescriptor } from '@/features/search/registry/types'
 
 /**
@@ -18,8 +19,13 @@ export const commands: CommandDescriptor[] = [
     icon: Plus,
     // Opens the New app dialog on arrival — app/(app)/apps/page.tsx reads ?new=1.
     href: '/apps?new=1',
-    // Presentation only. createApp() re-checks the role server-side; this just
-    // keeps a row nobody can use out of a member's palette.
-    visible: (ctx) => ctx.user.role === 'admin',
+    /* Presentation only. createApp() re-checks the role server-side; this just
+       keeps a row nobody can use out of a member's palette.
+
+       Through the predicate, never `role === 'admin'`: the widened enum turns
+       that comparison into a silent false for superadmin — still compiling,
+       still green — and hides this row from the one seat that certainly may
+       use it. */
+    visible: (ctx) => isAdminRole(ctx.user.role),
   },
 ]

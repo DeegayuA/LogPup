@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { adminNavItems, navItems } from '@/components/shell/nav-items'
+import { isAdminRole } from '@/features/auth/capabilities'
 import { settingsNavItem } from '@/features/settings/nav'
 import { commands as appsCommands } from '@/features/apps/commands'
 import { commands as authCommands } from '@/features/auth/commands'
@@ -89,8 +90,11 @@ function navCommands(ctx: PaletteContext): CommandDescriptor[] {
   const rows = [
     ...navItems,
     settingsNavItem,
-    // Admin's own nav list, gated the same way every other surface gates it.
-    ...(ctx.user.role === 'admin' ? adminNavItems : []),
+    /* Admin's own nav list, gated through the shared predicate rather than a
+       `role === 'admin'` comparison — that comparison goes silently false for
+       superadmin under the widened enum, dropping /admin out of the palette
+       for the one seat that certainly has it. */
+    ...(isAdminRole(ctx.user.role) ? adminNavItems : []),
   ]
   return rows.map((item) => ({
     id: `nav.${item.href}`,

@@ -84,7 +84,7 @@ const commandsRegistrySource = read('src/features/search/registry/commands.ts')
 const providersRegistrySource = read('src/features/search/registry/providers.ts')
 
 /** A context to resolve rows against. Role and shell state vary per test. */
-function ctx(role: 'admin' | 'member' = 'member'): PaletteContext {
+function ctx(role: PaletteContext['user']['role'] = 'member'): PaletteContext {
   return {
     user: {
       id: 'u1',
@@ -353,6 +353,48 @@ describe('check 7: allowlist hygiene', () => {
   })
 })
 
+// --- A tripwire for the RBAC expansion -----------------------------------
+
+/**
+ * Both admin-gated palette rows — the /admin destination (navCommands in
+ * ./commands.ts) and "New app" (features/apps/commands.ts) — go through
+ * isAdminRole(), never a `role === 'admin'` comparison. That comparison
+ * keeps COMPILING and keeps passing tests when the enum widens; it just goes
+ * false for every new role, so a superadmin silently loses both rows from ⌘K
+ * while holding both permissions on the server.
+ *
+ * This tripwire has already fired once, on the commit that widened user_role
+ * from admin/member to seven roles — which is what caught those two gates.
+ * It stays because the same thing happens on the next widening, and because
+ * the behavioural assertions below cannot catch it: they pass a role literal,
+ * so they stay green precisely while the highest-privilege seat is hidden.
+ *
+ * WHEN IT FAILS AGAIN: check every `visible` predicate and every nav gate in
+ * the registry against the new role, then update this list. Never widen the
+ * list alone to make it pass.
+ */
+type PaletteRole = PaletteContext['user']['role']
+type RolesTheRegistryWasWrittenFor =
+  | 'superadmin'
+  | 'admin'
+  | 'manager'
+  | 'editor'
+  | 'member'
+  | 'stakeholder'
+  | 'auditor'
+type RoleUnionUnchanged = [PaletteRole] extends [RolesTheRegistryWasWrittenFor]
+  ? [RolesTheRegistryWasWrittenFor] extends [PaletteRole]
+    ? true
+    : false
+  : false
+const ROLE_UNION_UNCHANGED: RoleUnionUnchanged = true
+
+describe('rbac tripwire', () => {
+  it('the role union is still the one the palette gates were written for', () => {
+    expect(ROLE_UNION_UNCHANGED).toBe(true)
+  })
+})
+
 // --- What the registry resolves to ---------------------------------------
 
 describe('paletteCommands', () => {
@@ -366,6 +408,23 @@ describe('paletteCommands', () => {
     const hrefs = paletteCommands(ctx('admin')).map((command) => command.href)
     expect(hrefs).toContain('/admin')
     expect(hrefs).toContain('/apps?new=1')
+  })
+
+  it('a superadmin sees both, not fewer than an admin', () => {
+    // The regression the widened enum caused everywhere else in the app: a
+    // `role === 'admin'` gate is false for superadmin, so the highest-
+    // privilege seat quietly gets the smallest palette.
+    const hrefs = paletteCommands(ctx('superadmin')).map((command) => command.href)
+    expect(hrefs).toContain('/admin')
+    expect(hrefs).toContain('/apps?new=1')
+  })
+
+  it('a role between the two extremes still sees neither', () => {
+    // isAdminRole is staff-only, not a ladder — an editor may edit plenty and
+    // still must not be offered the admin console.
+    const hrefs = paletteCommands(ctx('editor')).map((command) => command.href)
+    expect(hrefs).not.toContain('/admin')
+    expect(hrefs).not.toContain('/apps?new=1')
   })
 
   it('prints a jump chip only while the jumps are switched on', () => {
