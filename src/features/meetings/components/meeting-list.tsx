@@ -58,14 +58,33 @@ export function MeetingList({
   showAppBadge = true,
   users = [],
   apps = [],
+  offerCreate = false,
   openMeetingId,
 }: {
   meetings: MeetingSummary[]
   currentUserId: string
   isAdmin: boolean
+  /**
+   * False on a list already scoped to one app, where repeating that app's name
+   * on every row is noise.
+   */
   showAppBadge?: boolean
-  /** Mention pool for the notes editor. Empty just means no suggestions pop up. */
+  /**
+   * Mention pool for the notes editor. Empty just means no suggestions pop up
+   * — except in the empty state, where it is also the attendee pool the
+   * create form would have to offer (see offersCreate).
+   */
   users?: MentionUser[]
+  /**
+   * Whether this list's empty state may OFFER to create a meeting.
+   *
+   * Opt-in, and only true where a new meeting would actually land in the list
+   * the button was pressed from. MeetingForm seeds the next slot from now, so
+   * a past-scoped or app-scoped list must leave this false: the meeting it
+   * created would be filed somewhere the reader is not looking, and the empty
+   * state they are staring at would not change.
+   */
+  offerCreate?: boolean
   /**
    * Apps the edit dialog can move a meeting to. Optional so the surfaces that
    * render a list without one keep working — an empty list simply leaves
@@ -81,11 +100,50 @@ export function MeetingList({
   const now = new Date()
 
   if (meetings.length === 0) {
+    /*
+     * Whether this empty state can offer creation rather than describe it.
+     *
+     * Two conditions, both about being able to keep the promise:
+     *
+     * `offerCreate` — opt-in, passed only by the upcoming list. Every other
+     * caller leaves it false because the meeting this button makes starts at
+     * the next slot from now: on the app page's tab it would be filed under
+     * "No app" and vanish from a list filtered by appId, and in the past
+     * section it would be upcoming and therefore invisible there by
+     * definition. Those surfaces offer creation through their own form,
+     * seeded correctly.
+     *
+     * `users` — createMeeting requires at least one attendee, and the picker
+     * can only offer the people passed in. With none, the dialog opens onto a
+     * form that cannot be submitted.
+     */
+    const offersCreate = offerCreate && users.length > 0
     return (
-      <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-        <CalendarDaysIcon className="size-5 text-muted-foreground/60" aria-hidden />
-        <p className="text-sm font-medium">No meetings.</p>
-        <p className="text-xs text-muted-foreground">Schedule one to get the team in sync.</p>
+      <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-4 py-8 text-center">
+        <div className="flex flex-col items-center gap-1">
+          <CalendarDaysIcon className="size-5 text-muted-foreground/60" aria-hidden />
+          <p className="text-sm font-medium">No meetings.</p>
+          <p className="text-xs text-muted-foreground">
+            {offersCreate
+              ? // What happens after, rather than a second description of the
+                // button under it: createMeeting notifies every attendee
+                // except the organiser. Who MAY schedule one is a page-level
+                // fact and is said once, on /meetings, not on each list.
+                'Everyone you invite gets a notification.'
+              : 'Schedule one to get the team in sync.'}
+          </p>
+        </div>
+        {offersCreate ? (
+          <MeetingForm
+            apps={apps}
+            activeUsers={users}
+            trigger={
+              <Button variant="outline" size="sm">
+                New meeting
+              </Button>
+            }
+          />
+        ) : null}
       </div>
     )
   }

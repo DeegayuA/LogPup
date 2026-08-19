@@ -42,6 +42,17 @@ export function CapacityCard({
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : null}
+        {/* The unit, said once where the first percentage is met. It lives in
+            the shared chrome rather than in CapacityHeat because the admin's
+            editable list — the people who actually set these numbers — takes
+            the other path and would otherwise never see it. Gated on the same
+            count as the tally opposite: with nobody listed there is no
+            percentage on screen to explain. */}
+        {count > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Each bar is that person&rsquo;s app allocations added up; 100% is one full workload.
+          </p>
+        ) : null}
         {count > 0 ? (
           <CardAction>
             <span

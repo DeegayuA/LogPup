@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, count, desc, eq, gte, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { dailyWorklogs, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
@@ -37,6 +37,22 @@ export async function getUserJoinDay(userId: string): Promise<string | null> {
     .from(users)
     .where(eq(users.id, userId))
   return row ? toIsoDateInTimeZone(row.createdAt, LK_TIMEZONE) : null
+}
+
+/**
+ * Has this person ever logged a day at all?
+ *
+ * Deliberately a count and not a fetch: the only caller is the dashboard's
+ * first-log nudge, which needs "zero or not", never the rows. The access
+ * path is `daily_worklogs_user_day_idx` — the (user, day) unique index — so
+ * this stays one index read however long the log gets.
+ */
+export async function countMyWorklogDays(userId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(dailyWorklogs)
+    .where(eq(dailyWorklogs.userId, userId))
+  return row?.n ?? 0
 }
 
 /** One person's most recent days, newest first. */

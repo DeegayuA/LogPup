@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { Briefcase, PawPrint } from 'lucide-react'
 import { getSession } from '@/lib/session'
 import { Badge } from '@/components/ui/badge'
@@ -103,6 +104,23 @@ export default async function ProfilePage(props: {
         <SetPasswordForm />
 
         <GeminiKeysCard keys={geminiKeys} />
+
+        {/* The mirror of the footnote at the foot of /settings. The two pages
+            split along edit-here / read-there, which is only guessable if each
+            one names the other — saying it on one page left half the split
+            invisible to anyone who landed here first. No external-link icon:
+            this stays inside the app. */}
+        <p className="text-xs text-muted-foreground">
+          Looking for something else?{' '}
+          <Link
+            href="/settings"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            Settings
+          </Link>{' '}
+          holds your theme, your passkeys, whether your Gemini keys are working, the
+          version you are on, and sign out.
+        </p>
       </div>
     </div>
   )

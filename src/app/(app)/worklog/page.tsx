@@ -42,15 +42,23 @@ export default async function WorklogPage() {
           {format(new Date(`${today}T12:00:00`), 'EEEE, MMMM d')} — one line about your day, and how
           far you got.
         </p>
+        {/* The rules live here, not only inside the catch-up panel: that panel
+            renders only for somebody already behind, so a person who has never
+            missed a day would never be told how the days are counted. */}
+        <p className="text-2xs text-muted-foreground">
+          Sundays and gazetted public holidays are not counted; Saturdays are, as half days. Days
+          you missed wait above today&rsquo;s box, up to {MAX_BACKFILL_DAYS} at once. What you save
+          appears in your own list below, and in the team view that admins see. Only you can
+          write your entries — an admin can read them, but cannot log a day for you.
+        </p>
       </div>
 
       {/* Only the data waits. The heading is on screen immediately, and the
           form arrives with today's entry already in it rather than flashing
           an empty box that then fills. */}
-      {/* Owed days come FIRST, above today's box. The rule is that every
-          working day gets logged, so if earlier ones are outstanding they
-          are the thing to deal with — burying them under today's entry is
-          how a backlog becomes permanent. */}
+      {/* Earlier days come FIRST, above today's box. They are the ones a
+          person has to decide about — fill in or leave blank — and burying
+          them under today's entry is how a list nobody reads is made. */}
       <Suspense fallback={null}>
         <CatchUp userId={session.user.id} today={today} />
       </Suspense>
@@ -73,13 +81,15 @@ export default async function WorklogPage() {
 }
 
 /**
- * The days this person still owes, each with its own entry box.
+ * Earlier days with no entry yet, each with its own box.
  *
- * Renders nothing when nothing is outstanding — a permanently-present
- * "catch up" panel showing zero is noise that teaches people to ignore the
- * area where the real prompt appears. Weekends and gazetted holidays are
- * never counted, the window starts at the join date and is capped, so this
- * is always a list somebody can actually clear (see missing-days.ts).
+ * Renders nothing when there are none — a permanently-present catch-up
+ * panel showing zero is noise that teaches people to ignore the area where
+ * the real prompt appears. Deliberately not styled as a warning: people take
+ * leave and spend days on other work, and a blank day is not a fault. The
+ * list is kept short by missing-days.ts (weekends and gazetted holidays
+ * never counted, window starts at the join date, capped) so it is always
+ * something somebody can deal with in one sitting.
  */
 async function CatchUp({ userId, today }: { userId: string; today: string }) {
   const [joinedOn, recent] = await Promise.all([
@@ -96,15 +106,19 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
   if (missing.length === 0) return null
 
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/5 p-4">
+    <section className="flex flex-col gap-3 rounded-xl border bg-muted/40 p-4">
       <div className="flex flex-col gap-0.5">
         <h2 className="font-heading text-sm font-semibold">
-          {missing.length === 1 ? '1 day still needs logging' : `${missing.length} days still need logging`}
+          {missing.length === 1
+            ? '1 earlier day has no entry'
+            : `${missing.length} earlier days have no entry`}
         </h2>
+        {/* How the days are counted is stated under the page header, so it is
+            not repeated here. */}
         <p className="text-2xs text-muted-foreground">
-          Fill these in before today&rsquo;s. Sundays and public holidays are not counted; Saturdays
-          are, as half days. This only goes back {MAX_BACKFILL_DAYS} working days — you will never
-          be shown a backlog you cannot clear.
+          Fill in the ones you worked. For a day of leave, a day off, or a day on another
+          project, log it as that — a day leaves this list once it has an entry, whatever the
+          entry says.
         </p>
       </div>
 

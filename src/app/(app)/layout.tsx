@@ -25,7 +25,11 @@ export default async function AppLayout({
   const user = { name: session.user.name, image: session.user.image, title }
 
   return (
-    <CommandCenterProvider isAdmin={isAdmin}>
+    /* The whole session user, not `isAdmin`: palette rows carry their own
+       visibility rule (features/search/registry/types.ts), and a rule like
+       "admin or the person themselves" cannot be recovered once the session
+       has been flattened to one boolean on the way in. */
+    <CommandCenterProvider user={session.user}>
       <div className="flex min-h-full flex-1">
         {/* AccountMenu is a server component (its sign-out is an inline server
             action), so it is rendered here and threaded into the client

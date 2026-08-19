@@ -19,7 +19,7 @@ import type { IntentPerson } from '@/lib/task-intent'
 import type { GroupPatch } from '@/features/sprints/board-view'
 
 /**
- * The inline "Add a task…" field at the foot of every board column.
+ * The inline "Add a task, or a sentence…" field at the foot of every board column.
  *
  * Enter creates the task; everything above the field is a live, read-only
  * account of how the phrase was understood. The preview is the point: a parser
@@ -145,13 +145,19 @@ export function TaskComposer({
 
   return (
     <div className="mt-2 flex flex-col">
+      {/* The placeholder still has to say what the field IS — it is the only
+          visible label, and a column full of cards makes an unlabelled dashed
+          box read as content rather than as an invitation. "or a sentence"
+          is the whole hint it can afford at min-w-64: it says a bare title is
+          not the only thing accepted, and the focus hint below spells out the
+          syntax at the moment somebody is about to type. */}
       <Input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        placeholder="Add a task…"
+        placeholder="Add a task, or a sentence…"
         disabled={isPending}
         aria-label={`Add task to ${columnTitle}`}
         aria-describedby={previewId}

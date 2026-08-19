@@ -251,7 +251,15 @@ export function AppsBrowser({
           ) : null}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+        /* Three columns at `lg`, not at `md`: the sidebar (w-56) appears at the
+           same breakpoint the third column used to, so at 768px exactly the
+           card's content box fell from 317px to 121px in one pixel and every
+           band on it — sprint name, tag run, owner line — collapsed to an
+           ellipsis. Moving the third column to lg keeps the narrowest card the
+           grid ever renders at ~206px of content, which is what app-card.tsx's
+           single-line bands are sized against. loading.tsx mirrors this line;
+           the two disagreeing is a horizontal jump on every cold load. */
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visible.map((app) => (
             <AppCard key={app.id} app={app} today={today} />
           ))}

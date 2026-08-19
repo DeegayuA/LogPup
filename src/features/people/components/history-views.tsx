@@ -8,6 +8,7 @@ import {
   MinusIcon,
   UsersIcon,
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -16,6 +17,7 @@ import { CapacityBar, capacityBand } from '@/features/people/components/capacity
 import { SectionEmpty } from '@/features/people/components/section-empty'
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
 import { describeAllocationChange } from '@/features/people/allocation-history'
+import { historyHref, type HistoryParams } from '@/features/people/history-params'
 import type {
   AppLoadRow,
   CapacityDelta,
@@ -85,6 +87,23 @@ function PersonCell({ person }: { person: UserCapacity }) {
   )
 }
 
+/**
+ * The way out of a filter-caused empty state.
+ *
+ * It is rendered ONLY where a filter is actually set, and only where that
+ * filter narrows the list in front of the reader — a button offering to reveal
+ * rows that would still not appear is worse than prose. `historyHref` keeps the
+ * date, window and view, so clearing a filter does not also throw away the
+ * question somebody came here with.
+ */
+function ClearFilterButton({ href, label = 'Clear the filter' }: { href: string; label?: string }) {
+  return (
+    <Button variant="outline" size="sm" render={<Link href={href} />}>
+      {label}
+    </Button>
+  )
+}
+
 const BAND_WORD = {
   over: 'Over capacity',
   near: 'Near capacity',
@@ -101,19 +120,42 @@ export function HistoryPeopleTable({
   people,
   deltas,
   compareLabel,
+  params,
 }: {
   people: UserCapacity[]
   deltas: Map<string, CapacityDelta>
   /** What the comparison column is measured against, e.g. "30 days earlier". */
   compareLabel: string
+  /** Current URL state — the only thing that can name the filter and undo it. */
+  params: HistoryParams
 }) {
   if (people.length === 0) {
+    // Both the text filter and "only what moved" narrow THIS list, so either
+    // one being set means rows are hidden rather than absent. With neither
+    // set the roster itself is empty, and the honest answer is prose.
+    const filtered = Boolean(params.q || params.movedOnly)
     return (
       <Card>
         <SectionEmpty
           icon={UsersIcon}
           title="Nobody matches this view"
-          hint="Clear the filter, widen the comparison window, or pick a different date."
+          hint={
+            params.q && params.movedOnly
+              ? `Nothing matches the text filter and moved-since-${compareLabel} together.`
+              : params.q
+                ? 'Nothing on this date matches the text filter above.'
+                : params.movedOnly
+                  ? `Nobody’s load or app list is different from ${compareLabel}.`
+                  : 'The roster is empty, so there is no load to show.'
+          }
+          action={
+            filtered ? (
+              <ClearFilterButton
+                href={historyHref(params, { q: '', movedOnly: false })}
+                label={params.q && params.movedOnly ? 'Clear both filters' : 'Clear the filter'}
+              />
+            ) : undefined
+          }
         />
       </Card>
     )
@@ -225,14 +267,31 @@ export function HistoryPeopleTable({
  * figure is the one that matters — "this app is consuming 2.4 people"
  * answers a staffing question that a list of names never does.
  */
-export function HistoryAppsTable({ apps }: { apps: AppLoadRow[] }) {
+export function HistoryAppsTable({
+  apps,
+  params,
+}: {
+  apps: AppLoadRow[]
+  /** Current URL state — the only thing that can name the filter and undo it. */
+  params: HistoryParams
+}) {
   if (apps.length === 0) {
+    // Only the text filter reaches this rollup. "Only what moved" is a
+    // per-person comparison and never narrows the app list, so offering to
+    // clear it here would send the reader back to the same empty table.
     return (
       <Card>
         <SectionEmpty
           icon={LayersIcon}
           title="No app had anyone on it"
-          hint="Nobody was allocated to any app on this date, or the filter excluded them all."
+          hint={
+            params.q
+              ? 'Nobody was allocated to any app on this date, or the filter excluded them all.'
+              : 'Nobody was allocated to any app on this date.'
+          }
+          action={
+            params.q ? <ClearFilterButton href={historyHref(params, { q: '' })} /> : undefined
+          }
         />
       </Card>
     )
@@ -337,14 +396,30 @@ export function HistoryAppsTable({ apps }: { apps: AppLoadRow[] }) {
  * which meant "why is Anu suddenly at 130%?" had no answer anywhere in the
  * product. This is that answer.
  */
-export function HistoryChangeLog({ changes }: { changes: TeamChangeEntry[] }) {
+export function HistoryChangeLog({
+  changes,
+  params,
+}: {
+  changes: TeamChangeEntry[]
+  /** Current URL state — the only thing that can name the filter and undo it. */
+  params: HistoryParams
+}) {
   if (changes.length === 0) {
+    // Same rule as the app rollup: only the text filter narrows this list, so
+    // it is the only thing there is anything to clear.
     return (
       <Card>
         <SectionEmpty
           icon={ClockAlertIcon}
           title="Nothing changed in this window"
-          hint="Widen the comparison window, or clear the filter, to see earlier moves."
+          hint={
+            params.q
+              ? 'Or the filter excluded it — clearing it may bring rows back.'
+              : 'Only edits made inside the window land here — the date and window above set which stretch that is.'
+          }
+          action={
+            params.q ? <ClearFilterButton href={historyHref(params, { q: '' })} /> : undefined
+          }
         />
       </Card>
     )

@@ -20,7 +20,9 @@ import { CalendarDaysIcon } from 'lucide-react'
 import { HolidayIcons, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
 import { getLkHoliday, isLkSunday, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { isoDayInstant, isoToDisplayDate } from '@/features/meetings/calendar-view'
+import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
 import type { MentionUser } from '@/components/mention-textarea'
 import type { MeetingSummary } from '@/features/meetings/queries'
@@ -65,13 +67,44 @@ export function MeetingsAgenda({
   const populated = days.filter((iso) => (byDay.get(iso)?.length ?? 0) > 0)
 
   if (populated.length === 0) {
+    /*
+     * The form's own default start is the next slot from NOW, which is the
+     * right answer only while the month on screen is the current one. Someone
+     * stepping forward to an empty November in August would otherwise create
+     * an August meeting and watch November stay exactly as empty as it was —
+     * an offer that keeps neither the button's promise nor this line's.
+     * `isoDayInstant` is midday in Colombo on that day, so the seed is a
+     * working hour and not a timezone-dependent midnight.
+     *
+     * `users` is also the attendee pool: createMeeting requires at least one
+     * attendee, so with nobody to pick this stays prose-only rather than
+     * opening a form that cannot be submitted.
+     */
+    const seedIso = days.length > 0 && !days.includes(todayIso) ? days[0] : null
     return (
-      <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-10 text-center">
-        <CalendarDaysIcon className="size-5 text-muted-foreground/60" aria-hidden />
-        <p className="text-sm font-medium">Nothing scheduled this month.</p>
-        <p className="text-xs text-muted-foreground">
-          Step to another month, or schedule a meeting to fill it.
-        </p>
+      <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-4 py-10 text-center">
+        <div className="flex flex-col items-center gap-1">
+          <CalendarDaysIcon className="size-5 text-muted-foreground/60" aria-hidden />
+          <p className="text-sm font-medium">Nothing scheduled this month.</p>
+          {/* Stands on its own: Prev/Next step the agenda a MONTH at a time
+              (VIEW_STEP_UNIT), and this line must still make sense on the
+              rare render where the button below is not offered. */}
+          <p className="text-xs text-muted-foreground">
+            Step to another month to see what is already booked.
+          </p>
+        </div>
+        {users.length > 0 ? (
+          <MeetingForm
+            apps={apps}
+            activeUsers={users}
+            defaultStart={seedIso ? isoDayInstant(seedIso) : undefined}
+            trigger={
+              <Button variant="outline" size="sm">
+                New meeting
+              </Button>
+            }
+          />
+        ) : null}
       </div>
     )
   }

@@ -1,9 +1,12 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { geminiKeys } from '@/db/schema'
 import { decryptSecret } from '@/lib/crypto'
 import { MAX_ATTEMPTS, backoffDelayMs, shouldRetry, sleep } from '@/features/gemini/retry'
 import { shouldUseInlineAudio } from '@/features/gemini/audio-strategy'
+import { orderKeysForRotation } from '@/features/gemini/rotation'
+import { recordAiUsage } from '@/features/gemini/usage'
+import type { AiCallSlug } from '@/features/gemini/ai-features'
 
 // Pinned to an explicit version rather than a moving "-latest" alias so model
 // behaviour (and the prompts tuned against it) stays stable until deliberately bumped.
@@ -77,7 +80,7 @@ export async function validateGeminiKey(apiKey: string): Promise<boolean> {
 // non-key-specific failure (malformed request, empty response) that stops
 // the whole call immediately — trying another key or model won't help.
 type ModelAttemptResult<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; usage: { inputTokens: number; outputTokens: number } }
   | { ok: false; kind: 'auth' | 'quota' | 'overloaded' | 'missing' | 'bad'; message: string }
 
 /** Raw generateContent response shape — extractors pull what they need out of it. */
@@ -85,6 +88,10 @@ type GenerateContentResponse = {
   candidates?: {
     content?: { parts?: { text?: string; inlineData?: { mimeType?: string; data?: string } }[] }
   }[]
+  usageMetadata?: {
+    promptTokenCount?: number
+    candidatesTokenCount?: number
+  }
 }
 
 /**
@@ -160,7 +167,14 @@ async function callModelWithRetry<T>(
       if (value === null) {
         return { ok: false, kind: 'bad', message: 'Gemini returned an empty response' }
       }
-      return { ok: true, value }
+      return {
+        ok: true,
+        value,
+        usage: {
+          inputTokens: json.usageMetadata?.promptTokenCount ?? 0,
+          outputTokens: json.usageMetadata?.candidatesTokenCount ?? 0,
+        },
+      }
     }
 
     retryAfter = res.headers.get('retry-after')
@@ -229,7 +243,7 @@ async function callModelWithRetry<T>(
 export async function callGemini(
   userId: string,
   partsInput: GeminiPartsInput,
-  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean },
+  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean; feature?: AiCallSlug },
 ): Promise<{ text: string; model: string }> {
   const { value: text, model } = await callGeminiCore(
     userId,
@@ -237,6 +251,7 @@ export async function callGemini(
     resolveModelChain(opts),
     opts?.responseJson ? { responseMimeType: 'application/json' } : undefined,
     extractText,
+    opts?.feature,
   )
   return { text, model }
 }
@@ -254,6 +269,25 @@ function resolveModelChain(opts?: { model?: string; models?: readonly string[] }
 }
 
 /**
+ * Records a blocked-call ledger row (when `feature` is known) and returns
+ * the error unchanged, so every throw site in callGeminiCore can wrap its
+ * GeminiError in one call: `throw recordFailure(feature, userId, models, err)`.
+ * A blocked call is exactly the kind of event Settings and the adoption
+ * panel should count.
+ */
+function recordFailure(
+  feature: AiCallSlug | undefined,
+  userId: string,
+  models: readonly string[],
+  error: GeminiError,
+): GeminiError {
+  if (feature) {
+    recordAiUsage({ userId, feature, model: models[0] ?? 'unknown', status: error.code })
+  }
+  return error
+}
+
+/**
  * Generic core of every non-streaming Gemini call: key rotation, per-model
  * retry, model fallback, and failCount/lastUsedAt bookkeeping — with the
  * response payload abstracted behind `extract` so text calls (callGemini)
@@ -267,15 +301,32 @@ async function callGeminiCore<T>(
   models: readonly string[],
   generationConfig: Record<string, unknown> | undefined,
   extract: ResponseExtractor<T>,
+  feature?: AiCallSlug,
 ): Promise<{ value: T; model: string }> {
-  const keys = await db
+  const rows = await db
     .select()
     .from(geminiKeys)
-    .where(and(eq(geminiKeys.userId, userId), eq(geminiKeys.active, true)))
-    .orderBy(sql`${geminiKeys.lastUsedAt} ASC NULLS FIRST`)
+    .where(
+      and(
+        eq(geminiKeys.active, true),
+        or(eq(geminiKeys.userId, userId), eq(geminiKeys.shared, true)),
+      ),
+    )
+  // Own keys first (LRU), then org-shared keys (LRU) — a caller with
+  // working keys of their own never drains a teammate's shared quota.
+  const keys = orderKeysForRotation(userId, rows)
+  const usedSharedPool = keys.some((key) => key.userId !== userId)
 
   if (keys.length === 0) {
-    throw new GeminiError('NO_KEYS', 'No active Gemini API keys — add one in Profile.')
+    throw recordFailure(
+      feature,
+      userId,
+      models,
+      new GeminiError(
+        'NO_KEYS',
+        'No active Gemini API keys — add one in Profile (or ask a teammate to share one).',
+      ),
+    )
   }
 
   // Tracks *why* every key ultimately failed, so the final error message is
@@ -336,13 +387,26 @@ async function callGeminiCore<T>(
           .update(geminiKeys)
           .set({ lastUsedAt: new Date(), failCount: 0 })
           .where(eq(geminiKeys.id, key.id))
+        if (feature) {
+          recordAiUsage({
+            userId,
+            keyId: key.id,
+            keyOwnerId: key.userId,
+            keyLast4: key.last4,
+            feature,
+            model,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            status: 'ok',
+          })
+        }
         return { value: result.value, model }
       }
 
       if (result.kind === 'bad') {
         // Non-retriable, not key- or model-specific (malformed request,
         // empty response) — no other key or model would fare better.
-        throw new GeminiError('BAD_RESPONSE', result.message)
+        throw recordFailure(feature, userId, models, new GeminiError('BAD_RESPONSE', result.message))
       }
 
       if (result.kind === 'auth' || result.kind === 'quota') {
@@ -385,29 +449,51 @@ async function callGeminiCore<T>(
   }
 
   if (sawAuthFailure) {
-    throw new GeminiError(
-      'AUTH_FAILED',
-      'Your Gemini key was rejected or has hit its usage limit — check Profile → Gemini API keys.',
+    throw recordFailure(
+      feature,
+      userId,
+      models,
+      new GeminiError(
+        'AUTH_FAILED',
+        'Your Gemini key was rejected or has hit its usage limit — check Profile → Gemini API keys.',
+      ),
     )
   }
   if (sawTransientBusy) {
-    throw new GeminiError(
-      'TRANSIENT_BUSY',
-      'All Gemini models are busy right now — your recording is saved, try Analyze again in a minute.',
+    throw recordFailure(
+      feature,
+      userId,
+      models,
+      new GeminiError(
+        'TRANSIENT_BUSY',
+        'All Gemini models are busy right now — your recording is saved, try Analyze again in a minute.',
+      ),
     )
   }
   if (missingModelMessage) {
     // Not transient and not the user's key: a model this build asks for no
     // longer exists. Says so plainly rather than inviting a retry that will
     // fail identically forever.
-    throw new GeminiError(
-      'BAD_RESPONSE',
-      `${missingModelMessage} — LogPup needs its Gemini model list updated.`,
+    throw recordFailure(
+      feature,
+      userId,
+      models,
+      new GeminiError(
+        'BAD_RESPONSE',
+        `${missingModelMessage} — LogPup needs its Gemini model list updated.`,
+      ),
     )
   }
-  throw new GeminiError(
-    'ALL_KEYS_FAILED',
-    'Could not reach Gemini with any saved key — check Profile → Gemini API keys or try again shortly.',
+  throw recordFailure(
+    feature,
+    userId,
+    models,
+    new GeminiError(
+      'ALL_KEYS_FAILED',
+      usedSharedPool
+        ? 'Could not reach Gemini with any saved or org-shared key — check Profile → Gemini API keys or try again shortly.'
+        : 'Could not reach Gemini with any saved key — check Profile → Gemini API keys or try again shortly.',
+    ),
   )
 }
 
@@ -423,7 +509,7 @@ async function callGeminiCore<T>(
 export async function callGeminiSpeech(
   userId: string,
   text: string,
-  opts: { models: readonly string[]; voiceName?: string },
+  opts: { models: readonly string[]; voiceName?: string; feature?: AiCallSlug },
 ): Promise<GeminiSpeechAudio & { model: string }> {
   const { value, model } = await callGeminiCore(
     userId,
@@ -436,6 +522,7 @@ export async function callGeminiSpeech(
       },
     },
     extractInlineAudio,
+    opts.feature,
   )
   return { ...value, model }
 }
@@ -559,7 +646,7 @@ export async function callGeminiWithAudio(
   textParts: { text: string }[],
   audioBytes: Buffer,
   mimeType: string,
-  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean },
+  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean; feature?: AiCallSlug },
 ): Promise<{ text: string; model: string }> {
   return callGemini(
     userId,
@@ -589,7 +676,7 @@ export async function callGeminiWithImages(
   userId: string,
   textParts: { text: string }[],
   images: GeminiImageInput[],
-  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean },
+  opts?: { model?: string; models?: readonly string[]; responseJson?: boolean; feature?: AiCallSlug },
 ): Promise<{ text: string; model: string }> {
   return callGemini(
     userId,

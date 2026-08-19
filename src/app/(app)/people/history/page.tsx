@@ -162,6 +162,11 @@ async function HistoryData({
 
   const stats = buildCapacityHistoryStats(overview, params.window)
   const filteredListLabel = { people: 'people', apps: 'apps', changes: 'changes' }[params.view]
+  // "Only what moved" is a per-person comparison: it narrows the person view
+  // and nothing else. Switching to the app or change view carries the param in
+  // the URL, so the sentence below has to be gated on the filters that reach
+  // the list actually on screen, not on every filter that is set.
+  const listIsFiltered = Boolean(params.q) || (params.movedOnly && params.view === 'people')
 
   return (
     <>
@@ -170,7 +175,7 @@ async function HistoryData({
           would be exactly the snapshot this page used to be. */}
       <PersonStatRow stats={stats} className="xl:grid-cols-6" />
 
-      {params.q || params.movedOnly ? (
+      {listIsFiltered ? (
         // The tiles, the trend and the overload card are always WHOLE-TEAM
         // figures — a "team average" recomputed over a filtered subset would
         // be a different statistic wearing the same label. Since the filter
@@ -207,11 +212,19 @@ async function HistoryData({
         <OverloadCard overloads={overview.overloads} windowDays={params.window} />
       </div>
 
+      {/* `params` goes down with the rows: each of the three lists can be
+          empty because a filter hid everything, and only the URL state knows
+          how to offer the way back out. */}
       {params.view === 'people' ? (
-        <HistoryPeopleTable people={people} deltas={deltaById} compareLabel={compareLabel} />
+        <HistoryPeopleTable
+          people={people}
+          deltas={deltaById}
+          compareLabel={compareLabel}
+          params={params}
+        />
       ) : null}
-      {params.view === 'apps' ? <HistoryAppsTable apps={apps} /> : null}
-      {params.view === 'changes' ? <HistoryChangeLog changes={changes} /> : null}
+      {params.view === 'apps' ? <HistoryAppsTable apps={apps} params={params} /> : null}
+      {params.view === 'changes' ? <HistoryChangeLog changes={changes} params={params} /> : null}
 
       <p className="text-2xs text-muted-foreground">
         People are today&rsquo;s roster; only the allocations are historical. Someone deactivated

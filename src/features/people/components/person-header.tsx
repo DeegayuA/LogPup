@@ -156,6 +156,17 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
           </div>
         ) : null}
       </div>
+
+      {/* Says what the page is, because nothing else on it does: every card
+          below is a read-out and no control here writes anything. Naming
+          where the two editable things ARE changed keeps that from reading
+          as a dead end. Named rather than written as "their", since this
+          route is reachable for yourself from the directory and the
+          dashboard. */}
+      <p className="text-xs text-muted-foreground">
+        A read-only record of {user.name}&apos;s work — allocations are set from an app&rsquo;s
+        Team panel, tasks from its board.
+      </p>
     </header>
   )
 }

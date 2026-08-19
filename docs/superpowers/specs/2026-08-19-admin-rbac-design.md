@@ -55,11 +55,33 @@ value later, which costs one migration statement.
 
 | Role | Scope source |
 |---|---|
-| `manager` | Apps where the user holds `pm` or `lead`, resolved through the existing as-of read over `app_role_history` and `managesApp()`. No new table. |
+| `manager` | Apps where the user is the as-of `pm` or `lead` — open rows in `app_role_history` (`effective_to IS NULL`). **NOT `managesApp()`** — see the correction below. No new table. |
 | `editor` | Apps the user is **assigned** to (`assignments`). Deliberately a different source than `manager`: broader membership, narrower power — edit inside the scope, request outside it. |
 | `stakeholder` | Explicit rows in a new `app_grants` table. Read-only reach only. |
 | `superadmin`, `admin`, `auditor` | Workspace-wide. |
 | `member` | Own records plus apps they are assigned to (`assignments`). |
+
+**Correction (2026-08-19): `managesApp()` is not the manager-scope predicate.**
+`src/features/apps/project-manager.ts:25` resolves nothing structural — it
+regex-matches the free-text `assignments.role` string (`/\bmanager\b/`, `/^pm\b/`,
+product owner, scrum master) through `isProjectManagerRole()`, never reads
+`app_role_history`, `apps.pm_id` or `apps.lead_id`, and returns **false for a
+lead**. Scope decided by whatever string somebody typed into an assignment is not
+auditable, which is the whole point of these seats.
+
+`scopeAppIds(actor)` for a `manager` is therefore one indexed query:
+
+```sql
+SELECT app_id FROM app_role_history
+WHERE user_id = $1 AND effective_to IS NULL AND role IN ('pm','lead')
+```
+
+Consequence, stated plainly: a person whose only claim to management is
+`assignments.role = 'Project Manager'` has **no** manager scope until an admin
+records them as `pm` or `lead` on the app. The People section surfaces exactly
+that list at migration time so the gap is visible rather than discovered.
+`managesApp()` itself is left alone — the meetings gates that use it keep working
+until they are folded into the matrix.
 
 Per-project roles (`assignments.role` free text, `app_role_kind` `pm`/`lead`) are
 unchanged and remain orthogonal to global roles. A global `member` who is `pm` on
@@ -117,6 +139,43 @@ keeps `canEditUser` / `wouldLeaveNoSuperadmins` as admin-specific invariants and
 delegates capability questions upward. `src/features/sprints/permissions.ts`
 (`canMoveTask`) folds into the matrix as `task.move.own` / `task.move.any`.
 
+**Meetings folds in too (decided 2026-08-19).** The earlier scope freeze on
+`src/features/meetings/**` is lifted for this refactor: its three composite gates
+become matrix actions rather than string comparisons.
+
+| Today | Becomes |
+|---|---|
+| `canManageMeeting` (`actions.ts:171`, `ai-actions.ts:578`) — admin \|\| creator \|\| `managesApp` | `meeting.manage` resolved `own` / `scoped` / `all` |
+| `canReadMeetingIntel` (`ai-actions.ts:557`) — admin \|\| creator \|\| PM \|\| attendee | `meeting.intel.view`, with attendee as a fourth scope source |
+| `canServeKeyframe` (`keyframe-access.ts:34`) — `isAdmin` plus deleted flags | `trash.view` for the deleted-blob case; the flag logic is unchanged |
+
+**The 39 call sites do not move.** The four gates keep their exported names,
+parameters and return types exactly; only their bodies change to ask the matrix.
+That keeps `src/features/transcription/actions.ts:33` — which calls
+`canManageMeeting` and is outside scope — out of the diff entirely, and turns a
+55-expression refactor into 16 edits: 4 gate bodies plus 12 inline checks.
+
+**`meeting.admin` preserves the narrow reach.** Seven inline checks
+(`rsvp-actions.ts:163`, `:234`, `share-actions.ts:56`, `followup-move-actions.ts:165`,
+`:218`, `:73`, `ai-actions.ts:2221`) are creator-or-admin with **no `managesApp`
+branch**. Folding them into `meeting.manage` would silently hand every PM three
+powers they do not hold today. They get their own action instead, which
+deliberately does not consult app scope:
+
+| Role | `meeting.admin` |
+|---|---|
+| `superadmin`, `admin` | `all` |
+| everyone else | `own` — resolves against `meetings.createdBy` |
+
+Behaviour after the refactor is byte-for-byte what it is today. Widening it later
+is then a visible one-cell edit, not a side effect.
+
+The seven verbatim copies of `requireAdmin()` (`admin/actions.ts:28`,
+`admin/trash-actions.ts:43`, `sprints/actions.ts:58`, `sprints/task-actions.ts:126`,
+`apps/actions.ts:21`, `people/actions.ts:31`, `notion/actions.ts:13`) collapse to
+one imported guard. Meetings' AI, transcription, and speech behaviour is NOT
+touched — only the authorization expressions inside those files.
+
 Enforcement is server-side in every server action and route. Client-side hiding
 is presentation only. Sections the actor cannot use MUST NOT render at all —
 never render-then-error.
@@ -128,6 +187,14 @@ One table serves every proposal, in both directions.
 Approval applies the proposed diff inside a transaction and writes `activity_log`
 with the reviewer as actor and the requester recorded in `metadata`. Rejection
 mutates nothing. Withdrawal is the requester closing their own request.
+
+**Nobody reviews their own request, except a `superadmin` (decided 2026-08-19).**
+The reviewer candidate set always excludes the requester. A `superadmin` is the
+one exception — they may approve their own request, because the alternative is a
+sole-superadmin workspace that can never approve anything. Every self-approval
+writes `activity_log` with `selfApproved: true` in `metadata` so a compliance
+review can list them in one query. A test asserts both halves: a `manager`
+cannot approve their own leave, and a `superadmin` can.
 
 Reviewer routing is policy, not a stored column:
 
@@ -204,6 +271,15 @@ without its denominator is the bug this feature exists to fix.
 change request rather than writing silently. The cutoff reuses
 `MAX_BACKFILL_DAYS`.
 
+**Retroactive leave is unlimited (decided 2026-08-19).** An absence may be filed
+for any past date, and approval flips those days to `exempt` immediately, even if
+a report already counted them missing. Coverage is always the truth as currently
+known, never a frozen snapshot — a sick day entered a week late stops counting
+against the person the moment it is approved. The backfill cutoff above governs
+*worklog writes*, not absence filing; the two are deliberately different because
+a worklog is a claim about work done and an absence is a claim about work not
+owed.
+
 Half-day leave is out of scope for this pass (see YAGNI).
 
 ## Data model (Postgres via Drizzle)
@@ -243,8 +319,9 @@ Indexes: `(userId, startDate)`, `(status, startDate)`.
 **`app_grants`** — `id`, `userId`, `appId`, `grantedBy`, `createdAt`. Unique
 `(userId, appId)`.
 
-Soft-delete posture — decided, not deferred. **None of the five tables gets a
-`deletedAt`, and `SOFT_TABLES` stays at exactly five members.**
+Soft-delete posture — decided, not deferred. **None of the five NEW tables gets a
+`deletedAt`.** `SOFT_TABLES` does grow, but for existing tables, not these — see
+"Hard deletes convert" below.
 
 `change_requests` and `absences` close via status (`withdrawn`, `rejected`);
 `work_schedules` closes via `effectiveTo`. None of the three is ever deleted, so
@@ -257,8 +334,42 @@ Trash. A revoked stakeholder grant is the opposite: an access removal that must
 be absolute, for the same reason `webauthn_credentials` is exempted by name. A
 restorable grant is a key that can come back from the dead.
 
-`live.test.ts` permits this: its delete scan only fires on tables that *have* a
-`deletedAt`. Each of the five tables carries a comment stating which of the three
+### Hard deletes stay hard, and get gated (decided 2026-08-19)
+
+Five hard-delete paths exist outside the trash mechanism. **None of them
+converts.** `src/db/live.test.ts`'s `DELETE_ALLOWED_FUNCTIONS` (:296-360) already
+names three of them with written rationales, and those rationales are right:
+
+| Path | The repo's stated reason it stays hard |
+|---|---|
+| `deleteSprintCheckin` (`checkin-actions.ts:174`) | "0% is an answer, absence is the lack of one" — a check-in row means *I answered*; a soft-deleted one would still mean answered. The row has to be removable, not markable. |
+| `removeAssignment` (`people/actions.ts:351`) | A `deletedAt` would break the non-partial `assignments_user_app_idx` and make every capacity query over-count. `assignments` **already has a Trash kind**, backed by `assignment_history` `changeKind='removed'` tombstones — a second representation would contradict the first. |
+| `deleteFollowup` (`followup-move-actions.ts:186`) | "meeting_followups is deliberately outside the trash." |
+| `purge*` (`trash-actions.ts:460`–`604`) | Purge IS the trash bin's floor. |
+| `clearTestData` (`admin/actions.ts:34`) | The danger zone. |
+
+What changes is **who may reach them**, not what they do. Each gets a capability
+and an `activity_log` entry:
+
+| Path | Capability |
+|---|---|
+| `deleteSprintCheckin` | `checkin.delete` (`own` for everyone, `scoped` for manager+) |
+| `deleteFollowup` | `followup.delete` (`admin` and up; `editor` gets a change request) |
+| `removeAssignment` | `app.assign` |
+| `purge*` | `trash.purge` — `superadmin` only |
+| `clearTestData` | `danger.dbclear` — `superadmin` only |
+
+`SOFT_TABLES` stays at exactly five. `live.ts`, `live.test.ts`, the Trash
+grouping, and the three delete statements are **untouched** by this pass. Delete
+semantics are a separate argument from access control, and mixing them would put
+a 47-file query retarget in the same diff as the permission rewrite that reads
+those same queries.
+
+`live.test.ts` needs no change at all. Its `DELETE_RE` scan is keyed on file and
+function paths, not on whether a table has a `deletedAt` — so the new plain
+deletes for `org_holidays` and `app_grants` (access revocations, not content) DO
+need naming, as two new `DELETE_ALLOWED_FUNCTIONS` entries with their rationale
+written in the house style. That is the only edit to that file. Each of the five tables carries a comment stating which of the three
 closure mechanisms it uses and why, in the style of the existing schema comments.
 
 ## Migrations
@@ -304,6 +415,7 @@ Flows:
 - **Person books leave** → absence created `pending`, manager approves, covered
   days flip to `exempt` and stop counting as missing.
 - **Stakeholder signs in** → sees only granted apps; every other route 404s.
+- **Manager books leave** → routes to an `admin`, never back to themselves.
 
 ## UX
 
@@ -374,6 +486,8 @@ patterns:
   needs the label.
 - Time-boxed or expiring role grants.
 - Delegation ("approve on my behalf while I am away").
-- Any change to meetings, transcription, or speech features.
+- Any change to meetings *behaviour* — AI, transcription, speech, notes, or UI.
+  Meetings' authorization expressions ARE in scope (see "Meetings folds in too");
+  nothing else in that feature is.
 - Resolving the still-open "private notes" question — unrelated, and it must not
   ride along on these migrations.

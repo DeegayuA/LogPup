@@ -2003,8 +2003,9 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
           <Sparkles className="size-4" aria-hidden /> AI features
         </CardTitle>
         <CardDescription>
-          Everything AI does here runs on your Gemini keys. Dollar figures are indicative — what
-          the tokens would cost on Google&rsquo;s paid tier. Free keys are charged $0.
+          Everything AI does here runs on your Gemini keys. Each switch covers one feature only —
+          turning off drafting leaves dictation and read-aloud on. Dollar figures are indicative —
+          what the tokens would cost on Google&rsquo;s paid tier. Free keys are charged $0.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -2252,19 +2253,43 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `getAiPrefs`.
 - Produces: the three one-click AI entry points disappear when their pref is off. (Speech/dictation buttons and meeting recording keep the Task 9 server guards — they mount in too many places for prop threading to pay, and the server message is the designed response there.)
 
+**CRITICAL — gate the caption with the button, never the button alone.** Copy that explains a control which no longer renders is the exact defect this repo's reviewers have caught repeatedly. Before hiding any AI control, search its whole component for prose that names it, and put that prose inside the same conditional.
+
+Known instances (verified 2026-08-19):
+- `worklog-form.tsx` — the Draft button lives in the header row beside `DictateButton`, but its explanation is a separate `<p className="text-2xs text-muted-foreground">` AFTER the `<Textarea>`: *"Draft with AI writes a first version from what you did in LogPup today. Edit it — it is your entry."* Both must be gated by the same flag.
+- `sprint-form-dialog.tsx` — its Draft button has no adjacent caption; gate the button only. (Checked; do not invent one.)
+- `app-form-dialog.tsx` — read the repo-URL/README section fully and gate any prose describing the generate action along with the controls.
+
+**Do NOT gate these** — they are about who may WRITE an entry, not about AI, and stay true whether or not drafting is available: `worklog-form.tsx`'s *"Only you can write this entry — an admin can read it, but cannot log a day for you."* and `first-log-nudge-banner.tsx`'s *"nobody else can write it for you"*.
+
+`DictateButton` (the mic) is speech, a SEPARATE registry feature (`dictation`) with its own switch. Do not gate it with `worklog-draft`, and do not remove it — a user who turns off worklog drafting keeps dictation unless they also turn that off.
+
 - [ ] **Step 1: Thread the prop in each surface**
 
-Worklog: in `worklog/page.tsx` add `const prefs = await getAiPrefs(session.user.id)` alongside the existing fetches and pass `aiDraftEnabled={prefs['worklog-draft']}` to `WorklogForm`; in `worklog-form.tsx` accept the prop and wrap the Draft-with-AI button:
+Worklog: in `worklog/page.tsx` add `const prefs = await getAiPrefs(session.user.id)` alongside the existing fetches and pass `aiDraftEnabled={prefs['worklog-draft']}` to `WorklogForm`; in `worklog-form.tsx` accept the prop and gate BOTH the button and its caption:
 
 ```tsx
 {aiDraftEnabled ? (
-  <Button type="button" variant="outline" size="sm" onClick={handleDraft} disabled={isDrafting}>
+  <Button type="button" variant="outline" size="sm" disabled={drafting || saving} onClick={handleDraft}>
     {/* existing button content unchanged */}
   </Button>
 ) : null}
 ```
 
-Repeat for `sprint-form-dialog.tsx` (`prefs['sprint-draft']` → hide the Suggest button) and `app-form-dialog.tsx` (`prefs['app-metadata']` → hide the generate-from-repo controls). Read each dialog's server parent to find where props flow — the dialogs are client components, so the pref must come from the nearest server component.
+and, after the `<Textarea>`:
+
+```tsx
+{aiDraftEnabled ? (
+  <p className="text-2xs text-muted-foreground">
+    Draft with AI writes a first version from what you did in LogPup today. Edit it — it is
+    your entry.
+  </p>
+) : null}
+```
+
+Repeat for `sprint-form-dialog.tsx` (`prefs['sprint-draft']` → hide the Draft button) and `app-form-dialog.tsx` (`prefs['app-metadata']` → hide the generate-from-repo controls AND any prose describing them). Read each dialog's server parent to find where props flow — the dialogs are client components, so the pref must come from the nearest server component.
+
+**These three files carry another session's UNCOMMITTED work.** Read each from disk before editing; never assume HEAD. Preserve: `worklog-form.tsx`'s `useId`-derived field ids (`${fieldId}-percent` / `-note`), `worklog/page.tsx`'s always-visible rules line and its non-warning catch-up panel, and `worklog/actions.ts`'s `revalidatePath('/worklog')`.
 
 - [ ] **Step 2: Full verification pass**
 

@@ -2,29 +2,9 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { useTheme, type Theme } from '@/components/shell/theme-provider'
-import { format } from 'date-fns'
+import { useTheme } from '@/components/shell/theme-provider'
 import { toast } from 'sonner'
-import {
-  AppWindow,
-  CalendarDays,
-  History,
-  Keyboard,
-  LayoutDashboard,
-  Loader2,
-  LogOut,
-  Monitor,
-  Moon,
-  PawPrint,
-  Plus,
-  Search,
-  ShieldCheck,
-  SquareKanban,
-  Sun,
-  Timer,
-  User,
-  Users,
-} from 'lucide-react'
+import { CalendarDays, Loader2, PawPrint, Plus, Search } from 'lucide-react'
 import {
   CommandDialog,
   Command,
@@ -37,28 +17,28 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from '@/components/ui/command'
+import { navItems } from '@/components/shell/nav-items'
 import { cn } from '@/lib/utils'
 import { createDeduper } from '@/lib/dedupe'
 import { usePrefetchIntent } from '@/hooks/use-prefetch-intent'
 import {
   universalSearch,
-  signOutFromPalette,
   quickAssignTask,
   previewTaskIntent,
   type TaskIntentPreview,
-  type SearchResults,
 } from '../actions'
+import { paletteCommands, type ResolvedCommand } from '../registry/commands'
+import { KIND_META } from '../registry/kinds'
+import { MIN_QUERY_LENGTH } from '../registry/limits'
+import type { CommandApi, PaletteContext, PaletteRecent, SearchGroup } from '../registry/types'
 
-type Recent = {
-  type: 'app' | 'person' | 'task' | 'sprint' | 'meeting' | 'page'
-  label: string
-  sub?: string
-  href: string
-}
+type Recent = PaletteRecent
 
 const RECENTS_KEY = 'logpup.recents.v1'
 const GO_SHORTCUTS_KEY = 'logpup.goShortcuts'
-const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints: [], meetings: [] }
+/* One shared empty array, so a reset never makes a new object and re-renders
+   the list for no reason. */
+const EMPTY_RESULTS: SearchGroup[] = []
 
 /**
  * REQUEST DEDUPLICATION for the palette's two server round trips.
@@ -79,16 +59,8 @@ const EMPTY_RESULTS: SearchResults = { apps: [], people: [], tasks: [], sprints:
  * answer is now potentially wrong.
  */
 const SEARCH_TTL_MS = 30_000
-const searchDeduper = createDeduper<SearchResults>({ ttlMs: SEARCH_TTL_MS })
+const searchDeduper = createDeduper<SearchGroup[]>({ ttlMs: SEARCH_TTL_MS })
 const intentDeduper = createDeduper<TaskIntentPreview | null>({ ttlMs: SEARCH_TTL_MS })
-
-/* Typed once, at module scope: `setTheme` takes the three-value `Theme`
-   union, and an inline array literal would widen `value` to `string`. */
-const THEME_ACTIONS: { label: string; value: Theme; icon: typeof Sun }[] = [
-  { label: 'Theme: light', value: 'light', icon: Sun },
-  { label: 'Theme: dark', value: 'dark', icon: Moon },
-  { label: 'Theme: system', value: 'system', icon: Monitor },
-]
 
 const CommandCenterContext = React.createContext<{ setOpen: (open: boolean) => void } | null>(null)
 
@@ -98,12 +70,36 @@ export function useCommandCenter() {
   return ctx
 }
 
-/* Sequential "g then key" jumps for keyboard-first navigation. */
-const GO_KEYS: Record<string, string> = {
-  d: '/',
-  a: '/apps',
-  p: '/people',
-  m: '/meetings',
+/**
+ * Sequential "g then key" jumps for keyboard-first navigation.
+ *
+ * Derived from the nav instead of written out again here, because the letter a
+ * sidebar row shows on hover has to BE the letter this handler answers to.
+ * Written by hand the two drifted: the Work log row advertised "G W" while
+ * this map only knew d/a/p/m, so the one page people are asked to open daily
+ * had a hint that did nothing. Give a nav item a `key` and both surfaces —
+ * hint, handler, and the palette chips below — gain it together.
+ */
+const GO_TARGETS = navItems.flatMap((item) =>
+  item.key ? [{ key: item.key, href: item.href }] : [],
+)
+const GO_KEYS: Record<string, string> = Object.fromEntries(
+  GO_TARGETS.map((target) => [target.key.toLowerCase(), target.href] as const),
+)
+
+/**
+ * Single-key jumps are opt-out per browser (WCAG 2.1.4). Everything that
+ * fires them — and everything that advertises them — asks this one question,
+ * so the palette never shows a jump letter that would not work.
+ */
+function goShortcutsEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(GO_SHORTCUTS_KEY) !== 'off'
+  } catch {
+    /* No storage (private mode, blocked): the handler's own read fails the
+       same way and jumps stay on, so say on. */
+    return true
+  }
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -152,14 +148,18 @@ function StatusDot({ status }: { status: string }) {
 }
 
 export function CommandCenterProvider({
-  isAdmin,
+  user,
   children,
 }: {
-  isAdmin: boolean
+  /* The whole session user, not an `isAdmin` boolean: a command decides its
+     own visibility (registry/types.ts), and rules like "admin or the
+     assignee" cannot be expressed once the session has been flattened to one
+     flag on the way in. */
+  user: PaletteContext['user']
   children: React.ReactNode
 }) {
   const router = useRouter()
-  const { setTheme } = useTheme()
+  const { theme, setTheme } = useTheme()
   /**
    * OPTIMISTIC PRELOADING for the palette's results.
    *
@@ -174,18 +174,25 @@ export function CommandCenterProvider({
   const { intentProps } = usePrefetchIntent()
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
-  const [results, setResults] = React.useState<SearchResults>(EMPTY_RESULTS)
+  const [results, setResults] = React.useState<SearchGroup[]>(EMPTY_RESULTS)
   const [searching, setSearching] = React.useState(false)
   const [assigning, setAssigning] = React.useState(false)
   const [intent, setIntent] = React.useState<TaskIntentPreview | null>(null)
   const intentSeq = React.useRef(0)
   const [recents, setRecents] = React.useState<Recent[]>([])
   const searchSeq = React.useRef(0)
+  /* Whether "g then key" is switched on, so the palette only prints the jump
+     letters while pressing them does something. Read once on mount rather
+     than on every render: the dialog's contents exist only while it is open,
+     so nothing here is rendered on the server and there is no first paint to
+     get wrong. The toggle below is the only thing that writes it. */
+  const [goShortcutsOn, setGoShortcutsOn] = React.useState(goShortcutsEnabled)
   const goPrefix = React.useRef<number | null>(null)
   const paletteGoPrefix = React.useRef<number | null>(null)
   const paletteGoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /* ⌘K / Ctrl+K opens; "g then d/a/p/m" jumps between sections. */
+  /* ⌘K / Ctrl+K opens; "g then <key>" jumps to whichever nav item carries
+     that letter (GO_KEYS above). */
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'k' && (event.metaKey || event.ctrlKey)) {
@@ -202,7 +209,7 @@ export function CommandCenterProvider({
           event.target.closest(
             '[role="dialog"],[role="menu"],[role="listbox"],[role="combobox"],[role="textbox"]',
           )) ||
-        window.localStorage.getItem(GO_SHORTCUTS_KEY) === 'off'
+        !goShortcutsEnabled()
       )
         return
       const key = event.key.toLowerCase() // tolerate Shift/Caps Lock
@@ -325,7 +332,11 @@ export function CommandCenterProvider({
       }
       return
     }
-    if (key === 'g' && query === '') {
+    /* Same switch as the global handler. Someone who turned jumps off did it
+       to stop single keys behaving like commands, and this input swallowing
+       their "g" for 800ms is exactly that. Checked only where a prefix is
+       armed — the branch above can't run without one. */
+    if (key === 'g' && query === '' && goShortcutsEnabled()) {
       event.preventDefault()
       paletteGoPrefix.current = Date.now()
       paletteGoTimer.current = setTimeout(() => {
@@ -338,8 +349,6 @@ export function CommandCenterProvider({
 
   /* Natural-language quick-assign: "@sam fix login" or
      "assign fix login to sam on logpup" creates a backlog task directly. */
-  const rawQuery = query.trim()
-
   const handleQuickAssign = React.useCallback(async () => {
     const raw = query.trim()
     if (!raw || assigning) return
@@ -365,42 +374,83 @@ export function CommandCenterProvider({
   }, [assigning, go, query])
 
   const q = query.trim().toLowerCase()
-  const pages = [
-    { label: 'Dashboard', href: '/', icon: LayoutDashboard, shortcut: 'G D' },
-    { label: 'Apps', href: '/apps', icon: AppWindow, shortcut: 'G A' },
-    { label: 'People', href: '/people', icon: Users, shortcut: 'G P' },
-    { label: 'Meetings', href: '/meetings', icon: CalendarDays, shortcut: 'G M' },
-    { label: 'Activity', href: '/activity', icon: History, shortcut: undefined },
-    { label: 'Profile', href: '/profile', icon: User, shortcut: undefined },
-    ...(isAdmin
-      ? [{ label: 'Admin', href: '/admin', icon: ShieldCheck, shortcut: undefined }]
-      : []),
-  ].filter((page) => !q || page.label.toLowerCase().includes(q))
 
-  const themeActions = THEME_ACTIONS.filter((action) => !q || action.label.toLowerCase().includes(q) || 'theme'.includes(q))
+  /* Turning the jumps on or off is a stored preference, a piece of local
+     state and a toast — all three, or the chips start describing a state the
+     next keypress will contradict. */
+  const setGoShortcuts = React.useCallback((on: boolean) => {
+    try {
+      window.localStorage.setItem(GO_SHORTCUTS_KEY, on ? 'on' : 'off')
+    } catch {
+      /* localStorage unavailable. The key handler reads that same store, so
+         nothing actually changed — say so rather than pretend. */
+      toast.error('This browser would not save that — shortcuts are unchanged')
+      return
+    }
+    setGoShortcutsOn(on)
+    toast.info(on ? 'Go-to shortcuts enabled' : 'Go-to shortcuts disabled')
+  }, [])
 
-  const createActions = [
-    { label: 'New app', href: '/apps?new=1', adminOnly: true },
-    { label: 'New meeting', href: '/meetings?new=1', adminOnly: false },
-  ].filter(
-    (action) => (!action.adminOnly || isAdmin) && (!q || action.label.toLowerCase().includes(q)),
+  /* Everything a command is allowed to do. Deliberately this small: a row
+     that needs more than navigate / close / flip a shell switch / drop the
+     search cache is a page, not a palette row. */
+  const commandApi = React.useMemo<CommandApi>(
+    () => ({
+      go,
+      close: () => setOpen(false),
+      setTheme,
+      setGoShortcuts,
+      invalidateSearch: () => {
+        searchDeduper.clear()
+        intentDeduper.clear()
+      },
+    }),
+    [go, setGoShortcuts, setTheme],
   )
 
-  const showSignOut = !q || 'sign out log out'.includes(q)
-  const hasEntityResults =
-    results.apps.length > 0 ||
-    results.people.length > 0 ||
-    results.tasks.length > 0 ||
-    results.sprints.length > 0 ||
-    results.meetings.length > 0
+  /* Every static row, resolved for this person and this query in one call.
+     Which rows exist, what they are called, who may see them and what matches
+     them all live in features/search/registry/commands.ts — this file only
+     renders what comes back, so a new feature never has to be added here. */
+  const paletteCtx: PaletteContext = { user, theme, goShortcutsOn }
+  const commands = paletteCommands(paletteCtx, query)
+  const createCommands = commands.filter((command) => command.group === 'create')
+  const navCommands = commands.filter((command) => command.group === 'navigate')
+  const otherCommands = commands.filter((command) => command.group === 'command')
+
+  const renderCommand = (command: ResolvedCommand) => {
+    const Icon = command.icon
+    return (
+      <CommandItem
+        key={command.id}
+        value={command.id}
+        {...(command.href ? intentProps(command.href) : {})}
+        onSelect={() => {
+          if (command.href) {
+            go(command.href)
+            return
+          }
+          void command.run?.(commandApi, paletteCtx)
+        }}
+      >
+        <Icon />
+        {command.label}
+        {command.shortcut ? (
+          // Hidden below sm for the same reason as the footer strip: the
+          // palette is reachable from the header on a phone, where a chip
+          // advertises a key press the device cannot make.
+          <CommandShortcut className="hidden sm:inline">{command.shortcut}</CommandShortcut>
+        ) : null}
+      </CommandItem>
+    )
+  }
+
+  /* Nothing found means nothing to show at all — no result groups AND no
+     static rows the query reached. Before the registry this was a hand-kept
+     list of every group that could be non-empty, which is exactly the kind of
+     condition that goes stale the moment a group is added. */
   const nothingAtAll =
-    q.length >= 2 &&
-    !searching &&
-    !intent &&
-    !hasEntityResults &&
-    pages.length === 0 &&
-    themeActions.length === 0 &&
-    createActions.length === 0
+    q.length >= MIN_QUERY_LENGTH && !searching && !intent && results.length === 0 && commands.length === 0
 
   const contextValue = React.useMemo(() => ({ setOpen }), [])
 
@@ -415,8 +465,13 @@ export function CommandCenterProvider({
         className="top-[20%] sm:max-w-xl"
       >
         <Command shouldFilter={false}>
+          {/* The example IS the feature. This box parses a whole sentence into
+              an assignee, a due day and a priority (lib/task-intent.ts) and
+              offers to create the task — something "apps, people, tasks…" gave
+              nobody a reason to try. One short phrase shows the shape (name
+              first, then what, then when) and still fits the input at 360px. */}
           <CommandInput
-            placeholder="Fetch anything — apps, people, tasks…"
+            placeholder="Fetch anything — “shanika fix login friday”"
             value={query}
             onValueChange={setQuery}
             onKeyDown={handleInputKeyDown}
@@ -484,231 +539,88 @@ export function CommandCenterProvider({
             {!q && recents.length > 0 ? (
               <>
                 <CommandGroup heading="Recent">
-                  {recents.map((recent) => (
-                    <CommandItem
-                      key={recent.href}
-                      value={`recent-${recent.href}`}
-                      {...intentProps(recent.href)}
-                      onSelect={() => go(recent.href)}
-                    >
-                      <Search />
-                      <span className="truncate">{recent.label}</span>
-                      {recent.sub ? (
-                        <span className="truncate text-xs text-muted-foreground">{recent.sub}</span>
-                      ) : null}
-                    </CommandItem>
-                  ))}
+                  {recents.map((recent) => {
+                    /* A recent has always stored what KIND of thing it points
+                       at; until the registry nothing read it, so every row
+                       wore the same magnifying glass whatever it led to.
+                       Entries written by older builds may carry a kind this
+                       map does not know — those keep the glass. */
+                    const Icon = KIND_META[recent.type]?.icon ?? Search
+                    return (
+                      <CommandItem
+                        key={recent.href}
+                        value={`recent-${recent.href}`}
+                        {...intentProps(recent.href)}
+                        onSelect={() => go(recent.href)}
+                      >
+                        <Icon />
+                        <span className="truncate">{recent.label}</span>
+                        {recent.sub ? (
+                          <span className="truncate text-xs text-muted-foreground">
+                            {recent.sub}
+                          </span>
+                        ) : null}
+                      </CommandItem>
+                    )
+                  })}
                 </CommandGroup>
                 <CommandSeparator />
               </>
             ) : null}
 
-            {results.apps.length > 0 ? (
-              <CommandGroup heading="Apps">
-                {results.apps.map((app) => (
-                  <CommandItem
-                    key={app.id}
-                    value={`app-${app.id}`}
-                    {...intentProps(`/apps/${app.slug}`)}
-                    onSelect={() =>
-                      go(`/apps/${app.slug}`, {
-                        type: 'app',
-                        label: app.name,
-                        sub: app.slug,
-                        href: `/apps/${app.slug}`,
-                      })
-                    }
-                  >
-                    <AppWindow />
-                    <span className="truncate">{app.name}</span>
-                    <span className="truncate font-mono text-xs text-muted-foreground">
-                      {app.slug}
-                    </span>
-                    <StatusDot status={app.status} />
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {results.people.length > 0 ? (
-              <CommandGroup heading="People">
-                {results.people.map((person) => (
-                  <CommandItem
-                    key={person.id}
-                    value={`person-${person.id}`}
-                    {...intentProps(`/people/${person.id}`)}
-                    onSelect={() =>
-                      go(`/people/${person.id}`, {
-                        type: 'person',
-                        label: person.name,
-                        sub: person.title ?? undefined,
-                        href: `/people/${person.id}`,
-                      })
-                    }
-                  >
-                    <User />
-                    <span className="truncate">{person.name}</span>
-                    {person.title ? (
-                      <span className="truncate text-xs text-muted-foreground">{person.title}</span>
-                    ) : null}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {results.tasks.length > 0 ? (
-              <CommandGroup heading="Tasks">
-                {results.tasks.map((task) => (
-                  <CommandItem
-                    key={task.id}
-                    value={`task-${task.id}`}
-                    {...intentProps(task.href)}
-                    onSelect={() =>
-                      go(task.href, {
-                        type: 'task',
-                        label: task.title,
-                        sub: task.appName,
-                        href: task.href,
-                      })
-                    }
-                  >
-                    <SquareKanban />
-                    <span className="truncate">{task.title}</span>
-                    <span className="truncate text-xs text-muted-foreground">{task.appName}</span>
-                    <StatusDot status={task.status} />
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {results.sprints.length > 0 ? (
-              <CommandGroup heading="Sprints">
-                {results.sprints.map((sprint) => (
-                  <CommandItem
-                    key={sprint.id}
-                    value={`sprint-${sprint.id}`}
-                    {...intentProps(sprint.href)}
-                    onSelect={() =>
-                      go(sprint.href, {
-                        type: 'sprint',
-                        label: sprint.name,
-                        sub: sprint.appName,
-                        href: sprint.href,
-                      })
-                    }
-                  >
-                    <Timer />
-                    <span className="truncate">{sprint.name}</span>
-                    <span className="truncate text-xs text-muted-foreground">{sprint.appName}</span>
-                    <StatusDot status={sprint.status} />
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {results.meetings.length > 0 ? (
-              <CommandGroup heading="Meetings">
-                {results.meetings.map((meeting) => (
-                  <CommandItem
-                    key={meeting.id}
-                    value={`meeting-${meeting.id}`}
-                    {...intentProps(meeting.href)}
-                    onSelect={() =>
-                      go(meeting.href, {
-                        type: 'meeting',
-                        label: meeting.title,
-                        sub: meeting.appName ?? undefined,
-                        href: meeting.href,
-                      })
-                    }
-                  >
-                    <CalendarDays />
-                    <span className="truncate">{meeting.title}</span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {meeting.appName ?? format(meeting.startsAt, 'MMM d')}
-                    </span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {createActions.length > 0 ? (
-              <CommandGroup heading="Create">
-                {createActions.map((action) => (
-                  <CommandItem
-                    key={action.href}
-                    value={`create-${action.href}`}
-                    onSelect={() => go(action.href)}
-                  >
-                    <Plus />
-                    {action.label}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {pages.length > 0 ? (
-              <CommandGroup heading="Go to">
-                {pages.map((page) => (
-                  <CommandItem
-                    key={page.href}
-                    value={`page-${page.href}`}
-                    onSelect={() => go(page.href)}
-                  >
-                    <page.icon />
-                    {page.label}
-                    {page.shortcut ? <CommandShortcut>{page.shortcut}</CommandShortcut> : null}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ) : null}
-
-            {themeActions.length > 0 || showSignOut ? (
-              <CommandGroup heading="Commands">
-                {themeActions.map((action) => (
-                  <CommandItem
-                    key={action.value}
-                    value={`theme-${action.value}`}
-                    onSelect={() => {
-                      setTheme(action.value)
-                      setOpen(false)
-                    }}
-                  >
-                    <action.icon />
-                    {action.label}
-                  </CommandItem>
-                ))}
-                {showSignOut ? (
-                  <CommandItem
-                    value="sign-out"
-                    onSelect={() => {
-                      setOpen(false)
-                      void signOutFromPalette()
-                    }}
-                  >
-                    <LogOut />
-                    Sign out
-                  </CommandItem>
-                ) : null}
-                {!q || 'toggle go-to shortcuts keyboard'.includes(q) ? (
-                  <CommandItem
-                    value="toggle-go-shortcuts"
-                    onSelect={() => {
-                      try {
-                        const off = window.localStorage.getItem(GO_SHORTCUTS_KEY) === 'off'
-                        window.localStorage.setItem(GO_SHORTCUTS_KEY, off ? 'on' : 'off')
-                        toast.info(off ? 'Go-to shortcuts enabled' : 'Go-to shortcuts disabled')
-                      } catch {
-                        /* localStorage unavailable — shortcuts stay on */
+            {/* One shape for every kind of result. The heading, the order and
+                the rows all come from whichever provider produced them
+                (features/search/registry/providers.ts), so making a new thing
+                searchable adds a group here without this file changing. */}
+            {results.map((group) => (
+              <CommandGroup key={group.providerId} heading={group.label}>
+                {group.hits.map((hit) => {
+                  const meta = KIND_META[hit.kind]
+                  return (
+                    <CommandItem
+                      key={hit.id}
+                      value={`${group.providerId}-${hit.id}`}
+                      {...intentProps(hit.href)}
+                      onSelect={() =>
+                        go(hit.href, {
+                          type: hit.kind,
+                          label: hit.title,
+                          sub: hit.subtitle,
+                          href: hit.href,
+                        })
                       }
-                      setOpen(false)
-                    }}
-                  >
-                    <Keyboard />
-                    Toggle go-to shortcuts (g + key)
-                  </CommandItem>
-                ) : null}
+                    >
+                      <meta.icon />
+                      <span className="truncate">{hit.title}</span>
+                      {hit.subtitle ? (
+                        <span
+                          className={cn(
+                            'truncate text-xs text-muted-foreground',
+                            /* Slugs are things you type; names are things you
+                               read. Only the first earns the mono face. */
+                            meta.mono && 'font-mono',
+                          )}
+                        >
+                          {hit.subtitle}
+                        </span>
+                      ) : null}
+                      {hit.status ? <StatusDot status={hit.status} /> : null}
+                    </CommandItem>
+                  )
+                })}
               </CommandGroup>
+            ))}
+
+            {createCommands.length > 0 ? (
+              <CommandGroup heading="Create">{createCommands.map(renderCommand)}</CommandGroup>
+            ) : null}
+
+            {navCommands.length > 0 ? (
+              <CommandGroup heading="Go to">{navCommands.map(renderCommand)}</CommandGroup>
+            ) : null}
+
+            {otherCommands.length > 0 ? (
+              <CommandGroup heading="Commands">{otherCommands.map(renderCommand)}</CommandGroup>
             ) : null}
           </CommandList>
           <div className="flex items-center gap-3 border-t px-3 py-1.5 text-2xs text-muted-foreground">
@@ -718,9 +630,13 @@ export function CommandCenterProvider({
             <span>
               <kbd className="rounded border bg-muted px-1 font-mono">↵</kbd> open
             </span>
-            <span className="hidden sm:inline">
-              <kbd className="rounded border bg-muted px-1 font-mono">g</kbd>+key jump
-            </span>
+            {/* Gated on the same switch as the chips in "Go to" above: with
+                jumps turned off there is no g+key to describe. */}
+            {goShortcutsOn ? (
+              <span className="hidden sm:inline">
+                <kbd className="rounded border bg-muted px-1 font-mono">g</kbd>+key jump
+              </span>
+            ) : null}
             <span className="ml-auto inline-flex items-center gap-1">
               <PawPrint className="size-3" aria-hidden /> LogPup
             </span>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useId, useState, useTransition } from 'react'
 import { Loader2Icon, SparklesIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -34,6 +34,10 @@ export function WorklogForm({
   // What the server is known to hold, so the form can show "saved" the
   // instant it is pressed and roll back to the truth if the write fails.
   const [saved, setSaved] = useState(initial)
+  // One form per day is rendered on /worklog (today's, plus a box for each
+  // earlier day with no entry), so a fixed id would point every label at the
+  // first box's controls.
+  const fieldId = useId()
 
   const dirty = percent !== (saved?.percent ?? null) || note.trim() !== (saved?.note ?? '')
 
@@ -85,7 +89,7 @@ export function WorklogForm({
     <section className="flex flex-col gap-4 rounded-xl border bg-card p-4">
       <div className="flex flex-col gap-2">
         <div className="flex items-baseline justify-between gap-3">
-          <label htmlFor="worklog-percent" className="text-sm font-medium">
+          <label htmlFor={`${fieldId}-percent`} className="text-sm font-medium">
             How much of what you planned did you get through?
           </label>
           <span className="font-mono text-lg font-semibold tabular-nums">{percent}%</span>
@@ -94,7 +98,7 @@ export function WorklogForm({
             and it should cost one gesture. Steps of 5 because nobody means
             the difference between 62% and 63%. */}
         <input
-          id="worklog-percent"
+          id={`${fieldId}-percent`}
           type="range"
           min={0}
           max={100}
@@ -110,7 +114,7 @@ export function WorklogForm({
 
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <label htmlFor="worklog-note" className="text-sm font-medium">
+          <label htmlFor={`${fieldId}-note`} className="text-sm font-medium">
             What did you do?
           </label>
           <div className="flex items-center gap-1.5">
@@ -139,7 +143,7 @@ export function WorklogForm({
           </div>
         </div>
         <Textarea
-          id="worklog-note"
+          id={`${fieldId}-note`}
           value={note}
           onChange={(event) => setNote(event.target.value)}
           placeholder="Two or three lines is plenty."

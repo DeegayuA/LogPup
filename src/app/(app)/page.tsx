@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { getSession } from '@/lib/session'
 import { PasskeyNudge } from '@/features/auth/components/passkey-nudge'
+import { FirstLogNudge } from '@/features/worklog/components/first-log-nudge'
 import {
   businessHourOf,
   formatBusinessWeekdayLong,
@@ -84,8 +85,21 @@ export default async function DashboardPage() {
         ) : null}
       </header>
 
-      {/* One-time pointer from "signed in the slow way" to the fast way —
-          renders only while the account has zero passkeys (see PasskeyNudge). */}
+      {/* Two one-time pointers, each rendering only while its own condition
+          holds and each streaming on its own so neither can hold up the
+          first paint. A brand-new account is the one case that sees both, so
+          they share a shell and a muted voice — stacked, not competing.
+          They stay unwrapped siblings deliberately: a container would hold
+          the page's gap open for everyone who has already dealt with both.
+
+          The work log comes first — it is the daily habit the product is
+          for, and a dashboard of zeros says nothing about it (FirstLogNudge);
+          the passkey pointer follows (PasskeyNudge). */}
+      {user ? (
+        <Suspense fallback={null}>
+          <FirstLogNudge userId={user.id} />
+        </Suspense>
+      ) : null}
       {user ? (
         <Suspense fallback={null}>
           <PasskeyNudge userId={user.id} />

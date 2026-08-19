@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.254",
+  "current": "v0.0.262",
   "versions": [
     {
       "version": "v0.0.1",
@@ -1524,6 +1524,54 @@
       "date": "2026-08-14",
       "hash": "7246dde",
       "change": "."
+    },
+    {
+      "version": "v0.0.255",
+      "date": "2026-08-14",
+      "hash": "daac0bf",
+      "change": "."
+    },
+    {
+      "version": "v0.0.256",
+      "date": "2026-08-14",
+      "hash": "79998a3",
+      "change": "."
+    },
+    {
+      "version": "v0.0.257",
+      "date": "2026-08-19",
+      "hash": "a9541e0",
+      "change": "."
+    },
+    {
+      "version": "v0.0.258",
+      "date": "2026-08-19",
+      "hash": "b3c62e0",
+      "change": "docs: admin panel RBAC, change-request and coverage design spec"
+    },
+    {
+      "version": "v0.0.259",
+      "date": "2026-08-19",
+      "hash": "5d670ed",
+      "change": "."
+    },
+    {
+      "version": "v0.0.260",
+      "date": "2026-08-19",
+      "hash": "101777a",
+      "change": "docs: AI-everywhere design spec — usage ledger, key sharing, pricing, settings AI hub, 10-feature waves"
+    },
+    {
+      "version": "v0.0.261",
+      "date": "2026-08-19",
+      "hash": "ace2d4d",
+      "change": "docs: Phase A implementation plan + admin AI adoption panel in spec"
+    },
+    {
+      "version": "v0.0.262",
+      "date": "2026-08-19",
+      "hash": "86420e8",
+      "change": "feat: gemini pricing table with promo windows and honest formatting"
     }
   ]
 }

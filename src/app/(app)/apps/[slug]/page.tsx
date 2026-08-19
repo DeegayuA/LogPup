@@ -441,6 +441,21 @@ export default async function AppDetailPage(props: {
 
       {tab === 'roadmap' ? (
         <div className="flex flex-col gap-4">
+          {/* What this viewer may actually do here, stated once. The board
+              below hides what you cannot use — a member sees no sprint
+              controls and no delete — so without this line the only way to
+              learn where your reach ends is to try something. Both branches
+              are the real server rules: createTask takes any session,
+              updateTask and canMoveTask take an admin OR the assignee, and
+              every sprint action takes an admin. */}
+          {board && session?.user ? (
+            <p className="text-xs text-muted-foreground">
+              {isAdmin
+                ? 'You can change any task on this board, and the sprints themselves — dates, status and order.'
+                : 'You can add a task to any column and move or edit the ones assigned to you — sprints and their dates are set by an admin.'}
+            </p>
+          ) : null}
+
           {/* THE SPINE. The schedule and the sprint selector are one object —
               clicking a bar is what changes the board below it. This is the
               merge: a plan you can read the shape of, with the work inside it

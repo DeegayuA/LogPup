@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { format } from 'date-fns'
 import { PawPrint } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SectionEmpty } from '@/features/people/components/section-empty'
 import { isoDayDiff } from '@/features/people/iso-day'
@@ -111,6 +112,12 @@ export function PersonTasksCard({
       </CardHeader>
 
       {buckets.length === 0 ? (
+        // Only the never-had-a-task branch gets a button. "All their tasks are
+        // closed" is good news, and a call to action under it would read as a
+        // demand to go and find them more work. The other branch names a place
+        // — any app board — and this is the only way to get there from here.
+        // Composing a task is open to everyone (see the board's own empty
+        // state), so the offer promises nothing a member cannot do.
         <SectionEmpty
           icon={PawPrint}
           title="Nothing open."
@@ -118,6 +125,13 @@ export function PersonTasksCard({
             totalCount > 0
               ? `All ${totalCount} tasks ever assigned to them are closed.`
               : 'No tasks have been assigned to them yet — add one from any app board.'
+          }
+          action={
+            totalCount === 0 ? (
+              <Button variant="outline" size="sm" render={<Link href="/apps" />}>
+                Go to apps
+              </Button>
+            ) : undefined
           }
         />
       ) : (

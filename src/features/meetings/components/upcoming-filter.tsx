@@ -140,6 +140,7 @@ export function UpcomingMeetingsFiltered({
           isAdmin={isAdmin}
           users={users}
           apps={apps}
+          offerCreate
 
           openMeetingId={openMeetingId}
         />

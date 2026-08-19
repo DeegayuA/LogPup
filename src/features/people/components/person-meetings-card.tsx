@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { CalendarDays, Video } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { SectionEmpty } from '@/features/people/components/section-empty'
 import { formatBusinessMeetingRange } from '@/features/people/format-instant'
@@ -64,10 +65,18 @@ export function PersonMeetingsCard({ meetings }: { meetings: PersonMeetingsView 
       </CardHeader>
 
       {totalUpcoming + totalRecent === 0 ? (
+        // The window is 120 days wide, so this is not "nothing yet" — it is
+        // "nothing here". The rest of the schedule lives one page away, and the
+        // populated rows below already send readers to the same place.
         <SectionEmpty
           icon={CalendarDays}
           title="No meetings either side of today."
           hint="Nothing in the last 60 days and nothing scheduled in the next 60."
+          action={
+            <Button variant="outline" size="sm" render={<Link href="/meetings" />}>
+              Go to meetings
+            </Button>
+          }
         />
       ) : (
         <CardContent className="flex flex-col gap-4">

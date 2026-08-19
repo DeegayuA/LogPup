@@ -85,7 +85,23 @@ export default async function MeetingsPage(props: {
           {overview.live > 0 ? <StatTile value={overview.live} label="Now" tone="active" /> : null}
           <StatTile value={overview.past} label="Past" />
         </div>
-      ) : null}
+      ) : (
+        /* Nothing has ever been scheduled here. Five tiles reading zero would
+           be the page's most prominent element saying nothing at all, so the
+           slot carries the two things the tiles cannot answer instead: who may
+           make the first meeting, and what a meeting is still worth after it
+           has happened. Same border language as the tiles it stands in for.
+
+           "Anyone here" is the real rule, not a softening: createMeeting
+           checks for a session and nothing else, so a member schedules
+           meetings on exactly the same terms as an admin. "New meeting above"
+           is the header button, which renders unconditionally. */
+        <p className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground">
+          Nothing scheduled yet. Anyone here can schedule the first one with New
+          meeting above, and a meeting keeps its notes, transcript and follow-ups
+          long after it ends.
+        </p>
+      )}
 
       <MeetingsViews
         upcoming={upcoming}

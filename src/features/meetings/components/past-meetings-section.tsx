@@ -115,7 +115,7 @@ export function PastMeetingsSection({
         </p>
       ) : null}
       <div id={listId}>
-        {open ? (
+        {open && meetings.length > 0 ? (
           <MeetingList
             meetings={meetings}
             currentUserId={currentUserId}

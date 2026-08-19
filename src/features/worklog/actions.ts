@@ -1,5 +1,6 @@
 'use server'
 
+import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
@@ -73,6 +74,14 @@ export async function upsertDailyWorklog(
     pagePath: '/worklog',
     metadata: { day: parsed.data.day, percent: parsed.data.percent },
   })
+
+  // The page tells the reader their entry appears in the list below and
+  // that a filled day leaves the catch-up panel. Both of those are server
+  // renders, so without this the form flips to "Saved" while the rest of
+  // the page still reads "Not logged" — the one place a user concludes the
+  // save failed. revalidatePath re-renders the route in the action's own
+  // response, so the correction lands in the same roundtrip.
+  revalidatePath('/worklog')
 
   return ok({ day: parsed.data.day })
 }

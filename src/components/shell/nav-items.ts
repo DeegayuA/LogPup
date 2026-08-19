@@ -13,7 +13,16 @@ export type NavItem = {
   href: string
   label: string
   icon: ComponentType<{ className?: string }>
-  /** "G <key>" keyboard shortcut hint shown on hover/focus, if any. */
+  /**
+   * Letter for the "g then <key>" jump, if any. This is the single source of
+   * truth for the KEY ITSELF: the sidebar row renders it as a hint and the
+   * command center builds its key handler from the same field (GO_TARGETS in
+   * features/search/components/command-center.tsx), so a row cannot advertise
+   * a jump that nothing is listening for. The palette's own "Go to" LIST is
+   * still hand-written there — a new entry here needs adding to it by hand or
+   * it gets a working shortcut with no chip teaching it. Letters must be
+   * unique across this list.
+   */
   key?: string
 }
 
@@ -30,7 +39,11 @@ export const navItems: NavItem[] = [
   { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
   { href: '/people', label: 'People', icon: Users, key: 'P' },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },
-  { href: '/activity', label: 'Activity', icon: History },
+  // V rather than A, which Apps holds — it is the letter people reach for in
+  // "actiVity" once the obvious one is gone. Every other primary destination
+  // has a jump letter; this one had none, so the palette listed it without a
+  // shortcut and the row never showed one.
+  { href: '/activity', label: 'Activity', icon: History, key: 'V' },
 ]
 
 // Admin-only nav, appended after the primary nav. Gated on `isAdmin` the

@@ -1,145 +1,32 @@
 'use server'
 
 import { z } from 'zod'
-import { ilike, or, eq, and, sql, asc, desc } from 'drizzle-orm'
+import { ilike, or, eq, and, asc, desc } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
-import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import { apps, assignments, tasks, users } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { parseTaskIntent } from '@/lib/task-intent'
+import { runProviders } from './registry/providers'
+import type { SearchGroup } from './registry/types'
 
-export type SearchResults = {
-  apps: { id: string; name: string; slug: string; status: 'active' | 'paused' | 'archived' }[]
-  people: { id: string; name: string; title: string | null; avatarUrl: string | null }[]
-  tasks: {
-    id: string
-    title: string
-    status: 'todo' | 'in_progress' | 'done'
-    appName: string
-    href: string
-  }[]
-  sprints: {
-    id: string
-    name: string
-    status: 'planned' | 'active' | 'done'
-    appName: string
-    href: string
-  }[]
-  meetings: {
-    id: string
-    title: string
-    startsAt: Date
-    appName: string | null
-    href: string
-  }[]
-}
-
-const EMPTY: SearchResults = { apps: [], people: [], tasks: [], sprints: [], meetings: [] }
-const LIMIT = 6
-
-export async function universalSearch(q: string): Promise<SearchResults> {
+/**
+ * Universal search, fanned out over the provider registry.
+ *
+ * The five entity queries this function used to inline now live beside the
+ * features that own their tables, in each feature's `search-providers.ts` —
+ * adding a searchable thing must not mean editing this file. The list is
+ * registry/providers.ts, and its doc comment is the instruction.
+ */
+export async function universalSearch(q: string): Promise<SearchGroup[]> {
   const session = await auth()
-  if (!session?.user) return EMPTY
+  // The palette is behind the (app) shell, so this is a belt-and-braces check
+  // rather than the only one — but a server action is its own entry point and
+  // has to gate itself.
+  if (!session?.user) return []
 
-  const query = q.trim()
-  if (query.length < 2) return EMPTY
-  // Escape LIKE metacharacters so "50%" matches literally, not as a wildcard.
-  const pattern = `%${query.replace(/[\\%_]/g, '\\$&')}%`
-
-  const [appRows, peopleRows, taskRows, sprintRows, meetingRows] = await Promise.all([
-    db
-      .select({ id: apps.id, name: apps.name, slug: apps.slug, status: apps.status })
-      .from(apps)
-      .where(
-        or(
-          ilike(apps.name, pattern),
-          ilike(apps.slug, pattern),
-          sql`array_to_string(${apps.techTags}, ' ') ILIKE ${pattern}`,
-        ),
-      )
-      .orderBy(asc(apps.status), asc(apps.name))
-      .limit(LIMIT),
-    db
-      .select({ id: users.id, name: users.name, title: users.title, avatarUrl: users.avatarUrl })
-      .from(users)
-      .where(
-        and(
-          eq(users.active, true),
-          // Excludes self-signed-up users still awaiting admin approval.
-          eq(users.status, 'approved'),
-          or(ilike(users.name, pattern), ilike(users.email, pattern), ilike(users.title, pattern)),
-        ),
-      )
-      .orderBy(asc(users.name))
-      .limit(LIMIT),
-    db
-      .select({
-        id: liveTasks.id,
-        title: liveTasks.title,
-        status: liveTasks.status,
-        sprintId: liveTasks.sprintId,
-        appName: apps.name,
-        appSlug: apps.slug,
-      })
-      .from(liveTasks)
-      .innerJoin(apps, eq(liveTasks.appId, apps.id))
-      .where(ilike(liveTasks.title, pattern))
-      .orderBy(asc(liveTasks.status))
-      .limit(LIMIT),
-    db
-      .select({
-        id: liveSprints.id,
-        name: liveSprints.name,
-        status: liveSprints.status,
-        appName: apps.name,
-        appSlug: apps.slug,
-      })
-      .from(liveSprints)
-      .innerJoin(apps, eq(liveSprints.appId, apps.id))
-      .where(or(ilike(liveSprints.name, pattern), ilike(liveSprints.goal, pattern)))
-      .orderBy(asc(liveSprints.status))
-      .limit(LIMIT),
-    db
-      .select({
-        id: liveMeetings.id,
-        title: liveMeetings.title,
-        startsAt: liveMeetings.startsAt,
-        appName: apps.name,
-      })
-      .from(liveMeetings)
-      .leftJoin(apps, eq(liveMeetings.appId, apps.id))
-      .where(or(ilike(liveMeetings.title, pattern), ilike(liveMeetings.agenda, pattern)))
-      .orderBy(desc(liveMeetings.startsAt))
-      .limit(LIMIT),
-  ])
-
-  return {
-    apps: appRows,
-    people: peopleRows,
-    tasks: taskRows.map((t) => ({
-      id: t.id,
-      title: t.title,
-      status: t.status,
-      appName: t.appName,
-      href: `/apps/${t.appSlug}?tab=roadmap&sprint=${t.sprintId ?? 'backlog'}`,
-    })),
-    sprints: sprintRows.map((s) => ({
-      id: s.id,
-      name: s.name,
-      status: s.status,
-      appName: s.appName,
-      href: `/apps/${s.appSlug}?tab=roadmap&sprint=${s.id}`,
-    })),
-    meetings: meetingRows.map((m) => ({
-      id: m.id,
-      title: m.title,
-      startsAt: m.startsAt,
-      appName: m.appName,
-      href: '/meetings',
-    })),
-  }
+  return runProviders(q, { user: session.user })
 }
 
 export async function signOutFromPalette(): Promise<void> {
