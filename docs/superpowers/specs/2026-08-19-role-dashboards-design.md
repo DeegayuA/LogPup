@@ -38,6 +38,26 @@ The role's only role is priority: what this person came here to look at first.
 
 Zones are **capability-gated, then scope-narrowed**. A manager's `team` zone shows their `scopeAppIds`, not the org. That narrowing already exists in the capability model (`GrantLevel` of `scoped`) and must be honored per zone, or a manager sees data they cannot act on.
 
+### Narrow by grant level, never by scope emptiness
+
+**This is the trap in this design and the one thing an implementer must get right.** `scopeAppIds` is empty for superadmin, admin and auditor — not because they see nothing, but because their grants are `all` and never consult scope. A zone that filters on `scopeAppIds` without first checking the grant level will show an **auditor an empty portfolio and an admin an empty team**: the exact inversion of what those roles are for.
+
+The rule, per zone: read the actor's grant level for the zone's action first.
+- `all` → no narrowing. Ignore `scopeAppIds` entirely.
+- `scoped` → narrow to `scopeAppIds`; an empty set here genuinely means nothing to show, and the zone renders its empty state.
+- `own` → narrow to the actor's own rows.
+- `none` → the zone is not in the list at all.
+
+`composeDashboard` therefore returns each zone with the grant level that admitted it, so the zone component never has to re-derive it. `zones.test.ts` must include a case asserting an auditor's `portfolio` and an admin's `team` are UNNARROWED despite an empty `scopeAppIds`.
+
+### Where scope comes from (confirmed against `actor.ts` / `capabilities.ts`)
+
+`loadActor` resolves `scopeAppIds` from three different sources, and zones must not re-derive any of them:
+- **manager** — `app_role_history`, open rows only, role in (`pm`, `lead`). Deliberately NOT `managesApp()`, which regex-matches the free-text `assignments.role` string and returns false for a lead.
+- **editor, member** — `assignments`.
+- **stakeholder** — `app_grants`. A different mechanism, but `loadActor` folds it into the same `scopeAppIds` set, so zones read only that set.
+- **superadmin, admin, auditor** — `none`, i.e. empty. See the trap above.
+
 ## Per-role ordering
 
 Ordering is a hint attached to the role, not a permission. If a role gains a capability, its zone appears at whatever position the hint gives it, or at the end if unlisted.
@@ -72,10 +92,20 @@ Each zone keeps its own Suspense boundary, so the page still streams — control
 
 Blocked on the seven-role capability layer being committed: `loadActor`, `Actor` with `scopeAppIds`, and `can()`. Another session owns `capabilities.ts`, `actor.ts` and the migration widening `user_role`. This work starts only once those are on `main` and the tree typechecks — building the composition layer against a moving matrix would mean rewriting it.
 
-Coordination required before implementation:
-- Confirm the exact spelling of every action named here against the shipped matrix: `coverage.view`, `user.approve`, `task.edit`, `app.view`, `user.view.directory` were read from the in-flight file and may change.
-- The `trail` zone needs an org-wide activity-view action. **No such action was found in the matrix at design time** — confirm with the capabilities owner whether to add one, or gate `trail` on an existing admin/auditor-held action instead. Do not invent it here.
-- Confirm `Actor.scopeAppIds` is populated for manager, editor and stakeholder, since three zones narrow by it.
+Coordination status:
+- **Action spellings — CONFIRMED** against the file on disk: `coverage.view`, `user.approve`, `task.edit`, `app.view`, `user.view.directory` are all correct as written.
+- **`scopeAppIds` — CONFIRMED** for manager, editor and stakeholder, from three different sources; see "Where scope comes from" above.
+- **`trail` — STILL OPEN, and it is a hole in the matrix, not in this design.** There is no activity/audit-trail action anywhere in `capabilities.ts`. The auditor role holds `all` on `user.view.directory`, `user.view.detail`, `app.view`, `worklog.view`, `coverage.view`, `absence.view` and `trash.view` — but nothing that names the activity trail, which is the one surface an auditor would actually live in. The capabilities owner decides: add an action, or gate `trail` on an existing auditor-held action. **Do not invent one here**, and do not ship `trail` until it resolves. Every other zone is unblocked.
+
+## Division of ownership with the KPI work
+
+A parallel effort is adding system-wide KPIs (delivery, people load and coverage, meeting follow-through, cross-project health). Agreed split, so that neither side owns both halves:
+
+- **This work owns composition**: the zone registry, `composeDashboard(actor)`, which zones exist, who sees them, and how each narrows.
+- **The KPI work owns derivation**: one module composing the existing definitions (`app-health.ts`, `capacity-compare.ts`, `checkins.ts`, `plan-read.ts`, `computeCoverage`), plus any standalone non-dashboard surfaces.
+- Zones render those derivations. The KPI work adds no dashboard section of its own.
+
+The point: one answer to "what does at-risk mean", one answer to "who sees what", and different owners for each.
 
 ## Testing
 
