@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { PlateBriefing, PlateCapacity, PlateWriteup } from './plates'
+import { Fortnight } from './fortnight'
 import { RevealScope } from './reveal-scope'
 
 export const metadata: Metadata = {
@@ -300,6 +301,20 @@ export default function PublicHomePage() {
             before granting it. So the honest thing to do is describe the tool plainly, in public,
             and let the description be the marketing.
           </p>
+
+          {/* The paragraph above says the description is the marketing. This
+              is the description doing it: the product's smallest real object,
+              drawn to its own rules, rather than a claim about how good the
+              product is.
+
+              Placed at the end of §01 rather than under §02's heading — §02 is
+              "Ten things live in here", and this is not one of the ten — and
+              deliberately low enough on the page that the observer has always
+              classified it as below the fold, which is what lets it write
+              itself rather than appearing already written. */}
+          <div className="mt-14 lg:col-span-12 lg:mt-20">
+            <Fortnight />
+          </div>
         </div>
       </section>
 
