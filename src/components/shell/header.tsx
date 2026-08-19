@@ -4,8 +4,19 @@ import { MobileNav } from '@/components/shell/mobile-nav'
 import { CommandCenterTrigger } from '@/features/search/components/command-center'
 import { InstallButton } from '@/features/pwa/pwa'
 import { NotificationBell } from '@/features/notifications/components/notification-bell'
+import type { UserRole } from '@/features/auth/capabilities'
 
-export function Header({ user, isAdmin }: { user: AccountUser; isAdmin: boolean }) {
+export function Header({
+  user,
+  role,
+  isAdmin,
+}: {
+  user: AccountUser
+  // Both, and not one derived from the other: MobileNav gates on the admin
+  // family, while AccountMenu names the actual seat.
+  role: UserRole
+  isAdmin: boolean
+}) {
   return (
     <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur">
       {/* On phones the sidebar is hidden, so the brand mark doubles as the nav
@@ -26,7 +37,7 @@ export function Header({ user, isAdmin }: { user: AccountUser; isAdmin: boolean 
         <NotificationBell />
         <ThemeToggle />
         <span aria-hidden className="mx-1.5 h-5 w-px bg-border md:hidden" />
-        <AccountMenu user={user} isAdmin={isAdmin} variant="compact" className="md:hidden" />
+        <AccountMenu user={user} role={role} variant="compact" className="md:hidden" />
       </div>
     </header>
   )

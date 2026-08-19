@@ -24,6 +24,7 @@ import {
   assignmentHistory,
   assignments,
   meetingAiNotes,
+  meetingApps,
   meetingAttendeeHistory,
   meetingAttendees,
   meetingFollowups,
@@ -107,7 +108,7 @@ import {
 } from '@/features/meetings/components/meeting-notes-model'
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
 import { can, isAdminRole, type UserRole } from '@/features/auth/capabilities'
-import { managesApp } from '@/features/apps/project-manager'
+import { managesAnyApp } from '@/features/apps/project-manager'
 // Re-exported below (not just imported) — existing callers, including this
 // file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
 // './ai-actions'. The implementation itself lives in note-labels.ts, a
@@ -116,7 +117,7 @@ import { managesApp } from '@/features/apps/project-manager'
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 
 /** Meetings gates decide from the session alone; app reach comes from the
- * managesApp arm beside them, not from a resolved scope set. */
+ * managesAnyApp arm beside them, not from a resolved scope set. */
 const EMPTY_SCOPE: ReadonlySet<string> = new Set()
 
 export { keyframeDeleteLabel, noteSegmentDeleteLabel }
@@ -562,13 +563,23 @@ async function insertAutoNotesAndSuggestions(
 // away before it ever reaches here.
 export async function canReadMeetingIntel(
   user: { id: string; role?: string | null },
-  meeting: { id: string; createdBy: string; appId?: string | null },
+  // `appId` is deliberately NOT in this type any more. A meeting can be on
+  // several projects and the scalar names only one of them, so a caller who
+  // handed it over would silently lock out the PM of every other project the
+  // meeting serves. The set is resolved here, from meeting.id, so no call site
+  // can get it wrong.
+  meeting: { id: string; createdBy: string },
 ): Promise<boolean> {
   if (can({ id: user.id, role: (user.role ?? 'member') as UserRole, scopeAppIds: EMPTY_SCOPE },
           'meeting.intel.view', { ownerId: meeting.createdBy })) return true
-  // The app's project manager reads their project's meetings without having
-  // to be on every invite — running the project is their job.
-  if (await managesApp(user.id, meeting.appId)) return true
+  // The project manager of ANY project this meeting serves reads it without
+  // having to be on every invite — running the project is their job, and
+  // requiring all of them would mean a joint meeting could only be read by
+  // someone who runs every project in it (see Resource.appIds in
+  // capabilities.ts). meetingApps has no deletedAt of its own — live iff its
+  // meeting is — and this function's contract is that meeting.id was already
+  // resolved through liveMeetings by the caller.
+  if (await managesAnyApp(user.id, await meetingAppIds(meeting.id))) return true
   const [attendee] = await db
     .select({ userId: meetingAttendees.userId })
     .from(meetingAttendees)
@@ -590,15 +601,41 @@ export async function canManageMeeting(meetingId: string) {
   // Admin, the creator, or the app's PROJECT MANAGER: the PM manages
   // everything in their project and its meetings (see project-manager.ts);
   // the lead/architect stay reviewers and are deliberately not here.
-  // See the twin gate in actions.ts for why the managesApp arm survives the
+  // See the twin gate in actions.ts for why the managesAnyApp arm survives the
   // matrix conversion: free-text project roles and structured pm/lead are
   // different sets, and narrowing this quietly would strip meeting management
   // from PMs who only hold the title in free text.
+  //
+  // ANY of the meeting's projects, never the deprecated meetings.app_id: a PM
+  // of one project a joint meeting serves manages that meeting.
+  // Resolved ONCE and handed to both arms — two awaits of the same helper in
+  // one boolean expression would be two round trips for one answer.
+  const appIds = await meetingAppIds(meeting.id)
   const allowed =
     can({ id: session.user.id, role: session.user.role as UserRole, scopeAppIds: EMPTY_SCOPE },
-        'meeting.manage', { ownerId: meeting.createdBy }) ||
-    (await managesApp(session.user.id, meeting.appId))
+        'meeting.manage', { ownerId: meeting.createdBy, appIds }) ||
+    (await managesAnyApp(session.user.id, appIds))
   return allowed ? { session, meeting } : null
+}
+
+/**
+ * Which projects a meeting is on — the SET the two gates above decide with.
+ *
+ * NEVER meetings.app_id: that column is a deprecated single-value mirror kept
+ * only so change-request routing has one stable id (see the comment on it in
+ * src/db/schema.ts), and gating on it would lock the PM of every other project
+ * a joint meeting serves out of their own project's meeting.
+ *
+ * meetingApps has no deletedAt of its own — live iff its meeting is (see
+ * MEETING_CHILD_TABLES in src/db/live.ts). Both callers resolve the meeting
+ * through liveMeetings before reaching here.
+ */
+async function meetingAppIds(meetingId: string): Promise<string[]> {
+  const rows = await db
+    .select({ appId: meetingApps.appId })
+    .from(meetingApps)
+    .where(eq(meetingApps.meetingId, meetingId))
+  return rows.map((row) => row.appId)
 }
 
 // meetingAttendees has no deletedAt of its own — live iff its meeting is

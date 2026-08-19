@@ -37,10 +37,10 @@ export default async function AppLayout({
             Sidebar as a slot rather than imported by it. */}
         <Sidebar
           isAdmin={isAdmin}
-          account={<AccountMenu user={user} isAdmin={isAdmin} variant="sidebar" />}
+          account={<AccountMenu user={user} role={session.user.role} variant="sidebar" />}
         />
         <div className="flex flex-1 flex-col">
-          <Header user={user} isAdmin={isAdmin} />
+          <Header user={user} role={session.user.role} isAdmin={isAdmin} />
           <main className="flex flex-1 flex-col">{children}</main>
         </div>
       </div>

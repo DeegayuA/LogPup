@@ -36,6 +36,14 @@ vi.mock('@/db', () => ({
     delete: async (table: unknown) => {
       deleteSpy(table)
     },
+    // The capability guard reads users.employment_type for cappable actions
+    // (danger.dbclear, the approvals, the irreversible ones), so the mock has
+    // to answer it. Permanent caps nothing, which is the pre-cap behaviour.
+    select: () => ({
+      from: () => ({
+        where: async () => [{ employmentType: 'permanent' }],
+      }),
+    }),
   },
 }))
 

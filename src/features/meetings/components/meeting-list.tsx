@@ -55,7 +55,7 @@ export function MeetingList({
   meetings,
   currentUserId,
   isAdmin,
-  showAppBadge = true,
+  hideAppId,
   users = [],
   apps = [],
   offerCreate = false,
@@ -68,7 +68,16 @@ export function MeetingList({
    * False on a list already scoped to one app, where repeating that app's name
    * on every row is noise.
    */
-  showAppBadge?: boolean
+  /**
+   * The project whose chip to LEAVE OFF — the app page's own Meetings tab
+   * passes its own id, because "you are already in this project".
+   *
+   * It does not hide the row's projects entirely, which is what the boolean it
+   * replaced did: a meeting that also serves two other projects would then
+   * render as if it belonged to this one alone, and the reader would have no
+   * way to find out otherwise from the list.
+   */
+  hideAppId?: string
   /**
    * Mention pool for the notes editor. Empty just means no suggestions pop up
    * — except in the empty state, where it is also the attendee pool the
@@ -108,7 +117,7 @@ export function MeetingList({
      * `offerCreate` — opt-in, passed only by the upcoming list. Every other
      * caller leaves it false because the meeting this button makes starts at
      * the next slot from now: on the app page's tab it would be filed under
-     * "No app" and vanish from a list filtered by appId, and in the past
+     * "No app" and vanish from a list filtered by project, and in the past
      * section it would be upcoming and therefore invisible there by
      * definition. Those surfaces offer creation through their own form,
      * seeded correctly.
@@ -158,7 +167,7 @@ export function MeetingList({
           canManage={isAdmin || meeting.createdBy === currentUserId}
           canDelete={isAdmin}
           currentUserId={currentUserId}
-          showAppBadge={showAppBadge}
+          hideAppId={hideAppId}
           users={users}
           apps={apps}
           autoOpen={openMeetingId === meeting.id}
@@ -265,7 +274,7 @@ function MeetingRow({
   canManage,
   canDelete,
   currentUserId,
-  showAppBadge,
+  hideAppId,
   users,
   apps,
   autoOpen,
@@ -276,7 +285,7 @@ function MeetingRow({
   /** Deletion is admin-only — stricter than canManage, see deleteMeeting. */
   canDelete: boolean
   currentUserId: string
-  showAppBadge: boolean
+  hideAppId?: string
   users: MentionUser[]
   apps: { id: string; name: string }[]
   autoOpen: boolean
@@ -365,9 +374,13 @@ function MeetingRow({
 
             <div className="flex flex-wrap items-center gap-1.5">
               <TimingChip timing={timing} />
-              {showAppBadge && meeting.appName ? (
-                <Badge variant="secondary">{meeting.appName}</Badge>
-              ) : null}
+              {meeting.apps
+                .filter((app) => app.id !== hideAppId)
+                .map((app) => (
+                  <Badge key={app.id} variant="secondary">
+                    {app.name}
+                  </Badge>
+                ))}
               {meeting.googleEventId ? (
                 <MetaChip icon={CalendarCheckIcon}>Invite sent</MetaChip>
               ) : null}
@@ -438,7 +451,7 @@ function MeetingRow({
                 activeUsers={users}
                 editing={{
                   id: meeting.id,
-                  appId: meeting.appId,
+                  appIds: meeting.apps.map((app) => app.id),
                   title: meeting.title,
                   startsAt: meeting.startsAt,
                   endsAt: meeting.endsAt,
@@ -494,7 +507,7 @@ function MeetingRow({
           isAdmin={canDelete}
           currentUserId={currentUserId}
           attendees={meeting.attendees}
-          appId={meeting.appId}
+          appIds={meeting.apps.map((app) => app.id)}
           mentionUsers={users}
           onGlanceChange={setGlance}
           autoOpen={autoOpen}

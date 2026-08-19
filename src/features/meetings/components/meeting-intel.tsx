@@ -62,6 +62,7 @@ import {
 } from '@/features/meetings/components/meeting-chips'
 import { MeetingAiNotes, MeetingNotesEmpty } from '@/features/meetings/components/meeting-notes'
 import { MeetingPrepSection } from '@/features/meetings/components/meeting-prep'
+import { MeetingPlannerSection } from '@/features/meetings/components/meeting-planner'
 import {
   followupAge,
   glanceFromIntel,
@@ -414,6 +415,74 @@ function AroundTheTablePanel({
   )
 }
 
+/**
+ * "Plan this meeting" — the pre-meeting half of the write-up: who should be in
+ * the room for a meeting that covers several projects, and what to ask each of
+ * them. Same panel-shell lift as AroundTheTablePanel above, so its collapse
+ * preference is persisted with every other panel's.
+ *
+ * `onAnswerInNotes` is the one wire between this panel and the record below
+ * it: an accepted question is appended to the note composer's draft (never
+ * posted), so the answer is typed beside the question that produced it.
+ */
+function PlanTheMeetingPanel({
+  meetingId,
+  canManage,
+  onAnswerInNotes,
+}: {
+  meetingId: string
+  canManage: boolean
+  onAnswerInNotes: (text: string) => void
+}) {
+  const { openMap, setPanelOpen } = usePanels()
+  const id: PanelId = 'plan-the-meeting'
+  return (
+    <div id={id} className={PANEL_FRAME_CLASS}>
+      <MeetingPlannerSection
+        meetingId={meetingId}
+        canManage={canManage}
+        open={openMap[id] ?? PANEL_DEFAULT_OPEN[id]}
+        onOpenChange={(value) => setPanelOpen(id, value)}
+        onAnswerInNotes={onAnswerInNotes}
+      />
+    </div>
+  )
+}
+
+/**
+ * "Answer in notes" hands a line to the note composer — which lives inside the
+ * Record panel, and `Panel` UNMOUNTS its children when collapsed. Record is
+ * collapsed by default (PANEL_DEFAULT_OPEN.record === false), so seeding alone
+ * did nothing visible, and a second click before expanding overwrote the first:
+ * the seed is a single slot, not a queue.
+ *
+ * Opening the panel in the same click is what makes the button mean what it
+ * says. It has to happen from INSIDE MeetingPanelsProvider — the seed state
+ * lives on MeetingIntelPanel, which renders the provider rather than sitting
+ * under it — so this thin wrapper exists to hold that one hook.
+ */
+function PlannerWithNotesHandoff({
+  meetingId,
+  canManage,
+  onSeed,
+}: {
+  meetingId: string
+  canManage: boolean
+  onSeed: (next: { text: string; nonce: number } | ((prev: { text: string; nonce: number } | null) => { text: string; nonce: number })) => void
+}) {
+  const { setPanelOpen } = usePanels()
+  return (
+    <PlanTheMeetingPanel
+      meetingId={meetingId}
+      canManage={canManage}
+      onAnswerInNotes={(text) => {
+        setPanelOpen('record', true)
+        onSeed((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }))
+      }}
+    />
+  )
+}
+
 export function MeetingIntelPanel({
   meetingId,
   meetingTitle,
@@ -421,7 +490,7 @@ export function MeetingIntelPanel({
   currentUserId,
   attendees = [],
   autoOpen = false,
-  appId = null,
+  appIds = [],
   mentionUsers,
   onGlanceChange,
   isAdmin = false,
@@ -432,8 +501,13 @@ export function MeetingIntelPanel({
   currentUserId: string
   /** For speaker assignment and task-suggestion assignee pickers. */
   attendees?: { id: string; name: string }[]
-  /** The meeting's app — task suggestions need one to file into. */
-  appId?: string | null
+  /**
+   * The meeting's projects — task suggestions need one to file into. A SET,
+   * because a meeting can be on several and none of them is primary; `[]` is
+   * the app-less meeting and is the only state that leaves an unrouted
+   * suggestion with nowhere to go.
+   */
+  appIds?: string[]
   /** Wider mention pool for the note composer; falls back to attendees. */
   mentionUsers?: MentionUser[]
   /**
@@ -481,6 +555,17 @@ export function MeetingIntelPanel({
   // time) without touching the recorder again.
   const [finalizing, startFinalizing] = useTransition()
   const [finalizeError, setFinalizeError] = useState<string | null>(null)
+  /**
+   * A line the planner panel wants appended to the note composer below it —
+   * "Answer in notes" on an accepted question. Lifted to this level because
+   * the two panels are siblings inside PanelsLayout and neither owns the
+   * other; `nonce` is what makes clicking the SAME question twice append it
+   * twice, which a text-only signal could not express.
+   *
+   * It is a DRAFT hand-off, not a write: NoteTimeline appends it to whatever
+   * is already typed and never posts on its own.
+   */
+  const [noteDraftSeed, setNoteDraftSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [recording, setRecording] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [language, setLanguageState] = useState<LanguagePreference>('bilingual')
@@ -2554,6 +2639,7 @@ export function MeetingIntelPanel({
     ...(totalTerms > 0
       ? [{ id: 'glossary' as PanelId, label: KIND_META.term.label, icon: KIND_META.term.icon, count: totalTerms }]
       : []),
+    { id: 'plan-the-meeting' as PanelId, label: 'Plan this meeting', icon: UserPlus },
     { id: 'around-the-table' as PanelId, label: 'Around the table', icon: Users },
     ...(unattributed.length > 0
       ? [{ id: 'needs-attribution' as PanelId, label: 'Needs attribution', icon: UserPlus, count: unattributed.length }]
@@ -3134,7 +3220,7 @@ export function MeetingIntelPanel({
                     meetingTitle={meetingTitle}
                     canManage={canRecord}
                     attendees={attendees}
-                    appId={appId}
+                    appIds={appIds}
                     mentionUsers={mentionUsers}
                     suggestions={intel?.suggestions ?? []}
                     untrackedActions={intel?.untrackedActions ?? []}
@@ -3151,6 +3237,16 @@ export function MeetingIntelPanel({
                     </p>
                   </MeetingNotesEmpty>
                 )}
+
+                {/* Planning comes before the walk-through: who should be in
+                    the room for a meeting covering several projects, and what
+                    each of them is being asked — decided from live rows rather
+                    than from memory (see meeting-planner.tsx). */}
+                <PlannerWithNotesHandoff
+                  meetingId={meetingId}
+                  canManage={canRecord}
+                  onSeed={setNoteDraftSeed}
+                />
 
                 {/* One meeting covers every project its people work on — the
                     per-attendee walk-through (their apps, sprint counts, and
@@ -3363,11 +3459,12 @@ export function MeetingIntelPanel({
                     meetingTitle={meetingTitle}
                     canManage={canRecord}
                     attendees={attendees}
-                    appId={appId}
+                    appIds={appIds}
                     mentionUsers={mentionUsers}
                     shownElsewhere={notes?.summary ?? null}
                     autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
                     deadlines={notes?.deadlines ?? []}
+                    draftSeed={noteDraftSeed}
                   />
                   {/* Only once there is a record to ask about — an assistant
                       offered over an empty meeting can only answer "that

@@ -38,13 +38,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { MeetingShareDialog } from '@/features/meetings/components/meeting-share-dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { createMeeting, teamForApp, updateMeeting } from '@/features/meetings/actions'
 import {
@@ -58,13 +51,18 @@ import type { ActiveUser } from '@/features/people/queries'
 import { matchApp, type AppOption } from '@/lib/app-match'
 import { parseMeetingIntent, type MeetingIntent } from '@/lib/meeting-intent'
 
-const NO_APP = '__none__'
 // Long enough that a fast typist isn't re-parsing mid-word, short enough that
 // the preview still reads as live.
 const QUICK_ADD_DEBOUNCE_MS = 200
 
 type FormState = {
-  appId: string
+  /**
+   * Every project this meeting is on, all equal, no primary. `[]` is a real
+   * answer — a company all-hands belongs to nobody — and is what the old
+   * "No app" sentinel used to stand for. There is no sentinel any more: an
+   * empty selection says it in words instead.
+   */
+  appIds: string[]
   title: string
   start: Date
   end: Date
@@ -77,6 +75,20 @@ type FormState = {
   // updater — split state could apply one half against a form the user had
   // already changed.
   prefilledIds: string[]
+  // Each selected project's team, as it came back from teamForApp. Kept in
+  // FormState with prefilledIds and for the same reason: the prefilled set is
+  // the UNION of the selected projects' teams, so a landing response and the
+  // current selection have to be read in ONE updater — split state would apply
+  // one project's team against a selection the user had already changed.
+  // Cached per project so removing one withdraws exactly its people and
+  // re-adding it costs no second fetch.
+  teamsByApp: Record<string, string[]>
+}
+
+/** The prefilled portion is the union of the selected projects' teams. */
+function withTeamPrefill(f: FormState, roster: string[]): FormState {
+  const team = f.appIds.flatMap((id) => f.teamsByApp[id] ?? [])
+  return { ...f, ...applyTeamPrefill(f, team, roster) }
 }
 
 function emptyState(defaultAppId?: string, startAt?: Date, endAt?: Date): FormState {
@@ -86,7 +98,7 @@ function emptyState(defaultAppId?: string, startAt?: Date, endAt?: Date): FormSt
   // on it before calling, rather than this guessing one back out of a date.
   const start = startAt ?? roundUpToStep(new Date())
   return {
-    appId: defaultAppId ?? '',
+    appIds: defaultAppId ? [defaultAppId] : [],
     title: '',
     start,
     // A drag-created range hands in its own end; a click only knows a start,
@@ -96,6 +108,7 @@ function emptyState(defaultAppId?: string, startAt?: Date, endAt?: Date): FormSt
     meetingUrl: '',
     attendeeIds: [],
     prefilledIds: [],
+    teamsByApp: {},
   }
 }
 
@@ -179,7 +192,8 @@ function quickAddProblems(preview: QuickAddPreview): string[] {
  */
 export type EditableMeeting = {
   id: string
-  appId: string | null
+  /** Every project the meeting is on, ordered by name. `[]` is app-less. */
+  appIds: string[]
   title: string
   startsAt: Date
   endsAt: Date
@@ -190,7 +204,7 @@ export type EditableMeeting = {
 
 function stateFromMeeting(meeting: EditableMeeting): FormState {
   return {
-    appId: meeting.appId ?? '',
+    appIds: meeting.appIds,
     title: meeting.title,
     start: meeting.startsAt,
     end: meeting.endsAt,
@@ -201,6 +215,7 @@ function stateFromMeeting(meeting: EditableMeeting): FormState {
     // person actually committed to. Marking them prefilled would let a later
     // app switch silently swap them out (see attendee-prefill.ts).
     prefilledIds: [],
+    teamsByApp: {},
   }
 }
 
@@ -236,14 +251,17 @@ export function MeetingForm({
   const [open, setOpen] = useState(defaultOpen ?? false)
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
+  const [appPickerOpen, setAppPickerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() =>
     editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart, defaultEnd),
   )
-  // Which app's teamForApp call is in flight — drives the loading line in
-  // the attendees block. Rendered only while it matches form.appId, so a
-  // stale fetch (the user already moved to another app or "No app") never
-  // shows a loading line for a selection it no longer belongs to.
-  const [pendingTeamAppId, setPendingTeamAppId] = useState<string | null>(null)
+  // Which projects' teamForApp calls are in flight — drives the loading line
+  // in the attendees block. A SET, not one id: adding two projects at once
+  // starts two fetches, and a single id would make the line disappear the
+  // moment the first landed while the second was still running. Rendered only
+  // while at least one of them is still selected, so a fetch for a project the
+  // user has since removed never shows a loading line.
+  const [pendingTeamAppIds, setPendingTeamAppIds] = useState<string[]>([])
   // `quickAdd` is what is being typed; `settled` trails it by the debounce and
   // is the only thing the (re-parsed) preview reads, so parsing never runs on
   // a half-typed word.
@@ -282,19 +300,23 @@ export function MeetingForm({
     setForm((f) => ({
       ...f,
       title: preview.title.slice(0, 120),
-      appId: preview.appId ?? f.appId,
+      // A phrase names ONE project and ADDS it — it does not re-point the
+      // meeting off the projects already chosen, because with several allowed
+      // there is nothing to re-point from.
+      appIds:
+        preview.appId && !f.appIds.includes(preview.appId)
+          ? [...f.appIds, preview.appId]
+          : f.appIds,
       start: preview.startsAt ?? f.start,
       end: preview.endsAt ?? f.end,
       meetingUrl: preview.meetingUrl ?? f.meetingUrl,
-      // Named people join (or are promoted to) manual; a phrase that
-      // re-points the app also withdraws the previous app's team prefill —
-      // otherwise the old team rides along onto the new app and gets
-      // submitted with it. See applyQuickAddAttendees for both rules.
-      ...applyQuickAddAttendees(
-        f,
-        preview.attendees.map((a) => a.id),
-        preview.appId !== null && preview.appId !== f.appId,
-      ),
+      // Named people join (or are promoted to) manual. `appChanged` is false
+      // on purpose: that flag withdraws the previous app's team prefill, and
+      // adding a project withdraws nothing — the prefilled set is the union of
+      // the selected projects' teams, so it only shrinks when one is REMOVED.
+      // The phrase's project team is still deliberately not fetched (see
+      // applyQuickAddAttendees): in a phrase, the names ARE the decision.
+      ...applyQuickAddAttendees(f, preview.attendees.map((a) => a.id), false),
     }))
   }, [preview])
 
@@ -337,21 +359,20 @@ export function MeetingForm({
     setForm((f) => ({
       ...f,
       title: intent.title.slice(0, 120),
-      // Set directly instead of going through handleAppChange: that would
+      // Set directly instead of going through toggleApp: that would
       // fetch and prefill the app's whole team on top of the explicit
       // "with <names>" just typed. Naming people IS the attendee decision
       // here — the team suggestion rides only on the app select.
-      appId: intent.appId ?? f.appId,
+      appIds:
+        intent.appId && !f.appIds.includes(intent.appId)
+          ? [...f.appIds, intent.appId]
+          : f.appIds,
       start: intent.startsAt ?? f.start,
       end: intent.endsAt ?? f.end,
       meetingUrl: intent.meetingUrl ?? f.meetingUrl,
-      // Same merge as the auto-fill effect: named people become manual, and
-      // re-pointing the app withdraws the previous app's team prefill.
-      ...applyQuickAddAttendees(
-        f,
-        intent.attendees.map((a) => a.id),
-        intent.appId !== null && intent.appId !== f.appId,
-      ),
+      // Same merge as the auto-fill effect — see there for why `appChanged`
+      // is false now that a phrase adds a project rather than replacing one.
+      ...applyQuickAddAttendees(f, intent.attendees.map((a) => a.id), false),
     }))
   }
 
@@ -364,37 +385,36 @@ export function MeetingForm({
   }
 
   /**
-   * One teamForApp call per app selection (itself a single query over
-   * assignments); the merge is pure and lives in attendee-prefill.ts. The
-   * updater re-checks the selected app before applying: a response can land
-   * after the user has already switched to "No app" (which fetches nothing,
-   * so nothing newer would overwrite the stale team) or after quick-add
-   * re-pointed the form at a different app.
+   * One teamForApp call per project ADDED (itself a single query over
+   * assignments); the merge is pure and lives in attendee-prefill.ts.
+   *
+   * The response is cached into `teamsByApp` and the prefilled set is then
+   * recomputed from the CURRENT selection, so a response that lands after the
+   * user removed that project simply contributes nothing — no stale team can
+   * survive, and no separate "is it still selected?" guard has to be kept in
+   * step with the selection.
    */
   async function prefillTeam(appId: string) {
-    setPendingTeamAppId(appId)
+    setPendingTeamAppIds((ids) => (ids.includes(appId) ? ids : [...ids, appId]))
     try {
       const res = await teamForApp(appId)
       if (!res.ok) {
         toast.error(res.error)
         return
       }
-      setForm((f) => {
-        if (f.appId !== appId) return f
-        return {
-          ...f,
-          ...applyTeamPrefill(f, res.data.map((member) => member.id), activeUsers.map((u) => u.id)),
-        }
-      })
+      const team = res.data.map((member) => member.id)
+      setForm((f) =>
+        withTeamPrefill(
+          { ...f, teamsByApp: { ...f.teamsByApp, [appId]: team } },
+          activeUsers.map((u) => u.id),
+        ),
+      )
     } catch {
       // The ActionResult contract means the action itself never throws — this
       // catches the transport (offline, dialog closed mid-flight), which can.
       toast.error('Could not load the team for that app')
     } finally {
-      // Only the fetch that set the marker may clear it — a slow response
-      // for a superseded app must not hide the loading line of the current
-      // one's still-running fetch.
-      setPendingTeamAppId((current) => (current === appId ? null : current))
+      setPendingTeamAppIds((ids) => ids.filter((id) => id !== appId))
     }
   }
 
@@ -402,25 +422,46 @@ export function MeetingForm({
   // is still ours to fill: an empty box, or a suggestion we generated earlier
   // and the user has not replaced. The moment someone types their own title,
   // every later app or time change leaves it alone.
-  function withAutoTitle(f: FormState, next: { appId?: string; start?: Date }): FormState {
+  function withAutoTitle(f: FormState, next: { appIds?: string[]; start?: Date }): FormState {
     const merged = { ...f, ...next }
     if (merged.title.trim() && !isAutoMeetingTitle(merged.title)) return merged
-    const appName = apps.find((app) => app.id === merged.appId)?.name ?? null
+    // Only while EXACTLY ONE project is selected. autoMeetingTitle takes one
+    // name, and the title is capped at 120 characters — concatenating three
+    // project names would overflow it and, worse, invent a name nobody chose.
+    // With two or more the title is left alone; isAutoMeetingTitle still
+    // protects a human-typed one either way.
+    const appName =
+      merged.appIds.length === 1
+        ? (apps.find((app) => app.id === merged.appIds[0])?.name ?? null)
+        : null
     const suggested = autoMeetingTitle({ appName, startsAt: merged.start })
     // An empty suggestion means "no app chosen" — keep whatever is there
     // rather than blanking a title the user is midway through typing.
     return suggested ? { ...merged, title: suggested } : merged
   }
 
-  function handleAppChange(appId: string) {
-    // The old team suggestion is withdrawn the moment the app changes — not
-    // when (or if) the new team arrives. Waiting for the response to do the
-    // swap shows the previous app's team on the new app during the fetch,
-    // and strands it there for good if the fetch fails (only a toast would
-    // say anything). Manually-picked people stay either way; "No app" just
-    // ends here with nothing to fetch.
-    setForm((f) => withAutoTitle({ ...f, appId, ...applyTeamPrefill(f, [], []) }, { appId }))
-    if (appId) void prefillTeam(appId)
+  /**
+   * Adds or removes ONE project. Every project is equal, so this is a toggle,
+   * not a replacement.
+   *
+   * Removing withdraws exactly that project's team suggestion immediately —
+   * not when some response arrives — and adding withdraws nothing. Manually
+   * picked people survive both, which is applyTeamPrefill's whole contract.
+   */
+  function toggleApp(appId: string) {
+    const adding = !form.appIds.includes(appId)
+    setForm((f) => {
+      const appIds = f.appIds.includes(appId)
+        ? f.appIds.filter((id) => id !== appId)
+        : [...f.appIds, appId]
+      return withAutoTitle(
+        withTeamPrefill({ ...f, appIds }, activeUsers.map((u) => u.id)),
+        { appIds },
+      )
+    })
+    // Cached teams are reused — re-adding a project it already fetched costs
+    // no second round trip.
+    if (adding && !form.teamsByApp[appId]) void prefillTeam(appId)
   }
 
   function toggleAttendee(id: string) {
@@ -471,7 +512,7 @@ export function MeetingForm({
     startTransition(async () => {
       try {
         const fields = {
-          appId: form.appId || null,
+          appIds: form.appIds,
           title: form.title,
           startsAt: form.start.toISOString(),
           endsAt: form.end.toISOString(),
@@ -518,6 +559,10 @@ export function MeetingForm({
     .map((id) => activeUsers.find((u) => u.id === id))
     .filter((u): u is ActiveUser => Boolean(u))
   const availableUsers = activeUsers.filter((u) => !form.attendeeIds.includes(u.id))
+  // Ordered by the `apps` prop, which the server hands over sorted by name —
+  // so the chips read the same way the badges elsewhere do.
+  const selectedApps = apps.filter((app) => form.appIds.includes(app.id))
+  const availableApps = apps.filter((app) => !form.appIds.includes(app.id))
   // Title length is left to the input's native `required`/`minLength` — these
   // two have no native equivalent, so they are surfaced (and focused) by hand.
   const endBeforeStart = form.end <= form.start
@@ -573,28 +618,64 @@ export function MeetingForm({
         </div>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="meeting-app">App</Label>
-            <Select
-              value={form.appId || NO_APP}
-              onValueChange={(value) => handleAppChange(value === NO_APP ? '' : (value ?? ''))}
-            >
-              <SelectTrigger id="meeting-app" className="w-full">
-                {/* Explicit label mapping — the raw id is the Select's `value`, so
-                    without this the trigger falls back to rendering that id (a
-                    UUID) instead of the app's name. */}
-                <SelectValue>
-                  {(value: string) => apps.find((app) => app.id === value)?.name ?? 'No app'}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_APP}>No app</SelectItem>
-                {apps.map((app) => (
-                  <SelectItem key={app.id} value={app.id}>
+            <Label>Apps</Label>
+            {/* A meeting can serve several projects and none of them is the
+                primary one, so this is a toggle list, not a Select. There is
+                no "No app" item: an empty selection IS "no project", and the
+                line below says so in words rather than as a sentinel row. */}
+            {selectedApps.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedApps.map((app) => (
+                  <Badge key={app.id} variant="secondary" className="gap-1">
                     {app.name}
-                  </SelectItem>
+                    <button
+                      type="button"
+                      onClick={() => toggleApp(app.id)}
+                      className="ml-0.5 rounded-full p-0.5 text-muted-foreground outline-none transition-colors duration-150 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+                      aria-label={`Remove ${app.name}`}
+                    >
+                      <XIcon className="size-3" />
+                    </button>
+                  </Badge>
                 ))}
-              </SelectContent>
-            </Select>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No app — this meeting isn’t filed under a project.
+              </p>
+            )}
+            <Popover open={appPickerOpen} onOpenChange={setAppPickerOpen}>
+              <PopoverTrigger
+                render={
+                  <Button id="meeting-app" variant="outline" size="sm" type="button" className="w-fit" />
+                }
+              >
+                <PlusIcon /> Add app
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-0">
+                <Command>
+                  <CommandInput placeholder="Search apps…" />
+                  <CommandList>
+                    <CommandEmpty>
+                      {apps.length === 0 ? 'No apps yet.' : 'No apps found.'}
+                    </CommandEmpty>
+                    <CommandGroup>
+                      {availableApps.map((app) => (
+                        <CommandItem
+                          key={app.id}
+                          onSelect={() => {
+                            toggleApp(app.id)
+                            setAppPickerOpen(false)
+                          }}
+                        >
+                          {app.name}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="meeting-title">Title</Label>
@@ -694,11 +775,11 @@ export function MeetingForm({
                 present. aria-live because the chips themselves appear
                 silently to a screen reader — this is the announcement. */}
             <div aria-live="polite">
-              {pendingTeamAppId !== null && pendingTeamAppId === form.appId ? (
-                <p className="text-xs text-muted-foreground">Adding this app’s team…</p>
+              {pendingTeamAppIds.some((id) => form.appIds.includes(id)) ? (
+                <p className="text-xs text-muted-foreground">Adding the app team…</p>
               ) : form.prefilledIds.length > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  Suggested from the app’s team — remove anyone not needed.
+                  Suggested from the app teams — remove anyone not needed.
                 </p>
               ) : null}
             </div>
@@ -763,7 +844,7 @@ export function MeetingForm({
                   every meeting. Deliberately hidden once an app is chosen —
                   there the team prefill is the bulk path. Joins as manual
                   picks: clicking this is a decision, not a suggestion. */}
-              {!form.appId && availableUsers.length > 0 ? (
+              {form.appIds.length === 0 && availableUsers.length > 0 ? (
                 <Button
                   type="button"
                   variant="outline"

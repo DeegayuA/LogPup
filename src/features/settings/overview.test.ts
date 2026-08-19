@@ -4,9 +4,12 @@ import type { ReadinessLevel } from '@/features/gemini/readiness'
 import { describeAiStatus, findRelease } from './overview'
 
 const history: ChangelogEntry[] = [
-  { version: 'v0.0.1', date: '2026-01-01', hash: 'aaa1111', change: 'first commit' },
-  { version: 'v0.0.2', date: '2026-01-02', hash: 'bbb2222', change: 'feat: pups' },
-  { version: 'v0.0.3', date: '2026-01-03', hash: 'ccc3333', change: 'fix: fetch' },
+  // `at` and `kind` joined the entry when the version menu started showing the
+  // TIME of a build: this repo ships several a day, so a row carrying only a
+  // date cannot say which build you are on.
+  { version: 'v0.0.1', date: '2026-01-01', at: '2026-01-01T09:15:00+05:30', hash: 'aaa1111', kind: 'other', change: 'first commit' },
+  { version: 'v0.0.2', date: '2026-01-02', at: '2026-01-02T11:40:00+05:30', hash: 'bbb2222', kind: 'feat', change: 'pups' },
+  { version: 'v0.0.3', date: '2026-01-03', at: '2026-01-03T16:05:00+05:30', hash: 'ccc3333', kind: 'fix', change: 'fetch' },
 ]
 
 describe('findRelease', () => {

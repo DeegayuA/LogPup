@@ -196,7 +196,7 @@ export function MeetingDetailDialog({
           activeUsers={users}
           editing={{
             id: editing.id,
-            appId: editing.appId,
+            appIds: editing.apps.map((app) => app.id),
             title: editing.title,
             startsAt: editing.startsAt,
             endsAt: editing.endsAt,
@@ -369,12 +369,15 @@ function MeetingDetailBody({
               )}
             </MetaChip>
           ) : null}
-          {meeting.appName && meeting.appSlug ? (
-            <Badge variant="secondary" render={<Link href={`/apps/${meeting.appSlug}`} />}>
-              {meeting.appName}
-            </Badge>
-          ) : meeting.appName ? (
-            <Badge variant="secondary">{meeting.appName}</Badge>
+          {/* One badge per project, each linking to its own app. Not the
+              "+N" formatter: these are the dialog's only route INTO a project,
+              and an abbreviated name is not clickable. */}
+          {meeting.apps.length > 0 ? (
+            meeting.apps.map((app) => (
+              <Badge key={app.id} variant="secondary" render={<Link href={`/apps/${app.slug}`} />}>
+                {app.name}
+              </Badge>
+            ))
           ) : canRefile ? null : (
             // Dropped only when the picker below is there to say the same
             // thing in a control — a badge reading "No app" directly above a
@@ -408,7 +411,7 @@ function MeetingDetailBody({
       {canRefile ? (
         <MeetingProjectSelect
           meetingId={meeting.id}
-          appId={meeting.appId}
+          appIds={meeting.apps.map((app) => app.id)}
           apps={apps}
           className="max-w-xs"
         />

@@ -36,7 +36,14 @@ export function RevealScope({ rootId }: { rootId: string }) {
     // reduced-motion reader gets the same DOM the server sent.
     if (!window.matchMedia('(prefers-reduced-motion: no-preference)').matches) return
 
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-reveal], [data-rule]'))
+    /* `[data-stamp]` is the fortnight strip's cells. They join the same
+       classification pass as everything else, so they inherit the whole
+       guarantee unchanged: nothing is hidden in server output, only what is
+       already below the fold is ever marked pending, and a reader with
+       scripting off gets the finished strip the server sent. */
+    const nodes = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-reveal], [data-rule], [data-stamp]'),
+    )
 
     // Strictly below the viewport, not a fraction of it. An earlier fold at
     // 0.85 * innerHeight would mark the band between 85% and 100% as pending

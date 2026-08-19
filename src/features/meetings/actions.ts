@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { and, eq, inArray, isNull } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
@@ -10,6 +10,7 @@ import { liveMeetings } from '@/db/live'
 // the objects (they are purged with the meeting from admin Trash, not here).
 import {
   apps,
+  meetingApps,
   meetingAttendeeHistory,
   meetingAttendees,
   meetings,
@@ -33,10 +34,11 @@ import {
 import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
+import { formatAppNames } from '@/features/meetings/app-labels'
 import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 import { can, type UserRole } from '@/features/auth/capabilities'
 import { loadActor } from '@/features/auth/actor'
-import { managesApp } from '@/features/apps/project-manager'
+import { managesAnyApp } from '@/features/apps/project-manager'
 
 /**
  * The editable shape of a meeting, shared by create and update so the two can
@@ -45,7 +47,12 @@ import { managesApp } from '@/features/apps/project-manager'
  * hits it.
  */
 const meetingFields = {
-  appId: z.uuid().nullable(),
+  // EVERY PROJECT EQUAL, no primary. `[]` is legal and means "no project" — a
+  // company all-hands belongs to nobody — occupying exactly the place a null
+  // appId used to. Deduped before it is written, the same way attendeeIds is:
+  // a duplicate would violate meeting_apps' composite primary key and fail the
+  // whole batch.
+  appIds: z.array(z.uuid()),
   title: z.string().min(2).max(120),
   startsAt: z.iso.datetime(),
   endsAt: z.iso.datetime(),
@@ -142,24 +149,88 @@ function isForeignKeyViolation(error: unknown): boolean {
 // found" instead of still being mutable through its own gate.
 async function meetingById(meetingId: string) {
   const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, meetingId))
-  return meeting ?? null
+  if (!meeting) return null
+  // The project SET rides along with every gated meeting, because that is what
+  // the gates decide on now: a PM of ANY project a meeting serves manages that
+  // meeting. Reading it here rather than in each gate keeps it one query per
+  // action, and keeps `meetings.app_id` (the deprecated scalar on the row) from
+  // being mistaken for the answer.
+  return { ...meeting, appIds: await appIdsForMeeting(meeting.id) }
 }
 
-async function slugForApp(appId: string | null): Promise<string | null> {
-  if (!appId) return null
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, appId))
-  return app?.slug ?? null
+/**
+ * Which projects a meeting is on, ids only, ordered by app name so the first
+ * element is stable — several call sites below (the activity row's single
+ * appId, the deprecated meetings.app_id mirror) have to pick one and must pick
+ * the same one twice.
+ *
+ * meetingApps has no deletedAt of its own — live iff its meeting is. Every
+ * caller here reaches it with an id already resolved through liveMeetings (see
+ * MEETING_CHILD_TABLES in src/db/live.ts).
+ */
+async function appIdsForMeeting(meetingId: string): Promise<string[]> {
+  const rows = await db
+    .select({ appId: meetingApps.appId })
+    .from(meetingApps)
+    .innerJoin(apps, eq(meetingApps.appId, apps.id))
+    .where(eq(meetingApps.meetingId, meetingId))
+    .orderBy(asc(apps.name))
+  return rows.map((row) => row.appId)
 }
 
+/**
+ * One project's name, for the activity trail's denormalised appName column.
+ * Still keyed off the DEPRECATED single id — see the logActivity call sites
+ * below and the note on `meetings.app_id` in src/db/schema.ts.
+ */
 async function appNameById(appId: string | null): Promise<string | null> {
   if (!appId) return null
   const [app] = await db.select({ name: apps.name }).from(apps).where(eq(apps.id, appId))
   return app?.name ?? null
 }
 
-async function revalidateMeetingPaths(appId: string | null) {
-  const slug = await slugForApp(appId)
-  if (slug) revalidatePath('/apps/' + slug)
+/** Names of the given projects, ordered by name. One query, never N. */
+async function appNamesByIds(appIds: readonly string[]): Promise<string[]> {
+  if (appIds.length === 0) return []
+  const rows = await db
+    .select({ name: apps.name })
+    .from(apps)
+    .where(inArray(apps.id, [...appIds]))
+    .orderBy(asc(apps.name))
+  return rows.map((row) => row.name)
+}
+
+/**
+ * The value the DEPRECATED `meetings.app_id` column should hold for a meeting
+ * whose projects are `appIds`.
+ *
+ * Not a primary project: it is one member of the set, chosen so it does not
+ * move for no reason. If the id already recorded is still in the set it stays —
+ * so adding a project never re-points change-request routing at a different
+ * one. Otherwise the first of the set by app name, or null for no projects.
+ * See the comment on the column in src/db/schema.ts for why it survives at all.
+ */
+function mirroredAppId(current: string | null, appIds: readonly string[]): string | null {
+  if (current && appIds.includes(current)) return current
+  return appIds[0] ?? null
+}
+
+/**
+ * Revalidates every project page the change touched, plus /meetings and the
+ * dashboard.
+ *
+ * Takes the SET and resolves all slugs in ONE inArray query — one round trip
+ * per project would be an N+1 on a path that is already making a Google call.
+ * Callers that move a meeting between projects pass the UNION of what it left
+ * and what it joined: the project it left has one meeting fewer and needs
+ * re-rendering just as much.
+ */
+async function revalidateMeetingPaths(appIds: readonly (string | null)[]) {
+  const ids = [...new Set(appIds.filter((id): id is string => id !== null))]
+  if (ids.length > 0) {
+    const rows = await db.select({ slug: apps.slug }).from(apps).where(inArray(apps.id, ids))
+    for (const row of rows) revalidatePath('/apps/' + row.slug)
+  }
   revalidatePath('/meetings')
   revalidatePath('/')
   // deleteMeeting is one of the callers, and a soft delete lands a new row in
@@ -174,13 +245,20 @@ const EMPTY: ReadonlySet<string> = new Set()
 
 async function canManageMeeting(
   session: { user: { id: string; role: string } },
-  meeting: { createdBy: string; appId?: string | null },
+  meeting: { createdBy: string; appIds?: readonly string[] | null },
 ): Promise<boolean> {
   // Admin family and the creator both come from the matrix now: 'meeting.manage'
   // is 'all' for superadmin/admin and 'own' against createdBy for everyone
   // else. Written as a role string this silently went false for superadmin.
+  //
+  // The SET, never a single id: Resource.appIds exists for exactly this, and a
+  // scoped actor matches ANY of them (capabilities.ts) — a PM of one project a
+  // meeting serves can manage that meeting. `scopeAppIds` is EMPTY here because
+  // this gate resolves scope through the managesApp family below instead, so
+  // the scoped arm cannot fire; passing the set anyway is what keeps this call
+  // correct the day the actor is loaded properly.
   if (can({ id: session.user.id, role: session.user.role as UserRole, scopeAppIds: EMPTY },
-          'meeting.manage', { ownerId: meeting.createdBy })) return true
+          'meeting.manage', { ownerId: meeting.createdBy, appIds: meeting.appIds })) return true
   // The app's PROJECT MANAGER manages its meetings (see project-manager.ts);
   // leads/architects stay reviewers and are deliberately not here.
   //
@@ -191,7 +269,7 @@ async function canManageMeeting(
   // meeting management from every PM who holds the title in free text but has
   // never been recorded as pm on the app. That migration is a separate,
   // visible piece of work — not a side effect of a permission refactor.
-  return managesApp(session.user.id, meeting.appId)
+  return managesAnyApp(session.user.id, meeting.appIds)
 }
 
 /** A candidate for the Google Calendar attendee list: who, and required/optional. */
@@ -316,11 +394,13 @@ export async function createMeeting(
   const parsed = meetingInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const { appId, title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
+  const { title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
   // Dedup: the picker can submit the same user twice (e.g. selected, then
   // re-added via a mention hint) — a duplicate id would violate the
   // meetingAttendees composite primary key and fail the whole batch insert.
   const attendeeIds = [...new Set(parsed.data.attendeeIds)]
+  // Same dedup, same reason: meeting_apps has the same composite primary key.
+  const appIds = [...new Set(parsed.data.appIds)]
   // Generated client-side (not via .returning()) so the id is known before
   // the batch runs — db.batch sends both inserts in one atomic round-trip
   // (neon-http has no transactions), so the attendee rows can't reference a
@@ -330,11 +410,24 @@ export async function createMeeting(
   // interval, so the history starts exactly when the meeting did.
   const at = new Date()
 
+  // db.batch takes a NON-EMPTY tuple and the meeting insert is always first, so
+  // the project rows are spread in after it and skipped entirely when the
+  // meeting is on no project. neon-http has no transactions — the batch is what
+  // keeps these rows from landing apart from the meeting.
+  type BatchWrite = Parameters<typeof db.batch>[0][number]
+  const appWrites: BatchWrite[] =
+    appIds.length > 0
+      ? [db.insert(meetingApps).values(appIds.map((id) => ({ meetingId, appId: id })))]
+      : []
+
   try {
     await db.batch([
       db.insert(meetings).values({
         id: meetingId,
-        appId,
+        // DEPRECATED mirror, written so change-request routing has one stable
+        // project id for this meeting — see mirroredAppId and the comment on
+        // the column in src/db/schema.ts. meeting_apps is the real answer.
+        appId: mirroredAppId(null, appIds),
         title,
         startsAt: new Date(startsAt),
         endsAt: new Date(endsAt),
@@ -346,6 +439,7 @@ export async function createMeeting(
       db
         .insert(meetingAttendees)
         .values(attendeeIds.map((userId) => ({ meetingId, userId }))),
+      ...appWrites,
       // The membership history opens in the SAME batch as the live rows —
       // otherwise every meeting created after this feature shipped would have
       // attendees with no recorded start, and "who was on this meeting on
@@ -368,20 +462,25 @@ export async function createMeeting(
     throw error
   }
 
+  // ONE activity row per mutation, as the table promises. `appId`/`appName`
+  // carry the same deprecated single project the meeting row mirrors, so the
+  // feed's app chip and /activity's app filter keep working; `metadata.appIds`
+  // carries the full set, which is the complete fact.
+  const activityAppId = mirroredAppId(null, appIds)
   await logActivity({
     actorId: session.user.id,
     verb: 'created',
     entityType: 'meeting',
     entityId: meetingId,
     entityLabel: title,
-    appId,
-    appName: await appNameById(appId),
+    appId: activityAppId,
+    appName: await appNameById(activityAppId),
     pagePath: '/meetings',
     // Business timezone, not the server's: this string is PERSISTED into the
     // trail, so a UTC server would bake "5h30 earlier" into the row forever —
     // unlike the surrounding UI, a log line can never be re-rendered right.
     detail: `for ${formatBusinessWeekdayDayMonth(new Date(startsAt))} · ${formatBusinessTime(new Date(startsAt))}`,
-    metadata: { startsAt, endsAt, attendeeCount: attendeeIds.length },
+    metadata: { startsAt, endsAt, attendeeCount: attendeeIds.length, appIds },
   })
 
   const { reason, meetUrl } = await syncCalendarInvite(
@@ -423,7 +522,7 @@ export async function createMeeting(
     console.error('[notifications] meeting invite failed:', error)
   }
 
-  await revalidateMeetingPaths(appId)
+  await revalidateMeetingPaths(appIds)
   return ok({ meetingId, calendarWarning, meetUrl })
 }
 
@@ -460,7 +559,7 @@ export async function retryCalendarInvite(meetingId: string): Promise<ActionResu
     detail: 'with calendar invites',
   })
 
-  await revalidateMeetingPaths(existing.appId)
+  await revalidateMeetingPaths(existing.appIds)
   return ok(undefined)
 }
 
@@ -555,7 +654,7 @@ export async function rescheduleMeeting(
     console.error('[notifications] meeting reschedule failed:', error)
   }
 
-  await revalidateMeetingPaths(existing.appId)
+  await revalidateMeetingPaths(existing.appIds)
   return ok({ calendarWarning })
 }
 
@@ -594,10 +693,11 @@ export async function updateMeeting(
   if (!existing) return err('Meeting not found')
   if (!(await canManageMeeting(session, existing))) return err('Not allowed')
 
-  const { meetingId, appId, title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
+  const { meetingId, title, startsAt, endsAt, agenda, meetingUrl } = parsed.data
   // Same dedup as createMeeting: the picker can hand back the same id twice,
   // and a duplicate would violate the meetingAttendees composite primary key.
   const nextAttendeeIds = [...new Set(parsed.data.attendeeIds)]
+  const nextAppIds = [...new Set(parsed.data.appIds)]
   const nextStart = new Date(startsAt)
   const nextEnd = new Date(endsAt)
 
@@ -625,6 +725,36 @@ export async function updateMeeting(
   // conditional attendee writes spread in after it.
   type BatchWrite = Parameters<typeof db.batch>[0][number]
   const attendeeWrites: BatchWrite[] = []
+
+  // Projects reconcile the same way attendees do, and for the same reason: an
+  // untouched link must not be deleted and re-inserted. `existing.appIds` came
+  // from the liveMeetings-scoped meetingById gate above.
+  const currentAppIds = existing.appIds
+  const addedApps = nextAppIds.filter((id) => !currentAppIds.includes(id))
+  const removedApps = currentAppIds.filter((id) => !nextAppIds.includes(id))
+  const appWrites: BatchWrite[] = []
+  if (removedApps.length > 0) {
+    // A HARD delete, deliberately: meeting_apps has no deletedAt (verified in
+    // schema.ts) because "this meeting is no longer on that project" has no
+    // soft state to be in — the row's absence IS the fact, and the same control
+    // puts it back in one click. Named in live.test.ts's
+    // DELETE_ALLOWED_FUNCTIONS alongside the attendee delete below.
+    appWrites.push(
+      db
+        .delete(meetingApps)
+        .where(
+          and(
+            eq(meetingApps.meetingId, meetingId),
+            inArray(meetingApps.appId, removedApps),
+          ),
+        ),
+    )
+  }
+  if (addedApps.length > 0) {
+    appWrites.push(
+      db.insert(meetingApps).values(addedApps.map((id) => ({ meetingId, appId: id }))),
+    )
+  }
   if (removed.length > 0) {
     attendeeWrites.push(
       db
@@ -709,7 +839,10 @@ export async function updateMeeting(
       db
         .update(meetings)
         .set({
-          appId,
+          // DEPRECATED mirror — kept inside the meeting's project set so
+          // change-request routing has one stable answer. It only moves when
+          // the project it names is removed. See src/db/schema.ts.
+          appId: mirroredAppId(existing.appId, nextAppIds),
           title,
           startsAt: nextStart,
           endsAt: nextEnd,
@@ -718,6 +851,7 @@ export async function updateMeeting(
         })
         .where(eq(meetings.id, meetingId)),
       ...attendeeWrites,
+      ...appWrites,
     ])
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid app or attendee')
@@ -728,14 +862,15 @@ export async function updateMeeting(
     nextStart.getTime() !== existing.startsAt.getTime() ||
     nextEnd.getTime() !== existing.endsAt.getTime()
 
+  const activityAppId = mirroredAppId(existing.appId, nextAppIds)
   await logActivity({
     actorId: session.user.id,
     verb: 'updated',
     entityType: 'meeting',
     entityId: meetingId,
     entityLabel: title,
-    appId,
-    appName: await appNameById(appId),
+    appId: activityAppId,
+    appName: await appNameById(activityAppId),
     pagePath: '/meetings',
     // Business timezone — this string is persisted into the trail, so a UTC
     // server would bake the wrong clock time in forever (same reason as
@@ -749,6 +884,7 @@ export async function updateMeeting(
       titleChanged: existing.title !== title,
       attendeesAdded: added.length,
       attendeesRemoved: removed.length,
+      appIds: { added: addedApps, removed: removedApps },
     },
   })
 
@@ -793,72 +929,113 @@ export async function updateMeeting(
     console.error('[notifications] meeting update failed:', error)
   }
 
-  // Both apps: the meeting may have been moved from one app to another, and
-  // the app it left needs re-rendering just as much as the one it joined.
-  await revalidateMeetingPaths(existing.appId)
-  if (appId !== existing.appId) await revalidateMeetingPaths(appId)
+  // The UNION of before and after: a project the meeting LEFT has one meeting
+  // fewer and needs re-rendering just as much as one it joined. One call, one
+  // slug query — see revalidateMeetingPaths.
+  await revalidateMeetingPaths([...currentAppIds, ...nextAppIds])
   return ok({ meetingId, calendarWarning })
 }
 
 /**
- * Files an existing meeting under an app, moves it to a different one, or
- * unfiles it entirely.
+ * Sets the whole list of projects an existing meeting is on — attaching it to
+ * its first, adding a second, or taking it off all of them.
  *
- * `updateMeeting` can already change the app, but only as part of a full
+ * `updateMeeting` can already change the projects, but only as part of a full
  * re-submission of the whole meeting — title, times and the entire attendee
  * list. That makes the cheap, common correction ("this standup belongs to
  * Ledger after all") cost a round trip through a form that can reset RSVPs and
  * republish calendar invites. A quick meeting is meant to start general and be
  * attached later, so attaching it needs its own one-field write.
  *
- * Nothing else about the meeting is touched: no calendar sync (the app is not
- * part of the Google event) and no notifications (an attendee does not need to
- * hear that a meeting was refiled).
+ * Every project is equal and there is no primary: `appIds` is the complete new
+ * set, and `[]` means the meeting is on no project at all.
+ *
+ * Nothing else about the meeting is touched: no calendar sync (the projects are
+ * not part of the Google event) and no notifications (an attendee does not need
+ * to hear that a meeting was refiled).
  */
-export async function setMeetingApp(meetingId: string, appId: string | null): Promise<ActionResult> {
+export async function setMeetingApps(
+  meetingId: string,
+  appIds: readonly string[],
+): Promise<ActionResult> {
   const session = await requireSession()
   if (!session) return err('Sign in required')
 
   const parsed = z
-    .object({ meetingId: z.uuid(), appId: z.uuid().nullable() })
-    .safeParse({ meetingId, appId })
+    .object({ meetingId: z.uuid(), appIds: z.array(z.uuid()) })
+    .safeParse({ meetingId, appIds: [...appIds] })
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const existing = await meetingById(parsed.data.meetingId)
   if (!existing) return err('Meeting not found')
   if (!(await canManageMeeting(session, existing))) return err('Not allowed')
 
-  const nextAppId = parsed.data.appId
-  // Re-picking the app it is already filed under is a no-op, not an activity
-  // row: without this the trail fills with "updated · to Ledger" lines that
-  // record nothing having happened.
-  if (nextAppId === existing.appId) return ok(undefined)
+  const nextAppIds = [...new Set(parsed.data.appIds)]
+  const currentAppIds = existing.appIds
+  const added = nextAppIds.filter((id) => !currentAppIds.includes(id))
+  const removed = currentAppIds.filter((id) => !nextAppIds.includes(id))
+  // SET equality, not string equality: re-submitting the same projects in a
+  // different order is a no-op, not an activity row. Without this the trail
+  // fills with "updated · to Ledger" lines that record nothing having happened.
+  if (added.length === 0 && removed.length === 0) return ok(undefined)
+
+  type BatchWrite = Parameters<typeof db.batch>[0][number]
+  const writes: BatchWrite[] = []
+  if (removed.length > 0) {
+    // Hard delete — same reasoning as the attendee removal in updateMeeting:
+    // meeting_apps has no deletedAt (verified in schema.ts) because "no longer
+    // on that project" has no soft state to be in, the row's absence IS the
+    // fact, and this same control puts it back in one click. Named in
+    // live.test.ts's DELETE_ALLOWED_FUNCTIONS.
+    writes.push(
+      db
+        .delete(meetingApps)
+        .where(
+          and(
+            eq(meetingApps.meetingId, existing.id),
+            inArray(meetingApps.appId, removed),
+          ),
+        ),
+    )
+  }
+  if (added.length > 0) {
+    writes.push(
+      db.insert(meetingApps).values(added.map((id) => ({ meetingId: existing.id, appId: id }))),
+    )
+  }
+  // The deprecated mirror moves only when the project it names has been
+  // removed — see mirroredAppId. Always present, so db.batch's non-empty tuple
+  // is satisfied and every write lands in one round trip (neon-http has no
+  // transactions).
+  const nextMirror = mirroredAppId(existing.appId, nextAppIds)
 
   try {
-    await db.update(meetings).set({ appId: nextAppId }).where(eq(meetings.id, existing.id))
+    await db.batch([
+      db.update(meetings).set({ appId: nextMirror }).where(eq(meetings.id, existing.id)),
+      ...writes,
+    ])
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid app')
     throw error
   }
 
-  const nextAppName = await appNameById(nextAppId)
+  const nextNames = await appNamesByIds(nextAppIds)
   await logActivity({
     actorId: session.user.id,
     verb: 'updated',
     entityType: 'meeting',
     entityId: existing.id,
     entityLabel: existing.title,
-    appId: nextAppId,
-    appName: nextAppName,
+    appId: nextMirror,
+    appName: await appNameById(nextMirror),
     pagePath: '/meetings',
-    detail: nextAppName ? `to ${nextAppName}` : 'off its app',
-    metadata: { appId: { from: existing.appId, to: nextAppId } },
+    detail: nextNames.length > 0 ? `to ${formatAppNames(nextNames)}` : 'off its apps',
+    metadata: { appIds: { added, removed } },
   })
 
-  // Both apps, same reason as updateMeeting: the app it left has one meeting
-  // fewer and needs re-rendering as much as the one it joined.
-  await revalidateMeetingPaths(existing.appId)
-  await revalidateMeetingPaths(nextAppId)
+  // The UNION, same reason as updateMeeting: a project the meeting left has one
+  // meeting fewer and needs re-rendering as much as one it joined.
+  await revalidateMeetingPaths([...currentAppIds, ...nextAppIds])
   return ok(undefined)
 }
 
@@ -906,7 +1083,7 @@ export async function updateMeetingNotes(meetingId: string, notes: string): Prom
     console.error('[notifications] mention notify failed:', error)
   }
 
-  await revalidateMeetingPaths(existing.appId)
+  await revalidateMeetingPaths(existing.appIds)
   return ok(undefined)
 }
 
@@ -929,7 +1106,7 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
   // NONE for editor and below — an editor's delete opens a change request
   // instead of mutating. Written as a role string this both hid the action
   // from superadmin and gave managers no route to it at all.
-  if (!can(actor, 'meeting.delete', { ownerId: existing.createdBy, appId: existing.appId })) {
+  if (!can(actor, 'meeting.delete', { ownerId: existing.createdBy, appIds: existing.appIds })) {
     return err('Not allowed to delete this meeting')
   }
 
@@ -981,7 +1158,7 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
     pagePath: '/meetings',
   })
 
-  await revalidateMeetingPaths(existing.appId)
+  await revalidateMeetingPaths(existing.appIds)
   return ok(undefined)
 }
 

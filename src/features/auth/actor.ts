@@ -1,11 +1,13 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { db } from '@/db'
-import { appGrants, appRoleHistory, assignments } from '@/db/schema'
+import { appGrants, appRoleHistory, assignments, users } from '@/db/schema'
 import { cache } from 'react'
 import { getSession } from '@/lib/session'
 import {
   ROLE_GRANTS,
   can,
+  effectiveGrant,
+  isCappable,
   scopeSourceFor,
   type Action,
   type Actor,
@@ -33,9 +35,18 @@ export const loadActor = cache(async function loadActor(): Promise<Actor | null>
   if (!user?.id) return null
 
   const role = user.role as UserRole
+  // Not on the session: employment type changes rarely but must take effect on
+  // the next request like every other permission input, and threading it
+  // through the JWT would mean a stale cap until re-login.
+  const [row] = await db
+    .select({ employmentType: users.employmentType })
+    .from(users)
+    .where(eq(users.id, user.id))
+  const employmentType = row?.employmentType
+
   const source = scopeSourceFor(role)
   if (source === 'none') {
-    return { id: user.id, role, scopeAppIds: new Set() }
+    return { id: user.id, role, employmentType, scopeAppIds: new Set() }
   }
 
   const rows =
@@ -60,7 +71,7 @@ export const loadActor = cache(async function loadActor(): Promise<Actor | null>
             .from(appGrants)
             .where(eq(appGrants.userId, user.id))
 
-  return { id: user.id, role, scopeAppIds: new Set(rows.map((r) => r.appId)) }
+  return { id: user.id, role, employmentType, scopeAppIds: new Set(rows.map((r) => r.appId)) }
 })
 
 /**
@@ -83,10 +94,24 @@ export async function requireCapability(
   // refusal, a workspace-wide 'all', and an ownership check are all decidable
   // from the session alone, so the common paths never touch the database —
   // and a denied action no longer pays for a query whose answer it discards.
-  const level = ROLE_GRANTS[action][role]
+  // The seat's own answer first: a refusal needs nothing else, and most
+  // actions cannot be capped by any employment stage, so they need no read.
+  if (ROLE_GRANTS[action][role] === 'none') return null
+
+  // Only a cappable action pays for the employment type. Skipping the read
+  // when no stage withholds the action is what keeps the cap from putting a
+  // query in front of every permission question in the app.
+  const employmentType = isCappable(action)
+    ? (await db
+        .select({ employmentType: users.employmentType })
+        .from(users)
+        .where(eq(users.id, user.id)))[0]?.employmentType
+    : undefined
+
+  const level = effectiveGrant(role, employmentType, action)
   if (level === 'none') return null
   if (level === 'all' || level === 'own') {
-    const actor: Actor = { id: user.id, role, scopeAppIds: EMPTY_SCOPE }
+    const actor: Actor = { id: user.id, role, employmentType, scopeAppIds: EMPTY_SCOPE }
     return can(actor, action, resource) ? actor : null
   }
 

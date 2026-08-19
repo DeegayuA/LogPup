@@ -8,6 +8,7 @@ import { orgHolidays } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { requireCapability } from '@/features/auth/actor'
+import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
 
 const addInput = z.object({
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -42,12 +43,17 @@ export async function addOrgHoliday(raw: z.input<typeof addInput>): Promise<Acti
 }
 
 /**
- * A PLAIN DELETE, deliberately, and named in live.test.ts's
- * DELETE_ALLOWED_FUNCTIONS.
+ * Cancel a company holiday WITHOUT rewriting the past.
  *
- * A cancelled company holiday did not happen. A tombstone would make every
- * coverage read filter for it forever, and there is nothing here a person
- * would be distressed to lose — the activity_log row is the record.
+ * Not a delete. `isHoliday` is evaluated at read time from this table, so
+ * removing the row would make that day recompute as owed for everyone,
+ * retroactively — somebody correctly excused in August would acquire a
+ * missing day in November, with nothing on screen to explain it. That is the
+ * silent history rewrite the whole absence feature exists to prevent.
+ *
+ * `revokedFrom` is the day the cancellation takes effect, so a holiday people
+ * have already taken stays taken. Cancelling one that has not happened yet
+ * works exactly as an operator expects.
  */
 export async function revokeOrgHoliday(raw: { id: string }): Promise<ActionResult<void>> {
   const actor = await requireCapability('holiday.manage')
@@ -55,12 +61,19 @@ export async function revokeOrgHoliday(raw: { id: string }): Promise<ActionResul
 
   try {
     const [row] = await db
-      .select({ day: orgHolidays.day, name: orgHolidays.name })
+      .select({ day: orgHolidays.day, name: orgHolidays.name, revokedFrom: orgHolidays.revokedFrom })
       .from(orgHolidays)
       .where(eq(orgHolidays.id, raw.id))
     if (!row) return err('That holiday no longer exists')
+    if (row.revokedFrom) return err('That holiday is already cancelled')
 
-    await db.delete(orgHolidays).where(eq(orgHolidays.id, raw.id))
+    // Today in Colombo — never a UTC slice, which would cancel a day early or
+    // late for half the working week.
+    const today = toIsoDateInTimeZone(new Date())
+    await db
+      .update(orgHolidays)
+      .set({ revokedFrom: today, revokedBy: actor.id })
+      .where(eq(orgHolidays.id, raw.id))
     await logActivity({
       actorId: actor.id,
       verb: 'deleted',

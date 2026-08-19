@@ -39,17 +39,47 @@ let updateReturningQueue: unknown[][] = []
 
 vi.mock('@/db', () => ({
   db: {
-    select: () => ({
-      from: (table: unknown) => ({
+    // `select` now takes its column map, because two different reads hit the
+    // `users` table in one deleteMeeting call: loadActor asks for
+    // employmentType, and the calendar cleanup asks for googleRefreshToken.
+    // Keying only on the table made whichever ran first swallow the other's
+    // fixture — loadActor consumed the refresh token and the calendar delete
+    // silently no-oped.
+    select: (columns?: Record<string, unknown>) => ({
+      from: (table: unknown) => {
         // meetingById (deleteMeeting's read) goes through liveMeetings (D4)
         // — the write below is still the raw `meetings` table, which is
         // what writeSpy asserts against.
-        where: async () => {
-          if (table === liveMeetings) return meetingQueue.shift() ?? []
-          if (table === users) return userQueue.shift() ?? []
-          return []
-        },
-      }),
+        // `where` has to be BOTH awaitable and chainable: appIdsForMeeting
+        // continues with .orderBy(), while every older read awaits it
+        // directly. A promise with orderBy hung off it satisfies both without
+        // the stub having to know which caller it is serving.
+        const rows = (): Promise<unknown[]> & { orderBy: () => Promise<unknown[]> } => {
+          const settled = (async () => {
+            if (table === liveMeetings) return meetingQueue.shift() ?? []
+            if (table === users) {
+              // Only the read that wants a refresh token draws from the queue.
+              // loadActor's employmentType probe answers empty, which is what
+              // it answered before that column existed.
+              return columns && 'googleRefreshToken' in columns ? (userQueue.shift() ?? []) : []
+            }
+            return []
+          })() as Promise<unknown[]> & { orderBy: () => Promise<unknown[]> }
+          settled.orderBy = () => settled
+          return settled
+        }
+        const chain = {
+          where: rows,
+          // appIdsForMeeting joins meeting_apps -> apps, and a meeting with no
+          // projects is the honest default for these fixtures: this stub keeps
+          // the chain walkable and answers []. Returning `chain` rather than a
+          // fresh object means any further join a future read adds lands here
+          // too, instead of crashing two frames above the logic under test.
+          innerJoin: () => chain,
+          leftJoin: () => chain,
+        }
+        return chain
+      },
     }),
     update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({

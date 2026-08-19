@@ -17,7 +17,22 @@ import { STUDIO_DEFAULT_PATTERN, type SchedulePattern } from '@/features/worklog
  * per-user pattern and duplicates none of it.
  */
 
-export type CoverageStatus = 'logged' | 'off' | 'exempt' | 'not-yet-due' | 'missing'
+export type CoverageStatus =
+  | 'logged'
+  | 'off'
+  | 'exempt'
+  | 'not-yet-due'
+  | 'missing'
+  /**
+   * This person is not expected to log at all — a supervisory seat who
+   * assigns and monitors rather than performing the work.
+   *
+   * DISTINCT from 'off' (nobody works that day) and from 'exempt' (an
+   * approved absence removed an obligation that otherwise existed). Marking a
+   * tech lead's Monday 'off' would claim they were not working. They were
+   * working. They were not logging, and that is a different sentence.
+   */
+  | 'not-required'
 
 export type CoverageInput = {
   /** Half-open [from, to) as Asia/Colombo ISO days. */
@@ -35,6 +50,14 @@ export type CoverageInput = {
   joinedOn: string
   /** Today in Asia/Colombo. Today and later are never 'missing'. */
   today: string
+  /**
+   * Whether a worklog is expected from this person AT ALL — work_schedules
+   * .logging. Independent of WHICH days they work: a part-time tech lead
+   * needs both answers and they are not the same answer.
+   *
+   * Defaults true, so every existing caller is unaffected.
+   */
+  logsWork?: boolean
 }
 
 export type CoverageDay = {
@@ -57,6 +80,8 @@ export type CoverageSummary = {
   notYetDue: number
   /** Logs filed on days that were not owed. A count; never enters `expected`. */
   extra: number
+  /** Days nobody expected a log for because of the seat, not the calendar. */
+  notRequired: number
 }
 
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
@@ -89,6 +114,8 @@ export function computeCoverage(input: CoverageInput): CoverageSummary {
   let off = 0
   let notYetDue = 0
   let extra = 0
+  let notRequired = 0
+  const logsWork = input.logsWork !== false
 
   for (const day of eachDay(input.from, input.to)) {
     const pattern = input.patternFor(day) ?? STUDIO_DEFAULT_PATTERN
@@ -102,7 +129,10 @@ export function computeCoverage(input: CoverageInput): CoverageSummary {
     const isDue = day >= input.joinedOn && day < input.today
     // Owed = the studio actually expected a log. Everything else is excluded
     // from the denominator, which is the entire point of this module.
-    const owed = isDue && fraction > 0 && !isExempt
+    // logsWork belongs here as well as in the status ladder: without it a
+    // supervisory person's logged day would still add to `expected`, which is
+    // the denominator this whole status exists to keep empty.
+    const owed = logsWork && isDue && fraction > 0 && !isExempt
 
     let status: CoverageStatus
     if (!isDue) {
@@ -121,6 +151,12 @@ export function computeCoverage(input: CoverageInput): CoverageSummary {
       } else {
         extra += 1
       }
+    } else if (!logsWork) {
+      // ABOVE 'off', deliberately: a supervisory person's Monday is not the
+      // same fact as everybody's Sunday, and collapsing the two would lose the
+      // ability to say which it was.
+      status = 'not-required'
+      notRequired += 1
     } else if (fraction === 0) {
       status = 'off'
       off += 1
@@ -145,6 +181,7 @@ export function computeCoverage(input: CoverageInput): CoverageSummary {
     off,
     notYetDue,
     extra,
+    notRequired,
   }
 }
 
@@ -159,6 +196,11 @@ const num = (n: number) => String(Math.round(n * 10) / 10)
  * fix, so the shape that caused it is not expressible here.
  */
 export function formatCoverage(s: CoverageSummary): string {
+  // Never "0/0", and never a percentage of nothing. A supervisory seat is
+  // reported in words, because the honest answer is a sentence rather than a
+  // ratio.
+  if (s.expected === 0 && s.notRequired > 0) return 'Not required to log'
+
   const parts = [`${num(s.logged)}/${num(s.expected)} expected days logged`]
   parts.push(`${num(s.exempt)} exempt`)
   if (s.extra > 0) parts.push(`${s.extra} extra`)

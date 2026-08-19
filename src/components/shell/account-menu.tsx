@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { ChevronsUpDown, LogOut, User } from 'lucide-react'
 import { signOut } from '@/lib/auth'
+import { roleLabel, type UserRole } from '@/features/auth/capabilities'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
@@ -32,18 +33,22 @@ export type AccountUser = {
  */
 export function AccountMenu({
   user,
-  isAdmin,
+  role,
   variant = 'compact',
   className,
 }: {
   user: AccountUser
-  isAdmin: boolean
+  role: UserRole
   variant?: 'compact' | 'sidebar'
   className?: string
 }) {
   const initials = (user.name ?? '?').slice(0, 1).toUpperCase()
   const displayName = user.name ?? 'Account'
-  const roleLabel = isAdmin ? 'Admin' : 'Member'
+  // The seat's own name, never a two-value collapse of it. This read
+  // `isAdmin ? 'Admin' : 'Member'`, which showed a superadmin their own badge
+  // as 'Admin' — a demotion, in the one place that confirms who you are
+  // signed in as.
+  const roleName = roleLabel(role)
 
   const avatarNode = (
     <Avatar size="sm">
@@ -78,7 +83,7 @@ export function AccountMenu({
                     the identity. The job title would truncate at this width, so
                     it lives in the menu instead. */}
                 <span className="block truncate text-2xs leading-tight text-sidebar-foreground/70">
-                  {roleLabel}
+                  {roleName}
                 </span>
               </span>
               <ChevronsUpDown
@@ -113,7 +118,7 @@ export function AccountMenu({
           {avatarNode}
           <div className="min-w-0">
             <p className="truncate text-sm font-medium">{displayName}</p>
-            <p className="text-xs text-muted-foreground">{roleLabel}</p>
+            <p className="text-xs text-muted-foreground">{roleName}</p>
             {user.title ? (
               <p className="truncate text-xs text-muted-foreground">{user.title}</p>
             ) : null}

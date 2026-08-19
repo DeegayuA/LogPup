@@ -26,9 +26,9 @@ import {
 // --- live.ts sanity ---------------------------------------------------------
 
 describe('live.ts subqueries', () => {
-  it('SOFT_TABLES covers exactly the five soft-deleted tables', () => {
+  it('SOFT_TABLES covers exactly the six soft-deleted tables', () => {
     expect(SOFT_TABLES.map((t) => t.sqlName).sort()).toEqual(
-      ['meeting_note_segments', 'meeting_screenshots', 'meetings', 'sprints', 'tasks'].sort(),
+      ['apps', 'meeting_note_segments', 'meeting_screenshots', 'meetings', 'sprints', 'tasks'].sort(),
     )
   })
 
@@ -153,7 +153,11 @@ const RAW_FROM_RE = new RegExp(`\\.from\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const RAW_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const ALIAS_RE = new RegExp(`alias\\(\\s*${SOFT_TABLE_NAMES}\\b`)
 
-const CHILD_TABLE_NAMES = '(meetingAttendees|meetingAiNotes|meetingFollowups|meetingSpeakers|meetingTaskSuggestions|meetingRecordingSegments)'
+// This regex — not MEETING_CHILD_TABLES in live.ts, which only ever reaches an
+// error message — is the actual enforcement, and it can only see a table named
+// here as a LITERAL. meetingApps was added to both in the commit that created
+// the table, before its first reader existed.
+const CHILD_TABLE_NAMES = '(meetingAttendees|meetingAiNotes|meetingFollowups|meetingSpeakers|meetingTaskSuggestions|meetingRecordingSegments|meetingApps)'
 const CHILD_FROM_RE = new RegExp(`\\.from\\(\\s*${CHILD_TABLE_NAMES}\\s*[),]`)
 // Joins and alias() are read forms too. Check 1 has always had a join regex
 // for the soft tables; check 3 had only `.from(`, so
@@ -291,19 +295,29 @@ const DELETE_ALWAYS_ALLOWED_FILES = new Set([
   'src/features/admin/trash-actions.ts',
 ])
 
-// file -> function whose body may hard-delete; matches elsewhere in the same
-// file are still offenders (this is deliberately narrower than a file-level
-// allowlist).
-const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
-  // A cancelled company holiday did not happen. A tombstone would make every
-  // coverage read filter for it forever, and there is nothing here a person
-  // would be distressed to lose — the activity_log row is the record.
-  'src/features/worklog/org-holiday-actions.ts': 'revokeOrgHoliday',
+// file -> the function (or functions) whose body may hard-delete; matches
+// elsewhere in the same file are still offenders (this is deliberately narrower
+// than a file-level allowlist).
+//
+// The value became `string | readonly string[]` when meeting_apps arrived:
+// meetings/actions.ts had spent its single slot on updateMeeting, and
+// setMeetingApps needs the same never-soft hard delete from the other entry
+// point. Widening to a FILE allowlist instead would have converted a real
+// check back into convention — every remaining db.delete( in these files is
+// still an offender.
+const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string[]>> = {
   // An access key, exactly like webauthn_credentials. Revocation must be
   // absolute: a restorable grant is a key that can come back from the dead,
   // and "we thought we removed that client's access" is not a sentence
   // anyone wants to say.
   'src/features/admin/app-grant-actions.ts': 'revokeAppGrant',
+  // The same deliberate hard delete removeAssignment already performs, for
+  // the same reason: assignments is NOT a soft-deleted table (a deletedAt
+  // would break assignments_user_app_idx and make every capacity query
+  // over-count), and its history lives in assignment_history tombstones
+  // rather than in the row. A handover reassigns an allocation; it does not
+  // trash it.
+  'src/features/people/handover-actions.ts': 'applyHandover',
   // Verified by reading the file: every db.delete() in admin/actions.ts
   // today lives inside clearTestData (the ENABLE_DB_CLEAR-gated dev tool).
   'src/features/admin/actions.ts': 'clearTestData',
@@ -332,10 +346,13 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string>> = {
   // never-soft table reads as a violation; naming the one function keeps the
   // rest of each file under the check.
 
-  // why: attendee reconciliation. Editing a meeting writes only the added and
-  // removed rows so untouched attendees keep their RSVPs, and "removed from
-  // the meeting" has no soft state to be in — the row's absence IS the fact.
-  'src/features/meetings/actions.ts': 'updateMeeting',
+  // why: attendee AND project reconciliation. Editing a meeting writes only the
+  // added and removed rows so untouched attendees keep their RSVPs, and
+  // "removed from the meeting" has no soft state to be in — the row's absence
+  // IS the fact. meeting_apps (verified in schema.ts: no deletedAt column) is
+  // the identical case for a project, reconciled the same way by updateMeeting
+  // and by the one-control setMeetingApps.
+  'src/features/meetings/actions.ts': ['updateMeeting', 'setMeetingApps'],
 
   // why: the same hard delete of the same never-soft table, reached from the
   // per-attendee control rather than the edit form. Nothing is lost by it —
@@ -438,12 +455,16 @@ function check4MatchIndexes(entry: FileEntry): number[] {
   if (DELETE_ALWAYS_ALLOWED_FILES.has(entry.relPath)) return []
   if (allowlistSet.has(entry.relPath)) return [] // e.g. backup.ts, trash-queries.ts if ever applicable
 
-  const allowedFn = DELETE_ALLOWED_FUNCTIONS[entry.relPath]
-  if (allowedFn) {
-    const span = functionSpan(entry.text, allowedFn)
-    if (span) {
-      const [start, end] = span
-      return matches.filter((i) => i < start || i >= end)
+  const allowed = DELETE_ALLOWED_FUNCTIONS[entry.relPath]
+  if (allowed) {
+    // The UNION of the named functions' spans. Resolving only the first name
+    // would silently un-exempt every later one, which is the failure mode a
+    // single-string value had no way to express at all.
+    const spans = (typeof allowed === 'string' ? [allowed] : allowed)
+      .map((name) => functionSpan(entry.text, name))
+      .filter((span): span is [number, number] => span !== null)
+    if (spans.length > 0) {
+      return matches.filter((i) => !spans.some(([start, end]) => i >= start && i < end))
     }
   }
   return matches

@@ -25,6 +25,7 @@ import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
 import { AppearanceCard } from '@/features/settings/components/appearance-card'
 import { describeAiStatus, findRelease } from '@/features/settings/overview'
 import { isAdminRole, roleLabel } from '@/features/auth/capabilities'
+import { LK_TIMEZONE } from '@/lib/lk-holidays'
 
 export const metadata: Metadata = {
   title: 'Settings',
@@ -47,6 +48,26 @@ export const metadata: Metadata = {
  * the Gemini actions revalidate `/profile` specifically, so a duplicate form
  * here would show stale rows straight after a write.
  */
+/**
+ * "20 Aug 2026, 14:32" in Asia/Colombo.
+ *
+ * Explicit timeZone, never the server's: this renders on Vercel in UTC, where
+ * a build shipped at 00:36 Colombo would otherwise be reported as the previous
+ * evening — and this card exists so a person can tell an admin exactly which
+ * build they saw.
+ */
+function formatBuildStamp(at: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: LK_TIMEZONE,
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(at))
+}
+
 export default async function SettingsPage() {
   const session = await getSession()
   const user = session?.user
@@ -240,8 +261,20 @@ export default async function SettingsPage() {
               </div>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <dt className="text-muted-foreground">Released</dt>
-                <dd className="font-mono tabular-nums">{release?.date ?? 'Unknown'}</dd>
+                {/* Date AND time, in Asia/Colombo like every other instant
+                    here. Several builds ship on one day, so a bare date does
+                    not identify the one somebody is looking at — which is the
+                    entire purpose of this card. */}
+                <dd className="font-mono tabular-nums">
+                  {release ? formatBuildStamp(release.at) : 'Unknown'}
+                </dd>
               </div>
+              {release ? (
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <dt className="text-muted-foreground">Commit</dt>
+                  <dd className="font-mono text-xs">{release.hash}</dd>
+                </div>
+              ) : null}
               {release ? (
                 <div className="flex flex-col gap-1 border-t border-border pt-2">
                   <dt className="text-muted-foreground">What changed</dt>

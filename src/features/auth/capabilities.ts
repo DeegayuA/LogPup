@@ -29,11 +29,20 @@ export type UserRole = (typeof USER_ROLES)[number]
 /** Reach over ONE action. Never a comparison between roles. */
 export type GrantLevel = 'none' | 'own' | 'scoped' | 'all'
 
+export const EMPLOYMENT_TYPES = ['permanent', 'probation', 'trainee', 'intern', 'contract'] as const
+export type EmploymentType = (typeof EMPLOYMENT_TYPES)[number]
+
 export type Actor = {
   id: string
   role: UserRole
   /** Apps this actor reaches. Resolved once per request by `loadActor`. */
   scopeAppIds: ReadonlySet<string>
+  /**
+   * Where they are in their employment. OPTIONAL, and absent means
+   * 'permanent' — every Actor constructed before this field existed keeps
+   * behaving exactly as it did.
+   */
+  employmentType?: EmploymentType
 }
 
 /**
@@ -142,6 +151,103 @@ export const ROLE_GRANTS = {
 export type Action = keyof typeof ROLE_GRANTS
 
 /**
+ * Sign-off actions: deciding something on behalf of the organisation, rather
+ * than doing the work. This is the set an employment stage can withhold.
+ */
+const APPROVAL_ACTIONS = [
+  'request.review', 'absence.approve', 'user.approve', 'user.role.grant',
+  'app.grant.stakeholder', 'trash.purge', 'danger.dbclear',
+  'user.offboard',
+] as const
+// NOT trash.restore. Restoring is recovering something somebody deleted by
+// mistake, and it is reversible — you can trash it again. A trainee who spots
+// an accidental delete should be able to undo it. Purging is the one that
+// cannot be taken back, and that is capped.
+
+/** The subset that cannot be undone once done. */
+const IRREVERSIBLE_ACTIONS = [
+  'trash.purge', 'danger.dbclear', 'user.role.grant', 'user.offboard',
+] as const
+
+const has = (list: readonly string[], action: Action) => list.includes(action)
+
+/**
+ * What an employment stage permits, independent of the seat.
+ *
+ * A CAP, never a grant: the effective answer is the NARROWER of this and the
+ * seat's row, so this can only ever take away. `capFor` returning 'all' means
+ * "this stage withholds nothing here", not "this stage allows it".
+ *
+ * Each entry has a reason, because a cap that nobody can justify is a cap
+ * somebody will remove:
+ *
+ *  - trainee, intern — no sign-off of any kind. Someone still being taught the
+ *    work cannot be the person who approves other people's work.
+ *  - probation — the irreversible acts only. Probation is about confidence in
+ *    judgement, not competence at the job, so ordinary review stays theirs.
+ *  - contract — no admitting people to the org. A contractor may run the
+ *    project work; deciding who joins the studio is not project work.
+ *  - permanent — nothing.
+ */
+export function capFor(type: EmploymentType, action: Action): GrantLevel {
+  switch (type) {
+    case 'permanent':
+      return 'all'
+    case 'trainee':
+    case 'intern':
+      return has(APPROVAL_ACTIONS, action) ? 'none' : 'all'
+    case 'probation':
+      return has(IRREVERSIBLE_ACTIONS, action) ? 'none' : 'all'
+    case 'contract':
+      return action === 'user.create' || action === 'user.approve'
+        || action === 'user.role.grant' || action === 'danger.dbclear'
+        ? 'none'
+        : 'all'
+  }
+}
+
+/**
+ * Whether ANY employment stage withholds this action.
+ *
+ * Lets a capability check skip loading the employment type entirely for the
+ * actions no stage can cap — which is most of them, and all the hot ones
+ * (task.edit, worklog.write.own, app.view). Without this, adding the cap
+ * would have put a database read in front of every permission question in the
+ * app, which is the opposite of why `can` is synchronous.
+ */
+export function isCappable(action: Action): boolean {
+  return EMPLOYMENT_TYPES.some((type) => capFor(type, action) !== 'all')
+}
+
+/**
+ * Whether this seat holds ANY power an employment stage could withhold.
+ *
+ * Exists so the UI can say "Trainee: cannot approve anything" only where that
+ * sentence is true, WITHOUT writing `role === 'admin' || role === 'manager'`
+ * — which is the same silent-drift bug the predicate was introduced to kill,
+ * with one more value in it.
+ */
+export function hasCappablePower(role: UserRole): boolean {
+  return (Object.keys(ROLE_GRANTS) as Action[]).some(
+    (action) => isCappable(action) && ROLE_GRANTS[action][role] !== 'none',
+  )
+}
+
+const RANK: Record<GrantLevel, number> = { none: 0, own: 1, scoped: 2, all: 3 }
+
+/** The narrower of the seat's grant and the employment cap. */
+export function effectiveGrant(
+  role: UserRole,
+  type: EmploymentType | undefined,
+  action: Action,
+): GrantLevel {
+  const seat = ROLE_GRANTS[action][role]
+  if (!type) return seat
+  const cap = capFor(type, action)
+  return RANK[cap] < RANK[seat] ? cap : seat
+}
+
+/**
  * Fails closed. An `own` or `scoped` action asked without the resource it
  * needs is a denial, never an allow — a caller that forgot to pass the
  * resource must be told no rather than accidentally granted everything.
@@ -179,7 +285,7 @@ export function scopeSourceFor(role: UserRole): ScopeSource {
 }
 
 export function can(actor: Actor, action: Action, resource?: Resource): boolean {
-  const level: GrantLevel = ROLE_GRANTS[action][actor.role]
+  const level: GrantLevel = effectiveGrant(actor.role, actor.employmentType, action)
   if (level === 'none') return false
   if (level === 'all') return true
 

@@ -3,7 +3,10 @@ import { userRole } from '@/db/schema'
 import {
   ROLE_GRANTS,
   USER_ROLES,
+  EMPLOYMENT_TYPES,
   can,
+  capFor,
+  effectiveGrant,
   isAdminRole,
   roleLabel,
   type Action,
@@ -95,6 +98,82 @@ describe('ROLE_GRANTS', () => {
     // arm. A 'scoped' anywhere in this row would silently hand every PM three
     // powers they do not currently hold.
     expect(Object.values(ROLE_GRANTS['meeting.admin'])).not.toContain('scoped')
+  })
+})
+
+describe('employment caps', () => {
+  const CAPPED_FOR_TRAINEES = [
+    'request.review', 'absence.approve', 'user.approve', 'user.role.grant',
+    'app.grant.stakeholder', 'trash.purge', 'danger.dbclear',
+    'user.offboard',
+  ] as const
+
+  it('permanent caps nothing at all', () => {
+    for (const action of Object.keys(ROLE_GRANTS) as Action[]) {
+      expect(capFor('permanent', action), action).toBe('all')
+    }
+  })
+
+  it('stops a trainee and an intern signing off other people work', () => {
+    for (const type of ['trainee', 'intern'] as const) {
+      for (const action of CAPPED_FOR_TRAINEES) {
+        expect(capFor(type, action), `${type} x ${action}`).toBe('none')
+      }
+    }
+  })
+
+  it('lets a trainee undo an accidental delete', () => {
+    // Restoring is reversible — you can trash it again. Purging is not, and
+    // that is the one that is capped.
+    expect(capFor('trainee', 'trash.restore')).toBe('all')
+    expect(capFor('trainee', 'trash.purge')).toBe('none')
+  })
+
+  it('caps probation only on the irreversible acts', () => {
+    expect(capFor('probation', 'trash.purge')).toBe('none')
+    expect(capFor('probation', 'danger.dbclear')).toBe('none')
+    expect(capFor('probation', 'user.role.grant')).toBe('none')
+    expect(capFor('probation', 'user.offboard')).toBe('none')
+    // Judgement, not competence: reviewing a change request is still theirs.
+    expect(capFor('probation', 'request.review')).toBe('all')
+    expect(capFor('probation', 'absence.approve')).toBe('all')
+  })
+
+  it('keeps a contractor out of admitting people, not out of the work', () => {
+    expect(capFor('contract', 'user.create')).toBe('none')
+    expect(capFor('contract', 'user.approve')).toBe('none')
+    expect(capFor('contract', 'danger.dbclear')).toBe('none')
+    expect(capFor('contract', 'task.edit')).toBe('all')
+    expect(capFor('contract', 'sprint.manage')).toBe('all')
+  })
+
+  it('CAN ONLY REDUCE — never raises a grant, for any combination', () => {
+    // The one invariant that makes a cap safe to add anywhere: it is an AND,
+    // not an OR. If this ever fails, some employment type is granting.
+    const RANK = { none: 0, own: 1, scoped: 2, all: 3 } as const
+    for (const type of EMPLOYMENT_TYPES) {
+      for (const role of USER_ROLES) {
+        for (const action of Object.keys(ROLE_GRANTS) as Action[]) {
+          const raw = ROLE_GRANTS[action][role]
+          const effective = effectiveGrant(role, type, action)
+          expect(RANK[effective], `${type}/${role} x ${action}`).toBeLessThanOrEqual(RANK[raw])
+        }
+      }
+    }
+  })
+
+  it('refuses a trainee manager the approvals their seat would allow', () => {
+    const trainee = { id: 'u1', role: 'manager' as const, scopeAppIds: new Set(['app-1']), employmentType: 'trainee' as const }
+    expect(can(trainee, 'absence.approve', { appId: 'app-1' })).toBe(false)
+    expect(can(trainee, 'request.review', { appId: 'app-1' })).toBe(false)
+    // ...while leaving the actual work alone.
+    expect(can(trainee, 'task.edit', { appId: 'app-1' })).toBe(true)
+  })
+
+  it('leaves an actor with no employmentType exactly as they were', () => {
+    // Every existing Actor in the codebase predates this field.
+    const plain = { id: 'u1', role: 'manager' as const, scopeAppIds: new Set(['app-1']) }
+    expect(can(plain, 'absence.approve', { appId: 'app-1' })).toBe(true)
   })
 })
 

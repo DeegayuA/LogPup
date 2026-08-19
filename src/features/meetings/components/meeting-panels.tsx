@@ -86,6 +86,7 @@ export const PANEL_IDS = [
   'discussion',
   'for-next-meeting',
   'glossary',
+  'plan-the-meeting',
   'around-the-table',
   'needs-attribution',
   'carried-forward',
@@ -102,6 +103,13 @@ export const PANEL_DEFAULT_OPEN: Record<PanelId, boolean> = {
   discussion: true,
   'for-next-meeting': true,
   glossary: false,
+  // Collapsed on arrival, like Record, and for a cost reason rather than a
+  // taste one: opening it runs the planner's batched read (see
+  // planner-actions.ts, which includes a workspace-wide health pass), and a
+  // thirty-meeting list must not pay for that thirty times over for panels
+  // nobody asked to see. The panel nav always lists it, so it is one click
+  // away rather than hidden.
+  'plan-the-meeting': false,
   'around-the-table': true,
   'needs-attribution': true,
   'carried-forward': true,

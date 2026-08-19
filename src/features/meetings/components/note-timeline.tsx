@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
 import {
@@ -88,18 +88,20 @@ export function NoteTimeline({
   meetingTitle,
   canManage,
   attendees,
-  appId,
+  appIds,
   mentionUsers,
   shownElsewhere = null,
   autoAssignCappedCount = 0,
   deadlines = [],
+  draftSeed = null,
 }: {
   meetingId: string
   meetingTitle: string
   /** Same admin-or-creator tier the rest of the meeting's manage actions use. */
   canManage: boolean
   attendees: { id: string; name: string }[]
-  appId: string | null
+  /** The meeting's projects — a set, none primary; `[]` is the app-less meeting. */
+  appIds: string[]
   /** Wider mention pool (falls back to attendees). */
   mentionUsers?: MentionUser[]
   /**
@@ -125,6 +127,20 @@ export function NoteTimeline({
    * suggestions and tasks, not the AI notes row.
    */
   deadlines?: DeadlineHintSource[]
+  /**
+   * A line to drop into the composer, sent by another panel — today the
+   * meeting planner's "Answer in notes", so the answer to a question gets
+   * typed next to the question that produced it.
+   *
+   * APPENDS, never replaces, and never posts by itself — exactly the contract
+   * DictateButton below already has, and for the same reason: whatever is
+   * half-typed in the box belongs to the person typing it.
+   *
+   * `nonce` is what makes a repeat of the SAME text land again; keying the
+   * effect on the text alone would silently swallow the second click on the
+   * same question.
+   */
+  draftSeed?: { text: string; nonce: number } | null
 }) {
   const [data, setData] = useState<NoteTimelineData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -132,6 +148,20 @@ export function NoteTimeline({
 
   const [draft, setDraft] = useState('')
   const [posting, startPosting] = useTransition()
+
+  // Appends the seed once per nonce. The guard ref — rather than a
+  // nonce-only dependency list — is what makes this correct AND honest about
+  // its dependencies: the effect reads the text too, and a re-render carrying
+  // the same seed must not append it a second time. Functional updater, so it
+  // composes with whatever the person has already typed rather than racing it.
+  const appliedSeedNonce = useRef<number | null>(null)
+  useEffect(() => {
+    if (!draftSeed || !draftSeed.text) return
+    if (appliedSeedNonce.current === draftSeed.nonce) return
+    appliedSeedNonce.current = draftSeed.nonce
+    const line = draftSeed.text
+    setDraft((current) => (current.trim() ? `${current.trimEnd()}\n${line}` : line))
+  }, [draftSeed])
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
@@ -671,7 +701,7 @@ export function NoteTimeline({
         suggestions={data.suggestions}
         attendees={attendees}
         mentionUsers={mentionUsers}
-        appId={appId}
+        appIds={appIds}
         meetingTitle={meetingTitle}
         deadlines={deadlines}
         canManage={canManage}

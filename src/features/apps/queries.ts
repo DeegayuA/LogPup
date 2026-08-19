@@ -4,7 +4,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
 import { db } from '@/db'
 import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
-import { appComments, appRoleHistory, apps, assignments, users } from '@/db/schema'
+import { appComments, appRoleHistory, apps, assignments, meetingApps, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
   appHealth,
@@ -170,18 +170,28 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
           status: liveSprints.status,
         })
         .from(liveSprints),
+      // Counted through meeting_apps, not meetings.app_id: a meeting can be on
+      // several projects and each of them ran it, so it counts 1 toward each.
+      // Reading the deprecated single column here would leave this number
+      // disagreeing with the very list it labels (getMeetingsForApp, which
+      // reads the join table) on every joint meeting.
+      //
+      // meetingApps has no deletedAt of its own — live iff its meeting is — so
+      // the innerJoin is to liveMeetings, never the raw table (see
+      // MEETING_CHILD_TABLES in src/db/live.ts). `isNotNull` is gone with the
+      // column: a row only exists for a real project.
       db
         .select({
-          appId: liveMeetings.appId,
+          appId: meetingApps.appId,
           total: count(),
           thisWeek: countWhere(
             and(gte(liveMeetings.startsAt, weekStart), lt(liveMeetings.startsAt, weekEnd)),
           ),
           lastCreatedAt: max(liveMeetings.createdAt),
         })
-        .from(liveMeetings)
-        .where(isNotNull(liveMeetings.appId))
-        .groupBy(liveMeetings.appId),
+        .from(meetingApps)
+        .innerJoin(liveMeetings, eq(meetingApps.meetingId, liveMeetings.id))
+        .groupBy(meetingApps.appId),
       db
         .select({
           appId: appComments.appId,
@@ -422,10 +432,15 @@ export async function getAppCounts(appId: string): Promise<AppCounts> {
       })
       .from(liveTasks)
       .where(eq(liveTasks.appId, appId)),
+    // Through meeting_apps for the same reason as listApps above: this number
+    // labels the app page's Meetings tab, and the tab itself is
+    // getMeetingsForApp — which reads the join table. Reading the deprecated
+    // meetings.app_id here would print "3" over a list of 5.
     db
       .select({ total: count(), lastCreatedAt: max(liveMeetings.createdAt) })
-      .from(liveMeetings)
-      .where(eq(liveMeetings.appId, appId)),
+      .from(meetingApps)
+      .innerJoin(liveMeetings, eq(meetingApps.meetingId, liveMeetings.id))
+      .where(eq(meetingApps.appId, appId)),
     db
       .select({ total: count(), lastCreatedAt: max(appComments.createdAt) })
       .from(appComments)

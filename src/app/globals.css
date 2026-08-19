@@ -488,4 +488,42 @@
   [data-motion="on"] [data-rule][data-pending] {
     transform: scaleX(0);
   }
+
+  /* The fortnight strip writes itself, one day at a time.
+     `transform-origin: bottom` is declared on the cell itself and never
+     inherited: these sit inside a flex column, and an origin resolved against
+     the wrong box makes the half-height Saturday grow from the middle. */
+  [data-motion="on"] [data-stamp] {
+    transform-origin: bottom;
+    transition: transform 420ms var(--ease-editorial);
+    /* Position in the fortnight, so the two Sundays and the Poya day each
+       consume a beat without producing ink. The pause IS the point — the
+       sequence steps over the days nobody was expected to work. */
+    transition-delay: calc(var(--reveal-index, 0) * 55ms);
+  }
+  [data-motion="on"] [data-stamp][data-pending] {
+    /* Both heights travel the same 0.5rem: 0.8 of the 2.5rem full cell and
+       0.6 of the 1.25rem Saturday. A single shared scale factor would make
+       the Saturday move half as far and break the rhythm it is meant to keep.
+       0.5rem is the distance the rest of the page's reveals already use. */
+    transform: scaleY(0.8);
+  }
+  [data-motion="on"] [data-stamp]:has([data-caret]) {
+    /* The open cell is an outline, not ink — it was always there. Only its
+       caret arrives. */
+    transform: none;
+  }
+
+  /* The caret: one 300ms stroke, arriving after the last stamp, and never
+     blinking. A blink would claim something is waiting for input; this is a
+     record with its next line not yet written. */
+  [data-motion="on"] [data-caret] {
+    transform-origin: bottom;
+    transition: transform 300ms var(--ease-editorial);
+    transition-delay: 900ms;
+  }
+  [data-motion="on"] [data-caret][data-pending],
+  [data-motion="on"] [data-pending] [data-caret] {
+    transform: scaleY(0);
+  }
 }

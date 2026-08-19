@@ -122,6 +122,7 @@ import { laneFraction, overlapMap } from '@/features/meetings/calendar-overlap'
 import { isoDayInstant, isoToDisplayDate } from '@/features/meetings/calendar-view'
 import { chipTone } from '@/features/meetings/components/meetings-month-calendar'
 import { meetingColorKey } from '@/features/meetings/event-color'
+import { formatAppNames } from '@/features/meetings/app-labels'
 import { rescheduleMeeting } from '@/features/meetings/actions'
 import {
   dragCreateRange,
@@ -962,7 +963,14 @@ function buildShape(iso: string, meetings: MeetingSummary[]): DayShape {
     if (isAllDayMeeting(startMs, endMs)) {
       allDay.push({
         meeting,
-        label: [dayPrefix, meeting.title, 'all day', meeting.appName].filter(Boolean).join(', '),
+        // EVERY project, not the abbreviated "+N" the visible chip uses: this
+        // string is only ever read aloud, where there is no width to run out
+        // of, and "Alpha +2" tells a screen-reader user less than the two
+        // names it hides. `[].join()` is '' and drops out of the filter, which
+        // is the no-project meeting.
+        label: [dayPrefix, meeting.title, 'all day', meeting.apps.map((app) => app.name).join(', ')]
+          .filter(Boolean)
+          .join(', '),
       })
       continue
     }
@@ -1369,7 +1377,10 @@ const TimeGridEvent = memo(function TimeGridEvent({
           meeting.title,
           slice.timeRange,
           slice.duration,
-          meeting.appName,
+          // Same rule as the all-day label above: every project name here,
+          // because the block's visible footer only has room for one and this
+          // is the only place the rest are ever said.
+          meeting.apps.map((app) => app.name).join(', '),
           // The faces below are decorative to a screen reader; this is where
           // the same information is actually said.
           meeting.attendees.length > 0
@@ -1397,10 +1408,14 @@ const TimeGridEvent = memo(function TimeGridEvent({
             {slice.startLabel}
           </span>
         </span>
-        {!isCompact && (meeting.appName || meeting.attendees.length > 0) ? (
+        {!isCompact && (meeting.apps.length > 0 || meeting.attendees.length > 0) ? (
           <span className="mt-auto flex min-w-0 items-end justify-between gap-1.5">
+            {/* ONE name then "+N" — see the two-lines note above: this footer
+                shares the block's second line with the faces, so a second name
+                spelled out would be truncated mid-word and say less than the
+                count does. The sr-only string above says all of them. */}
             <span className="min-w-0 truncate text-xs text-muted-foreground">
-              {meeting.appName}
+              {formatAppNames(meeting.apps.map((app) => app.name), 1)}
             </span>
             <AttendeeAvatars attendees={meeting.attendees} />
           </span>

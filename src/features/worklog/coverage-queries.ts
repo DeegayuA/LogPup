@@ -1,10 +1,11 @@
-import { and, desc, eq, gte, isNull, lt, or } from 'drizzle-orm'
+import { and, desc, eq, gte, lt } from 'drizzle-orm'
 import { db } from '@/db'
 import { dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
 import { isGazettedHoliday } from '@/lib/working-days'
 import { can, type Actor } from '@/features/auth/capabilities'
 import { approvedAbsenceDays } from '@/features/worklog/absence-queries'
 import { computeCoverage, type CoverageSummary } from '@/features/worklog/coverage'
+import { orgHolidaySet } from '@/features/worklog/org-holidays'
 import { patternForDay, STUDIO_DEFAULT_PATTERN } from '@/features/worklog/schedules'
 
 /**
@@ -46,11 +47,13 @@ export async function getCoverage(
       .from(workSchedules)
       .where(eq(workSchedules.userId, userId))
       .orderBy(desc(workSchedules.effectiveFrom)),
-    db.select({ day: orgHolidays.day }).from(orgHolidays),
+    db.select({ day: orgHolidays.day, revokedFrom: orgHolidays.revokedFrom }).from(orgHolidays),
     approvedAbsenceDays(userId, from, to),
   ])
 
-  const orgHolidaySet = new Set(holidays.map((h) => h.day))
+  // Not a plain map: a cancelled holiday still covers the days that had
+  // already passed when it was cancelled. See org-holidays.ts.
+  const companyHolidays = orgHolidaySet(holidays)
   const rows = schedules.map((s) => ({
     effectiveFrom: s.effectiveFrom.toISOString().slice(0, 10),
     effectiveTo: s.effectiveTo ? s.effectiveTo.toISOString().slice(0, 10) : null,
@@ -65,7 +68,7 @@ export async function getCoverage(
     // Company shutdowns compose on TOP of the gazetted calendar through the
     // same callback working-days.ts already takes — a company holiday no
     // longer needs a deploy.
-    isHoliday: (iso) => isGazettedHoliday(iso) || orgHolidaySet.has(iso),
+    isHoliday: (iso) => isGazettedHoliday(iso) || companyHolidays.has(iso),
     patternFor: (iso) => (rows.length === 0 ? STUDIO_DEFAULT_PATTERN : patternForDay(rows, iso)),
     joinedOn: person.createdAt.toISOString().slice(0, 10),
     today,

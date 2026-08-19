@@ -104,7 +104,16 @@ type ReschedulePatch = { meetingId: string; startsAt: Date; endsAt: Date; isPast
     chip's state is otherwise carried by colour alone. */
 function chipLabel(meeting: MeetingSummary, isPast: boolean, isLive: boolean): string {
   const state = isLive ? 'happening now' : isPast ? 'past' : null
-  return [meeting.title, format(meeting.startsAt, 'h:mm a'), meeting.appName, state]
+  // Every project the meeting is on, spelled out. This string exists precisely
+  // because the visible chip truncates, so abbreviating it to "Alpha +2" here
+  // would hide the names in the one place that has room for them. `[].join()`
+  // is '' and drops out of the filter — that is the meeting on no project.
+  return [
+    meeting.title,
+    format(meeting.startsAt, 'h:mm a'),
+    meeting.apps.map((app) => app.name).join(', '),
+    state,
+  ]
     .filter(Boolean)
     .join(', ')
 }

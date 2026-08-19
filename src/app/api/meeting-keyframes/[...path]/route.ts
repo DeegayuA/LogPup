@@ -60,7 +60,10 @@ export async function GET(
       frameDeletedAt: meetingScreenshots.deletedAt,
       meetingId: meetings.id,
       createdBy: meetings.createdBy,
-      appId: meetings.appId,
+      // No appId: canReadMeetingIntel resolves the meeting's PROJECT SET from
+      // meeting_apps itself now. Selecting the deprecated single column here
+      // and passing it along would have named one project for a meeting that
+      // serves several, locking the others' PMs out of a keyframe they run.
       meetingDeletedAt: meetings.deletedAt,
     })
     .from(meetingScreenshots)
@@ -74,7 +77,6 @@ export async function GET(
   const canReadMeeting = await canReadMeetingIntel(session.user, {
     id: row.meetingId,
     createdBy: row.createdBy,
-    appId: row.appId,
   })
 
   const allowed = canServeKeyframe({

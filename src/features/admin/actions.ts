@@ -10,7 +10,8 @@ import {
   dailyWorklogs, users,
 } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
-import { can, USER_ROLES, type UserRole } from '@/features/auth/capabilities'
+import { countTransferableWork } from '@/features/people/handover-queries'
+import { EMPLOYMENT_TYPES, can, USER_ROLES, type UserRole } from '@/features/auth/capabilities'
 import { hashPassword } from '@/lib/password'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
@@ -182,13 +183,37 @@ export async function setUserRole(userId: string, role: UserRole): Promise<Actio
   return ok(undefined)
 }
 
-export async function setUserActive(userId: string, active: boolean): Promise<ActionResult> {
+export async function setUserActive(
+  userId: string,
+  active: boolean,
+  /**
+   * Deactivate even though they still hold transferable work.
+   *
+   * Deliberately explicit rather than a force flag with a default: closing
+   * somebody's access while their projects, roles and open tasks stay pinned
+   * to a login nobody can use is a real choice, and it should be one an
+   * operator makes on purpose and leaves a trail for.
+   */
+  acknowledgeUntransferred = false,
+): Promise<ActionResult> {
   const actor = await requireCapability('user.deactivate', { ownerId: userId })
   if (!actor) return err('Admins only')
   if (!canEditUser(actor.id, userId)) return err('Cannot change your own account')
 
   const parsed = z.boolean().safeParse(active)
   if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  // The gate that makes handover happen rather than be optional. Only on the
+  // way OUT — reactivating somebody is never blocked.
+  if (!active && !acknowledgeUntransferred) {
+    const outstanding = await countTransferableWork(userId)
+    if (outstanding > 0) {
+      return err(
+        `They still hold ${outstanding} ${outstanding === 1 ? 'item' : 'items'} of open work. ` +
+        'Hand it over first, or deactivate anyway and record why.',
+      )
+    }
+  }
 
   // Same up-front read as setUserRole: name for the activity row, role for
   // the last-admin check, active as the before value.
@@ -556,4 +581,67 @@ export async function rejectUser(userId: string): Promise<ActionResult> {
   })
   revalidateAdminPaths()
   return ok(undefined)
+}
+
+const employmentInput = z.object({
+  userId: z.string().uuid(),
+  employmentType: z.enum(EMPLOYMENT_TYPES),
+  supervisorId: z.string().uuid().nullable().optional(),
+})
+
+/**
+ * Where somebody is in their employment — separate from their seat, and it
+ * only ever CAPS what that seat may sign off.
+ *
+ * A person may never set their own, even though user.profile.edit resolves
+ * 'own' for several seats: this field decides what they are allowed to
+ * approve, and a control over your own approval powers is not a profile
+ * field. Asserted by test.
+ */
+export async function setUserEmploymentType(
+  raw: z.input<typeof employmentInput>,
+): Promise<ActionResult> {
+  const parsed = employmentInput.safeParse(raw)
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+  const { userId, employmentType: type, supervisorId } = parsed.data
+
+  const actor = await requireCapability('user.profile.edit', { ownerId: userId })
+  if (!actor) return err('Not allowed')
+  if (actor.id === userId) return err('You cannot change your own employment type')
+
+  // A trainee or an intern is somebody being taught. Who is teaching them is
+  // the point, so it is required — in the action rather than as a database
+  // constraint, which would make changing a type able to fail a migration.
+  if ((type === 'trainee' || type === 'intern') && !supervisorId) {
+    return err('A trainee or intern needs a named supervisor')
+  }
+  if (supervisorId === userId) return err('Somebody cannot supervise themselves')
+
+  try {
+    const [before] = await db
+      .select({ name: users.name, employmentType: users.employmentType })
+      .from(users)
+      .where(eq(users.id, userId))
+    if (!before) return err('That person no longer exists')
+
+    await db
+      .update(users)
+      .set({ employmentType: type, supervisorId: supervisorId ?? null })
+      .where(eq(users.id, userId))
+
+    await logActivity({
+      actorId: actor.id,
+      verb: 'updated',
+      entityType: 'user',
+      entityId: userId,
+      entityLabel: before.name,
+      detail: `employment ${before.employmentType} to ${type}`,
+    })
+
+    revalidatePath('/admin', 'layout')
+    return ok(undefined)
+  } catch (error) {
+    console.error('[admin] setUserEmploymentType', error)
+    return err('Something went wrong — try again')
+  }
 }

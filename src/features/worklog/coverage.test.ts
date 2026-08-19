@@ -103,6 +103,45 @@ describe('computeCoverage', () => {
   })
 })
 
+describe('a supervisory seat', () => {
+  // A tech lead who assigns and monitors produces no worklog rows. Reporting
+  // them 'missing' every working day is both false and poisonous: one wrong
+  // row drags every org-level coverage number with it.
+  const supervisory = () => computeCoverage(input({ logsWork: false }))
+
+  it('owes nothing, on every day, without claiming they are not working', () => {
+    const s = supervisory()
+    // 'logged' still appears — a supervisory person who files a log has it
+    // counted. What must never appear is 'missing'.
+    const allowed = new Set(['not-required', 'not-yet-due', 'logged'])
+    expect(s.days.every((d) => allowed.has(d.status))).toBe(true)
+    expect(s.days.some((d) => d.status === 'missing')).toBe(false)
+    // 'off' would claim nobody works that day. They work; they do not log.
+    expect(s.days.some((d) => d.status === 'off')).toBe(false)
+  })
+
+  it('has an empty denominator rather than a zero one', () => {
+    const s = supervisory()
+    expect(s.expected).toBe(0)
+    expect(s.missing).toBe(0)
+  })
+
+  it('says so in words instead of rendering 0/0', () => {
+    expect(formatCoverage(supervisory())).toBe('Not required to log')
+  })
+
+  it('still counts a log they file anyway', () => {
+    const s = supervisory()
+    expect(s.extra).toBeGreaterThan(0)
+    expect(s.days.find((d) => d.day === '2026-04-08')?.status).toBe('logged')
+  })
+
+  it('leaves a normal person completely unchanged', () => {
+    // logsWork defaults true, so every existing caller behaves as before.
+    expect(computeCoverage(input()).expected).toBe(4)
+  })
+})
+
 describe('formatCoverage', () => {
   it('always shows numerator and denominator', () => {
     expect(formatCoverage(computeCoverage(input())))

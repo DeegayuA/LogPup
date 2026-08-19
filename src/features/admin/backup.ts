@@ -1,7 +1,7 @@
 import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { db } from '@/db'
 import {
-  users, apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAiNotes,
+  users, apps, assignments, sprints, tasks, meetings, meetingApps, meetingAttendees, meetingAiNotes,
   meetingAttendeeRecommendations,
 } from '@/db/schema'
 
@@ -33,8 +33,8 @@ const backupUserColumns = {
 
 export async function buildSnapshot() {
   const [
-    usersRows, appsRows, assignmentsRows, sprintsRows, tasksRows, meetingsRows, attendeesRows,
-    aiNotesRows, attendeeRecommendationsRows,
+    usersRows, appsRows, assignmentsRows, sprintsRows, tasksRows, meetingsRows, meetingAppsRows,
+    attendeesRows, aiNotesRows, attendeeRecommendationsRows,
   ] = await Promise.all([
     db.select(backupUserColumns).from(users),
     db.select().from(apps),
@@ -42,6 +42,12 @@ export async function buildSnapshot() {
     db.select().from(sprints),
     db.select().from(tasks),
     db.select().from(meetings),
+    // Which projects each meeting is on. Not derivable from anything else in
+    // the export: meetings.app_id carries ONE of them (a deprecated mirror,
+    // see the comment on the column in src/db/schema.ts), so a restore built
+    // from meetings alone would silently drop every other project off every
+    // joint meeting.
+    db.select().from(meetingApps),
     db.select().from(meetingAttendees),
     // Meeting transcripts/notes are irreplaceable (Gemini output, not
     // re-derivable from anything else in the DB) — must be backed up.
@@ -62,6 +68,7 @@ export async function buildSnapshot() {
       sprints: sprintsRows,
       tasks: tasksRows,
       meetings: meetingsRows,
+      meetingApps: meetingAppsRows,
       meetingAttendees: attendeesRows,
       meetingAiNotes: aiNotesRows,
       meetingAttendeeRecommendations: attendeeRecommendationsRows,

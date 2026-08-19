@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray } from 'drizzle-orm'
+import { and, desc, eq, gte } from 'drizzle-orm'
 import { db } from '@/db'
 import { absences, users } from '@/db/schema'
 import { can, type Actor } from '@/features/auth/capabilities'

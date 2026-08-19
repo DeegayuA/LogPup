@@ -705,7 +705,7 @@ function SuggestedActionCard({
   compact,
   canManage,
   assigneePool,
-  appId,
+  appIds,
   deadlines,
   actions,
 }: {
@@ -713,7 +713,8 @@ function SuggestedActionCard({
   compact: boolean
   canManage: boolean
   assigneePool: MentionUser[]
-  appId: string | null
+  /** The meeting's projects — a set, none primary; `[]` is the app-less meeting. */
+  appIds: string[]
   deadlines: DeadlineHintSource[]
   actions: ActionItemActions
 }) {
@@ -780,14 +781,28 @@ function SuggestedActionCard({
             size="sm"
             type="button"
             // A suggestion the AI routed to a specific app can be accepted
-            // even when the MEETING has no app — the server files it into
-            // suggestion.suggestedAppId (acceptTaskSuggestion falls back to
-            // meeting.appId only when routing was inconclusive). Gating on
-            // the meeting's app alone made routed suggestions unclickable
-            // exactly where routing matters most: multi-project meetings not
-            // pinned to one app.
-            disabled={rowDisabled || (!appId && !suggestion.suggestedAppId)}
-            title={appId || suggestion.suggestedAppId ? undefined : 'Link this meeting to an app first'}
+            // even when the MEETING is on no project — the server files it
+            // into suggestion.suggestedAppId (acceptTaskSuggestion falls back
+            // to the meeting's own project only when routing was
+            // inconclusive). Gating on the meeting's projects alone made
+            // routed suggestions unclickable exactly where routing matters
+            // most.
+            //
+            // `appIds.length === 0` is the app-less meeting — the same state
+            // the old null appId meant, and the ONLY one where the server has
+            // nowhere to file an unrouted item. A meeting on two projects is
+            // NOT that state: the fallback lands on a project the meeting is
+            // genuinely on (see the mirror note on meetings.app_id in
+            // src/db/schema.ts), so the button stays live.
+            disabled={rowDisabled || (appIds.length === 0 && !suggestion.suggestedAppId)}
+            title={
+              appIds.length > 0 || suggestion.suggestedAppId
+                ? undefined
+                // "app", not "project": the control that fixes this is
+                // labelled "Apps" (meeting-project-select.tsx), and a hint may
+                // not name a control the viewer cannot find.
+                : 'Link this meeting to an app first'
+            }
             onClick={() => actions.handleAcceptSuggestion(suggestion)}
           >
             {busy ? <Loader2Icon className="animate-spin" aria-hidden /> : <CheckIcon aria-hidden />}
@@ -843,7 +858,7 @@ export function ActionItemSuggestionsList({
   suggestions,
   attendees,
   mentionUsers,
-  appId,
+  appIds,
   meetingTitle,
   deadlines,
   canManage,
@@ -854,7 +869,8 @@ export function ActionItemSuggestionsList({
   suggestions: TaskSuggestionView[]
   attendees: AttendeeRef[]
   mentionUsers?: MentionUser[]
-  appId: string | null
+  /** The meeting's projects — a set, none primary; `[]` is the app-less meeting. */
+  appIds: string[]
   meetingTitle: string
   deadlines: DeadlineHintSource[]
   canManage: boolean
@@ -912,7 +928,7 @@ export function ActionItemSuggestionsList({
                 compact={compact}
                 canManage={canManage}
                 assigneePool={assigneePool}
-                appId={appId}
+                appIds={appIds}
                 deadlines={deadlines}
                 actions={actions}
               />

@@ -2,7 +2,8 @@ import { cache } from 'react'
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
-import { apps, meetingAttendees, users } from '@/db/schema'
+import { apps, meetingApps, meetingAttendees, users } from '@/db/schema'
+import type { MeetingApp } from '@/features/meetings/app-labels'
 
 export type MeetingAttendee = {
   id: string
@@ -16,9 +17,20 @@ export type MeetingAttendee = {
 export type MeetingSummary = {
   id: string
   title: string
+  /**
+   * DEPRECATED. The meetings.app_id column — one project id, kept only so
+   * change-request routing has a stable primary-ish answer without resolving a
+   * set. It is NOT the meeting's project list: read `apps` for anything a
+   * person sees and for every permission decision. See the comment on the
+   * column in src/db/schema.ts.
+   */
   appId: string | null
-  appName: string | null
-  appSlug: string | null
+  /**
+   * Every project this meeting is on, ordered by name, all equal. `[]` is the
+   * app-less meeting — the company all-hands that belongs to nobody — and is
+   * exactly the state `appId === null` used to mean on its own.
+   */
+  apps: MeetingApp[]
   startsAt: Date
   endsAt: Date
   agenda: string | null
@@ -29,12 +41,13 @@ export type MeetingSummary = {
   attendees: MeetingAttendee[]
 }
 
+// No join to `apps` here any more: a meeting can be on several projects, and
+// joining would multiply each meeting row per project — the same problem
+// attachAttendees was written to avoid, with the same fix (see attachApps).
 const meetingColumns = {
   id: liveMeetings.id,
   title: liveMeetings.title,
   appId: liveMeetings.appId,
-  appName: apps.name,
-  appSlug: apps.slug,
   startsAt: liveMeetings.startsAt,
   endsAt: liveMeetings.endsAt,
   agenda: liveMeetings.agenda,
@@ -50,10 +63,8 @@ const meetingColumns = {
  * meeting row per attendee and complicate the ordering/pagination above.
  */
 async function attachAttendees(
-  rows: Omit<MeetingSummary, 'attendees'>[],
-): Promise<MeetingSummary[]> {
-  if (rows.length === 0) return []
-
+  rows: MeetingRow[],
+): Promise<Map<string, MeetingAttendee[]>> {
   // meetingAttendees has no deletedAt of its own — live iff its meeting is
   // live. `rows` here already came from a liveMeetings-scoped query (see
   // listMeetings/getMeetingsForApp/getUpcomingMeetingsForUser below), so
@@ -85,28 +96,93 @@ async function attachAttendees(
     byMeeting.set(row.meetingId, list)
   }
 
-  return rows.map((r) => ({ ...r, attendees: byMeeting.get(r.id) ?? [] }))
+  return byMeeting
+}
+
+/**
+ * The projects each meeting is on, fetched the same way and for the same
+ * reason as the attendees above: joining meeting_apps into the main query
+ * would return one row per meeting-project pair, so a meeting on four projects
+ * would appear four times and any LIMIT or pagination above would count the
+ * duplicates.
+ *
+ * ORDERED BY APP NAME, not by anything storage decides. Order here is what a
+ * reader sees ("Alpha, Beta +2") and what decides which two names survive the
+ * overflow, so ordering by a join-row id would shift the visible set between
+ * two reads of an unchanged meeting.
+ */
+async function attachApps(rows: MeetingRow[]): Promise<Map<string, MeetingApp[]>> {
+  // meetingApps has no deletedAt of its own — live iff its meeting is live.
+  // `rows` already came from a liveMeetings-scoped query, so scoping to their
+  // ids cannot pull in a trashed meeting's projects (see MEETING_CHILD_TABLES
+  // in src/db/live.ts).
+  const appRows = await db
+    .select({
+      meetingId: meetingApps.meetingId,
+      id: apps.id,
+      name: apps.name,
+      slug: apps.slug,
+    })
+    .from(meetingApps)
+    .innerJoin(apps, eq(meetingApps.appId, apps.id))
+    .where(inArray(meetingApps.meetingId, rows.map((r) => r.id)))
+    .orderBy(asc(apps.name))
+
+  const byMeeting = new Map<string, MeetingApp[]>()
+  for (const row of appRows) {
+    const list = byMeeting.get(row.meetingId) ?? []
+    list.push({ id: row.id, name: row.name, slug: row.slug })
+    byMeeting.set(row.meetingId, list)
+  }
+  return byMeeting
+}
+
+/** The row shape every query below selects, before its two lists are attached. */
+type MeetingRow = Omit<MeetingSummary, 'attendees' | 'apps'>
+
+/**
+ * Attaches both lists in ONE extra round trip each, in parallel — never one
+ * query per meeting.
+ */
+async function hydrate(rows: MeetingRow[]): Promise<MeetingSummary[]> {
+  if (rows.length === 0) return []
+  const [attendeesByMeeting, appsByMeeting] = await Promise.all([
+    attachAttendees(rows),
+    attachApps(rows),
+  ])
+  return rows.map((r) => ({
+    ...r,
+    attendees: attendeesByMeeting.get(r.id) ?? [],
+    apps: appsByMeeting.get(r.id) ?? [],
+  }))
 }
 
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
     .from(liveMeetings)
-    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
     .orderBy(desc(liveMeetings.startsAt))
 
-  return attachAttendees(rows)
+  return hydrate(rows)
 }
 
+/**
+ * The meetings on ONE project — the app page's Meetings tab.
+ *
+ * The innerJoin is pinned to a single app_id, so it still returns exactly one
+ * row per meeting even though a meeting can be on several projects. hydrate()
+ * then attaches the FULL project list, which is what lets the tab show a joint
+ * meeting's sibling projects instead of implying it belongs here alone.
+ */
 export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
     .from(liveMeetings)
-    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
-    .where(eq(liveMeetings.appId, appId))
+    .innerJoin(meetingApps, eq(meetingApps.meetingId, liveMeetings.id))
+    .where(eq(meetingApps.appId, appId))
     .orderBy(desc(liveMeetings.startsAt))
 
-  return attachAttendees(rows)
+  return hydrate(rows)
 }
 
 /**
@@ -119,10 +195,9 @@ export const getMeetingById = cache(
     const rows = await db
       .select(meetingColumns)
       .from(liveMeetings)
-      .leftJoin(apps, eq(liveMeetings.appId, apps.id))
       .where(eq(liveMeetings.id, meetingId))
 
-    const [meeting] = await attachAttendees(rows)
+    const [meeting] = await hydrate(rows)
     return meeting ?? null
   },
 )
@@ -141,7 +216,6 @@ export async function getUpcomingMeetingsForUser(
     .select(meetingColumns)
     .from(meetingAttendees)
     .innerJoin(liveMeetings, eq(meetingAttendees.meetingId, liveMeetings.id))
-    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
     .where(
       and(
         eq(meetingAttendees.userId, userId),
@@ -151,5 +225,5 @@ export async function getUpcomingMeetingsForUser(
     )
     .orderBy(asc(liveMeetings.startsAt))
 
-  return attachAttendees(rows)
+  return hydrate(rows)
 }

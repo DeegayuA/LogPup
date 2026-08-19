@@ -74,7 +74,7 @@ export function MeetingAiNotes({
   meetingTitle,
   canManage,
   attendees,
-  appId,
+  appIds,
   mentionUsers,
   suggestions,
   untrackedActions,
@@ -86,7 +86,8 @@ export function MeetingAiNotes({
   /** Same admin-or-creator tier the rest of the meeting's manage actions use. */
   canManage: boolean
   attendees: { id: string; name: string }[]
-  appId: string | null
+  /** The meeting's projects — a set, none primary; `[]` is the app-less meeting. */
+  appIds: string[]
   /** Wider mention pool for the assignee picker (falls back to attendees). */
   mentionUsers?: MentionUser[]
   /**
@@ -380,7 +381,7 @@ export function MeetingAiNotes({
                 suggestions={visibleSuggestions}
                 attendees={attendees}
                 mentionUsers={mentionUsers}
-                appId={appId}
+                appIds={appIds}
                 meetingTitle={meetingTitle}
                 deadlines={notes.deadlines}
                 canManage={canManage}

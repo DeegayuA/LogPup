@@ -39,8 +39,13 @@ export type MeetingEditBase = {
   meetingId: string
   /* updateMeeting validates and rewrites the whole meeting, so every field it
      requires has to travel back with the one being changed — otherwise saving
-     a title would blank the agenda and unfile the meeting from its app. */
-  appId: string | null
+     a title would blank the agenda and unfile the meeting from its apps.
+
+     The SET, not one id: a meeting can be on several projects and none of them
+     is primary, so sending back a single one would silently drop the rest the
+     first time somebody fixed a typo in the title from this page. `[]` is the
+     app-less meeting and is a legal value. */
+  appIds: string[]
   title: string
   /** ISO strings: a Date cannot cross the server/client boundary here. */
   startsAt: string

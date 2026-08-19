@@ -631,7 +631,7 @@ export default async function AppDetailPage(props: {
             meetings={appMeetings}
             currentUserId={session?.user?.id ?? ''}
             isAdmin={isAdmin}
-            showAppBadge={false}
+            hideAppId={app.id}
             users={activeUsers}
           />
         </div>

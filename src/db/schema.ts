@@ -42,6 +42,18 @@ export const changeRequestOp = pgEnum('change_request_op', ['edit', 'delete', 'r
 // count against them.
 export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other'])
 export const absenceStatus = pgEnum('absence_status', ['pending', 'approved', 'rejected', 'withdrawn'])
+// What stage of employment somebody is at. NOT a seat — user_role answers what
+// they may do, this answers where they are in their career here. Kept separate
+// because a trainee can be an editor and an intern can be a member; folding
+// the two would turn seven seats into twenty-eight. It CAPS a seat's approval
+// powers and never grants — see capFor() in features/auth/capabilities.ts.
+export const employmentType = pgEnum('employment_type', ['permanent', 'probation', 'trainee', 'intern', 'contract'])
+// Whether a worklog is expected from this person AT ALL, independent of which
+// days they work. A supervisory seat that only assigns and monitors produces
+// no daily_worklogs rows; without this they read 'missing' every working day
+// forever. Zeroing their pattern is not the fix — that claims they are not
+// working, and they are.
+export const loggingExpectation = pgEnum('logging_expectation', ['daily', 'none'])
 // The two roles app_role_history tracks as-of intervals for. Closed set, like
 // every other "kind" column in this file, hence a pg enum rather than free
 // text (contrast assignments.role / assignmentHistory.role, which are
@@ -102,6 +114,16 @@ export const users = pgTable('users', {
   // other form silently never matches without an entry here. Admin-set only;
   // nullable/no default because most users need none.
   aliases: text('aliases').array(),
+  // What stage of employment this person is at. NOT a seat: user_role answers
+  // what they may do. This CAPS their seat's sign-off powers and never grants
+  // — a trainee manager cannot approve, a permanent member is unaffected.
+  // See capFor() in features/auth/capabilities.ts.
+  employmentType: employmentType('employment_type').notNull().default('permanent'),
+  // Who mentors them. Required by the action for trainee and intern, optional
+  // otherwise — deliberately not a check constraint, which would make CHANGING
+  // someone's employment type able to fail, and mentorship is not a
+  // data-integrity fact.
+  supervisorId: uuid('supervisor_id'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -120,8 +142,27 @@ export const apps = pgTable('apps', {
   // added it nullable, backfilled it from lead_id, then locked it NOT NULL —
   // safe because every app already had a lead at that point.
   pmId: uuid('pm_id').notNull().references(() => users.id),
+  // Soft delete, the sixth table to carry it — and the first whose children
+  // (sprints, tasks, meetings, assignments, comments) all cascade on a HARD
+  // delete. That is exactly why deleting an app had to become soft: the only
+  // delete available before this was `db.delete(apps)`, which took the whole
+  // project history with it and left admin Trash nothing to restore.
+  //
+  // NOT the same thing as `status = 'archived'`. Archiving retires an app
+  // that still exists — it stays readable, keeps its board, and appears
+  // deliberately in an "include archived" view. A deleted app is gone from
+  // every read: index, detail, search, dashboards, calendars. The two are
+  // independent columns because an archived app can still be deleted, and a
+  // restored one must come back exactly as archived as it went in.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-})
+}, (t) => [
+  // Every list read is "live apps, by name", so the partial index is the one
+  // that matters — a full-table index would carry deleted rows that no such
+  // query ever wants.
+  index('apps_live_name_idx').on(t.name).where(sql`${t.deletedAt} is null`),
+])
 
 // Append-only "as of" index of who has held PM or lead on an app, and when.
 // Exactly the assignment_history pattern below, applied to apps.pmId /
@@ -313,6 +354,16 @@ export const tasks = pgTable('tasks', {
 
 export const meetings = pgTable('meetings', {
   id: uuid('id').primaryKey().defaultRandom(),
+  // DEPRECATED as the answer to "which projects is this meeting on" — that is
+  // `meeting_apps` now (many-to-many, every project equal, no primary). NOT
+  // DEAD, DO NOT DROP: change-request routing (change_requests.app_id) needs
+  // one stable, primary-ish project id for a meeting without resolving a set,
+  // and this column is it. It is still maintained by every meeting write:
+  // setMeetingApps/createMeeting/updateMeeting keep it inside the meeting's
+  // project set — unchanged while it is still a member, otherwise the first of
+  // the new set (or null when the set is empty). Read it ONLY where one id is
+  // genuinely required; anything that shows a project to a person, or gates
+  // permission, must read the set.
   appId: uuid('app_id').references(() => apps.id, { onDelete: 'set null' }),
   title: text('title').notNull(),
   startsAt: timestamp('starts_at').notNull(),
@@ -1066,6 +1117,10 @@ export const workSchedules = pgTable('work_schedules', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   pattern: jsonb('pattern').$type<SchedulePattern>().notNull(),
+  // Which days they work is `pattern`; whether a log is owed at all is this.
+  // Two questions, deliberately two columns — a part-time tech lead needs both
+  // answers and they are not the same answer.
+  logging: loggingExpectation('logging').notNull().default('daily'),
   effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull().defaultNow(),
   effectiveTo: timestamp('effective_to', { withTimezone: true }),
   changedBy: uuid('changed_by').notNull().references(() => users.id),
@@ -1130,6 +1185,20 @@ export const orgHolidays = pgTable('org_holidays', {
   note: text('note'),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // REVOKED, NOT DELETED — and revocation does not reach backwards.
+  //
+  // isHoliday is read at COMPUTE time, so removing the row would not merely
+  // lose a note: it would make that day recompute as owed, retroactively, for
+  // everybody. People correctly excused in August would acquire a missing day
+  // in November with nothing on screen to explain it — the exact silent
+  // rewrite of history this feature exists to prevent.
+  //
+  // So the row survives, and `revokedFrom` is the day the cancellation takes
+  // effect. A day BEFORE it stays a holiday forever: you can call off a
+  // shutdown that has not happened yet, but you cannot un-hold one people
+  // already took.
+  revokedFrom: date('revoked_from'),
+  revokedBy: uuid('revoked_by').references(() => users.id),
 })
 
 // The stakeholder seat's reach: explicit, per-app, read-only.
@@ -1150,4 +1219,35 @@ export const appGrants = pgTable('app_grants', {
 }, (t) => [
   uniqueIndex('app_grants_user_app_unique').on(t.userId, t.appId),
   index('app_grants_user_idx').on(t.userId),
+])
+
+// One meeting, several projects. Many-to-many, EVERY PROJECT EQUAL: no
+// isPrimary, no sortOrder, no createdAt/addedBy. Display order is
+// `ORDER BY apps.name` at every read site, so the list is meaningful to a
+// reader and cannot repaint when a project is added; who linked what and when
+// is already in activity_log, which is where that question belongs.
+//
+// Same two-column shape and composite primary key as meetingAttendees, and for
+// the same reasons: the key IS the invariant (a project appears on a meeting at
+// most once, so a double-submit from the picker is a no-op rather than a
+// duplicate) and it is the access path for the dominant read, "which projects
+// is this meeting on". meeting_apps_app_idx serves the reverse direction and
+// gives the app_id cascade an index to use.
+//
+// NO deletedAt, deliberately — meetingAttendees answered the identical question
+// the same way. There is nothing here to retract: unlinking a project loses no
+// content, and the row's absence IS the fact. Liveness is the meeting's:
+// registered in MEETING_CHILD_TABLES (src/db/live.ts), live iff its meeting is,
+// so trashing a meeting leaves these rows alone and restoreMeeting brings the
+// meeting back with its projects still attached. Every read must reach it
+// through liveMeetings.
+//
+// "No project" is COUNT(*) = 0 — a company all-hands belongs to nobody, so
+// there is no "at least one" constraint and there cannot be one.
+export const meetingApps = pgTable('meeting_apps', {
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+}, (t) => [
+  primaryKey({ columns: [t.meetingId, t.appId] }),
+  index('meeting_apps_app_idx').on(t.appId),
 ])

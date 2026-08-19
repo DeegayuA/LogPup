@@ -141,7 +141,7 @@ export function MeetingsViews({
    *
    * "I need to take notes NOW" is a different gesture from scheduling: no
    * app, no invite list, no form — the meeting is the notebook. One click
-   * creates a real meeting row (appId null, sole attendee: you, starting this
+   * creates a real meeting row (no projects, sole attendee: you, starting this
    * minute) and lands on it with the write-up panel already open, recorder a
    * click away.
    *
@@ -162,7 +162,10 @@ export function MeetingsViews({
         const start = new Date()
         const end = new Date(start.getTime() + 60 * 60 * 1000)
         const res = await createMeeting({
-          appId: null,
+          // No project — an empty SET, which is what "no app" is now. Sending
+          // the old `appId: null` here would fail meetingFields outright and
+          // turn this button into an error toast.
+          appIds: [],
           title: `Quick notes — ${formatBusinessWeekdayDayMonth(start)} · ${formatBusinessTime(start)}`,
           startsAt: start.toISOString(),
           endsAt: end.toISOString(),

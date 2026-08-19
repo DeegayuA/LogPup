@@ -5,6 +5,7 @@ import { liveMeetings, liveTasks } from '@/db/live'
 import {
   appComments,
   assignmentHistory,
+  meetingApps,
   users,
 } from '@/db/schema'
 import {
@@ -91,7 +92,18 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
       })
       .from(liveMeetings)
       .innerJoin(users, eq(users.id, liveMeetings.createdBy))
-      .where(eq(liveMeetings.appId, appId))
+      // Through meeting_apps, not the deprecated meetings.app_id: a meeting
+      // this project shares with two others still happened here, and reading
+      // the single column would drop it from this feed while the Meetings tab
+      // one click away still lists it.
+      //
+      // The join is pinned to ONE app_id, so it stays one row per meeting and
+      // PER_SOURCE_LIMIT still means "the last N meetings", not "the last N
+      // meeting-project pairs". meetingApps is reached through liveMeetings —
+      // it has no deletedAt of its own (see MEETING_CHILD_TABLES in
+      // src/db/live.ts).
+      .innerJoin(meetingApps, eq(meetingApps.meetingId, liveMeetings.id))
+      .where(eq(meetingApps.appId, appId))
       .orderBy(desc(liveMeetings.createdAt))
       .limit(PER_SOURCE_LIMIT),
     db

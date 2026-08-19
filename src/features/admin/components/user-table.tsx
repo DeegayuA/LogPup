@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import { Pencil } from 'lucide-react'
@@ -28,6 +29,7 @@ import {
   setUserOrgTags,
   setUserPersonalEmail,
   setUserPhone,
+  setUserEmploymentType,
   setUserRole,
   setUserTitle,
 } from '@/features/admin/actions'
@@ -38,7 +40,8 @@ import type { AdminUser } from '@/features/admin/queries'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { SeatSelect } from '@/features/admin/components/seat-select'
-import type { UserRole } from '@/features/auth/capabilities'
+import { CapNotice, EmploymentSelect } from '@/features/admin/components/employment-select'
+import type { EmploymentType, UserRole } from '@/features/auth/capabilities'
 
 const SELF_TITLE = 'Cannot change your own account'
 
@@ -310,6 +313,56 @@ export function UserTable({
     )
   }
 
+  function handleEmploymentChange(user: AdminUser, employmentType: EmploymentType) {
+    startTransition(async () => {
+      try {
+        const res = await setUserEmploymentType({
+          userId: user.id,
+          employmentType,
+          supervisorId: user.supervisorId,
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Employment updated')
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
+  function employmentControl(user: AdminUser, isSelf: boolean) {
+    return (
+      <div className="flex flex-col gap-1">
+        <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
+          <EmploymentSelect
+            value={user.employmentType}
+            disabled={isSelf || isPending}
+            ariaLabel={`Employment for ${user.name}`}
+            onChange={(type) => handleEmploymentChange(user, type)}
+            className="w-full min-w-36"
+          />
+        </div>
+        {/* Explained where the control is missing, rather than leaving an
+            admin wondering why a manager has no approve button. */}
+        <CapNotice employmentType={user.employmentType} role={user.role} />
+      </div>
+    )
+  }
+
+  function handoverLink(user: AdminUser, isSelf: boolean) {
+    if (isSelf) return null
+    return (
+      <Link
+        href={`/admin/people/${user.id}/handover`}
+        className="text-2xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        Hand over work
+      </Link>
+    )
+  }
+
   function activeControl(user: AdminUser, isSelf: boolean) {
     return (
       <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
@@ -368,10 +421,14 @@ export function UserTable({
             <li key={user.id} className="flex flex-col gap-3 rounded-xl border border-border p-3">
               <div className="flex items-start justify-between gap-3">
                 {identity(user)}
-                {activeControl(user, isSelf)}
+                <div className="flex flex-col items-end gap-1">
+                  {activeControl(user, isSelf)}
+                  {handoverLink(user, isSelf)}
+                </div>
               </div>
               <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field label="Seat">{seatControl(user, isSelf)}</Field>
+                <Field label="Employment">{employmentControl(user, isSelf)}</Field>
                 <Field label="Job role">
                   <JobRoleCell user={user} />
                 </Field>
@@ -393,11 +450,12 @@ export function UserTable({
       {/* DESKTOP: the table, in its own scroll container so wide content
           scrolls here rather than pushing the whole page sideways. */}
       <div className="hidden overflow-x-auto lg:block">
-        <Table className="min-w-[64rem]">
+        <Table className="min-w-[74rem]">
           <TableHeader>
             <TableRow>
               <TableHead>User</TableHead>
               <TableHead>Seat</TableHead>
+              <TableHead>Employment</TableHead>
               <TableHead>Job role</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Personal email</TableHead>
@@ -412,6 +470,7 @@ export function UserTable({
                 <TableRow key={user.id}>
                   <TableCell className="max-w-64">{identity(user)}</TableCell>
                   <TableCell>{seatControl(user, isSelf)}</TableCell>
+                  <TableCell>{employmentControl(user, isSelf)}</TableCell>
                   <TableCell className="min-w-48">
                     <JobRoleCell user={user} />
                   </TableCell>
@@ -424,7 +483,12 @@ export function UserTable({
                   <TableCell className="min-w-44">
                     <OrgTagsCell user={user} suggestions={allOrgTags} />
                   </TableCell>
-                  <TableCell className="text-right">{activeControl(user, isSelf)}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex flex-col items-end gap-1">
+                      {activeControl(user, isSelf)}
+                      {handoverLink(user, isSelf)}
+                    </div>
+                  </TableCell>
                 </TableRow>
               )
             })}

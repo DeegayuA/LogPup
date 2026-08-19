@@ -2,7 +2,7 @@ import { cache } from 'react'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
-import type { UserRole } from '@/features/auth/capabilities'
+import type { EmploymentType, UserRole } from '@/features/auth/capabilities'
 
 export type AdminUser = {
   id: string
@@ -10,6 +10,8 @@ export type AdminUser = {
   email: string
   avatarUrl: string | null
   role: UserRole
+  employmentType: EmploymentType
+  supervisorId: string | null
   active: boolean
   orgTags: string[]
   title: string | null
@@ -33,6 +35,8 @@ export async function listAllUsers(): Promise<AdminUser[]> {
       email: users.email,
       avatarUrl: users.avatarUrl,
       role: users.role,
+      employmentType: users.employmentType,
+      supervisorId: users.supervisorId,
       active: users.active,
       orgTags: users.orgTags,
       title: users.title,

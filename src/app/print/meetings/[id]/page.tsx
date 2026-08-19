@@ -23,6 +23,7 @@ import { listActiveUsers } from '@/features/people/queries'
 import { PrintToolbar } from './print-toolbar'
 import { RecordTimeline, type RecordRow } from './record-timeline'
 import { PrintSpeakerNames } from './print-speaker-names'
+import { formatAppNames } from '@/features/meetings/app-labels'
 import {
   EditableAgenda,
   EditableAttendees,
@@ -439,7 +440,10 @@ export default async function MeetingPrintPage(props: {
   // masthead does NOT edit still have to travel with the one it does.
   const editBase: MeetingEditBase = {
     meetingId: id,
-    appId: meeting.appId,
+    // Every project the meeting is on. Sending the deprecated single
+    // meetings.app_id here would unfile it from the rest the first time
+    // somebody edited the title from this page.
+    appIds: meeting.apps.map((app) => app.id),
     title: meeting.title,
     startsAt: meeting.startsAt.toISOString(),
     endsAt: meeting.endsAt.toISOString(),
@@ -757,7 +761,7 @@ export default async function MeetingPrintPage(props: {
                 <div className="flex items-baseline justify-between gap-4 border-t border-[color:var(--doc-rule)] pt-1 text-[7.5pt] text-[var(--doc-ink-faint)]">
                   <span className="truncate">
                     LogPup by Alta Vision · {full ? 'Full record' : 'Summary'}
-                    {meeting.appName ? ` · ${meeting.appName}` : ''}
+                    {meeting.apps.length > 0 ? ` · ${formatAppNames(meeting.apps.map((a) => a.name))}` : ''}
                   </span>
                   <span className="shrink-0 tabular-nums">
                     Ref {docRef} · Exported {stampFmt.format(exportedAt)}
@@ -822,10 +826,18 @@ export default async function MeetingPrintPage(props: {
               page. Who wrote this up (a model, not a person) belongs where
               somebody deciding whether to trust it will actually see it. */}
           <dl className="doc-factbox mt-4 grid grid-cols-[7rem_1fr] gap-x-4 gap-y-1.5 px-4 py-3 text-[9.5pt]">
-            {meeting.appName ? (
+            {meeting.apps.length > 0 ? (
               <>
-                <dt className="font-medium text-[var(--doc-ink-faint)]">Project</dt>
-                <dd className="text-[var(--doc-ink)]">{meeting.appName}</dd>
+                <dt className="font-medium text-[var(--doc-ink-faint)]">
+                  {meeting.apps.length === 1 ? 'Project' : 'Projects'}
+                </dt>
+                {/* Every project, spelled out — no "+N" here. This is the
+                    printed record, and a paper copy that hides two of five
+                    projects is a record with a hole in it. The running foot
+                    above abbreviates because it has one line; this has room. */}
+                <dd className="text-[var(--doc-ink)]">
+                  {meeting.apps.map((app) => app.name).join(', ')}
+                </dd>
               </>
             ) : null}
             {/* The two CONTENT rows print only when they have something to

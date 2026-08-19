@@ -2,7 +2,8 @@ import { notFound } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
 import { listPendingUsers } from '@/features/admin/queries'
-import { getApprovalsInbox } from '@/features/admin/change-request-queries'
+import { ApprovalActions } from '@/features/admin/components/approval-actions'
+import { getApprovalsInbox, getMyRequests } from '@/features/admin/change-request-queries'
 import { listPendingAbsences } from '@/features/worklog/absence-queries'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
@@ -18,10 +19,11 @@ export default async function AdminApprovalsPage() {
   const actor = await loadActor()
   if (!actor || !can(actor, 'request.review')) notFound()
 
-  const [pendingUsers, pendingAbsences, requests] = await Promise.all([
+  const [pendingUsers, pendingAbsences, requests, mine] = await Promise.all([
     can(actor, 'user.approve') ? listPendingUsers() : Promise.resolve([]),
     listPendingAbsences(actor),
     getApprovalsInbox(actor),
+    getMyRequests(actor),
   ])
 
   const nothingWaiting =
@@ -62,6 +64,7 @@ export default async function AdminApprovalsPage() {
                   <span className="font-mono text-2xs tabular-nums text-muted-foreground">
                     {r.entityType} · filed {r.createdAt}
                   </span>
+                  <ApprovalActions id={r.id} kind="request" isSelf={r.isSelf} />
                 </li>
               ))}
             </ul>
@@ -92,12 +95,39 @@ export default async function AdminApprovalsPage() {
                     {a.endDate !== a.startDate && ` to ${a.endDate}`}
                   </span>
                   {a.reason && <span className="text-muted-foreground">{a.reason}</span>}
+                  <ApprovalActions id={a.id} kind="absence" />
                 </li>
               ))}
             </ul>
           )}
         </CardContent>
       </Card>
+
+      {mine.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your requests</CardTitle>
+            <CardDescription>
+              What you have proposed, and where it stands. A pending request changes
+              nothing until somebody approves it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col divide-y divide-border">
+              {mine.map((r) => (
+                <li key={r.id} className="flex items-baseline justify-between gap-4 py-2 text-sm">
+                  <span>
+                    {r.operation} {r.entityLabel}
+                  </span>
+                  <span className="font-mono text-2xs tabular-nums text-muted-foreground">
+                    {r.status} · {r.createdAt}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       {nothingWaiting && (
         <p className="text-sm text-muted-foreground">
