@@ -118,6 +118,33 @@ async function mintWithKey(
 }
 
 /**
+ * Records a blocked-call ledger row and returns the error unchanged, so every
+ * throw site in mintLiveToken can wrap its GeminiError in one call:
+ * `throw recordFailure(userId, models, err)` — the same shape as
+ * callGeminiCore's helper in client.ts, with the feature slug fixed because
+ * this path only ever serves Live.
+ *
+ * Without it `live.session` would be the one slug whose call count meant
+ * "successes only" while every other slug counts attempts: a user permanently
+ * locked out of Live by a 403 would read as "not used" in Settings and the
+ * adoption panel — indistinguishable from someone who never tried it — while
+ * that same user's blocked worklog drafts were counted.
+ */
+function recordFailure(
+  userId: string,
+  models: readonly string[],
+  error: GeminiError,
+): GeminiError {
+  recordAiUsage({
+    userId,
+    feature: 'live.session',
+    model: models[0] ?? 'unknown',
+    status: error.code,
+  })
+  return error
+}
+
+/**
  * Mints an ephemeral Live token, rolling across the caller's own active keys
  * least-recently-used first (never-used before used), then org-shared keys
  * owned by others, LRU again — same ordering as callGeminiCore, via
@@ -153,9 +180,13 @@ export async function mintLiveToken(
   const usedSharedPool = keys.some((key) => key.userId !== userId)
 
   if (keys.length === 0) {
-    throw new GeminiError(
-      'NO_KEYS',
-      'No active Gemini API keys — add one in Profile (or ask a teammate to share one).',
+    throw recordFailure(
+      userId,
+      models,
+      new GeminiError(
+        'NO_KEYS',
+        'No active Gemini API keys — add one in Profile (or ask a teammate to share one).',
+      ),
     )
   }
 
@@ -229,15 +260,32 @@ export async function mintLiveToken(
   }
 
   if (sawAuthFailure) {
-    throw new GeminiError(
-      'AUTH_FAILED',
-      'Your Gemini key was rejected, is out of quota, or has no Live API access — live transcription is off, recording continues.',
+    // This — not ALL_KEYS_FAILED — is where the realistic "nothing worked"
+    // outcome exits, so it is the branch that has to name the shared pool.
+    // ALL_KEYS_FAILED below is only reachable when EVERY key fails to
+    // DECRYPT; a caller running on a teammate's shared key that hit its Live
+    // quota lands here, and telling them THEIR key was rejected sends them to
+    // a Profile page that may hold no keys at all, with no path to the real
+    // cause.
+    throw recordFailure(
+      userId,
+      models,
+      new GeminiError(
+        'AUTH_FAILED',
+        usedSharedPool
+          ? "Your key and your team's shared keys were all rejected, are out of quota, or have no Live API access — check Profile → Gemini API keys, or ask the teammate who shared a key to check theirs. Live transcription is off, recording continues."
+          : 'Your Gemini key was rejected, is out of quota, or has no Live API access — live transcription is off, recording continues.',
+      ),
     )
   }
   if (sawTransientBusy) {
-    throw new GeminiError(
-      'TRANSIENT_BUSY',
-      'Gemini Live is busy right now — recording continues without live transcription.',
+    throw recordFailure(
+      userId,
+      models,
+      new GeminiError(
+        'TRANSIENT_BUSY',
+        'Gemini Live is busy right now — recording continues without live transcription.',
+      ),
     )
   }
   if (lastBadMessage) {
@@ -246,15 +294,26 @@ export async function mintLiveToken(
     // the meeting. What they need is that the recording is unaffected and
     // that this is not something retrying will fix.
     console.error('[live-token] every model rejected the mint:', lastBadMessage)
-    throw new GeminiError(
-      'BAD_RESPONSE',
-      'Gemini Live isn’t available for this key’s project — recording continues without live transcription.',
+    throw recordFailure(
+      userId,
+      models,
+      new GeminiError(
+        'BAD_RESPONSE',
+        'Gemini Live isn’t available for this key’s project — recording continues without live transcription.',
+      ),
     )
   }
-  throw new GeminiError(
-    'ALL_KEYS_FAILED',
-    usedSharedPool
-      ? 'Could not reach Gemini Live with any saved or org-shared key — recording continues without live transcription.'
-      : 'Could not reach Gemini Live with any saved key — recording continues without live transcription.',
+  // Only reachable when every key failed to DECRYPT (the loop `continue`s past
+  // a corrupted row without setting any of the flags above), which is why the
+  // shared-pool distinction that matters to users lives on AUTH_FAILED.
+  throw recordFailure(
+    userId,
+    models,
+    new GeminiError(
+      'ALL_KEYS_FAILED',
+      usedSharedPool
+        ? 'Could not reach Gemini Live with any saved or org-shared key — recording continues without live transcription.'
+        : 'Could not reach Gemini Live with any saved key — recording continues without live transcription.',
+    ),
   )
 }
