@@ -54,6 +54,12 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     capability: 'absence.view',
   },
   {
+    href: '/admin/holidays',
+    label: 'Holidays',
+    description: 'Company-wide shutdown days, on top of the gazetted calendar',
+    capability: 'holiday.manage',
+  },
+  {
     href: '/admin/audit',
     label: 'Audit trail',
     description: 'Every change, with who made it and when',
