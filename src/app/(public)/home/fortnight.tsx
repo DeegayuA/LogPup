@@ -80,23 +80,35 @@ const FORTNIGHT: Day[] = [
    pale fill: `bg-muted` on `background` sits under 1.5:1 and would make three
    of these states invisible to the readers those rules exist for. */
 const CELL: Record<Cell, string> = {
-  logged: 'h-10 bg-foreground',
-  half: 'h-5 bg-foreground',
+  logged: 'h-8 bg-foreground',
+  half: 'h-4 bg-foreground',
   off: '',
-  missing: 'h-10 border-2 border-foreground',
-  open: 'h-10 border border-dashed border-foreground',
+  missing: 'h-8 border-2 border-foreground',
+  open: 'h-8 border border-dashed border-foreground',
 }
 
 export function Fortnight() {
   return (
-    <figure className="flex flex-col gap-4">
-      <div className="flex items-end gap-1.5">
+    /**
+     * MEASURED, NOT STRETCHED. An earlier version let the cells flex to fill
+     * the 76rem container, which made each day about 150px wide — at that
+     * size the row stopped reading as a fortnight of a ledger and started
+     * reading as a bar chart, and it was the only element on the page
+     * ignoring the measure everything else is set to. Fixed-width cells keep
+     * the strip at its natural size (fifteen days ≈ 24rem), so it sits inside
+     * the column as a figure rather than spanning the page.
+     */
+    <figure className="flex max-w-full flex-col gap-4">
+      <div className="flex w-fit items-end gap-1">
         {FORTNIGHT.map((day, index) => (
-          <div key={day.date} className="flex min-w-0 flex-1 flex-col items-center gap-2">
-            <div className="flex h-10 w-full items-end">
+          <div key={day.date} className="flex w-6 shrink-0 flex-col items-center gap-2">
+            <div className="flex h-8 w-full items-end">
               {day.state === 'off' ? (
                 /* No cell, on purpose. The gap IS the statement: a holiday or
-                   a Sunday is not an empty box waiting to be filled in. */
+                   a Sunday is not an empty box waiting to be filled in. A
+                   baseline tick rather than nothing at all, so the day still
+                   holds its place and the sequence is visibly stepping over
+                   it rather than closing the gap. */
                 <div aria-hidden className="h-px w-full bg-border" />
               ) : (
                 <div

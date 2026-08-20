@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowUpRight } from 'lucide-react'
 import { BrandMark } from '@/components/shell/brand-mark'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 
@@ -49,24 +50,63 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
           /terms, which have no colophon — dropping it would leave those two
           pages ending on nothing. */}
       <footer className="border-t border-border">
-        <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between md:px-10">
-          <div className="flex flex-col gap-2">
-            <AltaVisionLogo className="h-5 w-auto" />
-            <p className="text-xs text-muted-foreground">
+        {/* `items-end`, not `items-center`: the left column is a mark over a
+            sentence and the right is a row of links, so centring aligns a text
+            baseline against the middle of a stacked block and neither edge
+            lines up with anything. Ending both columns on the same line gives
+            the footer one baseline to sit on. */}
+        <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-6 px-6 py-8 sm:flex-row sm:items-end sm:justify-between md:px-10">
+          <div className="flex flex-col gap-2.5">
+            {/* h-4 rather than h-5. At the footer's 12px body size a 20px mark
+                is the loudest thing on the closing line, which puts the
+                operator's logo above the operator's sentence in emphasis. */}
+            <AltaVisionLogo className="h-4 w-auto" />
+            <p className="max-w-[46ch] text-xs leading-relaxed text-muted-foreground">
               LogPup is built and operated by Alta Vision (Pvt) Ltd, Sri Lanka.
             </p>
           </div>
-          <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-            <Link href="/privacy" className="hover:text-foreground">
-              Privacy Policy
-            </Link>
-            <Link href="/terms" className="hover:text-foreground">
-              Terms of Service
-            </Link>
-            <a href="mailto:deeghayus@altavision.lk" className="hover:text-foreground">
-              deeghayus@altavision.lk
+
+          <div className="flex flex-col items-start gap-3 sm:items-end">
+            <nav className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+              <Link
+                href="/privacy"
+                className="rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Privacy Policy
+              </Link>
+              <Link
+                href="/terms"
+                className="rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Terms of Service
+              </Link>
+              <a
+                href="mailto:deeghayus@altavision.lk"
+                className="rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                deeghayus@altavision.lk
+              </a>
+            </nav>
+
+            {/* Separated from the three links rather than becoming a fourth:
+                those are obligations of the operator — two of them are exactly
+                what Google's review fetches — and a personal site is a
+                different kind of thing. An anchor styled as a button, never a
+                <button>, because this navigates; same reasoning as the home
+                page's CTAs. `rel="noreferrer"` matches the existing external
+                link on the sign-in panel, and the label says where it goes and
+                that it leaves this tab. */}
+            <a
+              href="https://deeghayu.netlify.app/"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Built by Deeghayu — opens deeghayu.netlify.app in a new tab"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:border-ring/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none motion-reduce:transition-none"
+            >
+              Built by Deeghayu
+              <ArrowUpRight className="size-3 shrink-0" aria-hidden />
             </a>
-          </nav>
+          </div>
         </div>
       </footer>
     </div>
