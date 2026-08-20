@@ -5,6 +5,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { PlateBriefing, PlateCapacity, PlateWriteup } from './plates'
 import { Fortnight } from './fortnight'
+import { LedgerSheet } from './ledger-sheet'
 import { RevealScope } from './reveal-scope'
 
 export const metadata: Metadata = {
@@ -260,6 +261,20 @@ export default function PublicHomePage() {
               Accounts are approved by an Alta Vision administrator.
             </p>
           </div>
+        </div>
+
+        {/* The artefact sits beside the lead rather than under the nameplate:
+            the nameplate is the loudest thing on the page and putting a second
+            object directly beneath it makes two mastheads. On a phone it drops
+            below the lead, where it reads as an illustration of the sentence
+            above it rather than as a header of its own.
+
+            No `data-reveal`: this is above the fold, and reveal-scope.tsx
+            deliberately never touches anything already on screen. Its own
+            entrance is fill-mode keyframes, so it needs no observer and no
+            JavaScript. */}
+        <div className="mt-12 flex justify-start lg:mt-0 lg:justify-end">
+          <LedgerSheet />
         </div>
 
         {/* Drawn with a keyframe rather than through the IntersectionObserver:
