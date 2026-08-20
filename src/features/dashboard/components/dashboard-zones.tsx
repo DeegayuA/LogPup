@@ -20,11 +20,26 @@ import { listNotifications, unreadNotificationCount } from '@/features/notificat
 import { listRecentActivity } from '@/features/activity/queries'
 import { listPendingUsers } from '@/features/admin/queries'
 import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
+import { getBriefing } from '@/features/intel/actions'
+import { BriefingCard } from '@/features/intel/components/briefing-card'
+import { BriefingCardSkeleton } from '@/features/intel/components/intel-skeletons'
 import { CapacityHeat } from '@/features/dashboard/components/capacity-heat'
 import { ActiveSprints } from '@/features/dashboard/components/active-sprints'
 import { NotificationsCard } from '@/features/dashboard/components/notifications-card'
 import { RecentActivityCard } from '@/features/dashboard/components/recent-activity-card'
 import { buildMyDayStats } from '@/features/dashboard/my-day-stats'
+import {
+  aiEngineTotals,
+  buildAiEngineRows,
+  formatTokenCount,
+  sortAiEngineRows,
+} from '@/features/dashboard/ai-engine'
+import { AiEngineCard } from '@/features/dashboard/components/ai-engine-card'
+import { getAiPrefs } from '@/features/gemini/prefs'
+import { formatUsd } from '@/features/gemini/pricing'
+import { aggregateAiUsage, listPoolKeyHealth } from '@/features/gemini/queries'
+import { assessRecordingReadiness } from '@/features/gemini/readiness'
+import { summarizeUsage, totalsFor } from '@/features/gemini/usage-summary'
 import type { PersonStat, StatTone } from '@/features/people/person-stats'
 import { PersonTasksCard } from '@/features/people/components/person-tasks-card'
 import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
@@ -157,12 +172,24 @@ function MyDayStatTiles({ stats }: { stats: PersonStat[] }) {
 }
 
 export async function MyDayZone({ userId, userName }: { userId: string; userName: string }) {
-  const [workload, followups, meetings, notificationItems] = await Promise.all([
-    getPersonWorkload(userId),
-    getPersonFollowups(userId),
-    getPersonMeetings(userId),
-    listNotifications(userId, 8),
-  ])
+  const [workload, followups, meetings, notificationItems, briefingResult] =
+    await Promise.all([
+      getPersonWorkload(userId),
+      getPersonFollowups(userId),
+      getPersonMeetings(userId),
+      listNotifications(userId, 8),
+      // In the same Promise.all as the rest, not awaited after them: the
+      // briefing reads its own workspace snapshot, and sequencing it behind
+      // four queries would add its latency to a zone that already streams as
+      // one unit.
+      getBriefing(),
+    ])
+
+  // The one err() case is a snapshot that could not be read at all. Nothing
+  // to say and nothing to derive from, so the zone renders without the card
+  // rather than with an apology — the four cards below still answer the
+  // question the briefing was summarising.
+  const briefing = briefingResult.ok ? briefingResult.data : null
 
   // meetings.today, NOT a filter over meetings.upcoming: `upcoming` is a
   // display slice — capped at 5 and holding only meetings that have not
@@ -183,6 +210,14 @@ export async function MyDayZone({ userId, userName }: { userId: string; userName
   return (
     <>
       <MyDayStatTiles stats={myDayStats} />
+      {/* Full width and above the paired cards: the briefing is the sentence
+          that says which of the four cards below to open, so it reads before
+          them or not at all. No error branch and no conditional on AI being
+          configured — getBriefing degrades to source:'derived', a true
+          summary off the same snapshot, when AI is off, keyless or unrouted.
+          A card that sometimes vanished would make the zone's height depend
+          on somebody's AI settings. */}
+      {briefing ? <BriefingCard initial={briefing} className="mb-1" /> : null}
       <div className={pairedCards(4)}>
         <div id="my-tasks" className="scroll-mt-6">
           <PersonTasksCard
@@ -226,6 +261,13 @@ export function MyDayZoneSkeleton() {
             <Skeleton className="h-3 w-16" />
           </div>
         ))}
+      </div>
+      {/* Reserves the briefing's slot. Imported from the intel feature rather
+          than redrawn here: a second geometry for the same card is exactly
+          the drift this file's skeletons exist to prevent, and it would go
+          stale the first time the card changes. */}
+      <div aria-hidden className="mb-1">
+        <BriefingCardSkeleton />
       </div>
       <div className={pairedCards(4)} aria-hidden>
         {Array.from({ length: 4 }, (_, i) =>
@@ -363,6 +405,140 @@ export async function UnreadMentionsPill({ userId }: { userId: string }) {
       <AtSign className="size-3.5 text-chart-1" aria-hidden />
       {unread} unread
     </Link>
+  )
+}
+
+/* ────────────────────────── AI engine ───────────────────────── */
+
+/**
+ * How far back the AI figures look. Thirty days is not a round number picked
+ * for looks — it is the window Settings' own usage roll-up already uses, and
+ * two surfaces quoting "your AI usage" over different windows is how a user
+ * learns to trust neither.
+ */
+const AI_WINDOW_DAYS = 30
+const AI_WINDOW_MS = AI_WINDOW_DAYS * 24 * 60 * 60 * 1000
+
+const AI_STAT_GRID = 'grid grid-cols-2 gap-3 sm:grid-cols-2 md:grid-cols-4'
+
+/**
+ * The AI zone: what the product's AI is wired to, and what it has cost this
+ * person — the only zone on this page whose subject is the machine rather
+ * than the team.
+ *
+ * It sits LAST on purpose. The three zones above are what someone opens the
+ * dashboard to act on; this one is reference they consult. Streaming order
+ * follows reading order, so the numbers people came for still paint first.
+ *
+ * Two reads, both scoped to one user and both already indexed: the ledger
+ * roll-up and the key pool. The routing table itself costs nothing — it is
+ * computed from the same constants the call sites use.
+ */
+export async function AiZone({ userId }: { userId: string }) {
+  const now = new Date()
+  const since = new Date(now.getTime() - AI_WINDOW_MS)
+  const [prefs, aggRows, poolKeys] = await Promise.all([
+    getAiPrefs(userId),
+    aggregateAiUsage(userId, since),
+    listPoolKeyHealth(userId),
+  ])
+
+  const summaries = summarizeUsage(aggRows, now)
+  const totals = totalsFor(summaries)
+  const readiness = assessRecordingReadiness(poolKeys, now)
+  const rows = sortAiEngineRows(buildAiEngineRows({ prefs, summaries, at: now }))
+  const engineTotals = aiEngineTotals(rows)
+
+  return (
+    <>
+      <div className={AI_STAT_GRID}>
+        <StatTile
+          label={`AI calls · ${AI_WINDOW_DAYS}d`}
+          value={totals.calls}
+          meta={
+            totals.failedCalls > 0
+              ? `${totals.failedCalls} blocked before running`
+              : totals.calls > 0
+                ? 'all reached Google'
+                : 'nothing run yet'
+          }
+          tone={totals.failedCalls > 0 ? 'attention' : 'default'}
+          href="/settings"
+        />
+        <StatTile
+          label="Tokens spent"
+          value={formatTokenCount(totals.tokens)}
+          meta={`${totals.tokens.toLocaleString('en-US')} in and out`}
+          href="/settings"
+        />
+        <StatTile
+          label="Indicative value"
+          value={formatUsd(totals.valueUsd)}
+          // The distinction the ledger exists to keep straight: value is what
+          // the tokens WOULD cost on the paid tier, charge is what your own
+          // paid keys really ran. Free keys and a teammate's shared key are
+          // both $0 to you, and conflating the two invoices the wrong person.
+          meta={
+            totals.paidChargeUsd > 0
+              ? `${formatUsd(totals.paidChargeUsd)} on your paid keys`
+              : 'nothing charged to you'
+          }
+          href="/settings"
+        />
+        <StatTile
+          label="Keys working"
+          value={readiness.healthyCount}
+          meta={
+            readiness.failingCount > 0
+              ? `${readiness.failingCount} failing`
+              : readiness.healthyCount > 0
+                ? 'quota shared across them'
+                : 'add one in Profile'
+          }
+          tone={
+            readiness.level === 'blocked'
+              ? 'destructive'
+              : readiness.level === 'degraded'
+                ? 'attention'
+                : 'default'
+          }
+          href="/profile"
+        />
+      </div>
+      <div className={pairedCards(1)}>
+        <AiEngineCard
+          rows={rows}
+          totals={engineTotals}
+          readiness={readiness}
+          windowDays={AI_WINDOW_DAYS}
+        />
+      </div>
+    </>
+  )
+}
+
+export function AiZoneSkeleton() {
+  return (
+    <>
+      <span className="sr-only" role="status">
+        Loading your AI engine…
+      </span>
+      <div className={AI_STAT_GRID} aria-hidden>
+        {Array.from({ length: 4 }, (_, i) => (
+          <div
+            key={i}
+            className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2"
+          >
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-6 w-10" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        ))}
+      </div>
+      <div className={pairedCards(1)} aria-hidden>
+        <CardSkeleton rows={6} />
+      </div>
+    </>
   )
 }
 
