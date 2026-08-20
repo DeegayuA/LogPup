@@ -1,10 +1,12 @@
 import type { Session } from 'next-auth'
-import { and, asc, desc, eq, gte, isNull, lt } from 'drizzle-orm'
+import { and, asc, eq, gte, isNull, lt } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
 import { meetingAiNotes, meetingAttendees } from '@/db/schema'
 import { loadActor } from '@/features/auth/actor'
 import { UNWRITTEN_MEETING_LIMIT } from '@/features/intel/signals'
+import { absenceDays } from '@/features/worklog/absence-days'
+import { getMyPendingAbsences } from '@/features/worklog/queries'
 import { listApps } from '@/features/apps/queries'
 import { sortCapacities } from '@/features/dashboard/sort-capacities'
 import { isoDayAdd, isoDayDiff, isoDayOf } from '@/features/people/iso-day'
@@ -92,9 +94,18 @@ export async function loadWorkspaceSnapshot(
   const unwrittenSince = new Date(now.getTime() - UNWRITTEN_MEETING_WINDOW_DAYS * 86_400_000)
 
   // ONE Promise.all. On the Neon HTTP driver each await is a full round trip,
-  // and a person is watching this one resolve — seven serialized reads here is
-  // seven times the latency of seven parallel ones.
-  const [workload, followups, capacities, sprints, apps, unwritten, coverage] = await Promise.all([
+  // and a person is watching this one resolve — eight serialized reads here is
+  // eight times the latency of eight parallel ones.
+  const [
+    workload,
+    followups,
+    capacities,
+    sprints,
+    apps,
+    unwritten,
+    coverage,
+    pendingAbsences,
+  ] = await Promise.all([
     getPersonWorkload(user.id),
     getPersonFollowups(user.id),
     getUserCapacities(),
@@ -144,6 +155,10 @@ export async function loadWorkspaceSnapshot(
     loadActor().then((actor) =>
       actor ? getCoverage(actor, user.id, gapFrom, todayIso, todayIso) : null,
     ),
+    // Inside the batch, not after it: this is an independent read and every
+    // await in front of the others is another Neon round trip on a path
+    // somebody is waiting on.
+    getMyPendingAbsences(user.id),
   ])
 
   const rankedCapacities = sortCapacities(capacities).slice(0, CAPACITY_LIMIT)
@@ -164,8 +179,19 @@ export async function loadWorkspaceSnapshot(
       return left === right ? a.slug.localeCompare(b.slug) : left - right
     })
     .slice(0, QUIET_APP_LIMIT)
+  // A day already covered by a PENDING absence leaves the gap list, because
+  // /worklog's catch-up queue drops it too — getCoverage only exempts APPROVED
+  // absences, so without this /intel raises a worklog.gap alert (severity
+  // `alert` from three days) for days the other page is simultaneously
+  // treating as dealt with. Two surfaces disagreeing about the same days is
+  // worse than either answer alone: the reader cannot tell which is lying, and
+  // the alert is one they have no action left to clear.
+  //
+  // Same helper and same query /worklog uses, deliberately. A private copy of
+  // either is how the two answers drifted apart in the first place.
+  const filedDays = absenceDays(pendingAbsences, gapFrom, todayIso)
   const gapDays = (coverage?.days ?? [])
-    .filter((day) => day.status === 'missing')
+    .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
     .map((day) => day.day)
 
   const signalInput: SignalInput = {
