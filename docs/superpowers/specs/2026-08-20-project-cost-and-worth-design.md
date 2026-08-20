@@ -46,7 +46,14 @@ Two tables, because the sensitivity of the two is completely different.
 Same shape, keyed to `user_id`. Present only for people whose rate genuinely differs from their role's.
 
 **This is salary data, and the design treats it as such:**
-- Gated by its own capability. The capability matrix is another session's — **ask for one, do not invent one**.
+- **Gated by `finance.view`** — landed in `capabilities.ts` (c6cff98), decided by the owner, not chosen here:
+
+  `'finance.view': { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N }`
+
+  Three properties to build against, all deliberate:
+  1. **One capability for rates AND everything derived from them.** Every query returning money asks `finance.view` — not only the ones returning a rate — because a total narrowed to one contributor *is* that person's rate.
+  2. **No scoped arm, at any level.** This is the part most likely to be "fixed" later by someone helpful: a manager running a project does not thereby acquire the right to see what their team is paid. If a surface ever wants project economics for managers, that is a SEPARATE capability over a figure that cannot be narrowed to a person — never a scoped arm on this one.
+  3. It sits in `APPROVAL_ACTIONS`, so employment stage can withhold it: a trainee, intern or contractor holding an admin seat does not see salaries, without inventing a second seat.
 - **Never rendered in any per-person view.** Not the person page, not the directory, not a tooltip.
 - **No cost-per-person chart, ever.** A bar chart of cost by person is a salary chart with extra steps. Cost aggregates to project, team, role, or time — never to an individual.
 - **The capability must gate the AGGREGATE reads too, not just the rate field.** Suppressing the per-person chart is not sufficient. Anyone who can filter a cost total can narrow it to a single contributor — a project with one person on it, or a date range in which only one person logged — and read their rate off the result by dividing by their hours. **A rate hidden behind a capability but reconstructible from an unguarded total is not hidden.** So the gate belongs on every query that returns money, and a cost figure must refuse to render when its contributor count falls to one rather than quietly resolving to a single person's pay.
