@@ -70,13 +70,17 @@ export function defaultChainFor(featureId: AiFeatureId): readonly string[] {
  * a prepended model that answers 400 rather than 404 makes its feature fail
  * outright with a raw upstream error, for as long as the choice is set.
  *
- * Two things make that more than theoretical: MODEL_CHOICES offers
- * `gemini-omni-flash` and `gemini-3-flash-preview`, both undocumented enough
- * that no published rate exists for them (see pricing.ts), and three features
- * send responseMimeType: 'application/json' — meeting-intel, sprint-draft and
- * app-metadata, all of them `text` kind, all of them offering those two ids
- * in their picker. A model that rejects JSON mode rejects it with a 400, not
- * a 404. Note also that the sibling path is ASYMMETRIC:
+ * The exposure was narrowed rather than left open: `gemini-omni-flash` and
+ * `gemini-3-flash-preview` were REMOVED from MODEL_CHOICES for exactly this
+ * reason — no published rate existed for either, so they could not be priced
+ * honestly, AND nothing guaranteed they would fall through. Either flaw alone
+ * would have been tolerable; together they made a choice not worth offering.
+ * What remains is residual rather than live: three features send
+ * responseMimeType: 'application/json' — meeting-intel, sprint-draft and
+ * app-metadata, all `text` kind — and a model that rejects JSON mode rejects
+ * it with a 400, not a 404. So any FUTURE addition to the `text` list must be
+ * checked against JSON mode before it is offered.
+ * Note also that the sibling path is ASYMMETRIC:
  * mintLiveToken in ../transcription/live-token.ts DOES advance to the next
  * model on 'bad', because for the token endpoint a bad request usually means
  * the model is wrong; callGeminiCore does not.
