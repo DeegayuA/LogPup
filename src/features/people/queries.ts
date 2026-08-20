@@ -50,7 +50,7 @@ import {
   type ActivityDay,
 } from '@/features/people/activity-levels'
 import { splitPersonFollowups, type PersonFollowups } from '@/features/people/followup-split'
-import { notRemoved } from '@/features/people/removal-queries'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { isoDayAdd, isoDayOf, isoWeekStart } from '@/features/people/iso-day'
 import { splitPersonMeetings, type PersonMeetings } from '@/features/people/meeting-window'
 import {
@@ -181,14 +181,12 @@ export const getUserCapacities = cache(async function getUserCapacities(q?: stri
     .leftJoin(liveApps, eq(assignments.appId, liveApps.id))
     .where(
       and(
-        eq(users.active, true),
-        // Excludes self-signed-up users still awaiting admin approval.
-        eq(users.status, 'approved'),
-        // The directory answers "who is here", so somebody with an open
-        // removal is not. Their past work is untouched and still attributed
-        // to them everywhere else — this is the one read that stops naming
-        // them, not a filter applied to the record of what they did.
-        notRemoved(users.id),
+        // The directory answers "who is here", so somebody deactivated,
+        // unapproved or with an open removal is not. Their past work is
+        // untouched and still attributed to them everywhere else — this is
+        // the one read that stops naming them, not a filter applied to the
+        // record of what they did.
+        canHoldWork(),
         // Escape LIKE metacharacters so "%"/"_" in the search box match literally.
         q ? ilike(users.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`) : undefined,
       ),
@@ -269,7 +267,11 @@ export async function getTeamCapacityAsOf(at: Date): Promise<UserCapacity[]> {
         orgTags: users.orgTags,
       })
       .from(users)
-      .where(and(eq(users.active, true), eq(users.status, 'approved')))
+      // The same roster rule the pickers use. A removed person is excluded
+      // here for the reason a deactivated one already was: this is the list
+      // of people the workspace currently has, not a record of who did what
+      // — their past allocations stay attributed to them everywhere else.
+      .where(canHoldWork())
       .orderBy(asc(users.name)),
     db
       .select({
@@ -366,7 +368,11 @@ export async function getCapacityHistoryOverview(
         orgTags: users.orgTags,
       })
       .from(users)
-      .where(and(eq(users.active, true), eq(users.status, 'approved')))
+      // The same roster rule the pickers use. A removed person is excluded
+      // here for the reason a deactivated one already was: this is the list
+      // of people the workspace currently has, not a record of who did what
+      // — their past allocations stay attributed to them everywhere else.
+      .where(canHoldWork())
       .orderBy(asc(users.name)),
     // Every interval in force at ANY point inside [from, to]. Deliberately
     // wider than "in force at `to`" — the window's opening snapshot and the
@@ -685,16 +691,8 @@ export async function listActiveUsers(): Promise<ActiveUser[]> {
   return db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(
-      and(
-        eq(users.active, true),
-        // Excludes self-signed-up users still awaiting admin approval.
-        eq(users.status, 'approved'),
-        // Removed from the workspace — see the docblock above, and
-        // src/features/people/removal-queries.ts.
-        notRemoved(users.id),
-      ),
-    )
+    // See the docblock above, and src/features/people/removal-queries.ts.
+    .where(canHoldWork())
     .orderBy(asc(users.name))
 }
 

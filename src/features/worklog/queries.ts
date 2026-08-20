@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { absences, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
 import type { ScheduleRow } from '@/features/worklog/schedules'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
+import { orgHolidaySet } from '@/features/worklog/org-holidays'
 
 /**
  * Reads for the work log.
@@ -214,15 +215,25 @@ export async function getMyWorkSchedule(userId: string): Promise<ScheduleRow[]> 
 }
 
 /**
- * Company shutdown days in `[fromIso, toIso]`, to be merged with the gazetted
- * map by the caller — the same `isHoliday(iso)` callback working-days.ts and
- * coverage.ts both take, so a company holiday needs no deploy and no second
- * definition of "holiday".
+ * Company shutdown days IN FORCE in `[fromIso, toIso]`, to be merged with the
+ * gazetted map by the caller — the same `isHoliday(iso)` callback
+ * working-days.ts and coverage.ts both take, so a company holiday needs no
+ * deploy and no second definition of "holiday".
+ *
+ * REVOCATION IS APPLIED HERE, through `orgHolidaySet`, and this used to be
+ * the second definition it warns about. `org_holidays` is revoked rather than
+ * deleted (see the comment on the table in src/db/schema.ts) and a row only
+ * still closes the studio while `isOrgHolidayInForce` says so. Selecting
+ * `day` alone silently dropped that clause, so `/worklog`'s catch-up panel
+ * kept exempting days from shutdowns that had been called off, while
+ * getCoverage — which reads the same table through `orgHolidaySet` — counted
+ * them owed. The person and their manager were reading different denominators
+ * for the same days.
  */
 export async function getOrgHolidayDays(fromIso: string, toIso: string): Promise<string[]> {
   const rows = await db
-    .select({ day: orgHolidays.day })
+    .select({ day: orgHolidays.day, revokedFrom: orgHolidays.revokedFrom })
     .from(orgHolidays)
     .where(and(gte(orgHolidays.day, fromIso), lte(orgHolidays.day, toIso)))
-  return rows.map((row) => row.day)
+  return [...orgHolidaySet(rows)]
 }

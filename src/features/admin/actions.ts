@@ -18,6 +18,7 @@ import { orgForEmail } from '@/lib/org-from-domain'
 import { normalizePhone } from '@/lib/phone'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canEditUser, wouldLeaveNoSuperadmins } from '@/features/admin/permissions'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { jobRoleInput } from '@/features/auth/title-schema'
 import { personalEmailInput } from '@/features/auth/personal-email-schema'
 import { logActivity } from '@/features/activity/log'
@@ -109,8 +110,17 @@ function revalidateUserDetailPaths() {
   revalidatePath('/profile')
 }
 
-// Counts active admins other than `excludeUserId` — used to check whether
-// demoting/deactivating that user would leave zero active admins.
+// Counts REACHABLE superadmins other than `excludeUserId` — used to check
+// whether demoting/deactivating/removing that user would leave the workspace
+// with nobody who can grant superadmin again.
+//
+// `canHoldWork()`, not `active && approved`. The question this answers is not
+// "does another superadmin row exist" but "is there another superadmin who
+// could undo this", and a REMOVED superadmin cannot sign in at all — counting
+// them is the same mistake as counting a pending one, which the comment below
+// already warned about. Left uncounted, the last usable superadmin could be
+// demoted, deactivated or removed while a tombstoned account stood in as the
+// safety net, and the way back is restorePerson, which itself needs an admin.
 async function otherActiveSuperadminCount(excludeUserId: string): Promise<number> {
   const [row] = await db
     .select({ count: count() })
@@ -118,11 +128,11 @@ async function otherActiveSuperadminCount(excludeUserId: string): Promise<number
     .where(
       and(
         eq(users.role, 'superadmin'),
-        eq(users.active, true),
         // A pending superadmin must not count toward "there is still another
         // one" — otherwise the last-superadmin guard could be defeated by
-        // inviting somebody who has not accepted yet.
-        eq(users.status, 'approved'),
+        // inviting somebody who has not accepted yet. Same for a deactivated
+        // or removed one, which is why this is the shared roster predicate.
+        canHoldWork(),
         ne(users.id, excludeUserId),
       ),
     )

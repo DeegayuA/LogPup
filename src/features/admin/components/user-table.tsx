@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, Download, Pencil, ShieldCheck, UserRoundCog } from 'lucide-react'
+import { ChevronDown, Download, Pencil, ShieldCheck, UserRoundCog, UserRoundX } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -43,6 +43,7 @@ import {
   setUserEmploymentType,
   setUserRole,
   setUserTitle,
+  removeUser,
 } from '@/features/admin/actions'
 import {
   bulkSetUserActive,
@@ -61,6 +62,7 @@ import { HeaderCheckbox, RowCheckbox } from '@/features/admin/components/bulk-se
 import { downloadCsv } from '@/features/admin/components/csv-download'
 import { PERSONAL_EMAIL_MAX_LENGTH } from '@/features/auth/personal-email-schema'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
 import type { AdminUser } from '@/features/admin/queries'
 import { orgForEmail } from '@/lib/org-from-domain'
@@ -540,16 +542,23 @@ export function UserTable({
           <div className="flex flex-col">
             <span className="text-xs font-medium">Offboarding</span>
             <span className="text-2xs text-muted-foreground">
-              Reassign this person&apos;s open work before they leave.
+              Hand the work over first — removing somebody does not reassign it.
             </span>
           </div>
           {isSelf ? (
             <span className="text-2xs text-muted-foreground">Not available for your own account</span>
           ) : (
-            <Button variant="outline" size="sm" render={<Link href={`/admin/people/${user.id}/handover`} />}>
-              <UserRoundCog aria-hidden className="size-3.5" />
-              Hand over work
-            </Button>
+            /* Handover then removal, in the order they should happen. Removal
+               is the destructive one, so it is last and styled as such — and
+               both sit a step away from the seat and status controls above,
+               which are what an admin actually comes here to change. */
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" render={<Link href={`/admin/people/${user.id}/handover`} />}>
+                <UserRoundCog aria-hidden className="size-3.5" />
+                Hand over work
+              </Button>
+              <RemovePersonButton user={user} disabled={isPending} />
+            </div>
           )}
         </div>
       </div>
@@ -814,6 +823,93 @@ export function UserTable({
         </Table>
       </div>
     </div>
+  )
+}
+
+/**
+ * Removing somebody from the workspace.
+ *
+ * REMOVAL IS NOT DEACTIVATION, and the dialog says which is which, because
+ * the Active switch is three inches away and the two are easy to confuse: a
+ * deactivated person still signs in and is told their account is off; a
+ * removed one cannot sign in at all and stops being offered as an assignee,
+ * attendee, lead or PM anywhere.
+ *
+ * The reason field is optional and free text. It is the only part of a
+ * removal anybody reads six months later — "contract ended" versus "duplicate
+ * account" is the difference between a restore that makes sense and one
+ * nobody can justify — so it is offered, never demanded.
+ *
+ * Their work is deliberately untouched, and the dialog promises that plainly:
+ * removal opens an interval in user_deletions and nothing else, so every
+ * comment, worklog and meeting keeps their name on it (see the table's
+ * comment in src/db/schema.ts).
+ */
+function RemovePersonButton({ user, disabled }: { user: AdminUser; disabled: boolean }) {
+  const [reason, setReason] = useState('')
+  const [pending, startRemoving] = useTransition()
+
+  function handleRemove() {
+    startRemoving(async () => {
+      try {
+        const res = await removeUser(user.id, reason.trim() || undefined)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(`${user.name} removed from the workspace`)
+        setReason('')
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={disabled || pending}
+            className="border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10"
+          />
+        }
+      >
+        <UserRoundX aria-hidden className="size-3.5" />
+        Remove
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove {user.name} from the workspace?</AlertDialogTitle>
+          <AlertDialogDescription>
+            They will not be able to sign in, and they stop appearing as an assignee,
+            attendee, lead or PM. Everything they have written stays exactly where it is,
+            with their name on it. An admin can restore them from Trash.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`remove-reason-${user.id}`} className="text-xs">
+            Reason (optional)
+          </Label>
+          <Input
+            id={`remove-reason-${user.id}`}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Contract ended"
+            maxLength={200}
+            className="h-9 text-sm"
+          />
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" disabled={pending} onClick={handleRemove}>
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 

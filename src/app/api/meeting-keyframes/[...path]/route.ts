@@ -29,6 +29,14 @@ export async function GET(
 ) {
   const session = await auth()
   if (!session?.user) return new Response('Not found', { status: 404 })
+  // "Signed in" stopped implying "may use the app" when deactivated accounts
+  // were given real sessions (src/lib/auth.ts). The proxy's deactivation gate
+  // deliberately skips /api so sign-out keeps working, and this route is a
+  // file endpoint that must answer with a status code rather than an HTML
+  // redirect — so it has to ask for itself, exactly as the .ics route does.
+  // A keyframe is a screen capture of a meeting; a switched-off account must
+  // not still be able to stream one.
+  if (!session.user.active) return new Response('Not found', { status: 404 })
 
   const { path } = await params
   // Same single-encoded-segment trick as the avatar route and

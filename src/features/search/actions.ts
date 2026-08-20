@@ -1,12 +1,13 @@
 'use server'
 
 import { z } from 'zod'
-import { ilike, or, eq, and, asc, desc } from 'drizzle-orm'
+import { ilike, or, eq, asc, desc } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
 import { liveApps } from '@/db/live'
 import { assignments, tasks, users } from '@/db/schema'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canAccessApp } from '@/lib/access-gate'
 import { parseTaskIntent } from '@/lib/task-intent'
@@ -65,12 +66,17 @@ const quickAssignTitle = z
 // Escape LIKE metacharacters so names with "%"/"_" match literally.
 const likePattern = (value: string) => `%${value.replace(/[\\%_]/g, '\\$&')}%`
 
-/** Everyone the palette may assign to. Approved + active only. */
+/**
+ * Everyone the palette may assign to. `canHoldWork()` rather than the
+ * active+approved pair spelled out here: this is an ASSIGNMENT TARGET, so
+ * somebody removed from the workspace — who cannot sign in at all — must not
+ * be offered as one. See src/features/people/removal-queries.ts.
+ */
 async function assignableUsers() {
   return db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(and(eq(users.active, true), eq(users.status, 'approved')))
+    .where(canHoldWork())
     .orderBy(asc(users.name))
 }
 

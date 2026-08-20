@@ -21,7 +21,7 @@
 import { QueryBuilder, type AnyPgColumn } from 'drizzle-orm/pg-core'
 import { and, eq, isNull, notExists, sql, type SQL } from 'drizzle-orm'
 import { db } from '@/db'
-import { userDeletions } from '@/db/schema'
+import { userDeletions, users } from '@/db/schema'
 
 // Connection-free, same reason as src/db/live.ts: QueryBuilder builds SQL
 // without a client, so a module-level predicate never touches the lazy db
@@ -146,3 +146,29 @@ export class AccountRemovedError extends Error {}
  * ERROR_COPY in src/app/auth-error/page.tsx for the matching entry.
  */
 export const ACCOUNT_REMOVED_REDIRECT = '/auth-error?error=AccountRemoved'
+
+/**
+ * THE roster predicate — "may this person be handed work right now".
+ *
+ * Every directory, picker, assignment target and speaker list in the app was
+ * already spelling out `active && approved` by hand, and the removal work
+ * then had to remember to add `notRemoved` to each of them separately. It did
+ * not: six of the nine forgot, and in every one of those a REMOVED person —
+ * who cannot sign in at all — still ranked as more employable than a merely
+ * DEACTIVATED one, who is excluded by the `active` half. Removal is strictly
+ * heavier than deactivation, so any read where deactivation disqualifies you
+ * must disqualify removal too; the two can only stay in that order if one
+ * expression says so.
+ *
+ * Compose this instead of the three conditions. Never into a join that
+ * ATTRIBUTES work — see notRemoved above, and the comment on userDeletions in
+ * src/db/schema.ts.
+ */
+export function canHoldWork(): SQL {
+  return and(
+    eq(users.active, true),
+    // Excludes self-signed-up accounts still awaiting admin approval.
+    eq(users.status, 'approved'),
+    notRemoved(users.id),
+  ) as SQL
+}

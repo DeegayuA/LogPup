@@ -66,7 +66,7 @@ vi.mock('@/db', () => {
   }
 })
 
-const { deleteBug, reportBug, triageBug } = await import('./actions')
+const { deleteBug, reportBug, triageBug, updateBugContent } = await import('./actions')
 
 const APP_ID = '11111111-1111-4111-8111-111111111111'
 const BUG_ID = '22222222-2222-4222-8222-222222222222'
@@ -317,5 +317,75 @@ describe('deleteBug', () => {
     expect(logActivityMock).toHaveBeenCalledWith(
       expect.objectContaining({ verb: 'deleted', entityType: 'bug', detail: 'moved to trash' }),
     )
+  })
+})
+
+describe('updateBugContent', () => {
+  it('refuses a member: rewriting a report is a triage act, not a filing one', async () => {
+    // bug.report is granted 'all' from member up so anyone can FILE one. What
+    // a report says afterwards is the queue's index, and bug.triage owns it.
+    as('member')
+    const res = await updateBugContent({ bugId: BUG_ID, title: 'Sprint switcher loses the backlog' })
+    expect(res.ok).toBe(false)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses an empty edit rather than writing a no-op row', async () => {
+    as('admin')
+    // Both fields omitted — what a caller that forgot to diff its form sends.
+    // The refusal is the zod refine's, not the type system's: the input type
+    // has both optional, so nothing here is a compile error.
+    const res = await updateBugContent({ bugId: BUG_ID })
+    expect(res).toEqual({ ok: false, error: 'Nothing to change' })
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a title the reporting form would have refused', async () => {
+    // The bounds are lifted from bugReportInput, so this is really asserting
+    // that the two schemas cannot drift apart.
+    as('admin')
+    const res = await updateBugContent({ bugId: BUG_ID, title: 'ugh' })
+    expect(res.ok).toBe(false)
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes only the field that changed, and bumps updatedAt', async () => {
+    as('admin')
+    const res = await updateBugContent({ bugId: BUG_ID, title: 'Sprint switcher loses the backlog' })
+    expect(res.ok).toBe(true)
+    const set = updated()!
+    expect(set.title).toBe('Sprint switcher loses the backlog')
+    // Absent, not null: a title fix must not blank a description nobody sent.
+    expect('description' in set).toBe(false)
+    expect(set.updatedAt).toBeInstanceOf(Date)
+  })
+
+  it('leaves status, severity and resolvedAt alone — that is triageBug s job', async () => {
+    as('admin')
+    await updateBugContent({ bugId: BUG_ID, description: 'Happens in Chrome and Safari, every time.' })
+    const set = updated()!
+    expect('status' in set).toBe(false)
+    expect('severity' in set).toBe(false)
+    expect('resolvedAt' in set).toBe(false)
+  })
+
+  it('logs the edit against the OLD title, so the feed stays findable', async () => {
+    as('admin')
+    await updateBugContent({ bugId: BUG_ID, title: 'Sprint switcher loses the backlog' })
+    const entry = logActivityMock.mock.calls[0][0]
+    expect(entry.entityLabel).toBe('Sprint switcher forgets the backlog')
+    expect(entry.detail).toBe('edited the title')
+    expect(entry.metadata.title).toEqual({
+      from: 'Sprint switcher forgets the backlog',
+      to: 'Sprint switcher loses the backlog',
+    })
+  })
+
+  it('reports a bug that is gone rather than claiming success', async () => {
+    as('admin')
+    getBugScopeMock.mockResolvedValue(null)
+    const res = await updateBugContent({ bugId: BUG_ID, title: 'Anything at all here' })
+    expect(res).toEqual({ ok: false, error: 'Bug not found' })
+    expect(updateSpy).not.toHaveBeenCalled()
   })
 })

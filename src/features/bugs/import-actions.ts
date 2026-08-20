@@ -5,6 +5,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { bugReports, users } from '@/db/schema'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { liveApps } from '@/db/live'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -153,8 +154,10 @@ async function resolveImport(
           .where(
             and(
               inArray(sql<string>`lower(${users.email})`, emails),
-              eq(users.active, true),
-              eq(users.status, 'approved'),
+              // An assignee resolved out of a CSV is an assignment target, so
+              // the same roster rule the pickers use applies here — including
+              // removal, which no `active` check would catch.
+              canHoldWork(),
             ),
           )
 

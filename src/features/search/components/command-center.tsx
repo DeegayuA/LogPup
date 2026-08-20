@@ -4,7 +4,7 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from '@/components/shell/theme-provider'
 import { toast } from 'sonner'
-import { CalendarDays, Loader2, PawPrint, Plus, Search } from 'lucide-react'
+import { CalendarDays, Check, CloudOff, Keyboard, Loader2, PawPrint, Plus, Search } from 'lucide-react'
 import {
   CommandDialog,
   Command,
@@ -17,7 +17,10 @@ import {
   CommandSeparator,
   CommandShortcut,
 } from '@/components/ui/command'
+import { Kbd } from '@/components/ui/kbd'
+import { Skeleton } from '@/components/ui/skeleton'
 import { navItems } from '@/components/shell/nav-items'
+import { ShortcutsOverlay } from '@/components/shell/shortcuts-overlay'
 import { cn } from '@/lib/utils'
 import { createDeduper } from '@/lib/dedupe'
 import { usePrefetchIntent } from '@/hooks/use-prefetch-intent'
@@ -124,24 +127,42 @@ function readRecents(): Recent[] {
 }
 
 /* Ember (chart-1) is reserved for attention states; work in flight uses the
-   working color, planned/neutral states use the quiet pine tint. */
-const STATUS_DOT: Record<string, string> = {
-  active: 'bg-primary',
-  in_progress: 'bg-primary',
-  paused: 'bg-chart-1',
-  planned: 'bg-chart-2',
-  done: 'bg-muted-foreground/40',
-  archived: 'bg-muted-foreground/40',
-  todo: 'bg-muted-foreground/40',
+   working color, planned/neutral states use the quiet pine tint.
+
+   Never hue alone (WCAG 1.4.1): every status also gets its own SHAPE, so the
+   colorblind read matches the color read — filled dot = in flight, hollow
+   ring = paused, hollow square = planned, dashed ring = not started, check
+   glyph = finished. The sr-only word beside the glyph is the one and only
+   announcement; every visual is aria-hidden so status is never read twice. */
+type StatusShape = 'dot' | 'ring' | 'square' | 'dashed' | 'check'
+const STATUS_DOT: Record<string, { shape: StatusShape; className: string }> = {
+  active: { shape: 'dot', className: 'bg-primary' },
+  in_progress: { shape: 'dot', className: 'bg-primary' },
+  paused: { shape: 'ring', className: 'border-chart-1' },
+  planned: { shape: 'square', className: 'border-chart-2' },
+  todo: { shape: 'dashed', className: 'border-muted-foreground/60' },
+  done: { shape: 'check', className: 'text-muted-foreground/70' },
+  archived: { shape: 'check', className: 'text-muted-foreground/70' },
 }
 
 function StatusDot({ status }: { status: string }) {
+  const meta = STATUS_DOT[status] ?? { shape: 'dot' as const, className: 'bg-border' }
   return (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
-      <span
-        aria-hidden
-        className={cn('size-1.5 rounded-full', STATUS_DOT[status] ?? 'bg-border')}
-      />
+      {meta.shape === 'check' ? (
+        <Check aria-hidden strokeWidth={3} className={cn('size-3', meta.className)} />
+      ) : (
+        <span
+          aria-hidden
+          className={cn(
+            meta.shape === 'dot' && 'size-1.5 rounded-full',
+            meta.shape === 'ring' && 'size-2 rounded-full border-2 bg-transparent',
+            meta.shape === 'square' && 'size-1.5 border bg-transparent',
+            meta.shape === 'dashed' && 'size-2 rounded-full border border-dashed bg-transparent',
+            meta.className,
+          )}
+        />
+      )}
       <span className="sr-only">{status.replace('_', ' ')}</span>
     </span>
   )
@@ -176,7 +197,24 @@ export function CommandCenterProvider({
   const [query, setQuery] = React.useState('')
   const [results, setResults] = React.useState<SearchGroup[]>(EMPTY_RESULTS)
   const [searching, setSearching] = React.useState(false)
+  /* A failed round-trip is an OUTAGE, not an empty workspace. Kept separate
+     from `results` so the error row can never be mistaken for (or rendered
+     as) the "nothing to fetch" empty state. `searchRetry` re-runs the search
+     effect for the SAME query — the deduper never retains rejections
+     (lib/dedupe.ts), so a retry is a real second request, not a cached
+     failure served back. */
+  const [searchError, setSearchError] = React.useState(false)
+  const [searchRetry, setSearchRetry] = React.useState(0)
   const [assigning, setAssigning] = React.useState(false)
+  /* The "?" shortcuts overlay. A ref mirror lets the window key handler read
+     "is it open" without re-subscribing on every toggle — the same reason the
+     g-prefix lives in a ref. */
+  const [shortcutsOpen, setShortcutsOpenState] = React.useState(false)
+  const shortcutsOpenRef = React.useRef(false)
+  const setShortcutsOpen = React.useCallback((next: boolean) => {
+    shortcutsOpenRef.current = next
+    setShortcutsOpenState(next)
+  }, [])
   const [intent, setIntent] = React.useState<TaskIntentPreview | null>(null)
   const intentSeq = React.useRef(0)
   const [recents, setRecents] = React.useState<Recent[]>([])

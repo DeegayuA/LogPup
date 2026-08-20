@@ -7,7 +7,7 @@ import { users } from '@/db/schema'
 // toRemovalMap are both connection-free — so the stub only has to exist.
 vi.mock('@/db', () => ({ db: {} }))
 
-const { notRemoved, toRemovalMap } = await import('./removal-queries')
+const { canHoldWork, notRemoved, toRemovalMap } = await import('./removal-queries')
 
 const dialect = new PgDialect()
 const sqlOf = (fragment: Parameters<PgDialect['sqlToQuery']>[0]) => dialect.sqlToQuery(fragment).sql
@@ -58,5 +58,41 @@ describe('toRemovalMap', () => {
 
   it('answers "not removed" for anyone absent, which is almost everyone', () => {
     expect(toRemovalMap([]).get('u1')).toBeUndefined()
+  })
+})
+
+// The predicate every directory, picker and assignment target composes. It
+// exists because the removal rule used to be re-typed at each of them and six
+// of nine call sites left `notRemoved` out — which put a REMOVED person, who
+// cannot sign in at all, ahead of a merely DEACTIVATED one in the very same
+// read. These tests pin the ordering that failure violated.
+describe('canHoldWork', () => {
+  const predicate = () => sqlOf(canHoldWork())
+
+  it('requires all three: active, approved, and not removed', () => {
+    const sql = predicate()
+    expect(sql).toContain('"users"."active"')
+    expect(sql).toContain('"users"."status"')
+    expect(sql).toContain('not exists')
+    expect(sql).toContain('"user_deletions"')
+  })
+
+  // The whole point of the shared predicate. If someone ever splits these
+  // apart again, this is the assertion that should stop them: removal is
+  // strictly heavier than deactivation, so no roster read may exclude a
+  // deactivated account while still offering a removed one.
+  it('never excludes deactivation without also excluding removal', () => {
+    const sql = predicate()
+    const excludesDeactivated = sql.includes('"users"."active"')
+    const excludesRemoved = sql.includes('"user_deletions"')
+    expect(excludesDeactivated && !excludesRemoved).toBe(false)
+    expect(excludesRemoved).toBe(true)
+  })
+
+  // Same contract as notRemoved: a WHERE fragment callers opt into, never a
+  // replacement table. A subquery over users here would quietly become a
+  // second definition of the roster.
+  it('is a composable WHERE fragment, not a wrapped users table', () => {
+    expect(predicate()).not.toMatch(/^select .* from "users"/)
   })
 })

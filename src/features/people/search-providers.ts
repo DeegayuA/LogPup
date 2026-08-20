@@ -1,16 +1,19 @@
-import { and, asc, eq, or, ilike } from 'drizzle-orm'
+import { and, asc, or, ilike } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { PALETTE_RESULT_LIMIT, likePattern } from '@/features/search/registry/limits'
 import type { SearchProvider } from '@/features/search/registry/types'
 
 /**
  * People in the command center.
  *
- * The active + approved pair is not an ordinary predicate to be relaxed: it is
- * the ONLY thing keeping deactivated, pending and rejected accounts out of the
- * palette. `users` has no deletedAt — this is what soft deletion looks like
- * for a person.
+ * `canHoldWork()` is not an ordinary predicate to be relaxed: it is the ONLY
+ * thing keeping deactivated, pending, rejected and REMOVED accounts out of
+ * the palette. `users` has no deletedAt — removal is recorded beside the user
+ * in user_deletions instead, for the reason spelled out on that table in
+ * src/db/schema.ts, which is why this needs a shared predicate rather than
+ * the active+approved pair that used to be written out here.
  *
  * Email is searched but deliberately not returned. Someone typing a colleague's
  * address should find them; nobody should be able to read the whole address
@@ -28,8 +31,7 @@ export const searchProviders: SearchProvider[] = [
         .from(users)
         .where(
           and(
-            eq(users.active, true),
-            eq(users.status, 'approved'),
+            canHoldWork(),
             or(
               ilike(users.name, pattern),
               ilike(users.email, pattern),

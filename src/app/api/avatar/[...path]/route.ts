@@ -15,6 +15,10 @@ export async function GET(
 ) {
   const session = await auth()
   if (!session?.user) return new Response('Unauthorized', { status: 401 })
+  // Deactivated accounts hold a real session now (src/lib/auth.ts) and the
+  // proxy's deactivation gate skips /api, so "signed in" is no longer the
+  // question. Same fix as the .ics and keyframe routes.
+  if (!session.user.active) return new Response('Unauthorized', { status: 401 })
 
   const { path } = await params
   const pathname = path.map(decodeURIComponent).join('/')

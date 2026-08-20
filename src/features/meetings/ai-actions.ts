@@ -42,6 +42,7 @@ import {
   tasks,
   users,
 } from '@/db/schema'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { buildHistoryEntry } from '@/features/people/allocation-history'
 import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 import {
@@ -925,7 +926,7 @@ async function fetchApprovedUsers(): Promise<FollowupPersonOption[]> {
   return db
     .select({ id: users.id, name: users.name })
     .from(users)
-    .where(and(eq(users.active, true), eq(users.status, 'approved')))
+    .where(canHoldWork())
 }
 
 /** Derives person-linked follow-ups from the model's per-person notes and inserts them. */
@@ -2875,9 +2876,11 @@ export type NoteTimelineData = {
  * Active, approved org members who are NOT already on this meeting — the
  * "anyone else in the org" tier of the speaker picker.
  *
- * Filtered to active+approved because those are the people who can actually
- * hold work: a rejected or deactivated account showing up as a speaker option
- * would let an attribution create membership for someone who can't sign in.
+ * Filtered by `canHoldWork()` because those are the people who can actually
+ * hold work: a rejected, deactivated or REMOVED account showing up as a
+ * speaker option would let an attribution create membership for someone who
+ * can't sign in. Removal is the strongest of those three and was the one this
+ * read used to let through.
  */
 async function fetchOrgPeople(meetingId: string): Promise<OrgPersonOption[]> {
   const attendeeIds = db
@@ -2888,13 +2891,7 @@ async function fetchOrgPeople(meetingId: string): Promise<OrgPersonOption[]> {
   return db
     .select({ id: users.id, name: users.name, email: users.email })
     .from(users)
-    .where(
-      and(
-        eq(users.active, true),
-        eq(users.status, 'approved'),
-        notInArray(users.id, attendeeIds),
-      ),
-    )
+    .where(and(canHoldWork(), notInArray(users.id, attendeeIds)))
     .orderBy(users.name)
 }
 

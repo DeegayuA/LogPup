@@ -17,6 +17,7 @@ import type { BugFilters } from '@/features/bugs/report-input'
 import type { BugQueueRow, BugRow } from '@/features/bugs/queries'
 import { BugTriageControls } from '@/features/bugs/components/bug-triage-controls'
 import { DeleteBugButton } from '@/features/bugs/components/delete-bug-button'
+import { BugContentEditor } from '@/features/bugs/components/bug-content-editor'
 
 /**
  * The body of the Bugs tab, and of the admin triage queue — one component, so
@@ -109,6 +110,17 @@ export function BugList({
                     <Badge variant={bugStatusBadgeVariant(bug.status)}>
                       {bugStatusLabel(bug.status)}
                     </Badge>
+                    {/* The SAME predicate the triage controls use, not a second
+                        flag: rewriting what a report says is a triage act, and
+                        two independently-passed permissions are two chances for
+                        a caller to grant one without the other. */}
+                    {canTriage?.(bug) ? (
+                      <BugContentEditor
+                        bugId={bug.id}
+                        title={bug.title}
+                        description={bug.description}
+                      />
+                    ) : null}
                   </div>
                 </div>
 
