@@ -63,9 +63,18 @@ export default function SignInPage() {
         {/* The panel earns its width by saying what the product actually does,
             rather than stranding a tagline at the bottom of empty space. */}
         <div className="relative my-auto flex max-w-md flex-col gap-8 py-10">
-          <p className="font-heading text-3xl leading-tight font-bold tracking-tight motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:120ms] motion-safe:[animation-fill-mode:backwards]">
-            The watchdog for your team&apos;s apps, people, and sprints.
-          </p>
+          {/* Same eyebrow-then-headline order as every section of /home, at
+              the same tracking. It is the cheapest way to make two pages read
+              as one voice, and it gives the sentence something to sit under
+              instead of floating in the panel. */}
+          <div className="flex flex-col gap-4 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:120ms] motion-safe:[animation-fill-mode:backwards]">
+            <span className="font-mono text-2xs tracking-[0.18em] text-sidebar-foreground/60 uppercase">
+              Engineering operations
+            </span>
+            <p className="font-heading text-[2rem] leading-[1.05] font-bold tracking-[-0.03em]">
+              The watchdog for your team&apos;s apps, people, and sprints.
+            </p>
+          </div>
           <ul className="flex flex-col divide-y divide-sidebar-border">
             {CAPABILITIES.map(({ icon: Icon, title, detail }, index) => (
               <li
@@ -129,20 +138,39 @@ export default function SignInPage() {
         </div>
 
         <Card className="w-full max-w-sm motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-500 motion-safe:ease-out motion-safe:[animation-delay:100ms] motion-safe:[animation-fill-mode:backwards]">
-          <CardHeader className="gap-1">
-            <h1 className="font-heading text-2xl font-bold tracking-tight">Welcome back</h1>
-            <p className="text-sm text-muted-foreground">
+          {/* Set in the same editorial language as /home rather than as a
+              generic card header: a mono eyebrow at the tracking the public
+              page uses, a heading with the same negative tracking, and a rule
+              beneath. The two pages are one product and a person crosses from
+              one to the other in a single click — they should not look like
+              they were designed by different hands. */}
+          <CardHeader className="gap-3">
+            <span className="font-mono text-2xs tracking-[0.18em] text-muted-foreground uppercase">
+              Alta Vision · Internal tool
+            </span>
+            <h1 className="font-heading text-[1.75rem] leading-[1.05] font-bold tracking-[-0.03em]">
+              Welcome back
+            </h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
               Sign in to pick up where your team left off.
             </p>
+            {/* The same left-anchored draw the public page opens with. A
+                keyframe with fill-mode `both`, so it settles drawn without any
+                JavaScript and needs no observer on a page that has none. */}
+            <span
+              aria-hidden
+              className="rule-draw mt-1 block h-px w-full origin-left bg-border"
+            />
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+          <CardContent className="flex flex-col gap-5">
             {/* The caveat comes before the button it is about. Sitting under
                 the button it read as an afterthought about something the user
                 had already clicked — and this one has to land first, because
                 it is the difference between meeting the browser's "unsafe"
-                warning prepared or bouncing off it. Boxed rather than set as
-                grey micro-copy so it reads as an instruction, not a footnote. */}
-            <p className="rounded-lg border border-border bg-muted/60 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                warning prepared or bouncing off it. Set against the page
+                rather than in a filled box: a grey panel inside a card is a
+                third surface, and at this size the border alone separates it. */}
+            <p className="border-l-2 border-border pl-3 text-xs leading-relaxed text-muted-foreground">
               Personal accounts need admin approval. App is still in development, so please click
               unsafe and proceed if you see a warning.
             </p>
