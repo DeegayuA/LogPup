@@ -17,6 +17,9 @@ export type AiCallSlug =
   | 'speech.dictation'
   | 'speech.tts'
   | 'live.session'
+  | 'workspace.ask'
+  | 'workspace.briefing'
+  | 'audit.filter'
 
 /**
  * Which endpoint family a feature calls, and therefore which MODEL_CHOICES
@@ -177,6 +180,58 @@ export const AI_FEATURES = [
     estimate: {
       label: 'per generation',
       tokens: { model: 'gemini-3.5-flash-lite', inputTokens: 3_000, outputTokens: 200 },
+    },
+  },
+  {
+    id: 'workspace-ask',
+    label: 'Ask the workspace',
+    description: 'Answers a question about your work from tasks, follow-ups, sprints, and meetings.',
+    chain: 'Analysis',
+    kind: 'text',
+    slugs: ['workspace.ask'],
+    estimate: {
+      label: 'per question',
+      // The grounding pack is capped at 8,000 characters (context-pack.ts)
+      // plus the question and the rules block. Output matches
+      // meeting-assistant exactly: both prompts cap the answer at 90 words
+      // because both are short enough to be read aloud.
+      //
+      // No chosenModelApplies — one call, so the choice reprices the whole
+      // shape, which is correct.
+      tokens: { model: 'gemini-3.6-flash', inputTokens: 8_000, outputTokens: 150 },
+    },
+  },
+  {
+    id: 'daily-briefing',
+    label: 'Daily briefing',
+    description: 'Writes the morning read on what needs attention across the workspace.',
+    chain: 'Analysis',
+    kind: 'text',
+    slugs: ['workspace.briefing'],
+    estimate: {
+      label: 'per briefing',
+      // Same capped pack as the question above; the output is larger because a
+      // briefing is a headline, a short paragraph and up to three priorities
+      // rather than one spoken sentence.
+      tokens: { model: 'gemini-3.6-flash', inputTokens: 8_000, outputTokens: 400 },
+    },
+  },
+  {
+    id: 'audit-filter',
+    label: 'Audit filtering in words',
+    description: 'Turns a question about the audit log into the page’s own filters.',
+    chain: 'Quick',
+    kind: 'text',
+    slugs: ['audit.filter'],
+    estimate: {
+      label: 'per question',
+      // The smallest call in the registry, and deliberately so: the prompt is
+      // the two closed vocabularies plus one sentence, and the reply is a
+      // handful of filter values. It reads NO audit rows — the model never
+      // sees the log, only the question — which is what keeps a feature over
+      // the record of who did what cheap and, more importantly, incapable of
+      // leaking it into a prompt.
+      tokens: { model: 'gemini-3.6-flash', inputTokens: 700, outputTokens: 80 },
     },
   },
 ] as const satisfies readonly AiFeatureShape[]

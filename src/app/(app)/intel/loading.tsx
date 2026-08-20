@@ -1,5 +1,4 @@
 import { AmbientBackdrop } from '@/components/ui/ambient-backdrop'
-import { PageHeader } from '@/components/ui/page-header'
 import {
   AskPanelSkeleton,
   BriefingCardSkeleton,
@@ -7,44 +6,44 @@ import {
 } from '@/features/intel/components/intel-skeletons'
 
 /**
- * Cold entry into /intel only — later visits stream through the page's own
- * two <Suspense> boundaries.
+ * Cold entry into /intel only.
  *
- * It exists because loading.js is the nearest ANCESTOR segment's boundary
- * when a route declares none (see
- * node_modules/next/dist/docs/01-app/02-guides/streaming.md), so without this
- * file /intel inherited src/app/(app)/loading.tsx — and navigating to Intel
- * painted "Studio Dashboard", announced "Loading dashboard…" to a screen
- * reader, and drew the four dashboard zones before swapping to a two-column
- * layout that shares none of their geometry. That is the "skeleton that lies
- * about the coming layout" the dashboard's own loading.tsx warns against.
+ * Kept rather than left to the page's own <Suspense> boundaries, for the
+ * reason people/history/loading.tsx states: a dynamic route with no
+ * loading.tsx is not partially prefetchable AT ALL. Without this file the
+ * Intel nav row silently loses hover prefetch — and the row sits in the
+ * primary nav with a "G I" jump, which is exactly the traffic prefetch is for.
  *
- * The header is rendered FOR REAL: both strings are constants, not session
- * or query dependent, so there is nothing here to shimmer. Everything else
- * comes from the same intel-skeletons module the page's fallbacks use, inside
- * the same shell and the same grid — the two cannot drift apart.
+ * Everything is shimmer here because on a cold load nothing real exists yet,
+ * not even the header. Once the route is mounted the page renders its header,
+ * backdrop and both region shells for real, and only the two skeletons below
+ * stand in — see the Suspense split in page.tsx, which is by COST (a batched
+ * read versus a Gemini call), not by layout.
+ *
+ * The skeletons are imported from the intel feature rather than redrawn here.
+ * A second geometry is a second thing to keep true when a card changes, and
+ * the drift lands where nobody looks: the cold-entry path.
  */
-export default function LoadingIntel() {
+export default function LoadingStudioIntel() {
   return (
     <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8">
       <AmbientBackdrop />
 
-      <PageHeader
-        title="Studio Intel"
-        description="What LogPup noticed across every app, sprint, meeting and work log — and a box for whatever it did not think to mention."
-      />
+      {/* Header stand-in. Matches PageHeader's h1 + description block so the
+          real header does not shove the briefing down on hydration. */}
+      <div className="flex flex-col gap-2">
+        <div className="h-8 w-48 animate-pulse rounded-md bg-muted" />
+        <div className="h-4 w-full max-w-2xl animate-pulse rounded-md bg-muted/60" />
+      </div>
 
-      <section id="briefing" aria-label="Morning briefing" className="scroll-mt-6">
-        <BriefingCardSkeleton />
-      </section>
+      <BriefingCardSkeleton />
 
+      {/* Same track sizes as page.tsx, not an approximation: a cold load that
+          reflows from two equal columns into a 1.65/1 split is the layout shift
+          this file exists to prevent. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)] lg:items-start">
-        <section id="signals" aria-label="Studio signals" className="scroll-mt-6">
-          <SignalBoardSkeleton />
-        </section>
-        <section id="ask" aria-label="Ask LogPup" className="scroll-mt-6">
-          <AskPanelSkeleton />
-        </section>
+        <SignalBoardSkeleton />
+        <AskPanelSkeleton />
       </div>
     </div>
   )

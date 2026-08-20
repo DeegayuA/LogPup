@@ -1,9 +1,10 @@
 import type { Session } from 'next-auth'
-import { and, desc, eq, gte, isNull, lt } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, isNull, lt } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
 import { meetingAiNotes, meetingAttendees } from '@/db/schema'
 import { loadActor } from '@/features/auth/actor'
+import { UNWRITTEN_MEETING_LIMIT } from '@/features/intel/signals'
 import { listApps } from '@/features/apps/queries'
 import { sortCapacities } from '@/features/dashboard/sort-capacities'
 import { isoDayAdd, isoDayDiff, isoDayOf } from '@/features/people/iso-day'
@@ -39,7 +40,6 @@ import type { SignalInput } from '@/features/intel/signals'
 /** Every list is capped so no prompt can grow with the workspace. */
 const CAPACITY_LIMIT = 12
 const SPRINT_LIMIT = 8
-const UNWRITTEN_MEETING_LIMIT = 10
 const QUIET_APP_LIMIT = 8
 const TASK_LINE_LIMIT = 12
 /** Follow-ups are bounded by status='open', never by a LIMIT — so the pack caps them. */
@@ -128,7 +128,12 @@ export async function loadWorkspaceSnapshot(
           isNull(meetingAiNotes.summary),
         ),
       )
-      .orderBy(desc(liveMeetings.endsAt))
+      // ASCENDING: the oldest unwritten meetings, not the newest. The signal
+      // names "the oldest" one and counts the rest, so a descending slice made
+      // both claims about the ten most RECENT — the oldest of a recent slice is
+      // not the oldest, and a stale meeting from three weeks back never
+      // appeared at all.
+      .orderBy(asc(liveMeetings.endsAt))
       .limit(UNWRITTEN_MEETING_LIMIT),
     // Coverage genuinely depends on the actor, so it is one chained pair
     // INSIDE the batch rather than an await in front of it — the two hops run

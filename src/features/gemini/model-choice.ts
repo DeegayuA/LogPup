@@ -49,6 +49,7 @@ const DEFAULT_CHAIN: Record<AiFeatureId, readonly string[]> = {
   'app-metadata': QUICK_MODELS,
   'workspace-ask': ANALYSIS_MODELS,
   'daily-briefing': ANALYSIS_MODELS,
+  'audit-filter': QUICK_MODELS,
 }
 
 /**

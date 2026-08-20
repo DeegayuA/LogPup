@@ -308,6 +308,18 @@ export function worklogGapSignal(input: SignalInput): Signal | null {
  * that finished this morning is a reminder, whereas the same meeting still
  * unwritten next to three others is a backlog.
  */
+/**
+ * How many unwritten meetings the pack carries — declared HERE, in the pure
+ * module that words the signal, and imported by context-pack rather than the
+ * other way round.
+ *
+ * The wording depends on the cap: a list that came back full is a floor, not
+ * a count, and only the module that knows the ceiling can say "at least".
+ * Splitting the two apart is how a capped list starts being reported as a
+ * total.
+ */
+export const UNWRITTEN_MEETING_LIMIT = 10
+
 export function unwrittenMeetingSignal(input: SignalInput): Signal | null {
   const meetings = input.unwrittenMeetings
   if (meetings.length === 0) return null
@@ -317,17 +329,27 @@ export function unwrittenMeetingSignal(input: SignalInput): Signal | null {
   )
   const endedToday = dayOf(oldest.endedIso) === input.todayIso
   const onlyOneFromToday = meetings.length === 1 && endedToday
+  // The pack asks for the OLDEST unwritten meetings and stops at the cap, so a
+  // full list means "this many and probably more". Saying a bare number there
+  // would quietly convert a floor into a total, and the reader would clear ten
+  // meetings and expect to be done.
+  const atCap = meetings.length >= UNWRITTEN_MEETING_LIMIT
+  const howMany = atCap ? `At least ${meetings.length}` : `${meetings.length}`
 
   return {
     id: `meeting.unwritten:${input.me.id}`,
     kind: 'meeting.unwritten',
     severity: onlyOneFromToday ? 'info' : 'watch',
-    title: clip(`${plural(meetings.length, 'meeting has', 'meetings have')} no notes`),
+    title: clip(
+      atCap
+        ? `${meetings.length}+ meetings have no notes`
+        : `${plural(meetings.length, 'meeting has', 'meetings have')} no notes`,
+    ),
     detail: onlyOneFromToday
       ? `One meeting from today, “${oldest.title}”, still has no notes.`
       : meetings.length === 1
         ? `One past meeting, “${oldest.title}” on ${dayOf(oldest.endedIso)}, still has no notes.`
-        : `${meetings.length} past meetings still have no notes, the oldest “${oldest.title}” on ${dayOf(oldest.endedIso)}.`,
+        : `${howMany} past meetings still have no notes, the oldest “${oldest.title}” on ${dayOf(oldest.endedIso)}.`,
     href: '/meetings',
     count: meetings.length,
   }
