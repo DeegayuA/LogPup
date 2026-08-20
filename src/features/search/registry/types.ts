@@ -169,6 +169,18 @@ export type SearchProvider = {
    * So: write the query out, and read soft-deleted tables through the live_*
    * subqueries in db/live.ts.
    *
+   * SECOND TRAP, same shape — the code reads correct and the SQL is not.
+   * Drizzle drops table qualifiers across the whole select list when the outer
+   * query is SINGLE-TABLE, so a correlated subquery loses the qualification its
+   * predicate depends on: `meetingApps.meetingId = liveMeetings.id` rendered as
+   * `"meeting_id" = "id"` and bound to the INNER table's id, comparing a
+   * meeting uuid against an app uuid. It typechecks, it lints, it returns rows,
+   * and the group silently showed dates where project names belonged. Real
+   * joins flip isSingleTable off and restore qualification; a GROUP BY then
+   * keeps LIMIT meaning six meetings rather than six meeting-project pairs.
+   * Prefer joins plus grouping over a correlated subquery here — and if you
+   * must correlate, render the SQL and read it.
+   *
    * (Written without naming those tables in code form on purpose: the scan
    * reads comments too, and a doc comment that demonstrates the offence is
    * indistinguishable from committing it.)
