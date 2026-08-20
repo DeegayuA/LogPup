@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { Pencil } from 'lucide-react'
+import { ChevronDown, Download, Pencil, ShieldCheck, UserRoundCog } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,17 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from '@/components/ui/popover'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import {
   Table,
   TableBody,
@@ -33,6 +44,21 @@ import {
   setUserRole,
   setUserTitle,
 } from '@/features/admin/actions'
+import {
+  bulkSetUserActive,
+  bulkSetUserEmploymentType,
+  bulkSetUserRole,
+} from '@/features/admin/bulk-actions'
+import {
+  headerSelectionState,
+  pruneSelection,
+  selectRange,
+  toggleAllSelected,
+  toggleSelected,
+} from '@/features/admin/bulk-logic'
+import { BulkBar, toastBulkResult } from '@/features/admin/components/bulk-bar'
+import { HeaderCheckbox, RowCheckbox } from '@/features/admin/components/bulk-select'
+import { downloadCsv } from '@/features/admin/components/csv-download'
 import { PERSONAL_EMAIL_MAX_LENGTH } from '@/features/auth/personal-email-schema'
 import { Input } from '@/components/ui/input'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
@@ -41,9 +67,10 @@ import { orgForEmail } from '@/lib/org-from-domain'
 import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { SeatSelect } from '@/features/admin/components/seat-select'
 import { CapNotice, EmploymentSelect } from '@/features/admin/components/employment-select'
-import type { EmploymentType, UserRole } from '@/features/auth/capabilities'
+import { ROLE_LABELS, type EmploymentType, type UserRole } from '@/features/auth/capabilities'
 
 const SELF_TITLE = 'Cannot change your own account'
+const PEOPLE = { one: 'person', many: 'people' }
 
 // One user's "Job role" (users.title) — display/organizational metadata
 // only, separate from the admin|member permission enum, which this feature
@@ -118,7 +145,7 @@ function PhoneCell({ user }: { user: AdminUser }) {
       placeholder="—"
       maxLength={30}
       aria-label={`Phone number for ${user.name}`}
-      className="h-8 w-36 font-mono text-xs"
+      className="h-8 w-full font-mono text-xs"
     />
   )
 }
@@ -169,7 +196,7 @@ function PersonalEmailCell({ user }: { user: AdminUser }) {
       placeholder="—"
       maxLength={PERSONAL_EMAIL_MAX_LENGTH}
       aria-label={`Personal email for ${user.name}`}
-      className="h-8 w-52 text-xs"
+      className="h-8 w-full text-xs"
     />
   )
 }
@@ -201,7 +228,7 @@ function OrgTagsCell({ user, suggestions }: { user: AdminUser; suggestions: stri
 
   return (
     <div className="flex items-center gap-1.5">
-      <div className="flex max-w-56 flex-wrap gap-1">
+      <div className="flex min-w-0 flex-wrap gap-1">
         {user.orgTags.length > 0 ? (
           user.orgTags.map((tag) => (
             <Badge key={tag} variant="secondary">
@@ -250,6 +277,18 @@ function OrgTagsCell({ user, suggestions }: { user: AdminUser; suggestions: stri
   )
 }
 
+const CSV_HEADERS = [
+  'Name',
+  'Email',
+  'Seat',
+  'Employment',
+  'Job role',
+  'Phone',
+  'Personal email',
+  'Organizations',
+  'Active',
+] as const
+
 export function UserTable({
   users,
   currentUserId,
@@ -258,6 +297,21 @@ export function UserTable({
   currentUserId: string
 }) {
   const [isPending, startTransition] = useTransition()
+  const [picked, setPicked] = useState<string[]>([])
+  const [anchorId, setAnchorId] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<string[]>([])
+  const [seatOpen, setSeatOpen] = useState(false)
+  const [draftSeat, setDraftSeat] = useState<UserRole>('member')
+  const [employmentOpen, setEmploymentOpen] = useState(false)
+  const [draftEmployment, setDraftEmployment] = useState<EmploymentType>('permanent')
+  const [ackUntransferred, setAckUntransferred] = useState(false)
+
+  const ids = useMemo(() => users.map((user) => user.id), [users])
+
+  // Derived rather than stored, so a revalidation that drops a row can never
+  // leave the bar counting somebody who is no longer in the table.
+  const selected = useMemo(() => pruneSelection(picked, ids), [picked, ids])
+  const selectedSet = useMemo(() => new Set(selected), [selected])
 
   // Every tag already on any user, offered as one-click suggestions when
   // editing another user's organizations.
@@ -266,6 +320,15 @@ export function UserTable({
       Array.from(new Set(users.flatMap((u) => u.orgTags))).sort((a, b) => a.localeCompare(b)),
     [users],
   )
+
+  function toggleRow(id: string, range: boolean) {
+    setPicked((current) =>
+      range && anchorId
+        ? selectRange(pruneSelection(current, ids), ids, anchorId, id)
+        : toggleSelected(pruneSelection(current, ids), id),
+    )
+    setAnchorId(id)
+  }
 
   function handleRoleChange(userId: string, role: UserRole) {
     startTransition(async () => {
@@ -297,17 +360,55 @@ export function UserTable({
     })
   }
 
+  function runBulk(
+    run: () => Promise<Awaited<ReturnType<typeof bulkSetUserRole>>>,
+    doneVerb: string,
+  ) {
+    startTransition(async () => {
+      try {
+        const res = await run()
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toastBulkResult(res.data, doneVerb, PEOPLE)
+        // Left selected on purpose: the rows the guards refused — your own
+        // account, the last superadmin, anyone still holding open work — are
+        // the ones worth still having in hand after the toast.
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
+  function exportSelected() {
+    const rows = users
+      .filter((user) => selectedSet.has(user.id))
+      .map((user) => [
+        user.name,
+        user.email,
+        ROLE_LABELS[user.role],
+        user.employmentType,
+        user.title,
+        user.phone,
+        user.personalEmail,
+        user.orgTags.join(' | '),
+        user.active ? 'active' : 'inactive',
+      ])
+    downloadCsv('people', CSV_HEADERS, rows)
+  }
+
   // One row's controls, rendered by BOTH layouts so the two can never drift
   // apart into two different sets of affordances.
   function seatControl(user: AdminUser, isSelf: boolean) {
     return (
-      <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
+      <div title={isSelf ? SELF_TITLE : undefined} className="min-w-0">
         <SeatSelect
           value={user.role}
           disabled={isSelf || isPending}
           ariaLabel={`Seat for ${user.name}`}
           onChange={(role) => handleRoleChange(user.id, role)}
-          className="w-full min-w-40"
+          className="w-full"
         />
       </div>
     )
@@ -334,14 +435,14 @@ export function UserTable({
 
   function employmentControl(user: AdminUser, isSelf: boolean) {
     return (
-      <div className="flex flex-col gap-1">
-        <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
+      <div className="flex min-w-0 flex-col gap-1">
+        <div title={isSelf ? SELF_TITLE : undefined} className="min-w-0">
           <EmploymentSelect
             value={user.employmentType}
             disabled={isSelf || isPending}
             ariaLabel={`Employment for ${user.name}`}
             onChange={(type) => handleEmploymentChange(user, type)}
-            className="w-full min-w-36"
+            className="w-full"
           />
         </div>
         {/* Explained where the control is missing, rather than leaving an
@@ -384,20 +485,56 @@ export function UserTable({
           <AvatarFallback>{user.name.slice(0, 1).toUpperCase()}</AvatarFallback>
         </Avatar>
         <div className="flex min-w-0 flex-col">
-          <span className="flex items-center gap-1.5 font-medium">
+          <span className="flex min-w-0 items-center gap-1.5 font-medium">
             <span className="truncate">{user.name}</span>
             {user.mustChangePassword ? (
               <Badge
                 variant="outline"
                 title="Still on the starter password — they must change it on first sign-in"
               >
-                starter password
+                starter
               </Badge>
             ) : null}
           </span>
           <span className="truncate text-xs text-muted-foreground">{user.email}</span>
         </div>
       </div>
+    )
+  }
+
+  /**
+   * The fields that used to be four more always-visible columns. They are the
+   * ones an admin edits occasionally, not the ones they scan — so they live
+   * behind a per-row disclosure, which is what lets the table fit without a
+   * sideways scroll instead of being clipped into one.
+   */
+  function detailFields(user: AdminUser, isSelf: boolean) {
+    return (
+      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {/* Employment has its own column from lg up; below that it belongs
+            here rather than nowhere. */}
+        <div className="flex flex-col gap-1 lg:hidden">
+          <dt className="text-2xs text-muted-foreground">Employment</dt>
+          <dd className="min-w-0">{employmentControl(user, isSelf)}</dd>
+        </div>
+        <Field label="Job role">
+          <JobRoleCell user={user} />
+        </Field>
+        <Field label="Phone">
+          <PhoneCell user={user} />
+        </Field>
+        <Field label="Personal email">
+          <PersonalEmailCell user={user} />
+        </Field>
+        <Field label="Organizations" wide>
+          <OrgTagsCell user={user} suggestions={allOrgTags} />
+        </Field>
+        <Field label="Offboarding" wide>
+          {handoverLink(user, isSelf) ?? (
+            <span className="text-xs text-muted-foreground">Not available for your own account</span>
+          )}
+        </Field>
+      </dl>
     )
   }
 
@@ -410,92 +547,259 @@ export function UserTable({
   }
 
   return (
-    <>
-      {/* MOBILE: one card per person. A seven-column table on a phone is a
-          horizontal scroll nobody discovers, so the same fields stack instead
-          of shrinking to unreadable. */}
-      <ul className="flex flex-col gap-3 lg:hidden">
+    <div className="flex min-w-0 flex-col">
+      <BulkBar count={selected.length} noun={PEOPLE} onClear={() => setPicked([])}>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isPending}
+          onClick={() => runBulk(() => bulkSetUserActive({ ids: selected, active: true }), 'activated')}
+        >
+          Activate
+        </Button>
+
+        <AlertDialog>
+          <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
+            Deactivate
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Deactivate {selected.length} people?</AlertDialogTitle>
+              <AlertDialogDescription>
+                They lose access immediately. Your own account, and the last superadmin, are
+                skipped — and so is anyone still holding open work, unless you say otherwise
+                below.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <label className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+              <input
+                type="checkbox"
+                checked={ackUntransferred}
+                onChange={(event) => setAckUntransferred(event.target.checked)}
+                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+              />
+              <span>
+                Deactivate even if they still hold open work. Their projects, roles and open
+                tasks stay pinned to an account nobody can sign into.
+              </span>
+            </label>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={isPending}
+                onClick={() =>
+                  runBulk(
+                    () =>
+                      bulkSetUserActive({
+                        ids: selected,
+                        active: false,
+                        acknowledgeUntransferred: ackUntransferred,
+                      }),
+                    'deactivated',
+                  )
+                }
+              >
+                Deactivate
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <Popover open={seatOpen} onOpenChange={setSeatOpen}>
+          <PopoverTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
+            <ShieldCheck aria-hidden className="size-3.5" />
+            Seat
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80">
+            <PopoverHeader>
+              <PopoverTitle>Change seat</PopoverTitle>
+              <PopoverDescription>
+                Applies to all {selected.length} selected. Your own account and the last
+                superadmin are skipped.
+              </PopoverDescription>
+            </PopoverHeader>
+            <SeatSelect
+              value={draftSeat}
+              ariaLabel="New seat for the selected people"
+              onChange={setDraftSeat}
+              className="w-full"
+            />
+            <Button
+              size="sm"
+              disabled={isPending}
+              onClick={() => {
+                setSeatOpen(false)
+                runBulk(() => bulkSetUserRole({ ids: selected, role: draftSeat }), 'moved')
+              }}
+            >
+              Apply
+            </Button>
+          </PopoverContent>
+        </Popover>
+
+        <Popover open={employmentOpen} onOpenChange={setEmploymentOpen}>
+          <PopoverTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
+            <UserRoundCog aria-hidden className="size-3.5" />
+            Employment
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80">
+            <PopoverHeader>
+              <PopoverTitle>Change employment</PopoverTitle>
+              <PopoverDescription>
+                Existing supervisors are kept. A trainee or intern with nobody named is
+                skipped rather than left unsupervised.
+              </PopoverDescription>
+            </PopoverHeader>
+            <EmploymentSelect
+              value={draftEmployment}
+              ariaLabel="New employment type for the selected people"
+              onChange={setDraftEmployment}
+              className="w-full"
+            />
+            <Button
+              size="sm"
+              disabled={isPending}
+              onClick={() => {
+                setEmploymentOpen(false)
+                runBulk(
+                  () =>
+                    bulkSetUserEmploymentType({
+                      ids: selected,
+                      employmentType: draftEmployment,
+                    }),
+                  'updated',
+                )
+              }}
+            >
+              Apply
+            </Button>
+          </PopoverContent>
+        </Popover>
+
+        <Button variant="outline" size="sm" disabled={isPending} onClick={exportSelected}>
+          <Download aria-hidden className="size-3.5" />
+          CSV
+        </Button>
+      </BulkBar>
+
+      {/* PHONE: one card per person. Nine fields in a row on a phone is a
+          horizontal scroll nobody discovers, so they stack instead of
+          shrinking to unreadable. */}
+      <ul className="flex flex-col gap-3 md:hidden">
         {users.map((user) => {
           const isSelf = user.id === currentUserId
           return (
             <li key={user.id} className="flex flex-col gap-3 rounded-xl border border-border p-3">
               <div className="flex items-start justify-between gap-3">
-                {identity(user)}
-                <div className="flex flex-col items-end gap-1">
-                  {activeControl(user, isSelf)}
-                  {handoverLink(user, isSelf)}
+                <div className="flex min-w-0 items-start gap-2">
+                  <RowCheckbox
+                    checked={selectedSet.has(user.id)}
+                    label={`Select ${user.name}`}
+                    onToggle={(range) => toggleRow(user.id, range)}
+                    className="mt-2"
+                  />
+                  {identity(user)}
                 </div>
+                {activeControl(user, isSelf)}
               </div>
-              <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="Seat">{seatControl(user, isSelf)}</Field>
-                <Field label="Employment">{employmentControl(user, isSelf)}</Field>
-                <Field label="Job role">
-                  <JobRoleCell user={user} />
-                </Field>
-                <Field label="Phone">
-                  <PhoneCell user={user} />
-                </Field>
-                <Field label="Personal email">
-                  <PersonalEmailCell user={user} />
-                </Field>
-                <Field label="Organizations" wide>
-                  <OrgTagsCell user={user} suggestions={allOrgTags} />
-                </Field>
-              </dl>
+              <div className="flex flex-col gap-1">
+                <span className="text-2xs text-muted-foreground">Seat</span>
+                {seatControl(user, isSelf)}
+              </div>
+              {detailFields(user, isSelf)}
             </li>
           )
         })}
       </ul>
 
-      {/* DESKTOP: the table, in its own scroll container so wide content
-          scrolls here rather than pushing the whole page sideways. */}
-      <div className="hidden overflow-x-auto lg:block">
-        <Table className="min-w-[74rem]">
+      {/* TABLET AND UP: `table-fixed` is the structural fix for the sideways
+          scroll — a column no longer widens to fit a long name, so nothing can
+          push the table past the viewport. The four occasional fields moved
+          into the per-row disclosure below, which is what made a fixed layout
+          possible without clipping anything. */}
+      <div className="hidden min-w-0 md:block">
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead>User</TableHead>
-              <TableHead>Seat</TableHead>
-              <TableHead>Employment</TableHead>
-              <TableHead>Job role</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead>Personal email</TableHead>
-              <TableHead>Organizations</TableHead>
-              <TableHead className="text-right">Active</TableHead>
+              <TableHead className="w-9">
+                <HeaderCheckbox
+                  state={headerSelectionState(selected, ids)}
+                  label="Select all people"
+                  onToggle={() => setPicked((current) => toggleAllSelected(current, ids))}
+                />
+              </TableHead>
+              <TableHead>Person</TableHead>
+              <TableHead className="w-[11rem]">Seat</TableHead>
+              <TableHead className="hidden w-[10rem] lg:table-cell">Employment</TableHead>
+              <TableHead className="w-[4.5rem] text-right">Active</TableHead>
+              <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {users.map((user) => {
               const isSelf = user.id === currentUserId
-              return (
-                <TableRow key={user.id}>
-                  <TableCell className="max-w-64">{identity(user)}</TableCell>
-                  <TableCell>{seatControl(user, isSelf)}</TableCell>
-                  <TableCell>{employmentControl(user, isSelf)}</TableCell>
-                  <TableCell className="min-w-48">
-                    <JobRoleCell user={user} />
+              const isOpen = expanded.includes(user.id)
+              return [
+                <TableRow
+                  key={user.id}
+                  data-state={selectedSet.has(user.id) ? 'selected' : undefined}
+                >
+                  <TableCell className="align-top">
+                    <RowCheckbox
+                      checked={selectedSet.has(user.id)}
+                      label={`Select ${user.name}`}
+                      onToggle={(range) => toggleRow(user.id, range)}
+                      className="mt-2"
+                    />
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <PhoneCell user={user} />
+                  <TableCell className="align-top">{identity(user)}</TableCell>
+                  <TableCell className="align-top">{seatControl(user, isSelf)}</TableCell>
+                  <TableCell className="hidden align-top lg:table-cell">
+                    {employmentControl(user, isSelf)}
                   </TableCell>
-                  <TableCell className="max-w-56">
-                    <PersonalEmailCell user={user} />
+                  <TableCell className="align-top text-right">
+                    {activeControl(user, isSelf)}
                   </TableCell>
-                  <TableCell className="min-w-44">
-                    <OrgTagsCell user={user} suggestions={allOrgTags} />
+                  <TableCell className="align-top text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-expanded={isOpen}
+                      aria-controls={`person-detail-${user.id}`}
+                      aria-label={`${isOpen ? 'Hide' : 'Show'} details for ${user.name}`}
+                      onClick={() =>
+                        setExpanded((current) =>
+                          current.includes(user.id)
+                            ? current.filter((id) => id !== user.id)
+                            : [...current, user.id],
+                        )
+                      }
+                    >
+                      <ChevronDown
+                        aria-hidden
+                        className={`size-4 transition-transform duration-150 ${
+                          isOpen ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </Button>
                   </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex flex-col items-end gap-1">
-                      {activeControl(user, isSelf)}
-                      {handoverLink(user, isSelf)}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
+                </TableRow>,
+                isOpen ? (
+                  <TableRow key={`${user.id}-detail`} className="hover:bg-transparent">
+                    <TableCell colSpan={6} className="whitespace-normal">
+                      <div id={`person-detail-${user.id}`} className="px-1 pb-2">
+                        {detailFields(user, isSelf)}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : null,
+              ]
             })}
           </TableBody>
         </Table>
       </div>
-    </>
+    </div>
   )
 }
 

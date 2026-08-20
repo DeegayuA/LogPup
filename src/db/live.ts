@@ -40,6 +40,35 @@ export const liveSprints = liveSprintsAs('live_sprints')
 export const liveNoteSegments = liveNoteSegmentsAs('live_note_segments')
 export const liveScreenshots = liveScreenshotsAs('live_screenshots')
 
+/**
+ * Every column of `apps`, taken from the LIVE subquery.
+ *
+ * Exists because `getTableColumns(apps)` is the obvious way to write "select
+ * all of an app's columns" and is wrong the moment the statement reads from
+ * `liveApps`: the spread names the RAW table, the FROM names the subquery, and
+ * drizzle throws at runtime with
+ *
+ *   Your "id" field references a column "apps"."id", but the table "apps" is
+ *   not part of the query! Did you forget to join it?
+ *
+ * — which is a runtime error on a page, not a type error at build. One
+ * definition here means a converted call site cannot half-convert.
+ */
+export const liveAppColumns = {
+  id: liveApps.id,
+  name: liveApps.name,
+  slug: liveApps.slug,
+  description: liveApps.description,
+  status: liveApps.status,
+  repoUrl: liveApps.repoUrl,
+  techTags: liveApps.techTags,
+  leadId: liveApps.leadId,
+  pmId: liveApps.pmId,
+  deletedAt: liveApps.deletedAt,
+  deletedBy: liveApps.deletedBy,
+  createdAt: liveApps.createdAt,
+}
+
 export const SOFT_TABLES = [
   // apps is the widest of the six: a deleted app must vanish from the index,
   // the detail page, ⌘K, every dashboard zone, the meetings calendar and the

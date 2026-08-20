@@ -61,6 +61,31 @@ export function defaultChainFor(featureId: AiFeatureId): readonly string[] {
  * default. Replacing the chain would turn every Google deprecation into a
  * support ticket for whoever pinned that model. Do not "simplify" this to a
  * straight replacement.
+ *
+ * KNOWN LIMIT of that guarantee — the safety net does not cover HTTP 400.
+ * client.ts maps a response by status: 404 -> 'missing', 401/403 -> 'auth',
+ * 429 -> 'quota', 5xx -> 'overloaded', and every one of those advances to the
+ * next model in this chain. Anything else, 400 included, becomes kind: 'bad',
+ * which callGeminiCore throws on immediately — no next model, no next key. So
+ * a prepended model that answers 400 rather than 404 makes its feature fail
+ * outright with a raw upstream error, for as long as the choice is set.
+ *
+ * Two things make that more than theoretical: MODEL_CHOICES offers
+ * `gemini-omni-flash` and `gemini-3-flash-preview`, both undocumented enough
+ * that no published rate exists for them (see pricing.ts), and three features
+ * send responseMimeType: 'application/json' — meeting-intel, sprint-draft and
+ * app-metadata, all of them `text` kind, all of them offering those two ids
+ * in their picker. A model that rejects JSON mode rejects it with a 400, not
+ * a 404. Note also that the sibling path is ASYMMETRIC:
+ * mintLiveToken in ../transcription/live-token.ts DOES advance to the next
+ * model on 'bad', because for the token endpoint a bad request usually means
+ * the model is wrong; callGeminiCore does not.
+ *
+ * Deliberately documented rather than fixed: the retry taxonomy is
+ * load-bearing reliability code, and widening 'bad' to fall through would
+ * make genuinely malformed requests silently burn every model and key in the
+ * chain. If this bites, the narrow fix is a 400-with-unknown-model-or-config
+ * discriminator in client.ts, not a blanket change here.
  */
 export function resolveChain(featureId: AiFeatureId, chosenModel: string | null): readonly string[] {
   const defaultChain = defaultChainFor(featureId)

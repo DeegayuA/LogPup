@@ -17,9 +17,10 @@ export default async function AdminAppsPage() {
       <CardHeader>
         <CardTitle>Apps</CardTitle>
         <CardDescription>
-          Reassign an app&apos;s PM or lead, or archive it. Archived apps are shown muted.
-          Recording someone as PM or lead here is also what gives a manager seat its
-          reach — a job title typed into an assignment does not.
+          Reassign an app&apos;s PM or lead, archive it, or move it to Trash. Archived apps
+          are shown muted. Recording someone as PM or lead here is also what gives a
+          manager seat its reach — a job title typed into an assignment does not.
+          Tick rows to act on several at once; a batch reports exactly what it skipped.
         </CardDescription>
       </CardHeader>
       <CardContent>

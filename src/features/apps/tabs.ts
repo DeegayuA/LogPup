@@ -24,6 +24,7 @@ export const APP_TAB_IDS = [
   'roadmap',
   'discussion',
   'meetings',
+  'bugs',
   'activity',
   'settings',
 ] as const
@@ -35,6 +36,9 @@ export const APP_TAB_LABEL: Record<AppTabId, string> = {
   roadmap: 'Roadmap',
   discussion: 'Discussion',
   meetings: 'Meetings',
+  // Beside Meetings rather than under Settings: filing a bug is something
+  // anyone on the project does, not an administrative act.
+  bugs: 'Bugs',
   activity: 'Activity',
   settings: 'Settings',
 }
@@ -58,9 +62,11 @@ export const DEFAULT_APP_TAB: AppTabId = 'overview'
  *
  * Two distinct fallbacks, both to Overview: an unrecognised value (a typo, an
  * old link from before a tab was renamed) and a REAL tab the viewer isn't
- * allowed into. Settings is admin-only, so a `?tab=settings` link can outlive
- * the permission that produced it — landing on a working page beats landing
- * on an empty one or a 403.
+ * allowed into. Settings is admin-only and Bugs needs `bug.view` on this
+ * project, so either link can outlive the permission that produced it —
+ * landing on a working page beats landing on an empty one or a 403. That is
+ * also why `available` is a parameter rather than a constant: the caller
+ * knows the viewer, this module knows the sections.
  */
 export function normalizeAppTab(
   raw: string | string[] | undefined,

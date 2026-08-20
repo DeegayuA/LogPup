@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { AI_FEATURES, featureForSlug, MODEL_CHOICES, type FeatureKind } from '@/features/gemini/ai-features'
+import {
+  AI_FEATURES,
+  estimatePerUseCostUsd,
+  featureForSlug,
+  MODEL_CHOICES,
+  type AiFeatureEstimate,
+  type FeatureKind,
+} from '@/features/gemini/ai-features'
 import { resolvePrefs } from '@/features/gemini/prefs'
-import { priceForModel } from '@/features/gemini/pricing'
+import { estimateCostUsd, priceForModel } from '@/features/gemini/pricing'
 
 // Google's catalog marks these shut down. Offering one in a picker offers a
 // guaranteed, undiagnosable permanent failure — they must never appear in
@@ -50,6 +57,70 @@ describe('AI_FEATURES registry', () => {
         SHUT_DOWN_MODEL_IDS,
         `${f.id}'s estimate model "${f.estimate.tokens.model}" is shut down`,
       ).not.toContain(f.estimate.tokens.model)
+    }
+  })
+})
+
+describe('estimatePerUseCostUsd', () => {
+  const AT = new Date('2026-08-19')
+  const estimateFor = (id: string): AiFeatureEstimate => {
+    const feature = AI_FEATURES.find((f) => f.id === id)
+    if (!feature) throw new Error(`no such feature: ${id}`)
+    return feature.estimate
+  }
+
+  it('reprices the whole shape for a feature whose choice governs every call', () => {
+    const estimate = estimateFor('worklog-draft')
+    expect(estimate.chosenModelApplies).toBeUndefined()
+    expect(estimatePerUseCostUsd(estimate, 'gemini-2.5-pro', AT)).toBe(
+      estimateCostUsd({ ...estimate.tokens, model: 'gemini-2.5-pro', at: AT }),
+    )
+  })
+
+  // The defect this guards: meeting-intel's per-use figure is printed
+  // directly above a note promising that per-segment transcription is NOT
+  // repriced with the write-up. Pricing the whole 120k/12k shape on the
+  // chosen model doubled the row and made the card contradict itself.
+  it('reprices meeting-intel by less than a naive whole-shape reprice', () => {
+    const estimate = estimateFor('meeting-intel')
+    const base = estimatePerUseCostUsd(estimate, null, AT)
+    const split = estimatePerUseCostUsd(estimate, 'gemini-2.5-pro', AT)
+    const naive = estimateCostUsd({ ...estimate.tokens, model: 'gemini-2.5-pro', at: AT })
+    expect(base).not.toBeNull()
+    expect(split).not.toBeNull()
+    expect(naive).not.toBeNull()
+    // A dearer model still costs more than the default — the split reprices
+    // the synthesis pass, it does not ignore the choice.
+    expect(split!).toBeGreaterThan(base!)
+    // …but by strictly less than repricing the segment calls too would.
+    expect(split! - base!).toBeLessThan(naive! - base!)
+    expect(split!).toBeLessThan(naive!)
+  })
+
+  it('leaves the default-model figure untouched by the split', () => {
+    const estimate = estimateFor('meeting-intel')
+    expect(estimatePerUseCostUsd(estimate, null, AT)).toBe(
+      estimateCostUsd({ ...estimate.tokens, at: AT }),
+    )
+  })
+
+  it('returns null rather than a partial sum when the chosen model has no price', () => {
+    // gemini-omni-flash is deliberately unpriced (pricing.ts) — half of a
+    // blended figure would read as a real, cheap number.
+    expect(estimatePerUseCostUsd(estimateFor('meeting-intel'), 'gemini-omni-flash', AT)).toBeNull()
+  })
+
+  it('never lets a sub-shape exceed the shape it is carved out of', () => {
+    for (const f of AI_FEATURES) {
+      const estimate: AiFeatureEstimate = f.estimate
+      const sub = estimate.chosenModelApplies
+      if (!sub) continue
+      expect(sub.inputTokens, `${f.id} sub-shape input exceeds the whole`).toBeLessThanOrEqual(
+        estimate.tokens.inputTokens,
+      )
+      expect(sub.outputTokens, `${f.id} sub-shape output exceeds the whole`).toBeLessThanOrEqual(
+        estimate.tokens.outputTokens,
+      )
     }
   })
 })

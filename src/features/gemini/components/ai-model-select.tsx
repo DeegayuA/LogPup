@@ -59,9 +59,14 @@ export function AiModelSelect({
   for (const c of choices) labels[c.id] = c.label
 
   const selected = choices.find((c) => c.id === value)
-  // A free key gets 401/403 on every call to a paid-only model, forever —
-  // there is no downstream error message that can explain that failure, so
-  // it has to be said here, at the point of choice.
+  // A key with no paid tier answers 401/403 to a paid-only model on every
+  // call, forever. That does NOT refuse the call: client.ts treats an auth
+  // failure as "advance to the next model on this key", so the request falls
+  // through to the default model and the feature works normally. What the
+  // user loses is the choice itself — silently — plus one wasted request per
+  // call. Nothing downstream can report that (they see an ordinary result),
+  // so it has to be said here, at the point of choice, and said accurately:
+  // promising refusal would send someone to add billing they don't need.
   const needsPaidWarning = !!selected && !selected.freeTier && !hasPaidKey
 
   function handleChange(next: string | null) {
@@ -115,8 +120,10 @@ export function AiModelSelect({
         >
           <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           <span>
-            {selected.label} is paid-tier only. You hold no key marked paid, so every {label} call
-            will be refused until you add one.
+            {selected.label} is paid-tier only, and none of your active keys is marked paid.{' '}
+            {label} keeps working: each call is refused here, then falls through to the default
+            model — so until you add a paid key this choice only costs you one wasted request per
+            call.
           </span>
         </p>
       ) : null}

@@ -30,8 +30,10 @@ export default async function AdminPeoplePage() {
           <CardDescription>
             Approved teammates only — pending self-signups are under Approvals, and a
             rejected account is gone from every list. Add teammates by email, tag their
-            organization, change seats or deactivate accounts. You can&apos;t change your
-            own seat or active status here.
+            organization, change seats or deactivate accounts. Open a row for job role,
+            phone, personal email and organizations; tick rows to act on several at once.
+            You can&apos;t change your own seat or active status here, in a batch or
+            otherwise.
           </CardDescription>
           <CardAction>
             <AddUserDialog existingOrgTags={existingOrgTags} />

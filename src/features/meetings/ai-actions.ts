@@ -46,6 +46,7 @@ import { buildHistoryEntry } from '@/features/people/allocation-history'
 import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 import {
   DEFAULT_GEMINI_MODEL,
+  GEMINI_MODEL_FALLBACK_ORDER,
   callGemini,
   callGeminiWithAudio,
   callGeminiWithImages,
@@ -1165,17 +1166,30 @@ lists were given.`
     // reads is both the cheaper and the more useful reading of their intent.
     // Do NOT thread this into meeting.segment or meeting.followups "for
     // consistency" — see model-choice.ts's DEFAULT_CHAIN comment.
+    //
+    // With NO choice set, this path deliberately keeps its flash-first
+    // default (GEMINI_MODEL_FALLBACK_ORDER) rather than adopting
+    // SYNTHESIS_MODELS' Pro-first chain like the segmented path below. This
+    // is the legacy single-shot call: one request carrying the whole
+    // recording's audio, not a text pass over transcripts. Leading with a
+    // Pro preview here would make every default user's meeting start on a
+    // model whose free-tier quota runs out first — 429 is retriable, so
+    // that is ~4 wasted requests and seconds of backoff before flash gets
+    // its turn, on a call nobody asked to upgrade. An explicit choice is
+    // still honoured, prepended the same way resolveChain prepends it, so a
+    // retired pick falls through instead of failing.
     const prefs = await getAiPrefs(session.user.id)
+    const chosenModel = prefs['meeting-intel'].model
+    const models =
+      chosenModel === null
+        ? GEMINI_MODEL_FALLBACK_ORDER
+        : [chosenModel, ...GEMINI_MODEL_FALLBACK_ORDER.filter((m) => m !== chosenModel)]
     ;({ text: raw, model: modelUsed } = await callGeminiWithAudio(
       session.user.id,
       [{ text: prompt }],
       audioBytes,
       mimeType,
-      {
-        models: resolveChain('meeting-intel', prefs['meeting-intel'].model),
-        responseJson: true,
-        feature: 'meeting.synthesis',
-      },
+      { models, responseJson: true, feature: 'meeting.synthesis' },
     ))
   } catch (error) {
     // GeminiError.message is already an actionable, key-free string (see

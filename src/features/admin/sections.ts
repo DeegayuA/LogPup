@@ -48,6 +48,17 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     capability: 'app.edit',
   },
   {
+    href: '/admin/bugs',
+    label: 'Bugs',
+    description: 'Every open bug in the workspace, newest first',
+    // NOT admin.view. bug.view is 'all' for staff, manager and auditor and
+    // 'scoped' for editor and member — and a scoped grant asked with no
+    // resource fails closed, which is the right answer for a workspace-wide
+    // queue: an editor reads the bugs on their own projects' tabs, not
+    // everybody's in one list.
+    capability: 'bug.view',
+  },
+  {
     href: '/admin/absences',
     label: 'Absences',
     description: 'Leave, work schedules and company holidays',

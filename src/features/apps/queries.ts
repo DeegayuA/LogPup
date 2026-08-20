@@ -1,9 +1,9 @@
 import { cache } from 'react'
-import { and, asc, count, eq, getTableColumns, gte, isNotNull, lt, max, ne, sql, type SQL } from 'drizzle-orm'
+import { and, asc, count, eq, gte, isNotNull, lt, max, ne, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
 import { db } from '@/db'
-import { liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { liveAppColumns, liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import { appComments, appRoleHistory, apps, assignments, meetingApps, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
@@ -122,7 +122,7 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
     await Promise.all([
       db
         .select({
-          ...getTableColumns(apps),
+          ...liveAppColumns,
           leadName: lead.name,
           leadAvatarUrl: lead.avatarUrl,
           pmName: pm.name,
@@ -130,9 +130,9 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
         })
         .from(liveApps)
         // Left join: an app whose lead row was deleted must still list.
-        .leftJoin(lead, eq(apps.leadId, lead.id))
-        .leftJoin(pm, eq(apps.pmId, pm.id))
-        .orderBy(asc(apps.name)),
+        .leftJoin(lead, eq(liveApps.leadId, lead.id))
+        .leftJoin(pm, eq(liveApps.pmId, pm.id))
+        .orderBy(asc(liveApps.name)),
       db
         .select({
           appId: assignments.appId,
@@ -325,7 +325,7 @@ export async function getAppBySlug(slug: string) {
   const pm = alias(users, 'pm')
   const [app] = await db
     .select({
-      ...getTableColumns(apps),
+      ...liveAppColumns,
       leadName: lead.name,
       leadAvatarUrl: lead.avatarUrl,
       pmName: pm.name,

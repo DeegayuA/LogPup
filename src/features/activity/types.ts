@@ -4,6 +4,10 @@
 
 export const ACTIVITY_ENTITY_TYPES = [
   'app',
+  // A bug report. Its own entity type rather than a flavour of 'task':
+  // bug_reports is its own table (see the header on it in db/schema.ts), so
+  // an entityId here is a bug id and would resolve to nothing as a task.
+  'bug',
   'task',
   'sprint',
   'meeting',

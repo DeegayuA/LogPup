@@ -1,8 +1,12 @@
 import { Sparkles } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { AI_FEATURES } from '@/features/gemini/ai-features'
+import {
+  AI_FEATURES,
+  estimatePerUseCostUsd,
+  type AiFeatureEstimate,
+} from '@/features/gemini/ai-features'
 import { getAiPrefs } from '@/features/gemini/prefs'
-import { estimateCostUsd, formatUsd } from '@/features/gemini/pricing'
+import { formatUsd } from '@/features/gemini/pricing'
 import { aggregateAiUsage, listGeminiKeys } from '@/features/gemini/queries'
 import {
   summarizeUsage,
@@ -59,8 +63,22 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
   const sharedByMe = keys.filter((k) => k.shared).length
   // Whether this user could actually serve a call to a paid-only model
   // (gemini-2.5-pro-preview-tts) right now — the picker warns inline rather
-  // than let the choice fail as an undiagnosable 401/403 later.
-  const hasPaidKey = keys.some((k) => k.tier === 'paid')
+  // than let the choice be silently ignored on every call later.
+  //
+  // `active` is part of the question, not a detail: rotation only ever picks
+  // up active keys (client.ts), so a PAUSED paid key cannot serve the choice
+  // and must still raise the warning — that user's calls really do fall back,
+  // which is exactly the case the warning exists for.
+  //
+  // OWN keys only, deliberately. The pool a call can reach also includes a
+  // teammate's active+shared key, so someone leaning on a shared PAID key is
+  // warned when they need not be. That is accepted rather than overlooked:
+  // listGeminiKeys is own-keys-only by design (queries.ts), and
+  // listPoolKeyHealth — the one sanctioned view of the pool — selects no
+  // `tier` column, so there is no honest way to ask the pool this question
+  // today. Over-warning is the safe direction now that the warning says the
+  // choice may be ignored rather than that the feature breaks.
+  const hasPaidKey = keys.some((k) => k.active && k.tier === 'paid')
   const liveUsage = bySummary.get(ESTIMATED_USAGE_FEATURE_ID)
   const totalsIncludeEstimate = !!liveUsage && liveUsage.calls > 0
 
@@ -133,12 +151,22 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
           {AI_FEATURES.map((f) => {
             const used = bySummary.get(f.id)
             const chosenModel = prefs[f.id].model
-            // The token SHAPE (a representative call for this feature) stays
+            // The token SHAPE (a representative use of this feature) stays
             // fixed from the registry; only the MODEL priced against it
             // swaps to whatever the user chose, so the card never quotes one
             // model's rate beside another model's token counts.
-            const perUseModel = chosenModel ?? f.estimate.tokens.model
-            const perUse = estimateCostUsd({ ...f.estimate.tokens, model: perUseModel, at: now })
+            //
+            // Where a choice governs only part of the feature the registry
+            // says so (estimate.chosenModelApplies) and only that part
+            // reprices — for meeting intelligence, the synthesis pass alone,
+            // which is precisely what the footnote below promises. Pricing
+            // the whole shape at the chosen rate would print a number that
+            // footnote contradicts. The annotation is what lets this read the
+            // optional field off a union of const entries.
+            const estimate: AiFeatureEstimate = f.estimate
+            const splitReprice = chosenModel !== null && estimate.chosenModelApplies !== undefined
+            const perUseModel = chosenModel ?? estimate.tokens.model
+            const perUse = estimatePerUseCostUsd(estimate, chosenModel, now)
             const isEstimatedFeature = f.id === ESTIMATED_USAGE_FEATURE_ID
             return (
               <li key={f.id} className="flex flex-wrap items-center gap-3 py-2.5">
@@ -146,12 +174,11 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                   <span className="text-sm font-medium">{f.label}</span>
                   <span className="text-xs text-muted-foreground">{f.description}</span>
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                    {f.chain} · {perUseModel} ·{' '}
-                    {f.estimate.tokens.inputTokens.toLocaleString('en-US')} in /{' '}
-                    {f.estimate.tokens.outputTokens.toLocaleString('en-US')} out ·{' '}
-                    {perUse !== null
-                      ? `${formatUsd(perUse)} ${f.estimate.label}`
-                      : 'price unknown'}
+                    {f.chain} ·{' '}
+                    {splitReprice ? `${estimate.tokens.model} + ${perUseModel}` : perUseModel} ·{' '}
+                    {estimate.tokens.inputTokens.toLocaleString('en-US')} in /{' '}
+                    {estimate.tokens.outputTokens.toLocaleString('en-US')} out ·{' '}
+                    {perUse !== null ? `${formatUsd(perUse)} ${estimate.label}` : 'price unknown'}
                   </span>
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
                     {describeUsage(used, isEstimatedFeature)}
@@ -160,7 +187,8 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                     <span className="text-xs text-muted-foreground">
                       Model choice applies to the whole-meeting write-up only — per-segment
                       transcription and follow-up resolution always run on the default flash
-                      chain, so an hour of segment calls isn&rsquo;t repriced along with it.
+                      chain, so an hour of segment calls isn&rsquo;t repriced along with it, and
+                      the figure above prices only the write-up on your chosen model.
                     </span>
                   ) : null}
                 </div>

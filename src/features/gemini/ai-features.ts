@@ -4,6 +4,8 @@
 // history exists. Wave features register here as they ship — Settings, the
 // pref guard, and adoption reporting pick them up with no further wiring.
 
+import { estimateCostUsd } from '@/features/gemini/pricing'
+
 export type AiCallSlug =
   | 'meeting.segment'
   | 'meeting.synthesis'
@@ -26,6 +28,28 @@ export type AiCallSlug =
 export type FeatureKind = 'text' | 'tts' | 'live'
 
 /**
+ * The static per-use estimate a feature's Settings row shows before any real
+ * history exists.
+ *
+ * `tokens` is the representative shape of ONE use of the whole feature, and
+ * `tokens.model` is the model that shape is priced on by default.
+ *
+ * `chosenModelApplies` exists because a feature can span several Gemini calls
+ * while the user's model choice governs only SOME of them. It names the slice
+ * of `tokens` the choice actually reprices; the remainder (`tokens` minus this
+ * sub-shape) stays priced on `tokens.model`. Omit it — as every single-call
+ * feature does — and the choice reprices the whole shape.
+ *
+ * It must never exceed `tokens` in either direction; ai-features.test.ts
+ * enforces that.
+ */
+export type AiFeatureEstimate = {
+  label: string // e.g. "per meeting hour", "per draft"
+  tokens: { model: string; inputTokens: number; outputTokens: number }
+  chosenModelApplies?: { inputTokens: number; outputTokens: number }
+}
+
+/**
  * What a registry entry must look like. Only ever used to CHECK the entries
  * below (`satisfies`), never to annotate them: annotating the array would
  * widen every id back to `string` and make the derived AiFeatureId circular
@@ -38,10 +62,7 @@ type AiFeatureShape = {
   chain: 'Quick' | 'Analysis' | 'Synthesis' | 'Voice' | 'Live'
   kind: FeatureKind
   slugs: readonly AiCallSlug[]
-  estimate: {
-    label: string // e.g. "per meeting hour", "per draft"
-    tokens: { model: string; inputTokens: number; outputTokens: number }
-  }
+  estimate: AiFeatureEstimate
 }
 
 export const AI_FEATURES = [
@@ -54,9 +75,22 @@ export const AI_FEATURES = [
     slugs: ['meeting.segment', 'meeting.synthesis', 'meeting.followups'],
     estimate: {
       label: 'per meeting hour',
-      // ~12 audio segments plus one synthesis pass; priced on the flash
-      // default since the segment calls dominate the volume.
+      // ~12 five-minute audio segments (SEGMENT_TARGET_MS, ~108k in / ~8k out
+      // between them) plus ONE synthesis pass over their concatenated
+      // transcripts and the captured screens (~12k in / ~4k out). Priced on
+      // the flash default since the segment calls dominate the volume.
+      //
+      // THE SPLIT IS LOAD-BEARING. A user's chosen model governs
+      // meeting.synthesis ONLY — meeting.segment and meeting.followups always
+      // run the default flash chain (see both synthesis call sites in
+      // meetings/ai-actions.ts and DEFAULT_CHAIN in model-choice.ts). So
+      // `chosenModelApplies` is exactly that one synthesis call, and
+      // estimatePerUseCostUsd reprices only it, leaving the ~12 segment calls
+      // at the flash rate. If that ruling ever changes, this sub-shape moves
+      // with it — otherwise the Settings row quotes a figure its own footnote
+      // ("segments aren't repriced") flatly contradicts.
       tokens: { model: 'gemini-3.6-flash', inputTokens: 120_000, outputTokens: 12_000 },
+      chosenModelApplies: { inputTokens: 12_000, outputTokens: 4_000 },
     },
   },
   {
@@ -157,12 +191,60 @@ export type AiFeatureId = (typeof AI_FEATURES)[number]['id']
 export type AiFeatureDef = (typeof AI_FEATURES)[number]
 
 /**
+ * The per-use dollar estimate for one feature under the model this user
+ * chose — THE one place that turns a registry estimate into a figure shown
+ * to a person.
+ *
+ * The token shape never moves: it is what a representative use of this
+ * feature costs in tokens, and a model choice does not change how much audio
+ * an hour of meeting contains. Only the RATE applied to it moves, and only
+ * over the calls the choice actually governs:
+ *
+ *   - no `chosenModelApplies` -> the whole shape reprices (single-call
+ *     features: every call is the chosen model's).
+ *   - with `chosenModelApplies` -> that sub-shape prices on the chosen
+ *     model, the remainder stays on `tokens.model`, because those calls
+ *     genuinely still run the default chain.
+ *
+ * Any unpriced model on either side returns null ("price unknown"), never a
+ * partial sum — half a price is more misleading than no price.
+ */
+export function estimatePerUseCostUsd(
+  estimate: AiFeatureEstimate,
+  chosenModel: string | null,
+  at: Date,
+): number | null {
+  const { tokens, chosenModelApplies } = estimate
+  if (chosenModel === null) return estimateCostUsd({ ...tokens, at })
+  if (!chosenModelApplies) return estimateCostUsd({ ...tokens, model: chosenModel, at })
+
+  const remainder = estimateCostUsd({
+    model: tokens.model,
+    inputTokens: tokens.inputTokens - chosenModelApplies.inputTokens,
+    outputTokens: tokens.outputTokens - chosenModelApplies.outputTokens,
+    at,
+  })
+  const chosen = estimateCostUsd({
+    model: chosenModel,
+    inputTokens: chosenModelApplies.inputTokens,
+    outputTokens: chosenModelApplies.outputTokens,
+    at,
+  })
+  if (remainder === null || chosen === null) return null
+  return remainder + chosen
+}
+
+/**
  * One selectable model for a feature's `kind`. `stability` tells the user
  * what kind of promise the id carries: `stable` GA models, `preview` models
  * Google can retire on ~two weeks' notice, and `alias` ids like
  * gemini-flash-latest that hot-swap underneath you without warning at all.
- * `freeTier: false` means a free key gets 401/403 on every call, forever —
- * that has no downstream fix, so the picker must warn at the point of choice.
+ * `freeTier: false` means a free key gets 401/403 on every call to that
+ * model, forever. The CALL still succeeds — client.ts treats auth failures as
+ * "advance to the next model on this key", so it lands on the default model —
+ * but the choice is silently ignored and one request per call is spent
+ * discovering that. Nothing downstream can report it (the user just sees a
+ * normal result), so the picker warns at the point of choice.
  */
 export type ModelChoice = {
   id: string

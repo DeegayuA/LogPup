@@ -58,8 +58,13 @@ import { SprintStatusSelect } from '@/features/sprints/components/sprint-status-
 import { ExportButton } from '@/features/notion/components/export-button'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
-import { isAdminRole } from '@/features/auth/capabilities'
+import { isAdminRole, can } from '@/features/auth/capabilities'
+import { loadActor } from '@/features/auth/actor'
 import { getAiPrefs } from '@/features/gemini/prefs'
+import { getOpenBugCountForApp, listBugsForApp } from '@/features/bugs/queries'
+import { bugFilterHref, parseBugFilters } from '@/features/bugs/report-input'
+import { BugList } from '@/features/bugs/components/bug-list'
+import { ReportBugDialog } from '@/features/bugs/components/report-bug-dialog'
 
 const SPRINT_STATUS_LABEL: Record<'planned' | 'active' | 'done', string> = {
   planned: 'Planned',
@@ -87,14 +92,38 @@ export default async function AppDetailPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const [{ slug }, search] = await Promise.all([props.params, props.searchParams])
-  const [app, session] = await Promise.all([getAppBySlug(slug), getSession()])
+  // loadActor rather than a second role read: `bug.view` and `bug.triage` are
+  // SCOPED for manager, editor and member, so answering them needs the set of
+  // projects this person reaches — which is one query per request, memoised,
+  // and the only way to ask the matrix instead of comparing roles. The
+  // session is still read for the things that genuinely want an identity
+  // (the board's current user, the check-in card).
+  const [app, session, actor] = await Promise.all([
+    getAppBySlug(slug),
+    getSession(),
+    loadActor(),
+  ])
   if (!app) notFound()
 
   const isAdmin = session?.user ? isAdminRole(session.user.role) : false
-  // Settings is the only gated section, so availability is known the moment
-  // the session is. Everything else is visible to any signed-in member.
-  const available = APP_TAB_IDS.filter((id) => id !== 'settings' || isAdmin)
+  // Every bug question is asked WITH the project, because every one of them is
+  // scoped below manager. Asked without it, `can` fails closed and a member
+  // would lose the tab on their own project.
+  const bugResource = { appId: app.id }
+  const canViewBugs = actor ? can(actor, 'bug.view', bugResource) : false
+  const canTriageBugs = actor ? can(actor, 'bug.triage', bugResource) : false
+  const canDeleteBugs = actor ? can(actor, 'bug.delete', bugResource) : false
+  // Filing is granted 'all' from member up and takes no resource: whoever hits
+  // a bug reports it, including on a project they are not on.
+  const canReportBugs = actor ? can(actor, 'bug.report') : false
+  // Settings is admin-only; Bugs needs bug.view on THIS app. Everything else
+  // is visible to any signed-in member. normalizeAppTab sends a link to a tab
+  // this viewer cannot open back to Overview rather than to a 403.
+  const available = APP_TAB_IDS.filter((id) =>
+    id === 'settings' ? isAdmin : id === 'bugs' ? canViewBugs : true,
+  )
   const tab = normalizeAppTab(search.tab, available)
+  const bugFilters = parseBugFilters({ bugStatus: search.bugStatus, bugSeverity: search.bugSeverity })
   const sprintParam = typeof search.sprint === 'string' ? search.sprint : undefined
 
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
@@ -111,7 +140,14 @@ export default async function AppDetailPage(props: {
    * you hunting for a typo that isn't there. Tech tags are only ever wanted by
    * the editor dialogs, so fetching them here would be a query nothing reads.
    */
-  const needsUsers = isAdmin || tab === 'roadmap' || TABS_NEEDING_USERS.includes(tab)
+  // Bugs joins the list only for a viewer who can actually triage — the
+  // assignee select is the sole thing on that tab that wants a roster, and a
+  // member reading the list should not buy one.
+  const needsUsers =
+    isAdmin
+    || tab === 'roadmap'
+    || (tab === 'bugs' && canTriageBugs)
+    || TABS_NEEDING_USERS.includes(tab)
   const needsTechTags = isAdmin || TABS_NEEDING_USERS.includes(tab)
 
   // Overview shows a teaser; Activity shows the feed; every other tab needs
@@ -137,6 +173,8 @@ export default async function AppDetailPage(props: {
     contributions,
     roleHistory,
     aiPrefs,
+    bugs,
+    openBugCount,
   ] = await Promise.all([
     getSprintsForApp(app.id),
     getTeamForApp(app.id),
@@ -157,6 +195,12 @@ export default async function AppDetailPage(props: {
     // dialogs — a member pays nothing for a preference lookup they have no
     // control that needs it.
     isAdmin && session?.user ? getAiPrefs(session.user.id) : Promise.resolve(null),
+    tab === 'bugs' ? listBugsForApp(app.id, bugFilters) : Promise.resolve([]),
+    // The ONE exception to "only the active tab's data": the count is the
+    // badge ON the tab, so fetching it only while the tab is open is the one
+    // moment it is not needed. One partial-index count, and only for a viewer
+    // who can see the tab at all.
+    canViewBugs ? getOpenBugCountForApp(app.id) : Promise.resolve(0),
   ])
   const tasks = counts.tasks
   const sprintDraftEnabled = aiPrefs ? aiPrefs['sprint-draft'].enabled : true
@@ -336,24 +380,36 @@ export default async function AppDetailPage(props: {
         memberCount={team.length}
         sprintCount={sprints.length}
         meetingCount={counts.meetings}
+        /* Report a bug sits in the HEADER, not in the Bugs tab, because
+           `bug.report` is granted 'all' from member up while `bug.view` is
+           scoped: somebody outside this project can file a report and cannot
+           open the tab. Putting the affordance behind the tab would silence
+           exactly the person the grant was widened for. It is also true of
+           everyone else that a bug is hit on the Roadmap or in Discussion,
+           not on the Bugs tab. */
         actions={
-          isAdmin ? (
-            <AppFormDialog
-              appId={app.id}
-              initialValues={{
-                name: app.name,
-                description: app.description,
-                repoUrl: app.repoUrl,
-                techTags: app.techTags,
-                status: app.status,
-                leadId: app.leadId,
-                pmId: app.pmId,
-              }}
-              workspaceTechTags={workspaceTechTags}
-              activeUsers={activeUsers}
-              trigger={<Button variant="outline" size="sm" />}
-              aiGenerateEnabled={appMetadataEnabled}
-            />
+          canReportBugs || isAdmin ? (
+            <>
+              {canReportBugs ? <ReportBugDialog appId={app.id} appName={app.name} /> : null}
+              {isAdmin ? (
+                <AppFormDialog
+                  appId={app.id}
+                  initialValues={{
+                    name: app.name,
+                    description: app.description,
+                    repoUrl: app.repoUrl,
+                    techTags: app.techTags,
+                    status: app.status,
+                    leadId: app.leadId,
+                    pmId: app.pmId,
+                  }}
+                  workspaceTechTags={workspaceTechTags}
+                  activeUsers={activeUsers}
+                  trigger={<Button variant="outline" size="sm" />}
+                  aiGenerateEnabled={appMetadataEnabled}
+                />
+              ) : null}
+            </>
           ) : undefined
         }
       />
@@ -362,7 +418,10 @@ export default async function AppDetailPage(props: {
         slug={slug}
         active={tab}
         tabs={available}
-        counts={{ discussion: counts.comments, meetings: counts.meetings }}
+        // Open bugs only — resolved ones are not a number anybody has to act
+        // on, and the list under the badge counts the same way (see
+        // OPEN_BUG_STATUSES).
+        counts={{ discussion: counts.comments, meetings: counts.meetings, bugs: openBugCount }}
       />
 
       {tab === 'overview' ? (
@@ -634,6 +693,30 @@ export default async function AppDetailPage(props: {
             isAdmin={isAdmin}
             hideAppId={app.id}
             users={activeUsers}
+          />
+        </div>
+      ) : null}
+
+      {tab === 'bugs' ? (
+        <div className="flex flex-col gap-4">
+          <p className="max-w-prose text-sm text-muted-foreground">
+            What is broken in {app.name}, and who has it. Reports arrive from wherever
+            somebody hit the problem — the page they were on comes with them, which is
+            why <span className="font-medium text-foreground">Report a bug</span> lives in
+            the header above and not down here.
+          </p>
+          <BugList
+            bugs={bugs}
+            filters={bugFilters}
+            filterHrefFor={(patch) => bugFilterHref(slug, bugFilters, patch)}
+            emptyHint={
+              bugFilters.status || bugFilters.severity
+                ? 'No bug matches that filter. Clear it to see the rest.'
+                : 'Nothing has been reported against this app. Report a bug from the page it broke on — the route comes with it — and it will land here.'
+            }
+            assignableUsers={activeUsers.map((user) => ({ id: user.id, name: user.name }))}
+            canTriage={canTriageBugs ? () => true : undefined}
+            canDelete={canDeleteBugs ? () => true : undefined}
           />
         </div>
       ) : null}
