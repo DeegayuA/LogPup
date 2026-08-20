@@ -119,7 +119,7 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
                   >
                     <Link
                       href={`/people/${person.id}`}
-                      className="flex w-40 min-w-0 items-center gap-2 rounded-md outline-none transition-colors duration-150 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
+                      className="flex w-28 min-w-0 items-center gap-2 sm:w-40 lg:w-48 rounded-md outline-none transition-colors duration-150 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
                     >
                       <Avatar size="sm">
                         {person.avatarUrl ? <AvatarImage src={person.avatarUrl} alt="" /> : null}

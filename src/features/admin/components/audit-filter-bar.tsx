@@ -78,7 +78,21 @@ function DateFilter({
  */
 function SearchFilter({ value, onCommit }: { value: string; onCommit: (next: string) => void }) {
   const [draft, setDraft] = useState(value)
+  // Adjust-during-render sync instead of a `key` on the call site. Keying this
+  // component by the committed query remounted it on every debounce commit,
+  // which took focus out of the input mid-phrase — so anyone typing a
+  // multi-word filter slower than the 400ms window lost the caret and the rest
+  // of their words. `lastCommitted` is what distinguishes "the URL changed
+  // because I just committed" (keep the draft, keep focus) from "the URL
+  // changed underneath me" (adopt it). Same fix as activity-filter-bar.
+  const [prevValue, setPrevValue] = useState(value)
+  const [lastCommitted, setLastCommitted] = useState(value)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  if (value !== prevValue) {
+    setPrevValue(value)
+    if (value !== lastCommitted) setDraft(value)
+  }
 
   useEffect(() => {
     return () => {
@@ -89,7 +103,10 @@ function SearchFilter({ value, onCommit }: { value: string; onCommit: (next: str
   function commit(next: string) {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
-    if (next !== value) onCommit(next)
+    if (next !== value) {
+      setLastCommitted(next)
+      onCommit(next)
+    }
   }
 
   return (
@@ -189,7 +206,7 @@ export function AuditFilterBar({
         <AuditAsk current={current} />
       </div>
 
-      <SearchFilter key={`q-${current.q}`} value={current.q} onCommit={(q) => apply({ q })} />
+      <SearchFilter value={current.q} onCommit={(q) => apply({ q })} />
 
       <Select
         value={current.actor || ALL}

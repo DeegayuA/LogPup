@@ -98,12 +98,17 @@ export default async function ProgressPage(props: {
   const window = resolveProgressWindow(params, today)
 
   return (
-    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8 overflow-hidden">
-      {/* Background ambient lighting */}
+    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8">
+      {/* Decorative only, and clipped HERE rather than on the page root:
+          `overflow-hidden` on the root makes it the nearest scroll container,
+          which silently stops `position: sticky` for its descendants — and
+          this page's matrix has a sticky person column. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
       <div
         className="pointer-events-none absolute -top-40 right-1/3 -z-10 h-[400px] w-[500px] rounded-full bg-primary/8 blur-3xl"
         aria-hidden
       />
+      </div>
 
       {header}
 

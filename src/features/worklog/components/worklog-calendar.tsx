@@ -36,6 +36,11 @@ export function shiftMonth(month: string, steps: number): string {
 }
 
 function mondayColumn(iso: string): number {
+  // Midday UTC, matching workingDayFraction's anchor in src/lib/working-days.ts:
+  // far enough from either boundary that the +05:30 Colombo offset cannot tip
+  // the weekday to its neighbour. Kept in step with that file deliberately — a
+  // grid that disagreed with the working-day rule about which column a date
+  // belongs in would paint Saturdays under Sunday.
   return (new Date(`${iso}T12:00:00Z`).getUTCDay() + 6) % 7
 }
 
@@ -214,8 +219,13 @@ export function WorklogCalendar({
                     {Number(iso.slice(8, 10))}
                   </span>
 
+                  {/* Hidden below `sm`: at 320px a seven-column grid gives each
+                      cell ~40px, and the number plus this badge on one row left
+                      neither legible. The cell's fill tone (loggedTone) already
+                      encodes the percent there, and the sr-only sentence states
+                      it exactly for anyone who cannot see the tone. */}
                   {state === 'logged' && percent !== undefined ? (
-                    <span className="font-mono text-2xs font-semibold tabular-nums">
+                    <span className="hidden sm:inline font-mono text-2xs font-semibold tabular-nums">
                       {percent}%
                     </span>
                   ) : half ? (

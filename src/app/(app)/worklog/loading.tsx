@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
  */
 export default function WorklogLoading() {
   return (
-    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 md:p-8">
       <span className="sr-only" role="status">
         Loading your work log…
       </span>
@@ -20,7 +20,7 @@ export default function WorklogLoading() {
 
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         {Array.from({ length: 4 }, (_, i) => (
-          <Skeleton key={i} className="h-[74px] rounded-lg" />
+          <Skeleton key={i} className="h-30 rounded-xl" />
         ))}
       </div>
 

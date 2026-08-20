@@ -9,7 +9,7 @@ import { ProgressMatrixSkeleton } from '@/features/worklog/components/progress-m
  */
 export default function ProgressLoading() {
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6">
+    <div className="flex flex-1 flex-col gap-6 p-6 md:p-8">
       <span className="sr-only" role="status">
         Loading progress…
       </span>

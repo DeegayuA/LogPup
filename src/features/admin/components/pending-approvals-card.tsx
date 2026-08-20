@@ -112,6 +112,14 @@ function PendingRow({
         <Select
           value={role}
           disabled={isPending}
+          // `items` is not optional in practice: Base UI's Select.Value renders
+          // String(value) without it (or a function child), so the closed
+          // trigger would read the raw role id rather than its label. The repo
+          // has been bitten by this on the job-role and employment selects.
+          items={[
+            { value: 'member', label: 'Member' },
+            { value: 'admin', label: 'Admin' },
+          ]}
           onValueChange={(value) => setRole(value as UserRole)}
         >
           <SelectTrigger size="sm" aria-label={`Role for ${user.name}`} className="w-28">

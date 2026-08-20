@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useMemo, useState, useTransition } from 'react'
+import { Fragment, useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import {
   ChevronDown,
@@ -982,9 +982,14 @@ export function UserTable({
                   {visible.map((user) => {
                     const isSelf = user.id === currentUserId
                     const isOpen = expanded === user.id
-                    return [
+                    // One keyed Fragment, not an array of two elements.
+                    // React reconciles an array returned from a map by
+                    // position as well as key, so the detail row appearing and
+                    // disappearing shifted every following row's slot and
+                    // remounted their inputs mid-edit.
+                    return (
+                      <Fragment key={user.id}>
                       <TableRow
-                        key={user.id}
                         data-state={selectedSet.has(user.id) ? 'selected' : undefined}
                       >
                         <TableCell className="align-top">
@@ -1024,17 +1029,18 @@ export function UserTable({
                             />
                           </Button>
                         </TableCell>
-                      </TableRow>,
-                      isOpen ? (
-                        <TableRow key={`${user.id}-detail`} className="hover:bg-transparent">
+                      </TableRow>
+                      {isOpen ? (
+                        <TableRow className="hover:bg-transparent">
                           <TableCell colSpan={6} className="whitespace-normal">
                             <div id={`person-detail-${user.id}`} className="px-1 pb-2">
                               {detailFields(user, isSelf)}
                             </div>
                           </TableCell>
                         </TableRow>
-                      ) : null,
-                    ]
+                      ) : null}
+                      </Fragment>
+                    )
                   })}
                 </TableBody>
               </Table>

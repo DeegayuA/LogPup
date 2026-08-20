@@ -12,13 +12,13 @@ import { Skeleton } from '@/components/ui/skeleton'
  */
 export default function SettingsLoading() {
   return (
-    <div className="flex flex-1 flex-col p-4 sm:p-6">
+    <div className="flex flex-1 flex-col gap-6 p-6 md:p-8">
       <span className="sr-only" role="status">
         Loading your settings…
       </span>
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
         <PageHeader
-          title="Settings"
+          title="Account & Studio Settings"
           description="How LogPup behaves for you. Nothing here changes anything for your teammates."
         />
 

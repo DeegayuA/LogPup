@@ -70,7 +70,7 @@ export function MobileNav({
           <button
             type="button"
             aria-label="Open navigation"
-            className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="flex size-8 pointer-coarse:size-11 items-center justify-center rounded-md bg-primary text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <PawPrint className="size-4" aria-hidden />
           </button>
