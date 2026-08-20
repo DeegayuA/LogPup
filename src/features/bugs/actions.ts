@@ -13,8 +13,10 @@ import { logActivity } from '@/features/activity/log'
 import {
   bugReportInput,
   bugContentInput,
+  bugQueuePageInput,
   bugTriageInput,
   type BugContentInput,
+  type BugFilters,
   type BugReportInput,
   type BugTriageInput,
 } from '@/features/bugs/report-input'
@@ -23,7 +25,7 @@ import {
   bugStatusLabel,
   isSettledBugStatus,
 } from '@/features/bugs/bug-display'
-import { getBugScope } from '@/features/bugs/queries'
+import { getBugScope, listTriageQueue, type TriagePage } from '@/features/bugs/queries'
 
 /**
  * The three things a person can do to a bug report.
@@ -186,6 +188,43 @@ export async function triageBug(input: BugTriageInput): Promise<ActionResult> {
     return ok(undefined)
   } catch (error) {
     return unexpected('triageBug failed:', error)
+  }
+}
+
+/**
+ * The next page of the workspace triage queue.
+ *
+ * A READ behind a server action, which this file otherwise has none of. It is
+ * here because the alternative — a link that re-navigates with a cursor — is
+ * what the activity trail replaced for the same reason: each click threw away
+ * the rows already on screen, so reaching the fourth page meant reading the
+ * first three again, and going back meant re-fetching them.
+ *
+ * `bug.view` unscoped, deliberately. Asking it with a project would be asking
+ * the wrong question: this queue spans every project, and the scoped answer is
+ * applied per ROW by the page (canTriage / canDelete) rather than to the fetch.
+ * A viewer whose grant is scoped still sees the queue; what they cannot do is
+ * act on a row outside their scope.
+ */
+export async function loadMoreTriageBugs(input: {
+  before: string
+  filters?: BugFilters
+}): Promise<ActionResult<TriagePage>> {
+  const actor = await requireCapability('bug.view')
+  if (!actor) return err('Not allowed')
+
+  const parsed = bugQueuePageInput.safeParse(input)
+  if (!parsed.success) return err('That page reference is not valid — reload and try again.')
+
+  try {
+    // The filters travel WITH the cursor. Without them page two would be drawn
+    // from the unfiltered queue and silently widen the slice the reader is
+    // looking at — the likeliest bug a "load more" button has.
+    return ok(
+      await listTriageQueue({ before: parsed.data.before, filters: parsed.data.filters ?? {} }),
+    )
+  } catch (error) {
+    return unexpected('loadMoreTriageBugs failed:', error)
   }
 }
 

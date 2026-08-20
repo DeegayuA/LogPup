@@ -121,6 +121,21 @@ export const bugFilterInput = z.object({
 export type BugFilters = z.infer<typeof bugFilterInput>
 
 /**
+ * One "load more" request from the triage queue.
+ *
+ * The cursor is a bare string here and decoded downstream — validating its
+ * SHAPE is keyset-cursor.ts's job, and repeating the format in a regex would
+ * be a second definition of the cursor, free to drift from the one that
+ * parses it. What this schema is for is the FILTERS: they must travel with the
+ * cursor, and arrive as the same closed enums the URL parser produces, so a
+ * hand-made request cannot ask page two for a status the queue does not serve.
+ */
+export const bugQueuePageInput = z.object({
+  before: z.string().min(1).max(200),
+  filters: bugFilterInput.optional(),
+})
+
+/**
  * Reads the two filter values out of a Next `searchParams` bag.
  *
  * Repeated params arrive as an array; an unknown value is dropped rather than

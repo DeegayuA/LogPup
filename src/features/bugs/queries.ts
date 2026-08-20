@@ -9,6 +9,8 @@ import {
   type BugStatus,
 } from '@/features/bugs/bug-display'
 import type { BugFilters } from '@/features/bugs/report-input'
+import { TRIAGE_PAGE_SIZE, triageQueueConditions } from '@/features/bugs/queue-page'
+import { decodeKeysetCursor, encodeKeysetCursor } from '@/lib/keyset-cursor'
 
 /**
  * Every read of a bug report.
@@ -36,9 +38,6 @@ import type { BugFilters } from '@/features/bugs/report-input'
 
 /** How many bugs one app's tab will render before it stops. */
 const APP_BUG_LIMIT = 200
-
-/** How many rows the workspace triage queue shows in one go. */
-export const TRIAGE_QUEUE_LIMIT = 100
 
 export type BugRow = {
   id: string
@@ -197,8 +196,26 @@ export async function getOpenBugCounts(): Promise<OpenBugCount[]> {
  * until somebody has triaged it, so sorting an untriaged queue by severity
  * would be sorting it by the column default.
  */
-export async function listTriageQueue(limit = TRIAGE_QUEUE_LIMIT): Promise<BugQueueRow[]> {
-  return db
+export type TriagePage = {
+  rows: BugQueueRow[]
+  /** Cursor for the page after this one, or null at the end of the queue. */
+  nextCursor: string | null
+}
+
+export async function listTriageQueue(
+  options: { filters?: BugFilters; before?: string; limit?: number } = {},
+): Promise<TriagePage> {
+  const { filters = {}, before, limit = TRIAGE_PAGE_SIZE } = options
+
+  // A malformed cursor decodes to null and is simply dropped — page one, not a
+  // crash. See the codec's contract in src/lib/keyset-cursor.ts.
+  const cursor = decodeKeysetCursor(before) ?? undefined
+
+  // One row MORE than the page. Its existence is what says "there is another
+  // page": a count would answer the same question at the cost of a second
+  // scan, and `rows.length === limit` cannot tell a full last page from a full
+  // middle one — which is how a pager ends up offering an empty page.
+  const rows = await db
     .select({
       ...bugColumns,
       appId: liveApps.id,
@@ -209,9 +226,19 @@ export async function listTriageQueue(limit = TRIAGE_QUEUE_LIMIT): Promise<BugQu
     .innerJoin(liveApps, eq(liveApps.id, liveBugReports.appId))
     .leftJoin(reporter, eq(reporter.id, liveBugReports.reportedBy))
     .leftJoin(assignee, eq(assignee.id, liveBugReports.assignedTo))
-    .where(inArray(liveBugReports.status, [...OPEN_BUG_STATUSES]))
-    .orderBy(desc(liveBugReports.createdAt))
-    .limit(limit)
+    .where(triageQueueConditions(filters, cursor))
+    // id breaks ties inside a millisecond, and it MUST match the tiebreaker in
+    // triageQueueConditions: a keyset walk whose ORDER BY and WHERE disagree
+    // skips rows at every page seam.
+    .orderBy(desc(liveBugReports.createdAt), desc(liveBugReports.id))
+    .limit(limit + 1)
+
+  const page = rows.slice(0, limit)
+  const last = page.at(-1)
+  return {
+    rows: page,
+    nextCursor: rows.length > limit && last ? encodeKeysetCursor(last) : null,
+  }
 }
 
 /**
