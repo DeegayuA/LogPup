@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
@@ -47,23 +47,43 @@ describe('every module a tracked file imports is itself tracked', () => {
       .filter((p) => /\.(ts|tsx)$/.test(p))
     const tracked = new Set(trackedList)
 
-    const offenders: string[] = []
-    for (const file of trackedList) {
-      const source = readFileSync(file, 'utf8')
-      // `from '@/…'` covers static imports and re-exports. The lazy
-      // `await import('@/…')` form that the command registry requires is
-      // matched by the second pattern and matters at least as much: a
-      // dynamic import of an untracked module fails at runtime rather than
-      // at build, so it reaches a user instead of a deploy log.
-      const specs = [
-        ...source.matchAll(/from\s+['"](@\/[^'"]+)['"]/g),
-        ...source.matchAll(/import\(\s*['"](@\/[^'"]+)['"]\s*\)/g),
-      ].map((m) => m[1])
+    // HEAD's content, NOT the working tree's. The property being asserted is
+    // "no COMMITTED file imports an uncommitted module". Reading disk instead
+    // would also fail during the entirely legitimate window where somebody
+    // has written a module and its consumer and staged neither yet — which,
+    // in a tree shared by several sessions, is most of the time. A guard
+    // that is red while you work is a guard someone mutes, and then it is
+    // not there for the case it was built for.
+    //
+    // One `git grep` over the HEAD tree rather than one `git show` per file:
+    // the per-file form spawned ~600 processes and took 25s, which is its own
+    // way of getting a check disabled.
+    //
+    // `from '@/…'` covers static imports and re-exports; the lazy
+    // `await import('@/…')` the command registry requires is the second
+    // alternative, and matters at least as much — a dynamic import of an
+    // untracked module fails at RUNTIME rather than at build, so it reaches
+    // a user instead of a deploy log.
+    const IMPORT_LINE = /(?:from\s+['"](@\/[^'"]+)['"]|import\(\s*['"](@\/[^'"]+)['"]\s*\))/g
 
-      for (const spec of new Set(specs)) {
+    let grepped = ''
+    try {
+      grepped = git([
+        'grep', '-h', '-E', "(from ['\"]@/|import\\(['\"]@/)", 'HEAD', '--', 'src/',
+      ])
+    } catch {
+      // git grep exits 1 when nothing matches; an empty repo of imports is
+      // a pass, not an error.
+    }
+
+    const offenders: string[] = []
+    for (const line of grepped.split('\n')) {
+      for (const m of line.matchAll(IMPORT_LINE)) {
+        const spec = m[1] ?? m[2]
+        if (!spec) continue
         const target = resolveAlias(spec)
         if (target && !tracked.has(target)) {
-          offenders.push(`${file}\n      imports ${spec}  ->  ${target} (UNTRACKED)`)
+          offenders.push(`imports ${spec}  ->  ${target} (UNTRACKED)`)
         }
       }
     }
@@ -73,7 +93,7 @@ describe('every module a tracked file imports is itself tracked', () => {
       offenders.length
         ? 'These files cannot build from a clean checkout. Stage the imported ' +
             'module in the same commit as its consumer, or drop the import:\n\n  ' +
-            offenders.join('\n  ')
+            [...new Set(offenders)].join("\n  ")
         : undefined,
     ).toEqual([])
   })
