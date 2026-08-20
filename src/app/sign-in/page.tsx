@@ -16,6 +16,7 @@ import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { GoogleOneTap } from '@/features/auth/components/google-one-tap'
 import { PasskeyLoginButton } from '@/features/auth/components/passkey-login-button'
 import { PasswordAuth } from '@/features/auth/components/password-auth'
+import { SignInMethods } from '@/features/auth/components/sign-in-methods'
 import { SignInBackdrop } from '@/features/auth/components/sign-in-backdrop'
 import { ThemeToggle } from '@/components/shell/theme-toggle'
 import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
@@ -146,42 +147,39 @@ export default function SignInPage() {
               unsafe and proceed if you see a warning.
             </p>
 
-            {/* Google is primary — filled, first, and the only provider that can
-                self-provision an account. Notion sits directly under it as the
-                outline variant: same group, clearly secondary. */}
-            <div className="flex flex-col gap-2">
-              <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/' }) }}>
-                <Button type="submit" size="lg" className="w-full">Continue with Google</Button>
-              </form>
+            {/* The three methods are rendered HERE, on the server — Google's
+                button submits a server action and the password panel is a
+                native <details> with no JS behind it — and handed to
+                SignInMethods as slots. That component only reorders them, so
+                whichever one you used last comes first, wearing a "Last used"
+                tag and the filled treatment. With scripting off, or on a first
+                visit, this canonical order is exactly what stays on screen. */}
+            <SignInMethods
+              google={
+                <div className="flex flex-col gap-2">
+                  <form action={async () => { 'use server'; await signIn('google', { redirectTo: '/' }) }}>
+                    <Button type="submit" size="lg" className="w-full">Continue with Google</Button>
+                  </form>
 
-              {notionConfigured && (
-                <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
-                  <Button type="submit" size="lg" variant="outline" className="w-full">
-                    Continue with Notion
-                  </Button>
-                </form>
-              )}
-              {/* One tap for anyone who added a passkey in settings — the
-                  fast door after the first sign-in. */}
-              <PasskeyLoginButton />
-            </div>
-
-            {/* The rule now separates OAuth from credentials — the real fork in
-                the page — instead of separating two OAuth buttons from each
-                other. */}
-            <div className="relative">
-              <span aria-hidden className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </span>
-              <span className="relative flex justify-center">
-                <span className="bg-card px-2 text-xs text-muted-foreground">or</span>
-              </span>
-            </div>
-
-            {/* Email + password is the fallback, so it starts collapsed rather
-                than filling the card with fields nobody uses first. Native
-                <details> keeps this a server component — no JS to hydrate. */}
-            <details className="group">
+                  {notionConfigured && (
+                    <form action={async () => { 'use server'; await signIn('notion', { redirectTo: '/' }) }}>
+                      <Button type="submit" size="lg" variant="outline" className="w-full">
+                        Continue with Notion
+                      </Button>
+                    </form>
+                  )}
+                </div>
+              }
+              /* One tap for anyone who added a passkey in settings — the fast
+                 door after the first sign-in. */
+              passkey={<PasskeyLoginButton />}
+              password={
+                /* Email + password is the fallback, so it starts collapsed
+                   rather than filling the card with fields nobody uses first.
+                   Native <details> keeps this server-rendered — no JS to
+                   hydrate, which is also why it is passed as a slot rather
+                   than rebuilt inside the client component. */
+                <details className="group">
               <summary className="flex cursor-pointer list-none items-center justify-center gap-1.5 rounded-md py-1 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
                 Use email and password
                 <ChevronDown
@@ -189,10 +187,12 @@ export default function SignInPage() {
                   className="size-4 transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none"
                 />
               </summary>
-              <div className="pt-3">
-                <PasswordAuth />
-              </div>
-            </details>
+                  <div className="pt-3">
+                    <PasswordAuth />
+                  </div>
+                </details>
+              }
+            />
 
             {devLoginEmail && (
               <form

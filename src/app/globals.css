@@ -399,6 +399,31 @@
   }
 }
 
+/* The sign-in method you used last gets the filled treatment, whichever one it
+   is. Google already ships as the primary button, so this only has visible
+   work to do when the promoted method is the passkey or the password panel —
+   both secondary by default, which would otherwise put a "Last used" tag above
+   a button that still looks like an also-ran.
+
+   Reached through a data attribute on the wrapper rather than by threading a
+   variant down, because those buttons are rendered on the server and handed to
+   the client component as slots (features/auth/components/sign-in-methods.tsx).
+   There is no prop to pass. */
+[data-promoted] > button,
+[data-promoted] form > button,
+[data-promoted] > summary {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  border-color: transparent;
+}
+[data-promoted] > summary {
+  /* The password panel's trigger is a <summary>, not a button, so it needs the
+     shape as well as the colour to sit beside the buttons it now leads. */
+  border-radius: 0.5rem;
+  padding-block: 0.5rem;
+  font-weight: 500;
+}
+
 .ring-breathe {
   /* fill-box so `center` means the ellipse's own middle, not the SVG viewBox
      middle — without it every ring would swing around the canvas center. */
