@@ -1,24 +1,24 @@
 import Link from "next/link"
-
 import { cn } from "@/lib/utils"
 
 /**
- * A stat that goes somewhere. The dashboard's "Overdue 3" tiles were static
- * <dl> entries — a number that names a problem but won't take you to it.
- * StatTile renders as a Link when `href` is given, with the repo's standard
- * focus ring, so every count is also the shortest path to its rows.
- *
- * Numbers are mono/tabular (they align in a row of tiles); the label carries
- * the meaning in WORDS — tone tints the value but never replaces the label,
- * so a colorblind reader loses nothing (WCAG 1.4.1).
+ * A stat that goes somewhere. Numbers are mono/tabular (they align in a row of tiles);
+ * the label carries the meaning in WORDS — tone tints the value but never replaces the label.
  */
 type StatTone = "default" | "attention" | "positive" | "destructive"
 
 const TONE_TEXT: Record<StatTone, string> = {
   default: "text-foreground",
   attention: "text-chart-1",
-  positive: "text-success",
+  positive: "text-primary",
   destructive: "text-destructive",
+}
+
+const TONE_BG: Record<StatTone, string> = {
+  default: "hover:border-border/80 hover:bg-muted/40",
+  attention: "hover:border-chart-1/50 hover:bg-chart-1/5",
+  positive: "hover:border-primary/50 hover:bg-primary/5",
+  destructive: "hover:border-destructive/50 hover:bg-destructive/5",
 }
 
 function StatTile({
@@ -31,8 +31,6 @@ function StatTile({
 }: {
   label: React.ReactNode
   value: React.ReactNode
-  /** One quiet line under the value — a worded delta ("2 more than Monday"),
-   *  never a bare arrow or color-only signal. */
   meta?: React.ReactNode
   tone?: StatTone
   href?: string
@@ -40,10 +38,10 @@ function StatTile({
 }) {
   const body = (
     <>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd
         className={cn(
-          "font-mono text-lg font-semibold tabular-nums leading-tight",
+          "font-mono text-xl font-bold tabular-nums leading-tight tracking-tight",
           TONE_TEXT[tone]
         )}
       >
@@ -54,7 +52,10 @@ function StatTile({
   )
 
   const shared = cn(
-    "flex min-w-0 flex-col gap-0.5 rounded-lg border border-border bg-card px-3 py-2",
+    // Named properties, never `all`: a tile animating `all` also animates its
+    // own layout when a neighbour's value changes width, which is the jitter
+    // this row is most prone to. Only colour and elevation move on hover.
+    "flex min-w-0 flex-col gap-1 rounded-xl border border-border/70 bg-card/80 p-3.5 shadow-xs backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 ease-out motion-reduce:transition-none",
     className
   )
 
@@ -65,7 +66,8 @@ function StatTile({
         data-slot="stat-tile"
         className={cn(
           shared,
-          "outline-none transition-colors duration-150 hover:bg-muted/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
+          "outline-none cursor-pointer focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/40",
+          TONE_BG[tone]
         )}
       >
         <dl className="contents">{body}</dl>

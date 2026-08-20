@@ -5,7 +5,7 @@ import { Header } from '@/components/shell/header'
 import { AccountMenu } from '@/components/shell/account-menu'
 import { CommandCenterProvider } from '@/features/search/components/command-center'
 import { getOwnTitle } from '@/features/auth/queries'
-import { isAdminRole } from '@/features/auth/capabilities'
+import { effectiveGrant, isAdminRole } from '@/features/auth/capabilities'
 
 export default async function AppLayout({
   children,
@@ -24,6 +24,15 @@ export default async function AppLayout({
   // and it is what makes "sees nothing" true rather than merely likely.
   if (!session.user.active) redirect('/deactivated')
   const isAdmin = isAdminRole(session.user.role)
+  // Whether to offer the /progress row at all — asked with the SAME
+  // expression the page itself redirects on, so the nav and the page cannot
+  // disagree. `undefined` for the employment type is not a shortcut: no
+  // stage caps 'worklog.view' (it is in neither APPROVAL_ACTIONS nor
+  // IRREVERSIBLE_ACTIONS, so isCappable is false for it), which means the
+  // seat's row IS the effective answer and the layout can skip loading the
+  // actor — a DB read on every authed page for a row that would not move.
+  const progressGrant = effectiveGrant(session.user.role, undefined, 'worklog.view')
+  const canSeeProgress = progressGrant === 'all' || progressGrant === 'scoped'
   // Job role (users.title) isn't on the session/JWT (setUserTitle in
   // features/admin/actions.ts never re-mints the token) — read it here,
   // right alongside the session this layout already fetches, and thread it
@@ -43,10 +52,16 @@ export default async function AppLayout({
             Sidebar as a slot rather than imported by it. */}
         <Sidebar
           isAdmin={isAdmin}
+          canSeeProgress={canSeeProgress}
           account={<AccountMenu user={user} role={session.user.role} variant="sidebar" />}
         />
         <div className="flex flex-1 flex-col">
-          <Header user={user} role={session.user.role} isAdmin={isAdmin} />
+          <Header
+            user={user}
+            role={session.user.role}
+            isAdmin={isAdmin}
+            canSeeProgress={canSeeProgress}
+          />
           <main className="flex flex-1 flex-col">{children}</main>
         </div>
       </div>

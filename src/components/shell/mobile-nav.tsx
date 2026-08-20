@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { NavLink } from '@/components/shell/sidebar'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { VersionBadge } from '@/components/shell/version-badge'
-import { adminNavItems, navItems } from '@/components/shell/nav-items'
+import { adminNavItems, navItems, progressNavItem } from '@/components/shell/nav-items'
 import { settingsNavItem } from '@/features/settings/nav'
 
 /**
@@ -35,7 +35,16 @@ import { settingsNavItem } from '@/features/settings/nav'
  * (sidebar.tsx) as the desktop Sidebar — one nav list, one row renderer,
  * two surfaces.
  */
-export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
+export function MobileNav({
+  isAdmin,
+  canSeeProgress,
+}: {
+  isAdmin: boolean
+  /* Below `md` this sheet IS the navigation, so it carries the same gated
+     /progress row the sidebar does — a row that appears only on desktop is
+     a feature a phone user never learns exists. */
+  canSeeProgress: boolean
+}) {
   const [open, setOpen] = React.useState(false)
   const pathname = usePathname()
 
@@ -116,6 +125,14 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
                 active={href === '/' ? pathname === '/' : pathname.startsWith(href)}
               />
             ))}
+            {canSeeProgress ? (
+              <NavLink
+                href={progressNavItem.href}
+                label={progressNavItem.label}
+                icon={progressNavItem.icon}
+                active={pathname.startsWith(progressNavItem.href)}
+              />
+            ) : null}
             {/* Same single declaration the desktop sidebar renders — see the
                 comment there for why it isn't in navItems. */}
             <NavLink

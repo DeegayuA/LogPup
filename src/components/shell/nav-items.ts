@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import {
   AppWindow,
   CalendarDays,
+  GaugeCircle,
   History,
   LayoutDashboard,
   NotebookPen,
@@ -46,6 +47,32 @@ export const navItems: NavItem[] = [
   { href: '/activity', label: 'Activity', icon: History, key: 'V' },
 ]
 
+/**
+ * /progress — the studio-wide "who did what, where, how far" view.
+ *
+ * NOT in `navItems`, and not in `adminNavItems` either, because it fits
+ * neither gate: the page is open to anyone whose seat can read somebody
+ * else's work log (admin, superadmin, auditor, and the scoped seats —
+ * manager and editor), and closed to a member, who is redirected to their
+ * own /worklog. A row in `navItems` would offer every member a destination
+ * that bounces them; a row in `adminNavItems` would hide it from the PM it
+ * was built for.
+ *
+ * The predicate lives with the page, not here: the (app) layout asks
+ * `effectiveGrant(role, employmentType, 'worklog.view')` — the SAME
+ * expression the page redirects on — and passes the answer down. One
+ * question, asked once, so the row and the page cannot disagree about who
+ * may see it.
+ *
+ * 'R' rather than P (People holds it) — the letter left in "pRogress".
+ */
+export const progressNavItem: NavItem = {
+  href: '/progress',
+  label: 'Progress',
+  icon: GaugeCircle,
+  key: 'R',
+}
+
 // Admin-only nav, appended after the primary nav. Gated on `isAdmin` the
 // same way in every surface — see getVisibleNavItems below.
 export const adminNavItems: NavItem[] = [{ href: '/admin', label: 'Admin', icon: ShieldCheck }]
@@ -53,6 +80,12 @@ export const adminNavItems: NavItem[] = [{ href: '/admin', label: 'Admin', icon:
 // All nav items visible to a user with the given permission level, primary
 // nav first. Exists mainly so the admin gate is one pure function instead
 // of a copy-pasted `isAdmin ? [...] : [...]` in each nav surface.
-export function getVisibleNavItems(isAdmin: boolean): NavItem[] {
-  return isAdmin ? [...navItems, ...adminNavItems] : navItems
+export function getVisibleNavItems(isAdmin: boolean, canSeeProgress = false): NavItem[] {
+  // Progress sits after the workspace destinations and before Manage: it is
+  // still a place you go to look at work, not a place you go to administer
+  // it. Optional parameter so the four existing call sites and their tests
+  // keep their meaning — "no answer given" reads as "not granted", which is
+  // the safe direction for a row that leads to a gated page.
+  const primary = canSeeProgress ? [...navItems, progressNavItem] : navItems
+  return isAdmin ? [...primary, ...adminNavItems] : primary
 }
