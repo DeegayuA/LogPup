@@ -189,6 +189,19 @@ export async function loadWorkspaceSnapshot(
   //
   // Same helper and same query /worklog uses, deliberately. A private copy of
   // either is how the two answers drifted apart in the first place.
+  //
+  // THE SET PASSED HERE IS THE WHOLE RULING, AND NOTHING TESTS IT. absenceDays
+  // is pure and carries its own tests, but it clips whatever ranges it is
+  // handed — it cannot know which ones were meant, so handing it the wrong set
+  // yields correct days for the wrong question and nothing anywhere goes red.
+  // This line is the assumption a test would otherwise have pinned, so it is
+  // written down instead:
+  //
+  //   PENDING only. Approved days are already gone — getCoverage never reports
+  //   them missing, so including them here would be a no-op that reads like a
+  //   safeguard. Rejected days must stay IN the gap list: a refused request is
+  //   precisely the case where the day still has to be logged, and dropping it
+  //   would hide the one absence outcome that leaves work owed.
   const filedDays = absenceDays(pendingAbsences, gapFrom, todayIso)
   const gapDays = (coverage?.days ?? [])
     .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
