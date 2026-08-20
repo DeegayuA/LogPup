@@ -233,14 +233,14 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
             const routed = isFeatureRouted(f.id)
             const perUse = routed ? estimatePerUseCostUsd(estimate, chosenModel, now) : null
             const isEstimatedFeature = f.id === ESTIMATED_USAGE_FEATURE_ID
-            const suggestion = suggestModelFor(
-              f.kind,
-              estimate,
-              chosenModel,
-              used,
-              hasPaidKey,
-              now,
-            )
+            // Gated on `routed` as well as usage: a feature that HAD calls and
+            // then lost its chain entry would otherwise be offered a cheaper
+            // model for something that cannot run at all. Narrow — a chain gap
+            // is usually a brand-new feature with no history — but the ordering
+            // is not guaranteed, and the suggestion points at the wrong lever.
+            const suggestion = routed
+              ? suggestModelFor(f.kind, estimate, chosenModel, used, hasPaidKey, now)
+              : null
             return (
               <li key={f.id} className="flex flex-col gap-2 py-3">
                 {/* The switch sits beside the feature's name — the one
@@ -255,8 +255,22 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                 </div>
                 <div className="flex flex-col gap-0.5">
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                    {/* The chain NAME stays when unrouted — it is the registry
+                        declaring intent, so "Synthesis · not routed" reads as
+                        "should be wired to the synthesis chain, isn't". The
+                        model ID does not stay: it comes from the pref or the
+                        registry estimate, both independent of the chain, so it
+                        would name a model on the same line that says the
+                        feature reaches none. */}
                     {f.chain} ·{' '}
-                    {splitReprice ? `${estimate.tokens.model} + ${perUseModel}` : perUseModel} ·{' '}
+                    {routed ? (
+                      <>
+                        {splitReprice
+                          ? `${estimate.tokens.model} + ${perUseModel}`
+                          : perUseModel}{' '}
+                        ·{' '}
+                      </>
+                    ) : null}
                     {estimate.tokens.inputTokens.toLocaleString('en-US')} in /{' '}
                     {estimate.tokens.outputTokens.toLocaleString('en-US')} out ·{' '}
                     {!routed
@@ -282,7 +296,13 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                   label={f.label}
                   kind={f.kind}
                   model={chosenModel}
-                  enabled={prefs[f.id].enabled}
+                  // `&& routed`: a select SOLICITS action in a way a static
+                  // badge does not. An unrouted row that says "cannot run" and
+                  // then offers a live dropdown invites someone to try three
+                  // models looking for the one that fixes it — none of them
+                  // can, because the gap is wiring, not choice. Disabled is
+                  // the honest affordance.
+                  enabled={prefs[f.id].enabled && routed}
                   hasPaidKey={hasPaidKey}
                   suggestion={suggestion}
                 />
