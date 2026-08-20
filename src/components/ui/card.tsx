@@ -33,9 +33,21 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+function CardTitle({
+  className,
+  as: Comp = "div",
+  ...props
+}: React.ComponentProps<"div"> & {
+  /**
+   * Render as a real heading (`as="h2"` / `as="h3"`) so the card joins the
+   * page's heading outline. The div default exists only for legacy call
+   * sites; a card that titles CONTENT should always pass a heading level —
+   * screen-reader heading navigation cannot reach a styled div.
+   */
+  as?: "div" | "h2" | "h3" | "h4"
+}) {
   return (
-    <div
+    <Comp
       data-slot="card-title"
       className={cn(
         "font-heading text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",

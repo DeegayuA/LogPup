@@ -52,6 +52,15 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-overlay: var(--overlay);
+  /* App-chrome motion pair (see 2026-08-20-ui-intelligence-redesign spec):
+     enter decelerates hard (arrives, settles), exit accelerates (leaves,
+     doesn't linger). Deliberately separate from --ease-editorial below —
+     that is the public page's brand curve for content that READS; these are
+     for chrome that RESPONDS. Collapsing them would make /home feel like a
+     settings panel or the app feel like an essay. */
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
   --color-weekend: var(--weekend);
   --color-holiday: var(--holiday);
   --color-mercantile: var(--mercantile);
@@ -83,6 +92,18 @@
      Deliberately not a named CSS keyword — `ease-out` is the browser default
      everyone ships, and it is why most pages move identically. */
   --ease-editorial: cubic-bezier(0.22, 0.68, 0.2, 1);
+  /* Modal scrim. The kit's dialogs used raw bg-black/10 — the one non-token
+     color in the app, and a 10% black scrim gave near-zero separation on the
+     dark theme. Tinted toward the foreground family rather than pure black
+     so the dimmed page still reads as the same warm surface, just receded. */
+  --overlay: oklch(0.2 0.01 155 / 32%);
+  /* Motion durations for the app chrome: quick = hover/press feedback,
+     base = enter/reveal, slow = large-surface movement (sheets, panels).
+     Plain vars (not @theme) — consumed as duration-(--dur-base) or inside
+     bespoke CSS, so no utility-class generation is needed. */
+  --dur-quick: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
   --background: oklch(0.977 0.004 95);
   --foreground: oklch(0.22 0.012 155);
   --card: oklch(1 0 0);
@@ -193,6 +214,9 @@
 }
 
 .dark {
+  /* Deeper and more opaque than light: a dark page under a dark scrim needs
+     more distance for the popup to separate at all. */
+  --overlay: oklch(0.1 0.01 165 / 55%);
   --background: oklch(0.17 0.01 165);
   --foreground: oklch(0.95 0.006 120);
   --card: oklch(0.21 0.012 165);
