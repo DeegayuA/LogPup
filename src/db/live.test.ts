@@ -26,9 +26,12 @@ import {
 // --- live.ts sanity ---------------------------------------------------------
 
 describe('live.ts subqueries', () => {
-  it('SOFT_TABLES covers exactly the six soft-deleted tables', () => {
+  it('SOFT_TABLES covers exactly the seven soft-deleted tables', () => {
     expect(SOFT_TABLES.map((t) => t.sqlName).sort()).toEqual(
-      ['apps', 'meeting_note_segments', 'meeting_screenshots', 'meetings', 'sprints', 'tasks'].sort(),
+      [
+        'apps', 'bug_reports', 'meeting_note_segments', 'meeting_screenshots',
+        'meetings', 'sprints', 'tasks',
+      ].sort(),
     )
   })
 
@@ -92,6 +95,13 @@ const ALLOWLIST: readonly string[] = [
   // instead of re-implementing the filter itself.
   'src/db/live.ts',
 
+  // why: createApp's slug-uniqueness pre-check must see TRASHED apps. The
+  // unique index on apps.slug covers them, so asking only the live set would
+  // report an address as free and then fail the insert with a 23505 the user
+  // cannot act on. Every other read of `apps` in this file goes through
+  // liveApps.
+  'src/features/apps/actions.ts',
+
   // why: the trash-bin listing has to read deletedAt IS NOT NULL rows
   // directly — the opposite of what liveMeetings/liveTasks/... expose.
   'src/features/admin/trash-queries.ts',
@@ -148,7 +158,7 @@ describe('allowlist hygiene', () => {
 // simply stopped seeing a call the moment prettier wrapped it, which is a
 // silent hole rather than a failing test. (Verified: a probe file using that
 // spelling turns checks 1, 2 and 3 red.)
-const SOFT_TABLE_NAMES = '(meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots)'
+const SOFT_TABLE_NAMES = '(apps|bugReports|meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots)'
 const RAW_FROM_RE = new RegExp(`\\.from\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const RAW_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const ALIAS_RE = new RegExp(`alias\\(\\s*${SOFT_TABLE_NAMES}\\b`)

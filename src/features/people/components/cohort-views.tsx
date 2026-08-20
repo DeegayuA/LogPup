@@ -26,6 +26,7 @@ import {
   type SharedPerson,
 } from '@/features/people/cohorts'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
+import { HelpNote } from '@/components/shared/help-note'
 
 /**
  * The three cohort views on /people — "By project", "Shared" and "Overlap".
@@ -485,6 +486,16 @@ export function ProjectOverlapView({
       ) : null}
 
       <OverlapPicker cohorts={cohorts} anchorAppId={anchor.appId} params={params} />
+
+      {/* "Room size" is the only number on this page a reader cannot derive
+          from the rows in front of them, and it is the one the view exists to
+          produce — so it is defined once, here, rather than guessed at per
+          card. */}
+      <HelpNote>
+        People, not head counts: <span className="text-foreground">shared</span> is who works on both
+        projects, and <span className="text-foreground">room size</span> is everyone on either one —
+        the number who would have to be in a meeting that covered both.
+      </HelpNote>
 
       <Card>
         <CardHeader>

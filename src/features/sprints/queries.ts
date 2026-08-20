@@ -1,8 +1,8 @@
 import { cache } from 'react'
 import { and, asc, desc, eq, gt, gte, isNull, lte, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { liveSprints, liveTasks } from '@/db/live'
-import { apps, sprints, users } from '@/db/schema'
+import { liveApps, liveSprints, liveTasks } from '@/db/live'
+import { sprints, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
 import type { TaskStatus } from '@/features/sprints/board-view'
@@ -92,15 +92,15 @@ export const getActiveSprints = cache(async function getActiveSprints(): Promise
     .select({
       sprintId: liveSprints.id,
       sprintName: liveSprints.name,
-      appName: apps.name,
-      appSlug: apps.slug,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
       startDate: liveSprints.startDate,
       endDate: liveSprints.endDate,
       status: liveSprints.status,
       taskStatus: liveTasks.status,
     })
     .from(liveSprints)
-    .innerJoin(apps, eq(liveSprints.appId, apps.id))
+    .innerJoin(liveApps, eq(liveSprints.appId, liveApps.id))
     .leftJoin(liveTasks, eq(liveTasks.sprintId, liveSprints.id))
     .where(
       or(
@@ -169,12 +169,12 @@ export async function getNextUpcomingSprint(): Promise<UpcomingSprintSummary | n
     .select({
       sprintId: liveSprints.id,
       sprintName: liveSprints.name,
-      appName: apps.name,
-      appSlug: apps.slug,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
       startDate: liveSprints.startDate,
     })
     .from(liveSprints)
-    .innerJoin(apps, eq(liveSprints.appId, apps.id))
+    .innerJoin(liveApps, eq(liveSprints.appId, liveApps.id))
     .where(gt(liveSprints.startDate, today))
     .orderBy(asc(liveSprints.startDate))
     .limit(1)

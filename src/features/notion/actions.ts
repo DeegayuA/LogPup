@@ -3,8 +3,8 @@
 import { eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { liveSprints } from '@/db/live'
-import { apps, sprints } from '@/db/schema'
+import { liveApps, liveSprints } from '@/db/live'
+import { sprints } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { getBoard, type Board, type TaskWithAssignee } from '@/features/sprints/queries'
@@ -43,7 +43,7 @@ export async function exportSprintToNotion(sprintId: string): Promise<ActionResu
   const [sprint] = await db.select().from(liveSprints).where(eq(liveSprints.id, sprintId))
   if (!sprint) return err('Sprint not found')
 
-  const [app] = await db.select({ name: apps.name, slug: apps.slug }).from(apps).where(eq(apps.id, sprint.appId))
+  const [app] = await db.select({ name: liveApps.name, slug: liveApps.slug }).from(liveApps).where(eq(liveApps.id, sprint.appId))
   if (!app) return err('App not found')
 
   // No parent-page precheck here any more: export.ts resolves the

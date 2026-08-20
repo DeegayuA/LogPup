@@ -1,7 +1,7 @@
 import { QueryBuilder } from 'drizzle-orm/pg-core'
 import { isNull } from 'drizzle-orm'
 import {
-  apps, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
+  apps, bugReports, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
 } from './schema'
 
 // Connection-free: QueryBuilder builds SQL without a client, so importing
@@ -19,6 +19,8 @@ const qb = new QueryBuilder()
 // reference the same table twice.
 export const liveAppsAs = (name: string) =>
   qb.select().from(apps).where(isNull(apps.deletedAt)).as(name)
+export const liveBugReportsAs = (name: string) =>
+  qb.select().from(bugReports).where(isNull(bugReports.deletedAt)).as(name)
 export const liveMeetingsAs = (name: string) =>
   qb.select().from(meetings).where(isNull(meetings.deletedAt)).as(name)
 export const liveTasksAs = (name: string) =>
@@ -31,6 +33,7 @@ export const liveScreenshotsAs = (name: string) =>
   qb.select().from(meetingScreenshots).where(isNull(meetingScreenshots.deletedAt)).as(name)
 
 export const liveApps = liveAppsAs('live_apps')
+export const liveBugReports = liveBugReportsAs('live_bug_reports')
 export const liveMeetings = liveMeetingsAs('live_meetings')
 export const liveTasks = liveTasksAs('live_tasks')
 export const liveSprints = liveSprintsAs('live_sprints')
@@ -43,6 +46,11 @@ export const SOFT_TABLES = [
   // capacity maths — which is precisely why it is registered here rather than
   // left to each caller to remember an isNull() of its own.
   { table: apps, sqlName: 'apps', live: liveApps, liveAs: liveAppsAs },
+  // Registered in the SAME change that creates the table, before its first
+  // reader exists — the rule meetingApps established. Adding a soft table to
+  // the guard after its readers are written means the guard was blind for
+  // exactly as long as it mattered.
+  { table: bugReports, sqlName: 'bug_reports', live: liveBugReports, liveAs: liveBugReportsAs },
   { table: meetings, sqlName: 'meetings', live: liveMeetings, liveAs: liveMeetingsAs },
   { table: tasks, sqlName: 'tasks', live: liveTasks, liveAs: liveTasksAs },
   { table: sprints, sqlName: 'sprints', live: liveSprints, liveAs: liveSprintsAs },

@@ -267,6 +267,20 @@ is the one that matters: a Google event that outlived its LogPup meeting.
 `'failed'` means guests have not been told about a change that already landed in
 LogPup.
 
+**And that makes this column the completion of spec A's digest predicate**, which
+is a seam neither document noticed until both were written. Spec A's rule is "do
+not email about a meeting Google already emailed about", and its first
+implementation reads `google_event_id IS NULL` — a proxy that is only correct for
+CREATE failures. An UPDATE failure is exactly the case this column exists to
+record: the id is set, so spec A's id-only rule excludes the meeting from the
+digest permanently, and LogPup stays silent about precisely the meetings whose
+guests are out of date. Spec A therefore states the rule as one
+`digestEligible(meeting)` helper —
+`google_event_id IS NULL OR calendar_sync_state IN ('failed','orphaned')` — with
+the id-only half as its first implementation and a comment naming this column.
+**Completing it is a one-line change inside that one function, and it belongs to
+build order step 4 below**, in the same step that starts writing the states.
+
 `calendar_drift` is jsonb because it is a report, not a queried fact:
 `{ cancelledInGoogle, googleStart, googleEnd }`. Cleared on either resolution.
 
@@ -328,8 +342,8 @@ END $$` for constraints, and backfills whose `WHERE` clause stops matching once
 applied.
 
 **Migration numbers are allocated at merge time, not in advance.** The highest on
-`main` today is `0041_employment_and_logging`, and 0040 was recently claimed by
-four parallel sessions at once. Numbers are assigned against then-current `main`
+`main` today is `0043_app_soft_delete`, and 0040 was recently claimed by four
+parallel sessions at once. Numbers are assigned against then-current `main`
 at integration; a number written into a branch is a merge conflict with a
 plausible-looking resolution.
 
@@ -490,7 +504,14 @@ Permission matrix:
 6. **`meeting.calendar.organiser` is `own` for `manager`** — the single
    assertion the row exists to protect. A PM who manages the project may not hand
    over a meeting organised by someone else. If a later edit widens this cell to
-   `scoped`, this test fails and names the reason.
+   `scoped`, this test fails and names the reason. Plus `auditor` and
+   `stakeholder` are `none`, asserted explicitly: this action is a **write** that
+   the auditor sweep at `capabilities.test.ts:48-58` does not match — its regex
+   has no `organiser` verb — so the seat is held at `none` here by hand today.
+   Spec C widens that regex (adding `report|triage|set|commit|move|organiser`)
+   and adds the stakeholder mirror sweep; whichever of C and E lands second
+   inherits a sweep that already covers this row, and the explicit assertion
+   above is what holds the line until then.
 
 ## Build order
 
@@ -504,7 +525,10 @@ Permission matrix:
    of the `&& moved` guard at `:894-896`.
 4. Classified cancellation, `calendar_sync_state` writes, and the `restoreMeeting`
    guard. **This is the one that stops a live Meet link outliving its meeting**;
-   it is third only because it wants the classifier and the columns first.
+   it is third only because it wants the classifier and the columns first. It
+   also carries the one-line completion of spec A's `digestEligible(meeting)` —
+   the moment this step starts writing `'failed'`, the digest must start covering
+   those meetings, or the state is recorded and acted on by nobody.
 5. Migration 2, `auth.ts` scope capture, and status writes at every call site.
 6. Admin integration-health list and the composer pre-flight warning.
 7. `reassignMeetingOrganiser`, then the offboarding wiring —

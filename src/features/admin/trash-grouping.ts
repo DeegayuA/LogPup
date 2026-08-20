@@ -21,7 +21,11 @@
 // while removing the drift risk two separate copies would carry.
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 
-export const TRASH_KINDS = ['meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'] as const
+// 'app' leads the list because it is the only kind that can contain the
+// others: a deleted app takes its whole board and calendar out of every view
+// with it, so an admin scanning the trash for "what went missing today"
+// should meet the project before its parts.
+export const TRASH_KINDS = ['app', 'meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'] as const
 export type TrashKind = (typeof TRASH_KINDS)[number]
 
 export type TrashRow = {
@@ -49,6 +53,18 @@ export type TrashGroup = {
 }
 
 // --- Raw shapes trash-queries.ts's per-table SELECTs hand in ---------------
+
+export type RawAppTrashRow = {
+  id: string
+  name: string
+  /** The app's own status at the moment it was deleted. An archived app that
+   *  is then deleted must come back archived, and the trash row says so
+   *  rather than implying every restore lands back on the active list. */
+  status: string
+  deletedAt: Date
+  deletedByName: string | null
+  deletedByAvatarUrl: string | null
+}
 
 export type RawMeetingTrashRow = {
   id: string
@@ -104,6 +120,26 @@ export type RawAssignmentTrashRow = {
 }
 
 // --- Builders ----------------------------------------------------------
+
+export function buildAppTrashRow(row: RawAppTrashRow): TrashRow {
+  return {
+    id: row.id,
+    label: row.name,
+    // Every other kind puts its app in `context`; an app IS the app, so the
+    // secondary line carries the one fact a restorer needs instead — whether
+    // it comes back to the active list or straight into the archive.
+    context: row.status === 'archived' ? 'Archived project' : 'Project',
+    deletedByName: row.deletedByName,
+    deletedByAvatarUrl: row.deletedByAvatarUrl,
+    deletedAt: row.deletedAt,
+    // Nothing contains an app, so there is no parent to be trashed. The
+    // reverse is what matters and is handled at read time: an app's sprints,
+    // tasks and meetings are live iff the app is (the liveApps joins in
+    // src/db/live.ts), so they are NOT separately trashed and must not be
+    // separately listed here.
+    parentTrashed: false,
+  }
+}
 
 export function buildMeetingTrashRow(row: RawMeetingTrashRow): TrashRow {
   return {

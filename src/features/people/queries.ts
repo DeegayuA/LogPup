@@ -2,11 +2,10 @@ import { cache } from 'react'
 import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
-import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import {
   activityLog,
   appRoleHistory,
-  apps,
   assignmentHistory,
   assignments,
   meetingAttendees,
@@ -170,15 +169,15 @@ export const getUserCapacities = cache(async function getUserCapacities(q?: stri
       userRole: users.role,
       orgTags: users.orgTags,
       assignmentId: assignments.id,
-      appId: apps.id,
-      appName: apps.name,
-      slug: apps.slug,
+      appId: liveApps.id,
+      appName: liveApps.name,
+      slug: liveApps.slug,
       role: assignments.role,
       allocationPct: assignments.allocationPct,
     })
     .from(users)
     .leftJoin(assignments, eq(assignments.userId, users.id))
-    .leftJoin(apps, eq(assignments.appId, apps.id))
+    .leftJoin(liveApps, eq(assignments.appId, liveApps.id))
     .where(
       and(
         eq(users.active, true),
@@ -269,9 +268,9 @@ export async function getTeamCapacityAsOf(at: Date): Promise<UserCapacity[]> {
     db
       .select({
         userId: assignmentHistory.userId,
-        appId: apps.id,
-        appName: apps.name,
-        slug: apps.slug,
+        appId: liveApps.id,
+        appName: liveApps.name,
+        slug: liveApps.slug,
         role: assignmentHistory.role,
         allocationPct: assignmentHistory.allocationPct,
         changeKind: assignmentHistory.changeKind,
@@ -279,7 +278,7 @@ export async function getTeamCapacityAsOf(at: Date): Promise<UserCapacity[]> {
         effectiveTo: assignmentHistory.effectiveTo,
       })
       .from(assignmentHistory)
-      .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+      .innerJoin(liveApps, eq(assignmentHistory.appId, liveApps.id))
       .where(
         and(
           lte(assignmentHistory.effectiveFrom, at),
@@ -371,9 +370,9 @@ export async function getCapacityHistoryOverview(
     db
       .select({
         userId: assignmentHistory.userId,
-        appId: apps.id,
-        appName: apps.name,
-        slug: apps.slug,
+        appId: liveApps.id,
+        appName: liveApps.name,
+        slug: liveApps.slug,
         role: assignmentHistory.role,
         allocationPct: assignmentHistory.allocationPct,
         changeKind: assignmentHistory.changeKind,
@@ -381,7 +380,7 @@ export async function getCapacityHistoryOverview(
         effectiveTo: assignmentHistory.effectiveTo,
       })
       .from(assignmentHistory)
-      .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+      .innerJoin(liveApps, eq(assignmentHistory.appId, liveApps.id))
       .where(
         and(
           lte(assignmentHistory.effectiveFrom, to),
@@ -396,9 +395,9 @@ export async function getCapacityHistoryOverview(
         id: assignmentHistory.id,
         userId: assignmentHistory.userId,
         userName: subject.name,
-        appId: apps.id,
-        appName: apps.name,
-        slug: apps.slug,
+        appId: liveApps.id,
+        appName: liveApps.name,
+        slug: liveApps.slug,
         role: assignmentHistory.role,
         allocationPct: assignmentHistory.allocationPct,
         changeKind: assignmentHistory.changeKind,
@@ -407,7 +406,7 @@ export async function getCapacityHistoryOverview(
         note: assignmentHistory.note,
       })
       .from(assignmentHistory)
-      .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+      .innerJoin(liveApps, eq(assignmentHistory.appId, liveApps.id))
       .leftJoin(subject, eq(assignmentHistory.userId, subject.id))
       .leftJoin(changer, eq(assignmentHistory.changedBy, changer.id))
       .where(
@@ -511,9 +510,9 @@ export async function getPersonAllocationHistory(
   const rows = await db
     .select({
       id: assignmentHistory.id,
-      appId: apps.id,
-      appName: apps.name,
-      slug: apps.slug,
+      appId: liveApps.id,
+      appName: liveApps.name,
+      slug: liveApps.slug,
       role: assignmentHistory.role,
       allocationPct: assignmentHistory.allocationPct,
       changeKind: assignmentHistory.changeKind,
@@ -523,7 +522,7 @@ export async function getPersonAllocationHistory(
       note: assignmentHistory.note,
     })
     .from(assignmentHistory)
-    .innerJoin(apps, eq(assignmentHistory.appId, apps.id))
+    .innerJoin(liveApps, eq(assignmentHistory.appId, liveApps.id))
     // Left join: an admin account deleted since must not make their changes
     // vanish from the audit trail.
     .leftJoin(changer, eq(assignmentHistory.changedBy, changer.id))
@@ -566,9 +565,9 @@ export async function getPersonAppRoleHistory(userId: string): Promise<PersonApp
   const rows = await db
     .select({
       id: appRoleHistory.id,
-      appId: apps.id,
-      appName: apps.name,
-      slug: apps.slug,
+      appId: liveApps.id,
+      appName: liveApps.name,
+      slug: liveApps.slug,
       role: appRoleHistory.role,
       effectiveFrom: appRoleHistory.effectiveFrom,
       effectiveTo: appRoleHistory.effectiveTo,
@@ -576,7 +575,7 @@ export async function getPersonAppRoleHistory(userId: string): Promise<PersonApp
       note: appRoleHistory.note,
     })
     .from(appRoleHistory)
-    .innerJoin(apps, eq(appRoleHistory.appId, apps.id))
+    .innerJoin(liveApps, eq(appRoleHistory.appId, liveApps.id))
     .leftJoin(changer, eq(appRoleHistory.changedBy, changer.id))
     .where(eq(appRoleHistory.userId, userId))
     .orderBy(desc(appRoleHistory.effectiveFrom))
@@ -591,10 +590,10 @@ export async function getPersonAppRoleHistory(userId: string): Promise<PersonApp
  */
 export const listAssignableApps = cache(async function listAssignableApps(): Promise<AssignableApp[]> {
   return db
-    .select({ id: apps.id, name: apps.name, slug: apps.slug })
-    .from(apps)
-    .where(ne(apps.status, 'archived'))
-    .orderBy(asc(apps.name))
+    .select({ id: liveApps.id, name: liveApps.name, slug: liveApps.slug })
+    .from(liveApps)
+    .where(ne(liveApps.status, 'archived'))
+    .orderBy(asc(liveApps.name))
 })
 
 export type PersonActivity = {
@@ -719,18 +718,18 @@ export const getPersonOverview = cache(async function getPersonOverview(
       .where(eq(users.id, userId)),
     db
       .select({
-        appId: apps.id,
-        appName: apps.name,
-        slug: apps.slug,
-        appStatus: apps.status,
+        appId: liveApps.id,
+        appName: liveApps.name,
+        slug: liveApps.slug,
+        appStatus: liveApps.status,
         role: assignments.role,
         allocationPct: assignments.allocationPct,
-        leadId: apps.leadId,
+        leadId: liveApps.leadId,
       })
       .from(assignments)
-      .innerJoin(apps, eq(assignments.appId, apps.id))
+      .innerJoin(liveApps, eq(assignments.appId, liveApps.id))
       .where(eq(assignments.userId, userId))
-      .orderBy(desc(assignments.allocationPct), asc(apps.name)),
+      .orderBy(desc(assignments.allocationPct), asc(liveApps.name)),
   ])
 
   const [userRow] = userRows
@@ -782,12 +781,12 @@ export const getPersonWorkload = cache(async function getPersonWorkload(userId: 
         priority: liveTasks.priority,
         dueDate: liveTasks.dueDate,
         createdAt: liveTasks.createdAt,
-        appName: apps.name,
-        appSlug: apps.slug,
+        appName: liveApps.name,
+        appSlug: liveApps.slug,
         sprintName: liveSprints.name,
       })
       .from(liveTasks)
-      .innerJoin(apps, eq(liveTasks.appId, apps.id))
+      .innerJoin(liveApps, eq(liveTasks.appId, liveApps.id))
       // Left: a task in the backlog has no sprint, and dropping those would
       // hide exactly the work nobody has scheduled yet.
       .leftJoin(liveSprints, eq(liveTasks.sprintId, liveSprints.id))
@@ -910,15 +909,15 @@ export const getPersonMeetings = cache(async function getPersonMeetings(userId: 
       startsAt: liveMeetings.startsAt,
       endsAt: liveMeetings.endsAt,
       meetingUrl: liveMeetings.meetingUrl,
-      appName: apps.name,
-      appSlug: apps.slug,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
       response: meetingAttendees.response,
     })
     .from(meetingAttendees)
     // meetingAttendees has no deletedAt of its own — live iff its meeting is
     // live (see MEETING_CHILD_TABLES in src/db/live.ts).
     .innerJoin(liveMeetings, eq(meetingAttendees.meetingId, liveMeetings.id))
-    .leftJoin(apps, eq(liveMeetings.appId, apps.id))
+    .leftJoin(liveApps, eq(liveMeetings.appId, liveApps.id))
     .where(
       and(
         eq(meetingAttendees.userId, userId),
@@ -983,14 +982,14 @@ export const getPeopleNow = cache(async function getPeopleNow(
         id: liveTasks.id,
         assigneeId: liveTasks.assigneeId,
         title: liveTasks.title,
-        appName: apps.name,
-        appSlug: apps.slug,
+        appName: liveApps.name,
+        appSlug: liveApps.slug,
         sprintName: liveSprints.name,
         dueDate: liveTasks.dueDate,
         priority: liveTasks.priority,
       })
       .from(liveTasks)
-      .leftJoin(apps, eq(liveTasks.appId, apps.id))
+      .leftJoin(liveApps, eq(liveTasks.appId, liveApps.id))
       .leftJoin(liveSprints, eq(liveTasks.sprintId, liveSprints.id))
       .where(
         and(

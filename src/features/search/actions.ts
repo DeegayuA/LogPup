@@ -5,7 +5,8 @@ import { ilike, or, eq, and, asc, desc } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { auth, signOut } from '@/lib/auth'
 import { db } from '@/db'
-import { apps, assignments, tasks, users } from '@/db/schema'
+import { liveApps } from '@/db/live'
+import { assignments, tasks, users } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canAccessApp } from '@/lib/access-gate'
 import { parseTaskIntent } from '@/lib/task-intent'
@@ -98,12 +99,12 @@ export async function previewTaskIntent(raw: string): Promise<TaskIntentPreview 
   let appName: string | null = null
   if (intent.appQuery) {
     const [match] = await db
-      .select({ name: apps.name })
-      .from(apps)
+      .select({ name: liveApps.name })
+      .from(liveApps)
       .where(
         or(
-          ilike(apps.name, likePattern(intent.appQuery)),
-          ilike(apps.slug, likePattern(intent.appQuery)),
+          ilike(liveApps.name, likePattern(intent.appQuery)),
+          ilike(liveApps.slug, likePattern(intent.appQuery)),
         ),
       )
       .limit(1)
@@ -159,9 +160,9 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
   // were part of the task ("write the copy on onboarding").
   if (appQuery) {
     const matches = await db
-      .select({ id: apps.id })
-      .from(apps)
-      .where(or(ilike(apps.name, likePattern(appQuery)), ilike(apps.slug, likePattern(appQuery))))
+      .select({ id: liveApps.id })
+      .from(liveApps)
+      .where(or(ilike(liveApps.name, likePattern(appQuery)), ilike(liveApps.slug, likePattern(appQuery))))
       .limit(2)
     if (matches.length === 0) {
       taskTitle = `${taskTitle} on ${appQuery}`
@@ -172,12 +173,12 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
   let app: { id: string; name: string; slug: string } | undefined
   if (appQuery) {
     const appMatches = await db
-      .select({ id: apps.id, name: apps.name, slug: apps.slug })
-      .from(apps)
+      .select({ id: liveApps.id, name: liveApps.name, slug: liveApps.slug })
+      .from(liveApps)
       .where(
-        or(ilike(apps.name, likePattern(appQuery)), ilike(apps.slug, likePattern(appQuery))),
+        or(ilike(liveApps.name, likePattern(appQuery)), ilike(liveApps.slug, likePattern(appQuery))),
       )
-      .orderBy(asc(apps.name))
+      .orderBy(asc(liveApps.name))
       .limit(6)
     if (appMatches.length === 0) return err(`No app matches "${appQuery}"`)
     if (appMatches.length > 1) {
@@ -190,9 +191,9 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
     // No explicit app — default to wherever the assignee spends most of
     // their time (highest allocation wins).
     ;[app] = await db
-      .select({ id: apps.id, name: apps.name, slug: apps.slug })
+      .select({ id: liveApps.id, name: liveApps.name, slug: liveApps.slug })
       .from(assignments)
-      .innerJoin(apps, eq(assignments.appId, apps.id))
+      .innerJoin(liveApps, eq(assignments.appId, liveApps.id))
       .where(eq(assignments.userId, assignee.id))
       .orderBy(desc(assignments.allocationPct))
       .limit(1)

@@ -15,6 +15,7 @@ import type { TrashGroup, TrashKind, TrashRow } from '@/features/admin/trash-gro
  * change here too.
  */
 export const TRASH_GROUP_ORDER: readonly TrashKind[] = [
+  'app',
   'meeting',
   'task',
   'sprint',
@@ -24,6 +25,7 @@ export const TRASH_GROUP_ORDER: readonly TrashKind[] = [
 ]
 
 export const TRASH_GROUP_TITLES: Record<TrashKind, string> = {
+  app: 'Projects',
   meeting: 'Meetings',
   task: 'Tasks',
   sprint: 'Sprints',

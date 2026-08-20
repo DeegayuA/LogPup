@@ -1,7 +1,6 @@
 import { asc, eq, ilike, or } from 'drizzle-orm'
 import { db } from '@/db'
-import { liveSprints, liveTasks } from '@/db/live'
-import { apps } from '@/db/schema'
+import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { PALETTE_RESULT_LIMIT, likePattern } from '@/features/search/registry/limits'
 import type { SearchProvider } from '@/features/search/registry/types'
 
@@ -25,11 +24,11 @@ export const searchProviders: SearchProvider[] = [
           title: liveTasks.title,
           status: liveTasks.status,
           sprintId: liveTasks.sprintId,
-          appName: apps.name,
-          appSlug: apps.slug,
+          appName: liveApps.name,
+          appSlug: liveApps.slug,
         })
         .from(liveTasks)
-        .innerJoin(apps, eq(liveTasks.appId, apps.id))
+        .innerJoin(liveApps, eq(liveTasks.appId, liveApps.id))
         .where(ilike(liveTasks.title, likePattern(query)))
         // asc(status) is todo → in_progress → done, by the pg enum's
         // declaration order: unfinished work first.
@@ -58,11 +57,11 @@ export const searchProviders: SearchProvider[] = [
           id: liveSprints.id,
           name: liveSprints.name,
           status: liveSprints.status,
-          appName: apps.name,
-          appSlug: apps.slug,
+          appName: liveApps.name,
+          appSlug: liveApps.slug,
         })
         .from(liveSprints)
-        .innerJoin(apps, eq(liveSprints.appId, apps.id))
+        .innerJoin(liveApps, eq(liveSprints.appId, liveApps.id))
         // The goal is searched as well as the name: people remember what a
         // sprint was for long after they forget it was called "Sprint 12".
         .where(or(ilike(liveSprints.name, pattern), ilike(liveSprints.goal, pattern)))

@@ -6,7 +6,8 @@ import { db } from '@/db'
 import { activityLog } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { GeminiError, callGemini } from '@/features/gemini/client'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { buildWorklogDraftPrompt, type DraftActivity } from './draft-prompt'
 import { WORK_DAY_PATTERN } from './worklog-day'
 
@@ -62,7 +63,9 @@ export async function draftWorklogNote(
   })
 
   try {
+    const prefs = await getAiPrefs(session.user.id)
     const { text } = await callGemini(session.user.id, [{ text: prompt }], {
+      models: resolveChain('worklog-draft', prefs['worklog-draft'].model),
       feature: 'worklog.draft',
     })
     const note = text.trim()

@@ -3,7 +3,8 @@
 import { z } from 'zod'
 import { type ActionResult, err, ok } from '@/lib/action-result'
 import { GeminiError } from '@/features/gemini/client'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { canManageMeeting } from '@/features/meetings/ai-actions'
 import { isLiveTranscriptionEnabled } from './flag'
 import { type MintedLiveToken, mintLiveToken } from './live-token'
@@ -38,7 +39,10 @@ export async function requestLiveToken(meetingId: string): Promise<ActionResult<
   if (disabled) return err(disabled)
 
   try {
-    const minted = await mintLiveToken(allowed.session.user.id)
+    const prefs = await getAiPrefs(allowed.session.user.id)
+    const minted = await mintLiveToken(allowed.session.user.id, {
+      models: resolveChain('live-captions', prefs['live-captions'].model),
+    })
     return ok(minted)
   } catch (error) {
     // GeminiError messages are written to be shown to the user and already say

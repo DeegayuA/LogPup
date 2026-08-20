@@ -138,12 +138,37 @@ because it is.
 not refused.** That machinery is built and I verified it rather than assuming:
 `createChangeRequest` / `approveChangeRequest` exist
 (`src/features/admin/change-request-actions.ts:44`, `:95`), `'task'` is already
-in `SUPPORTED_ENTITY_TYPES` (`change-request-appliers.ts:17`), `detectConflict`
-compares a stored pre-image field by field (`:36-48`), and
-`buildApplyStatement` spreads the `after` object generically into
-`db.update(table).set(after)` (`:58-66`) — so a due-date change request needs
-**zero applier changes**. The `{before, after}` payload carries `dueDate`,
-`dueKind` and `dueCommitmentNote`.
+in `SUPPORTED_ENTITY_TYPES` (`change-request-appliers.ts:17`), and
+`detectConflict` compares a stored pre-image field by field (`:36-48`). The
+`{before, after}` payload carries `dueDate`, `dueKind` and `dueCommitmentNote`.
+
+**It does NOT need zero applier changes. It needs exactly one, and without it
+this spec's central invariant is false through its own escape hatch.**
+`buildApplyStatement` (`:58-66`) is `db.update(table).set(after).where(eq(table.id,
+entityId))` — a generic spread. That genericity is the bug here: an approved
+due-date change request writes `due_date` straight to `tasks` without ever
+entering `applyDueDate`, so it never stamps `original_due_date` on a first
+`NULL → non-NULL`, never increments `due_changed_count`, and never enforces the
+non-empty commitment note that `committed` requires. This spec spent a whole
+section arguing that three writers must become one, and then routed a fourth
+around it. Because `'task'` is already registered, the hole is live the day this
+spec ships — and it is live on the one path that has a reviewer's approval
+attached, which is precisely the path whose record has to be right.
+
+**The fix: `TABLES.task`'s generic statement is replaced by a task-specific
+applier** that builds its statements by calling `applyDueDate` (this spec) and
+`transitionTaskStatus` (spec A — a change request carrying `status: 'done'` has
+the identical hole against `completed_at`, and spec A states the same fix in the
+same terms). The registry keeps its shape and its closed-registry discipline; one
+entry stops being a spread. Every other entity type keeps the generic statement,
+which is still correct for a table with no invariants.
+
+**Rejected: refusing `dueDate` / `dueKind` / `status` keys in a task
+change-request payload at file time.** The file-time-failure discipline the
+applier's own docblock argues for is the right instinct and the wrong tool here —
+a committed-date move *is* the change request this section creates, so refusing
+those keys at file time would delete the flow the guard exists to protect. One
+door, one applier.
 
 One honesty correction this spec inherits and must not overstate: approval is
 `db.batch` plus an explicit pre-image conflict check
@@ -160,6 +185,28 @@ escalationStep(dueDate, dueKind, status, todayIso, suppressedDays)
 Zero database access, table-driven tests, one module, serving both tasks and
 follow-ups. `due-soon` is within 7 **working** days; `breached` is `committed`
 and overdue by two or more working days.
+
+**`due-today` is a render-only rung: it has no notification kind and never
+sends.** The step exists because the card, spec D's `/my-day` tile and the
+promises list all need to say "today" in words rather than in a colour — but a
+bell row for "due today" arrives on the morning the person is already looking at
+the item, and it is the worst signal-to-noise rung in the ladder. So the ladder
+has five steps and **three notifying rungs**: `due-soon`, `overdue`, `breached`.
+This is stated explicitly because an earlier draft of this document wrote its
+volume cap as "four steps" while contributing three kinds, which costed the
+notification budget against a kind that does not exist.
+
+The step → kind map is therefore total, and partial on purpose:
+
+```
+none → null            due-soon  → deadline.due_soon
+due-today → null       overdue   → deadline.overdue
+(render-only)          breached  → deadline.breached
+```
+
+One exported const, with a table-driven test asserting every member of the step
+union has an entry. A future rung added with no decision about notifying then
+fails the build instead of silently notifying nobody.
 
 **The critical rule, stated so nobody softens it later: an item `isOverdue` is
 NEVER suppressed. Only the nudge to the person is.** The client still does not
@@ -235,19 +282,58 @@ partial unique index; this spec only declares which semantics its kinds use.
 
 Rows carry `title_key` + `params`, never a frozen sentence — surfaces are
 bilingual Sinhala + English and the reader's language is not known at write
-time. `params` carries `{ taskTitle, appName, dueDate, days }`.
+time. Per spec A's params convention (**ids, not display names** — a frozen
+`appName` is a rename bomb in jsonb exactly as a frozen display name is one
+inside a mention token), `params` carries `{ taskId, appId, dueDate, days }`,
+resolved to current titles in the same read-time pass that renders `title_key`.
 
 Volume cap, structural rather than social: **at most one notification per item
-per step per due date, four steps for the life of an item.** The bell today
+per step per due date, three notifying steps for the life of an item**
+(`due-today` is render-only — see the escalation section above). The bell today
 carries meeting invites and mentions — low volume, high signal. A daily sweep
 can trivially triple it and train twenty people to ignore the bell, which
 quietly breaks meeting invites too.
+
+**And the cap is a published number, not a shape.** Spec A owns the notification
+budget table (`2026-08-20-work-substrate-design.md` §"The notification budget is
+one table") and the rule that a spec adding a kind adds a row with a real number
+before it ships. An earlier draft of this document stated no number at all,
+which is how three sweep-driven kinds consumed more than the entire headroom
+reserved for C, D and E combined. This spec's rows, derived at studio scale — a
+twenty-person shop carrying ~10 open dated tasks and ~5 dated follow-ups per
+person, each item living ~15 weekdays, each rung firing at most once per item per
+due date:
+
+| Kind | Fires for | Expected/person/weekday |
+|---|---|---|
+| `deadline.due_soon` | every dated item, once in its life | ~1.0 |
+| `deadline.overdue` | the minority that actually slips | ~0.3 |
+| `deadline.breached` | `committed` and 2+ working days over — a minority of that minority | ~0.05 |
+| `deadline.breached` (PM copy) | one aggregated row per PM per tick | ~0.05 org-wide, ≤1.0 for a PM |
+
+**~1.35 rows per person per weekday is what this spec spends**, and that figure
+is copied into spec A's table. The estimate most likely to be wrong is the burst
+rather than the steady state: the dedupe key includes `{dueDate}` on purpose, so
+a sprint slip moving twenty dates re-arms twenty ladders on the next tick. That
+is correct per item and unacceptable per person, and it is bounded by spec A's
+per-recipient daily cap inside `createNotifications` rather than by anything in
+this document. Nothing here may assume the cap is absent.
 
 `breached` additionally notifies the app's current PM, resolved at tick time
 from `apps.pm_id` (`schema.ts:144`, NOT NULL, so a recipient always exists), and
 escalates no further. `app_role_history` is the audit of who held the role, not
 the routing table. Resolve the PM at tick time and never bake it into the dedupe
 key — otherwise the key encodes yesterday's PM and today's is never told.
+
+**The PM copy is ONE aggregated row per PM per tick**, keyed
+`deadline:pm:{userId}:{tickDate}`, `title_key = notif.deadline.breached.pm`,
+`params = {count, appIds, href}` pointing at the at-risk list. Deliberately not
+one row per breached task: a PM receives a copy for every committed overdue item
+across every app they own, so the per-task version prices one bad Monday across
+five apps at a dozen bell rows for the person least able to ignore them. The
+assignee's own copy stays per-item, keyed
+`deadline:{taskId}:breached:{dueDate}` — they are being told about one specific
+promise, the PM is being told there is a pile.
 
 ### Bugs are `tasks.kind = 'bug'` plus a 1:1 satellite — not a `bugs` table
 
@@ -276,8 +362,9 @@ everything this spec just built on top of it.
 **Rejected in full: a `bugs` table.** It sounds like clean modelling and it is
 the central mistake available here. Its real cost, itemised against this repo:
 
-- A sixth `SOFT_TABLES` entry. `src/db/live.ts:37-43` holds exactly five, and
-  `live.test.ts:29-31` asserts *exactly* five by name.
+- Another `SOFT_TABLES` entry. `src/db/live.ts:37-43` holds six today, and
+  `live.test.ts:29-31` asserts that exact set by name — so a new soft-deleted
+  table is never one file's change.
 - A new `liveOf(...)` view export and a new `liveBugsAs` alias builder.
 - A new group in `admin/trash-queries.ts`, plus a restore arm **and** a purge
   arm in `admin/trash-actions.ts`.
@@ -367,9 +454,19 @@ the first reader exists means the guard stays blind for exactly as long as it
 matters."
 
 This keeps `live.test.ts` check 5 (`:501`, "every schema table with a deletedAt
-column is in SOFT_TABLES") passing and `SOFT_TABLES` at exactly five. A table
-with a `deletedAt` not registered in `SOFT_TABLES` **fails the build**, so the
-choice here is deliberate rather than an omission.
+column is in SOFT_TABLES") passing, because **`taskBugDetails` carries no
+`deletedAt` column and is therefore absent from `SOFT_TABLES`** — which is the
+assertion this spec actually owns. A table with a `deletedAt` not registered in
+`SOFT_TABLES` **fails the build**, so the choice here is deliberate rather than
+an omission.
+
+Deliberately **not** phrased as "`SOFT_TABLES` stays at exactly N". The total is
+not this spec's to pin: spec D adds `personal_items`, which genuinely does carry
+`deleted_at`, and legitimately raises the count. A guard test this document
+described as load-bearing, edited in D's diff, is exactly the shape of change the
+repo's guard-test discipline exists to make a reviewer suspicious of — so the
+count assertion in `live.test.ts:29` belongs to whichever spec changes the set,
+and this spec asserts only its own table's absence.
 
 `task_bug_details` is added to `admin/backup.ts` in the same commit. Forgetting
 it is silent: every repro step in the product would be absent from the nightly
@@ -452,13 +549,22 @@ minority rather than duplicating the table. `tasks_app_sprint_sort_idx`
 (`schema.ts:333`) is keyed `(app_id, sprint_id, sort_order)` and still covers
 every board render unchanged.
 
-**Two indexes spec A lists are moved here**, because they name columns that do
-not exist until this spec ships and would fail on creation:
-`tasks (app_id, kind, status)` (spec A already flags "kind arrives in spec C")
-and `meeting_followups (user_id, status, due_date) WHERE status = 'open'`. Spec
-A's `meeting_followups` index therefore drops to `(user_id, status)` if it ships
-first, or waits. Whoever integrates must not create either index before its
-column.
+**This spec owns two indexes that an earlier draft of spec A also listed**, and
+the ownership is now stated once, here, because three documents previously gave
+three answers. `tasks (app_id, kind, status)` and
+`meeting_followups (user_id, status, due_date) WHERE status = 'open'` both name
+columns that do not exist until this spec ships — `tasks.kind` and
+`meeting_followups.due_date` — so creating either in spec A, which has no
+dependencies and ships first, would fail. Spec A no longer lists them at all and
+says so in its data model; spec D's dependency list attributes them here.
+
+**The definitions in this document are the definitions.** The first index is
+`(app_id, kind, status) WHERE deleted_at IS NULL AND kind <> 'task'` as written
+above — not spec A's old `WHERE deleted_at IS NULL`, which indexes the whole
+table to serve the bug minority. Each index ships in the same migration as the
+column it keys (steps 2 and 4 below), so there is no window in which one exists
+without the other. The cost of this, accepted knowingly: `meeting_followups`
+stays entirely unindexed until this spec ships.
 
 **`task_bug_details`** — the satellite, primary-keyed on `task_id` so it needs
 no id of its own:
@@ -556,6 +662,15 @@ the only capability in the whole matrix where a stakeholder gains a write. It is
 also unreachable until `/admin/apps` ships a grant path for `app_grants`, and
 that dependency is stated rather than discovered.
 
+**Disclosure here is not composition, so the RBAC document is amended in the same
+change.** `2026-08-19-admin-rbac-design.md` defines the seat as "Read-only,
+hard-scoped to explicitly granted apps", and the whole justification for the seat
+is containment of a client login — so a widening that lives only as a paragraph
+in this spec leaves the ladder saying something false in the document people read
+to answer "what can a client do?". The RBAC stakeholder row now reads *read-only
+plus exactly one write, reporting a defect in a granted app*, and the stakeholder
+mirror sweep in Testing is what keeps the count at one.
+
 ## Migrations
 
 Hand-written SQL plus hand-written `drizzle/meta/_journal.json` entries;
@@ -567,8 +682,8 @@ header states that discipline for exactly this reason.
 **Migration numbers are allocated at merge time, never in advance.** The tree
 already shows what happens otherwise: `0040` was claimed by four parallel
 sessions and `drizzle/0040_meeting_apps.sql` won. Latest on disk today is
-`drizzle/0041_employment_and_logging.sql`. Any number written into this document
-would be wrong by construction, so none is.
+`drizzle/0043_app_soft_delete.sql`. Any number written into this document would
+be wrong by construction, so none is.
 
 **Zero `ALTER TYPE … ADD VALUE` statements in this spec.** Not for
 `task_status`, not for `notification_type`, not for `followup_kind`. Every new
@@ -631,8 +746,9 @@ UX rules, non-negotiable and all pre-existing:
   for breached, `--warning` for overdue, `--muted` for target. `--chart-*` is
   for real chart series and is not touched here.
 - **Never colour-only state.** Every deadline badge and every severity badge
-  carries a word. The deadline ramp has four steps, which is more than colour
-  can carry legibly even before WCAG 1.4.1.
+  carries a word. The deadline ramp renders four badged steps — `due-soon`,
+  `due-today`, `overdue`, `breached`, of which three notify — which is more than
+  colour can carry legibly even before WCAG 1.4.1.
 - Empty, loading and error states for every new surface; skeletons, not
   spinners.
 - Bilingual copy where the surrounding surface is bilingual.
@@ -659,7 +775,10 @@ permission-guarded server-side. Client-side hiding is presentation only.
 - Moving a committed date without the capability → a change request is created
   and the action returns `ok()` with its id. This is not a refusal and must not
   read like one. Approving one that has gone stale fails loudly through the
-  existing `detectConflict` path.
+  existing `detectConflict` path. **Approving a live one goes through the
+  task-specific applier**, so it stamps `original_due_date`, increments
+  `due_changed_count` and enforces the commitment note exactly as the direct path
+  does — an approved change request is a fourth writer, not an exemption.
 - A `kind = 'bug'` task moving to `done` with a null `resolution` → `err` naming
   what is missing, enforced in **all three** of `updateTask`, `moveTaskOnBoard`
   and `bulkUpdateTasks`. Partial enforcement is worse than none, because it
@@ -697,7 +816,11 @@ Pure, table-driven:
 1. **`escalationStep`** across all five steps, with each of the four suppression
    sources asserted separately; a **pending** absence suppresses nothing; and
    the load-bearing assertion — `isOverdue` is identical with and without
-   suppression, only the recipient list differs.
+   suppression, only the recipient list differs. Plus the **step → kind map is
+   total**: every member of the step union has an entry, `due-today` maps to
+   `null` explicitly rather than by omission, and the three notifying rungs map
+   to the three kind strings this spec contributes. A rung added later with no
+   entry fails the build instead of silently notifying nobody.
 2. **`applyDueDate` transitions** — `original_due_date` written on the first
    `NULL → non-NULL` and unchanged by a move, a clear, a restore and a
    reassignment; `due_changed_count` increments only on
@@ -709,11 +832,30 @@ Pure, table-driven:
    `capabilities.test.ts`, with explicit assertions that `deadline.commit` and
    `deadline.move.committed` are `none` for `member`, `stakeholder` and
    `auditor`, and that `deadline.set` at `own` resolves against `assigneeId`.
+   **Plus two sweep changes, because this spec's new write actions are invisible
+   to the sweeps that exist.** The auditor sweep (`capabilities.test.ts:48-58`)
+   matches on
+   `/\.(create|edit|delete|grant|approve|assign|restore|purge|manage|deactivate|write|dbclear|offboard|backfill|withdraw)/`,
+   which matches none of `bug.report`, `bug.triage`, `deadline.set`,
+   `deadline.commit`, `deadline.move.committed` or spec E's
+   `meeting.calendar.organiser`. Every one of them does set `auditor` to `none` —
+   by hand, and nothing would fail if a future one did not. The regex gains
+   `report|triage|set|commit|move|organiser`. And the **stakeholder seat gets the
+   mirror sweep it has never had**: every action matching the write regex is
+   `none` for `stakeholder` except an explicit named allowlist containing
+   `bug.report` and nothing else. Without that allowlist the next stakeholder
+   write is a one-line diff that passes review, which is how the read-only seat
+   stops being read-only.
 
 Integration, mocked-`db` idiom:
 
 5. An under-privileged committed move creates a `change_requests` row and
-   mutates the task not at all; approving a stale one returns the conflict.
+   mutates the task not at all; approving a stale one returns the conflict; and
+   **approving a live one stamps `original_due_date` on a first `NULL →
+   non-NULL` and increments `due_changed_count`** — the assertion that fails
+   today against the generic `buildApplyStatement` and is the whole reason the
+   task-specific applier exists. Spec A adds the mirror assertion on the same
+   applier: an approved `status: 'done'` sets `completed_at`.
 6. A `kind = 'bug'` task refuses `done` without a resolution through each of
    `updateTask`, `moveTaskOnBoard` and `bulkUpdateTasks` — three cases, one per
    door.
@@ -721,16 +863,22 @@ Integration, mocked-`db` idiom:
 
 Guard tests, which are the ones that fail silently if forgotten:
 
-8. `live.test.ts` check 5 still passes and `SOFT_TABLES` is still exactly five
-   after `task_bug_details` exists — i.e. the satellite really has no
-   `deleted_at`.
+8. `live.test.ts` check 5 still passes after `task_bug_details` exists, and
+   `taskBugDetails` is **absent** from `SOFT_TABLES` — i.e. the satellite really
+   has no `deleted_at`. Asserted as absence, deliberately not as a total: the
+   count belongs to whichever spec changes the set, and spec D changes it by
+   adding `personal_items`.
 9. `TASK_CHILD_TABLES` contains `taskBugDetails`, and `admin/backup.ts` includes
    the table. Both omissions are invisible in every other test.
 
 ## Build order
 
 1. **`tasks` deadline columns and `applyDueDate`**, consolidating the three
-   writers. Nothing else in this spec can be correct before the writers are one.
+   writers **and the fourth** — `TABLES.task` in
+   `src/features/admin/change-request-appliers.ts` becomes a task-specific
+   applier in this same step. Nothing else in this spec can be correct before the
+   writers are one, and the approval door is a writer whether or not it looks
+   like one.
 2. **`escalation.ts`** — the pure module and its tests. No UI, no database.
 3. **Escalation as a step inside `/api/cron/notify-tick`.** Blocked on spec A's
    notification substrate: the kinds, the dedupe key, the `title_key`/`params`

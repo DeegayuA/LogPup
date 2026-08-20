@@ -1,7 +1,8 @@
 import { cache } from 'react'
 import { asc, desc, eq, isNotNull, sql } from 'drizzle-orm'
 import { db } from '@/db'
-import { activityLog, apps, users } from '@/db/schema'
+import { liveApps } from '@/db/live'
+import { activityLog, users } from '@/db/schema'
 import { activityConditions } from '@/features/activity/filters'
 import type { ActivityFilters, ActivityRow } from '@/features/activity/types'
 
@@ -36,7 +37,7 @@ export async function listActivity(options: {
       // row's rail node by product, and only colours a row whose product is
       // ALSO named in text (WCAG 1.4.1). Without this join those id-but-no-name
       // rows would lose both their label and their hue.
-      appName: sql<string | null>`coalesce(${apps.name}, ${activityLog.appName})`,
+      appName: sql<string | null>`coalesce(${liveApps.name}, ${activityLog.appName})`,
       pagePath: activityLog.pagePath,
       detail: activityLog.detail,
       metadata: activityLog.metadata,
@@ -46,7 +47,7 @@ export async function listActivity(options: {
     .innerJoin(users, eq(activityLog.actorId, users.id))
     // LEFT, not inner: app_id has no foreign key (a log row must survive its
     // app's deletion), and most rows have no app at all.
-    .leftJoin(apps, eq(activityLog.appId, apps.id))
+    .leftJoin(liveApps, eq(activityLog.appId, liveApps.id))
     .where(activityConditions(options.filters ?? {}, options.cursor))
     .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
     .limit(options.limit + 1)
@@ -89,11 +90,11 @@ export const listActivityApps = cache(async function listActivityApps(): Promise
   // — see the task actions), while a since-deleted app has a name only on
   // the log row. Preferring the LIVE name also means a renamed app filters
   // under what it is called now.
-  const name = sql<string | null>`coalesce(${apps.name}, ${activityLog.appName})`
+  const name = sql<string | null>`coalesce(${liveApps.name}, ${activityLog.appName})`
   const rows = await db
     .selectDistinct({ id: activityLog.appId, name })
     .from(activityLog)
-    .leftJoin(apps, eq(activityLog.appId, apps.id))
+    .leftJoin(liveApps, eq(activityLog.appId, liveApps.id))
     .where(isNotNull(activityLog.appId))
     .orderBy(asc(name))
   // isNotNull narrows the ROWS, not the column's TypeScript type — and an id

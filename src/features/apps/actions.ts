@@ -14,11 +14,12 @@ import { appCreateInput } from '@/features/apps/create-input'
 import { buildAppUpdate, summarizeAppChanges } from '@/features/apps/update-input'
 import { buildAppRoleEntry, type AppRoleKind } from '@/features/apps/role-history'
 import { callGemini } from '@/features/gemini/client'
-import { QUICK_MODELS } from '@/features/gemini/models'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
 import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
 import { isAdminRole } from '@/features/auth/capabilities'
+import { liveApps } from '@/db/live'
 
 // Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
 // other files. Every guard now names the capability it needs and the matrix
@@ -126,8 +127,9 @@ async function generateFromFacts(
     // A README into one paragraph is mechanical work with an obvious right
     // answer — the cheap tier first, so the flagship stays available for the
     // meeting write-up that shares this key's quota.
+    const prefs = await getAiPrefs(userId)
     ;({ text } = await callGemini(userId, [{ text: prompt }], {
-      models: QUICK_MODELS,
+      models: resolveChain('app-metadata', prefs['app-metadata'].model),
       responseJson: true,
       feature: 'app.metadata',
     }))
@@ -293,6 +295,10 @@ export async function createApp(input: unknown): Promise<ActionResult<{ slug: st
   // The unique index on `slug` is still the real guard (this check races
   // against a concurrent create); the catch below just stops reporting the
   // wrong cause.
+  // RAW `apps`, not liveApps, and this is the one read here that must stay
+  // raw: the unique index on `slug` covers TRASHED rows too, so asking only the
+  // live set would report a slug as free and then fail on the insert with a
+  // 23505 the user cannot act on. A trashed app still owns its address.
   const [existing] = await db.select({ name: apps.name }).from(apps).where(eq(apps.slug, slug))
   if (existing) {
     return err(`“${existing.name}” already uses the address /apps/${slug} — pick another name`)
@@ -385,8 +391,8 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
       leadId: apps.leadId,
       pmId: apps.pmId,
     })
-    .from(apps)
-    .where(eq(apps.id, parsedId.data))
+    .from(liveApps)
+    .where(eq(liveApps.id, parsedId.data))
   if (!app) return err('App not found')
 
   const at = new Date()
@@ -486,6 +492,60 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   })
   revalidatePath('/apps')
   revalidatePath(`/apps/${app.slug}`)
+  return ok(undefined)
+}
+
+/**
+ * Soft-deletes an app: gone from every view, recoverable from admin Trash.
+ *
+ * NOT archiveApp with a stronger word. Archiving leaves the app readable and
+ * is a status the app itself carries; this takes it out of the index, the
+ * detail page, ⌘K and every dashboard at once, because `liveApps` filters
+ * `deletedAt` for all of them. The app's sprints, tasks and meetings are NOT
+ * separately marked — they are live iff the app is, which is what makes
+ * restoreApp exact rather than approximate (see its comment in
+ * admin/trash-actions.ts).
+ *
+ * `status` is deliberately left alone. An archived app that is deleted must
+ * come back archived, and overwriting status here would quietly promote it to
+ * active on the way out of the bin.
+ */
+export async function deleteApp(appId: string): Promise<ActionResult> {
+  const actor = await requireCapability('app.delete')
+  if (!actor) return err('Admins only')
+  const parsedId = z.uuid().safeParse(appId)
+  if (!parsedId.success) return err('Invalid app')
+  try {
+    // `isNull(deletedAt)` in the WHERE, not just the id: deleting an
+    // already-trashed app would otherwise overwrite deletedAt/deletedBy and
+    // rewrite the record of who removed it and when.
+    const [deleted] = await db
+      .update(apps)
+      .set({ deletedAt: new Date(), deletedBy: actor.id })
+      .where(and(eq(apps.id, parsedId.data), isNull(apps.deletedAt)))
+      .returning({ slug: apps.slug, name: apps.name })
+    if (!deleted) return err('App not found, or it was already deleted')
+    await logActivity({
+      actorId: actor.id,
+      verb: 'deleted',
+      entityType: 'app',
+      entityId: parsedId.data,
+      entityLabel: deleted.name,
+      appId: parsedId.data,
+      appName: deleted.name,
+      // The detail page 404s from here on, so the feed points at the index.
+      pagePath: '/apps',
+      detail: 'moved to trash',
+    })
+    revalidatePath('/apps')
+    revalidatePath(`/apps/${deleted.slug}`)
+    revalidatePath('/meetings')
+    revalidatePath('/admin')
+    revalidatePath('/')
+  } catch (error) {
+    console.error('[apps] deleteApp failed:', error)
+    return err('Could not delete the app — try again')
+  }
   return ok(undefined)
 }
 

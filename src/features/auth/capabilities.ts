@@ -90,9 +90,28 @@ export const ROLE_GRANTS = {
   'app.create':                 { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'app.edit':                   { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   'app.archive':                { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
+  // Deleting is NOT archiving with a stronger word, so it does not inherit
+  // archive's scoped arm. A manager retires a project they run — that is
+  // project work. Removing one from the workspace entirely, along with every
+  // board, meeting and comment hanging off it, is a workspace decision, and a
+  // scoped seat cannot see what else depended on the app they are deleting.
+  // Reversible through admin Trash, which is why it is absent from
+  // IRREVERSIBLE_ACTIONS below; trash.purge is the one that ends it.
+  'app.delete':                 { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'app.assign':                 { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   'app.role.assign':            { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   'app.grant.stakeholder':      { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
+  // Bug reports. Filing is the ONE write in this file granted 'all' to a
+  // member: a bug is reported by whoever hit it, and a scoped grant would
+  // mean the person best placed to describe a break — someone outside the
+  // project who tripped over it — is the one person who cannot say so.
+  // Reading and triaging stay scoped, because a bug list is project work.
+  'bug.report':                 { superadmin: A, admin: A, manager: A, editor: A, member: A, stakeholder: N, auditor: N },
+  'bug.view':                   { superadmin: A, admin: A, manager: A, editor: S, member: S, stakeholder: N, auditor: A },
+  // Triage is deciding a bug's severity and status on the project's behalf,
+  // so it follows sprint.manage's shape rather than task.edit's.
+  'bug.triage':                 { superadmin: A, admin: A, manager: S, editor: S, member: N, stakeholder: N, auditor: N },
+  'bug.delete':                 { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   // Worklog. There is deliberately no worklog.write.any at any level.
   'worklog.view':               { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: A },
   'worklog.write.own':          { superadmin: O, admin: O, manager: O, editor: O, member: O, stakeholder: N, auditor: N },
@@ -146,6 +165,28 @@ export const ROLE_GRANTS = {
   'audit.view':                 { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: A },
   'admin.view':                 { superadmin: A, admin: A, manager: A, editor: N, member: N, stakeholder: N, auditor: A },
   'danger.dbclear':             { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
+  // The rest of the danger zone. Each is separately grantable rather than
+  // folded into danger.dbclear, because they differ in what they destroy and
+  // therefore in who should hold them.
+  //
+  // A full backup is the only one that DESTROYS NOTHING — it is the thing you
+  // do BEFORE the others — so it is the only one an admin holds too. It still
+  // lives here rather than with the ordinary reads because a single file
+  // containing every row in the workspace is exactly what an exfiltration
+  // looks like, and the audit trail should say who took one.
+  'danger.backup.export':       { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
+  // Emptying the bin is trash.purge applied to everything at once. Same seat
+  // as trash.purge (superadmin only) — a bulk version of an irreversible act
+  // must never be easier to reach than the single one.
+  'danger.trash.empty':         { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
+  // Wiping recordings destroys the keyframes and audio segments behind every
+  // AI meeting note. The notes themselves survive; the evidence for them does
+  // not, which is why this is not merely "clearing a cache".
+  'danger.recordings.wipe':     { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
+  // Emptying ONE project's board (sprints, tasks, check-ins) while keeping
+  // the project, its team and its meetings. Narrower than dbclear in blast
+  // radius but identical in kind, so it stays superadmin-only.
+  'danger.app.reset':           { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
 } satisfies Record<string, Row>
 
 export type Action = keyof typeof ROLE_GRANTS
@@ -158,6 +199,11 @@ const APPROVAL_ACTIONS = [
   'request.review', 'absence.approve', 'user.approve', 'user.role.grant',
   'app.grant.stakeholder', 'trash.purge', 'danger.dbclear',
   'user.offboard',
+  // The whole danger zone, backup included. Taking a file containing every
+  // row in the workspace is a decision made on the organisation's behalf even
+  // though it destroys nothing.
+  'danger.backup.export', 'danger.trash.empty', 'danger.recordings.wipe',
+  'danger.app.reset',
 ] as const
 // NOT trash.restore. Restoring is recovering something somebody deleted by
 // mistake, and it is reversible — you can trash it again. A trainee who spots
@@ -167,6 +213,10 @@ const APPROVAL_ACTIONS = [
 /** The subset that cannot be undone once done. */
 const IRREVERSIBLE_ACTIONS = [
   'trash.purge', 'danger.dbclear', 'user.role.grant', 'user.offboard',
+  // Emptying the bin, wiping recordings and resetting a board all end in rows
+  // that no restore can bring back. Exporting a backup does not, so it is
+  // deliberately absent.
+  'danger.trash.empty', 'danger.recordings.wipe', 'danger.app.reset',
 ] as const
 
 const has = (list: readonly string[], action: Action) => list.includes(action)

@@ -4,12 +4,11 @@ import {
   absences,
   appGrants,
   appRoleHistory,
-  apps,
   assignments,
   changeRequests,
   users,
 } from '@/db/schema'
-import { liveMeetings, liveTasks } from '@/db/live'
+import { liveApps, liveMeetings, liveTasks } from '@/db/live'
 import { can, type Actor } from '@/features/auth/capabilities'
 import { NON_TRANSFERABLE, type TransferableGroup } from '@/features/people/handover-inventory'
 
@@ -56,14 +55,14 @@ export async function getHandoverInventory(
   const [assignmentRows, roleRows, taskRows, meetingRows, requestRows, absenceRows, grantRows] =
     await Promise.all([
       db
-        .select({ id: assignments.id, appId: assignments.appId, appName: apps.name, pct: assignments.allocationPct })
+        .select({ id: assignments.id, appId: assignments.appId, appName: liveApps.name, pct: assignments.allocationPct })
         .from(assignments)
-        .innerJoin(apps, eq(apps.id, assignments.appId))
+        .innerJoin(liveApps, eq(liveApps.id, assignments.appId))
         .where(eq(assignments.userId, userId)),
       db
-        .select({ id: appRoleHistory.id, appId: appRoleHistory.appId, appName: apps.name, role: appRoleHistory.role })
+        .select({ id: appRoleHistory.id, appId: appRoleHistory.appId, appName: liveApps.name, role: appRoleHistory.role })
         .from(appRoleHistory)
-        .innerJoin(apps, eq(apps.id, appRoleHistory.appId))
+        .innerJoin(liveApps, eq(liveApps.id, appRoleHistory.appId))
         .where(and(eq(appRoleHistory.userId, userId), isNull(appRoleHistory.effectiveTo))),
       db
         .select({ id: liveTasks.id, title: liveTasks.title, appId: liveTasks.appId })
@@ -84,9 +83,9 @@ export async function getHandoverInventory(
         .from(absences)
         .where(and(eq(absences.userId, userId), eq(absences.status, 'pending'))),
       db
-        .select({ id: appGrants.id, appId: appGrants.appId, appName: apps.name })
+        .select({ id: appGrants.id, appId: appGrants.appId, appName: liveApps.name })
         .from(appGrants)
-        .innerJoin(apps, eq(apps.id, appGrants.appId))
+        .innerJoin(liveApps, eq(liveApps.id, appGrants.appId))
         .where(eq(appGrants.userId, userId)),
     ])
 

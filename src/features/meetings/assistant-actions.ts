@@ -16,8 +16,8 @@ import {
 import { resolveSpeakerNameForLabel } from '@/features/meetings/notes'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { GeminiError, callGemini } from '@/features/gemini/client'
-import { ASSISTANT_MODELS } from '@/features/gemini/models'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { canReadMeetingIntel } from '@/features/meetings/ai-actions'
 
 /**
@@ -198,8 +198,9 @@ Rules:
 - Name people as they are named above. Never invent a name, a date, or a commitment.`
 
   try {
+    const prefs = await getAiPrefs(session.user.id)
     const { text, model } = await callGemini(session.user.id, [{ text: prompt }], {
-      models: ASSISTANT_MODELS,
+      models: resolveChain('meeting-assistant', prefs['meeting-assistant'].model),
       feature: 'meeting.assistant',
     })
     const answer = text.trim()

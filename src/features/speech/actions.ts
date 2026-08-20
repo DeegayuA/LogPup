@@ -8,8 +8,9 @@ import {
   callGeminiSpeech,
   callGeminiWithAudio,
 } from '@/features/gemini/client'
-import { TTS_MODEL_FALLBACK_ORDER, TTS_VOICE } from '@/features/gemini/models'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { TTS_VOICE } from '@/features/gemini/models'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { truncateForSpeech } from '@/features/speech/spoken-text'
 import { MAX_SPEECH_CHUNKS, chunkForSpeech } from '@/features/speech/chunk-speech'
 
@@ -62,12 +63,13 @@ export async function transcribeDictation(formData: FormData): Promise<ActionRes
   }
 
   try {
+    const prefs = await getAiPrefs(session.user.id)
     const { text } = await callGeminiWithAudio(
       session.user.id,
       [{ text: DICTATION_PROMPT }],
       Buffer.from(await audio.arrayBuffer()),
       audio.type || 'audio/webm',
-      { feature: 'speech.dictation' },
+      { models: resolveChain('dictation', prefs.dictation.model), feature: 'speech.dictation' },
     )
     return ok({ text: text.trim() })
   } catch (error) {
@@ -135,8 +137,9 @@ export async function synthesizeSpeech(
   if (!chunk) return err('Nothing to read aloud')
 
   try {
+    const prefs = await getAiPrefs(session.user.id)
     const spoken = await callGeminiSpeech(session.user.id, chunk, {
-      models: TTS_MODEL_FALLBACK_ORDER,
+      models: resolveChain('read-aloud', prefs['read-aloud'].model),
       voiceName: TTS_VOICE,
       feature: 'speech.tts',
     })

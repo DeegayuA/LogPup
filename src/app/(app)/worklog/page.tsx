@@ -263,7 +263,7 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
                 </div>
                 {/* Draft with AI reads that day's own activity, so a forgotten
                     Tuesday is still recoverable from what LogPup saw. */}
-                <WorklogForm day={day} initial={null} aiDraftEnabled={aiPrefs['worklog-draft']} />
+                <WorklogForm day={day} initial={null} aiDraftEnabled={aiPrefs['worklog-draft'].enabled} />
               </div>
             ))}
           </div>
@@ -323,7 +323,7 @@ async function TodayEntry({ userId, today }: { userId: string; today: string }) 
     <WorklogForm
       day={today}
       initial={todayRow ? { percent: todayRow.percent, note: todayRow.note } : null}
-      aiDraftEnabled={aiPrefs['worklog-draft']}
+      aiDraftEnabled={aiPrefs['worklog-draft'].enabled}
     />
   )
 }

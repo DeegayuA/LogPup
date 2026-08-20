@@ -60,6 +60,17 @@ export const loggingExpectation = pgEnum('logging_expectation', ['daily', 'none'
 // per-project free text and stay `text`).
 export const appRoleKind = pgEnum('app_role_kind', ['pm', 'lead'])
 export const sprintStatus = pgEnum('sprint_status', ['planned', 'active', 'done'])
+
+// How badly something is broken, as judged by whoever triages it — NOT by the
+// reporter, who is asked to describe what happened rather than rate it. Four
+// levels, because a fifth is where a severity scale stops being read.
+export const bugSeverity = pgEnum('bug_severity', ['low', 'medium', 'high', 'critical'])
+// 'triaged' is its own state, separate from 'in_progress', because the
+// question a reporter actually asks is "has anyone looked at this yet?" —
+// unanswerable if acknowledging a bug and starting work on it are one event.
+export const bugStatus = pgEnum('bug_status', [
+  'open', 'triaged', 'in_progress', 'resolved', 'closed',
+])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
 export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
 export const attendeeResponse = pgEnum('attendee_response', ['pending', 'going', 'maybe', 'declined'])
@@ -145,8 +156,9 @@ export const apps = pgTable('apps', {
   // Soft delete, the sixth table to carry it — and the first whose children
   // (sprints, tasks, meetings, assignments, comments) all cascade on a HARD
   // delete. That is exactly why deleting an app had to become soft: the only
-  // delete available before this was `db.delete(apps)`, which took the whole
-  // project history with it and left admin Trash nothing to restore.
+  // removal available before this was a hard DELETE of the row, which took
+  // the whole project history with it and left admin Trash nothing to
+  // restore.
   //
   // NOT the same thing as `status = 'archived'`. Archiving retires an app
   // that still exists — it stays readable, keeps its board, and appears
@@ -1253,4 +1265,53 @@ export const meetingApps = pgTable('meeting_apps', {
 }, (t) => [
   primaryKey({ columns: [t.meetingId, t.appId] }),
   index('meeting_apps_app_idx').on(t.appId),
+])
+
+// Bugs, as reported by whoever hit one.
+//
+// A SEPARATE TABLE, NOT A TASK WITH A FLAG. The two look alike for about a
+// day and then diverge on every field that matters: a task is planned work
+// with an assignee, an estimate and a place in a sprint, while a bug arrives
+// unplanned from someone who may not work on the project at all, and its
+// useful fields — what happened, where, how bad — have no task equivalent.
+// Folding them together would also put every unplanned report into the sprint
+// counts the board uses to say whether the plan is on track.
+//
+// The link runs the other way instead: `linkedTaskId` records the task
+// somebody created to FIX this, so a triaged bug can point at the work
+// without pretending to be it.
+export const bugReports = pgTable('bug_reports', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  // NOT NULL, and cascade: a bug is always about a project. Cascade is safe
+  // here because a soft-deleted app keeps its rows — only a purge removes
+  // them, and a purge is meant to take the project's records with it.
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  // What happened, in the reporter's words. Free text on purpose: a required
+  // "steps to reproduce / expected / actual" triple is what stops people
+  // filing bugs at all.
+  description: text('description').notNull(),
+  severity: bugSeverity('severity').notNull().default('medium'),
+  status: bugStatus('status').notNull().default('open'),
+  // The page the reporter was on when they hit it, captured automatically.
+  // The single most useful field in a bug report, and the one nobody types.
+  pagePath: text('page_path'),
+  reportedBy: uuid('reported_by').notNull().references(() => users.id),
+  assignedTo: uuid('assigned_to').references(() => users.id),
+  // The task somebody opened to fix this, if any. SET NULL rather than
+  // cascade: deleting the fix must not delete the report of the problem.
+  linkedTaskId: uuid('linked_task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // The app's own bug list, which is every read on the Bugs tab.
+  index('bug_reports_app_live_idx')
+    .on(t.appId, t.status, t.createdAt)
+    .where(sql`${t.deletedAt} is null`),
+  // "What have I reported?" and the workspace-wide triage queue.
+  index('bug_reports_reporter_idx').on(t.reportedBy).where(sql`${t.deletedAt} is null`),
+  index('bug_reports_status_idx').on(t.status, t.createdAt).where(sql`${t.deletedAt} is null`),
 ])

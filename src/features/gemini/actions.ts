@@ -10,7 +10,7 @@ import { encryptSecret } from '@/lib/crypto'
 import { validateGeminiKey } from '@/features/gemini/client'
 import { assessRecordingReadiness, type RecordingReadiness } from '@/features/gemini/readiness'
 import { listPoolKeyHealth } from '@/features/gemini/queries'
-import { AI_FEATURES, type AiFeatureId } from '@/features/gemini/ai-features'
+import { AI_FEATURES, MODEL_CHOICES, type AiFeatureId } from '@/features/gemini/ai-features'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
 const MAX_KEYS_PER_USER = 5
@@ -156,6 +156,41 @@ export async function setAiFeaturePref(
     .onConflictDoUpdate({
       target: [userAiPrefs.userId, userAiPrefs.feature],
       set: { enabled, updatedAt: new Date() },
+    })
+  revalidatePath('/settings')
+  return ok(undefined)
+}
+
+/**
+ * Sets (or clears, with `model: null`) which Gemini model this feature's
+ * picker should prefer. The dropdown that calls this is NOT the security
+ * boundary — a model outside this feature's `kind` cannot actually serve it
+ * (a `tts` model handed to a text call, etc.), so it is refused here rather
+ * than left to fail confusingly at call time.
+ *
+ * The upsert sets `enabled` ONLY on INSERT. A user picking a model for a
+ * feature they never toggled must not accidentally disable it, and one who
+ * deliberately turned a feature off must not have it silently re-enabled by
+ * picking a model for it — `enabled` is absent from the UPDATE `set` for
+ * exactly that reason.
+ */
+export async function setAiFeatureModel(
+  feature: AiFeatureId,
+  model: string | null,
+): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+  const def = AI_FEATURES.find((f) => f.id === feature)
+  if (!def) return err('Unknown AI feature')
+  if (model !== null && !MODEL_CHOICES[def.kind].some((c) => c.id === model)) {
+    return err('That model cannot serve this feature')
+  }
+  await db
+    .insert(userAiPrefs)
+    .values({ userId: session.user.id, feature, enabled: true, model, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [userAiPrefs.userId, userAiPrefs.feature],
+      set: { model, updatedAt: new Date() },
     })
   revalidatePath('/settings')
   return ok(undefined)

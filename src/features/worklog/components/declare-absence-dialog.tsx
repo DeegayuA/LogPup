@@ -27,6 +27,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { createAbsence } from '@/features/worklog/absence-actions'
 import type { MyAbsence } from '@/features/worklog/queries'
 import { overlaps } from '@/features/worklog/schedules'
+import { HelpNote } from '@/components/shared/help-note'
 
 /**
  * "I was not working that day."
@@ -253,9 +254,7 @@ export function DeclareAbsenceDialog({
           {/* Both bounds start on the day that was clicked, so the common
               correction — "it was actually the whole week" — is moving one
               field rather than filling in two. */}
-          <p className="text-2xs text-muted-foreground">
-            Both days count. Move the last day if it ran longer than one.
-          </p>
+          <HelpNote>Both days count. Move the last day if it ran longer than one.</HelpNote>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`${fieldId}-kind`}>What was it?</Label>
@@ -278,6 +277,14 @@ export function DeclareAbsenceDialog({
                 ))}
               </SelectContent>
             </Select>
+            {/* The absent options are the ones that raise a question. "No work
+                assigned" is a statement about the studio failing to give
+                somebody work, so a person filing it against themselves turns a
+                grievance into a form field; it is filed for you, not by you. */}
+            <HelpNote>
+              Filed for approval either way. If nobody had work for you, an admin files that one —
+              it is not yours to declare about yourself.
+            </HelpNote>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -296,7 +303,11 @@ export function DeclareAbsenceDialog({
           </div>
 
           {refusal || serverError ? (
-            <p id={errorId} role="alert" className="text-2xs text-destructive">
+            <p
+              id={errorId}
+              role="alert"
+              className="text-2xs text-destructive motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-150"
+            >
               {refusal?.kind === 'reversed' ? (
                 'That ends before it starts — the last day has to be on or after the first.'
               ) : refusal?.kind === 'clash' ? (

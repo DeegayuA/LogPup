@@ -8,7 +8,8 @@ import { meetingAiNotes } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { callGemini } from '@/features/gemini/client'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 
 export type SprintSuggestion = { name: string; goal: string }
 
@@ -113,7 +114,9 @@ export async function suggestSprint(appId: unknown): Promise<ActionResult<Sprint
   ].join('\n')
 
   try {
+    const prefs = await getAiPrefs(session.user.id)
     const { text } = await callGemini(session.user.id, [{ text: prompt }], {
+      models: resolveChain('sprint-draft', prefs['sprint-draft'].model),
       responseJson: true,
       feature: 'sprint.draft',
     })

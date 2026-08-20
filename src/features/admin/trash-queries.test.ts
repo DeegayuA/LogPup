@@ -57,9 +57,14 @@ beforeEach(() => {
 })
 
 describe('getTrash', () => {
-  it('returns all six groups, in kind order, even when every source is empty', async () => {
+  it('returns all seven groups, in kind order, even when every source is empty', async () => {
     const groups = await getTrash()
-    expect(groups.map((g) => g.kind)).toEqual(['meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'])
+    // 'app' leads deliberately, not alphabetically: a deleted project is the
+    // only kind that can explain the others (its meetings and sprints leave
+    // every view with it), so it is read first. Same order as TRASH_KINDS and
+    // TRASH_GROUP_ORDER — all three move together, or the card renders one
+    // order while the data layer returns another.
+    expect(groups.map((g) => g.kind)).toEqual(['app', 'meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'])
     for (const g of groups) {
       expect(g.rows).toEqual([])
       expect(g.totalCount).toBe(0)

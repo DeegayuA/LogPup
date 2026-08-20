@@ -130,6 +130,43 @@ const uuidInput = z.uuid()
  * "Add to calendar" (the .ics path), which works unconditionally and is the
  * only way to get guests a fresh invite.
  */
+export async function restoreApp(appId: string): Promise<ActionResult> {
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
+  const parsedId = uuidInput.safeParse(appId)
+  if (!parsedId.success) return err('Invalid app')
+
+  // Nothing to un-delete besides the app itself: deleteApp marks ONLY this
+  // row, and the app's sprints, tasks and meetings are live iff the app is
+  // (the liveApps joins in src/db/live.ts). A cascade of soft-deletes would
+  // have had to remember which children were already trashed BEFORE the app
+  // went, and restoring would resurrect those too — a delete that cannot be
+  // undone faithfully is the bug this whole feature exists to avoid.
+  const restored = await db
+    .update(apps)
+    .set({ deletedAt: null, deletedBy: null })
+    .where(and(eq(apps.id, parsedId.data), isNotNull(apps.deletedAt)))
+    .returning({ id: apps.id, name: apps.name, slug: apps.slug })
+  if (restored.length === 0) return err('Not found, or it was already restored')
+  const [row] = restored
+
+  await logActivity({
+    actorId: actor.id,
+    verb: 'restored',
+    entityType: 'app',
+    entityId: row.id,
+    entityLabel: row.name,
+    appId: row.id,
+    appName: row.name,
+    pagePath: '/apps/' + row.slug,
+  })
+  revalidatePath('/apps')
+  revalidatePath('/apps/' + row.slug)
+  revalidatePath('/meetings')
+  revalidateTrashPaths()
+  return ok(undefined)
+}
+
 export async function restoreMeeting(meetingId: string): Promise<ActionResult<{ warning: string }>> {
   const actor = await requireCapability('trash.restore')
   if (!actor) return err('Admins only')
@@ -455,6 +492,45 @@ function checkConfirm(confirm: string): ActionResult<never> | null {
  * trashed screenshots', or a live keyframe's blob would be orphaned by a
  * meeting purge with nothing left to clean it up.
  */
+export async function purgeApp(appId: string, confirm: string): Promise<ActionResult> {
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
+  const parsedId = uuidInput.safeParse(appId)
+  if (!parsedId.success) return err('Invalid app')
+  const confirmError = checkConfirm(confirm)
+  if (confirmError) return confirmError
+
+  // The widest purge in the file, and the FK columns decide how wide: sprints,
+  // tasks, assignments, comments and app_role_history are ON DELETE CASCADE
+  // and go with it, while meetings.app_id is ON DELETE SET NULL (schema.ts)
+  // and therefore SURVIVE, unlinked. That asymmetry is deliberate upstream —
+  // a meeting is a record of people spending an hour, which stays true after
+  // the project it discussed is gone — so no blob cleanup belongs here
+  // either: every keyframe still hangs off a meeting that still exists.
+  const deleted = await db
+    .delete(apps)
+    .where(and(eq(apps.id, parsedId.data), isNotNull(apps.deletedAt)))
+    .returning({ id: apps.id, name: apps.name })
+  if (deleted.length === 0) return err('Not found, or it was restored — nothing purged')
+  const [row] = deleted
+
+  await logActivity({
+    actorId: actor.id,
+    verb: 'purged',
+    entityType: 'app',
+    entityId: row.id,
+    entityLabel: row.name,
+    // No appId/pagePath: the app is gone, so a link to /apps/<slug> would be a
+    // permanent 404 in the activity feed.
+    appName: row.name,
+    pagePath: '/apps',
+  })
+  revalidatePath('/apps')
+  revalidatePath('/meetings')
+  revalidateTrashPaths()
+  return ok(undefined)
+}
+
 export async function purgeMeeting(meetingId: string, confirm: string): Promise<ActionResult> {
   const actor = await requireCapability('trash.purge')
   if (!actor) return err('Admins only')

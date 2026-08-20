@@ -306,8 +306,16 @@ costed it during scoping.
 
 ### Notification kinds: four, and what they spend
 
-Spec A ships the mechanism with zero kinds. This spec adds the first four. The
-budget is **at most 5 immediate in-app notifications per person per weekday**.
+Spec A ships the mechanism with zero kinds. This spec adds the first four.
+
+**The budget table is spec A's, not this spec's.** An earlier draft of this
+document owned it and handed out "headroom" to C, D and E informally, which is
+exactly how the ceiling got blown by the first spec that spent against it
+without writing a number down. The ceiling — **at most 5 immediate in-app
+notifications per person per weekday** — and the table that tracks it now live in
+`2026-08-20-work-substrate-design.md` §"The notification budget is one table",
+alongside the `createNotifications` cap that enforces it. The four rows below are
+this spec's entries in that table; the authoritative copy is A's.
 
 | Kind | Recipient | Dedupe | Key | Expected/person/weekday |
 |---|---|---|---|---|
@@ -316,10 +324,12 @@ budget is **at most 5 immediate in-app notifications per person per weekday**.
 | `task.forced` | Assignee | **Permanent** | `task:{taskId}:forced:{historyRowId}` | ~0.1 |
 | `mention` | Mentioned person | **Collapsing** | `{entityType}:{entityId}:mention` | ~1.0 |
 
-**Running total after spec A + B: 4 kinds, ~2.3 rows per person per weekday
-against a ceiling of 5.** Specs C, D and E have ~2.7 rows of headroom between
-them. That number is the budget, and a later spec that wants a fifth kind spends
-against this table rather than adding to it silently.
+**This spec's subtotal: 4 kinds, ~2.3 rows per person per weekday.** That number
+is copied into spec A's budget table, and the remaining headroom is read from
+there rather than asserted here — a headroom figure restated in two documents is
+a figure that goes stale in one of them. Spec D adds no kind but adds volume to
+`task.offered` through promote-and-assign, which is priced into the `~1.0` above
+rather than counted separately.
 
 Why each dedupe semantic:
 
@@ -340,13 +350,24 @@ Two kinds that are deliberately absent:
   dies. Accepted offers change a count on the assigner's dashboard read.
 - **Bulk offer reuses `task.offered`**, one aggregated row per recipient, keyed
   `task:offer-batch:{batchId}`, with `title_key = notif.task.offered.many` and
-  `params = {actorName, count, appName, href}`. Forty acceptance prompts for one
+  `params = {actorId, count, appId, href}`. Forty acceptance prompts for one
   offboarding would guarantee the feature is disabled inside a week.
 
 Every row stores `title_key` + `params`, never a sentence — surfaces are
 bilingual Sinhala + English and the reader's language is not known at write time.
 Keys: `notif.task.offered.one`, `notif.task.offered.many`,
 `notif.task.declined`, `notif.task.forced`, `notif.mention.entity`.
+
+**`params` carries ids, never display names**, per spec A's params convention
+(A owns it). This is the same argument as the uuid mention token one section
+above, one level down: `actorName` and `appName` frozen into jsonb at write time
+are stored display names, and a stored display name is a rename bomb whether it
+sits inside `@[…]` brackets or inside a parameter bag. The bell resolves
+`actorId` and `appId` to current names in the pass that already renders
+`title_key`, so a rename updates every historical row instead of leaving a
+museum of old labels. A purged actor is the one case that needs a fallback, and
+it is a clearly-named snapshot (`actorLabel`) the renderer reaches for only when
+the id resolves to nothing — `activity_log`'s `entityLabel` convention.
 
 ### A mention that cannot be delivered is recorded and reported, never dropped
 
@@ -471,12 +492,12 @@ duplicate_object` on every constraint — modelled on
 `drizzle/0034_app_role_history.sql`.
 
 **Migration numbers are allocated at merge time, never in advance.** The
-committed journal runs to `0041_employment_and_logging` (`when: 1787155700000`)
-and an uncommitted `0042` is already on disk in this worktree — which is the
-whole argument: `when` values must exceed the last entry's and strictly
-increase, and four parallel sessions once claimed 0040 at the same time. This
-spec therefore names no number, and its three files are numbered against
-then-current `main` at integration.
+committed journal now runs to `0043_app_soft_delete` (`when: 1787155900000`) —
+`0042` and `0043` were both uncommitted-on-disk while this spec was being
+written, which is the whole argument: `when` values must exceed the last entry's
+and strictly increase, and four parallel sessions once claimed 0040 at the same
+time. This spec therefore names no number, and its three files are numbered
+against then-current `main` at integration.
 
 Ordered, one concern each:
 
@@ -594,7 +615,12 @@ Integration, mocked-`db` idiom:
 8. **Assignment notifies** — each of `updateTask`, `moveTaskOnBoard` and
    `bulkUpdateTasks` reaches `createNotifications` on an assignee change, and
    `bulkUpdateTasks` emits one aggregated row per recipient rather than one per
-   task.
+   task. **Spec D's promotion is the fourth door** and joins this test when it
+   ships: promoting a `personal_items` row with an assignee other than yourself
+   opens an offer interval and emits `task.offered`, exactly as the other three
+   do. A write path that reaches `tasks.assignee_id` without opening an interval
+   is the bug this test exists to catch, and D's path is the one nobody would
+   think to look at.
 9. **Suppression is recorded, not dropped** — an out-of-scope mention writes the
    `mentions` row with `suppressed_reason = 'no_access'`, creates no
    notification, and returns `ok` with the advisory naming the person.
@@ -618,7 +644,10 @@ Integration, mocked-`db` idiom:
    Manual assignment stops being silent **here**, not earlier: shipping a bare
    `task.assigned` kind first and re-cutting it as `task.offered` two weeks later
    teaches people two meanings for one bell row and forces a dedupe re-key over
-   live rows.
+   live rows. **There is no `task.assigned` kind in this spec or anywhere else**,
+   stated because spec D's error-handling section referred to one; D now names
+   `task.offered` and routes its promotion through the handshake like every other
+   write path.
 5. **The assigner dashboard read** — "Offered to you", "Awaiting their answer",
    three business days.
 

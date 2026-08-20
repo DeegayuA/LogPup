@@ -151,19 +151,26 @@ function recordFailure(
  * orderKeysForRotation — with the same failCount/lastUsedAt bookkeeping so a
  * key that is failing here is also deprioritised for ordinary Gemini calls.
  *
- * Model fallback: each key walks LIVE_MODEL_FALLBACK_ORDER (primary Live
- * preview, then the older 2.5 native-audio preview). A mint the endpoint
- * rejects outright ('bad' — the model was renamed/retired, or this project
- * has no access to that preview) or reports overloaded falls through to the
- * next model on the SAME key; only key-level failures (auth/quota) rotate
- * to the next key. The minted token stays pinned to exactly one model — the
- * chain exists so a retired primary can never hard-fail the whole feature.
+ * Model fallback: each key walks the chain (by default LIVE_MODEL_FALLBACK_ORDER
+ * — primary Live preview, then the older 2.5 native-audio preview; `opts.models`
+ * overrides it wholesale, same `models`-beats-`model` precedence as
+ * resolveModelChain in gemini/client.ts). A mint the endpoint rejects outright
+ * ('bad' — the model was renamed/retired, or this project has no access to
+ * that preview) or reports overloaded falls through to the next model on the
+ * SAME key; only key-level failures (auth/quota) rotate to the next key. The
+ * minted token stays pinned to exactly one model — the chain exists so a
+ * retired primary can never hard-fail the whole feature.
  */
 export async function mintLiveToken(
   userId: string,
-  opts?: { model?: string },
+  opts?: { model?: string; models?: readonly string[] },
 ): Promise<MintedLiveToken> {
-  const models = opts?.model ? [opts.model] : LIVE_MODEL_FALLBACK_ORDER
+  const models =
+    opts?.models && opts.models.length > 0
+      ? opts.models
+      : opts?.model
+        ? [opts.model]
+        : LIVE_MODEL_FALLBACK_ORDER
 
   const rows = await db
     .select()

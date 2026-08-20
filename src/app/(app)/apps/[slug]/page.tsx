@@ -25,6 +25,7 @@ import { getAppActivity } from '@/features/apps/activity-queries'
 import { listAppComments } from '@/features/apps/comment-queries'
 import { AppHeader } from '@/features/apps/components/app-header'
 import { AppTabNav } from '@/features/apps/components/app-tab-nav'
+import { DeleteAppCard } from '@/features/apps/components/delete-app-card'
 import { AppSprintBand } from '@/features/apps/components/app-sprint-band'
 import { AppActivity } from '@/features/apps/components/app-activity'
 import { AppComments } from '@/features/apps/components/app-comments'
@@ -158,8 +159,8 @@ export default async function AppDetailPage(props: {
     isAdmin && session?.user ? getAiPrefs(session.user.id) : Promise.resolve(null),
   ])
   const tasks = counts.tasks
-  const sprintDraftEnabled = aiPrefs ? aiPrefs['sprint-draft'] : true
-  const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'] : true
+  const sprintDraftEnabled = aiPrefs ? aiPrefs['sprint-draft'].enabled : true
+  const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'].enabled : true
 
   const sprintSnapshots: AppSprintSnapshot[] = sprints.map((sprint) => ({
     id: sprint.id,
@@ -682,6 +683,13 @@ export default async function AppDetailPage(props: {
               Apps view, but nothing is deleted.
             </p>
           </div>
+
+          {/* Deleting is the harder of the two, so it is read second — and it
+              is safe on the same gate as this whole tab, because `app.delete`
+              grants exactly the seats isAdminRole covers (superadmin, admin)
+              with no scoped arm. The action re-checks the capability
+              regardless; this only decides what is offered. */}
+          <DeleteAppCard appId={app.id} appName={app.name} slug={slug} />
         </div>
       ) : null}
     </div>

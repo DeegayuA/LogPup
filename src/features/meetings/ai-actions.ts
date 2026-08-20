@@ -12,6 +12,8 @@ import { allowedDomains, emailAllowed } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { db } from '@/db'
 import {
+  liveApps,
+  liveAppsAs,
   liveMeetings,
   liveNoteSegments,
   liveScreenshots,
@@ -20,7 +22,6 @@ import {
   liveTasksAs,
 } from '@/db/live'
 import {
-  apps,
   assignmentHistory,
   assignments,
   meetingAiNotes,
@@ -51,8 +52,8 @@ import {
   GeminiError,
   type GeminiImageInput,
 } from '@/features/gemini/client'
-import { SYNTHESIS_MODELS } from '@/features/gemini/models'
-import { aiFeatureDisabledMessage } from '@/features/gemini/prefs'
+import { resolveChain } from '@/features/gemini/model-choice'
+import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import {
   estimateMinutesFromAudioBytes,
   summaryDepthInstruction,
@@ -668,15 +669,15 @@ async function fetchAttendeeAppLists(attendeeIds: string[]): Promise<Map<string,
   if (attendeeIds.length === 0) return byUser
 
   const assignmentRows = await db
-    .select({ userId: assignments.userId, id: apps.id, name: apps.name })
+    .select({ userId: assignments.userId, id: liveApps.id, name: liveApps.name })
     .from(assignments)
-    .innerJoin(apps, eq(assignments.appId, apps.id))
+    .innerJoin(liveApps, eq(assignments.appId, liveApps.id))
     .where(inArray(assignments.userId, attendeeIds))
 
   const taskRows = await db
-    .select({ userId: liveTasks.assigneeId, id: apps.id, name: apps.name })
+    .select({ userId: liveTasks.assigneeId, id: liveApps.id, name: liveApps.name })
     .from(liveTasks)
-    .innerJoin(apps, eq(liveTasks.appId, apps.id))
+    .innerJoin(liveApps, eq(liveTasks.appId, liveApps.id))
     .where(and(inArray(liveTasks.assigneeId, attendeeIds), ne(liveTasks.status, 'done')))
 
   for (const row of [...assignmentRows, ...taskRows]) {
@@ -1152,12 +1153,29 @@ lists were given.`
   let raw: string
   let modelUsed: string = DEFAULT_GEMINI_MODEL
   try {
+    // meeting-intel spans three call slugs (meeting.segment, meeting.synthesis,
+    // meeting.followups) but a user's chosen model applies ONLY to
+    // meeting.synthesis — this is that call, the short-recording twin of
+    // finalizeMeetingRecordingInner's synthesis pass below. An hour-long
+    // meeting makes ~12 segment-transcription calls against one synthesis
+    // call, so pointing a Pro-tier choice at segments too would multiply this
+    // feature's cost several-fold to improve transcription flash already
+    // handles well — the opposite of what someone choosing a model wants.
+    // Applying the choice only to the call whose output a person actually
+    // reads is both the cheaper and the more useful reading of their intent.
+    // Do NOT thread this into meeting.segment or meeting.followups "for
+    // consistency" — see model-choice.ts's DEFAULT_CHAIN comment.
+    const prefs = await getAiPrefs(session.user.id)
     ;({ text: raw, model: modelUsed } = await callGeminiWithAudio(
       session.user.id,
       [{ text: prompt }],
       audioBytes,
       mimeType,
-      { responseJson: true, feature: 'meeting.synthesis' },
+      {
+        models: resolveChain('meeting-intel', prefs['meeting-intel'].model),
+        responseJson: true,
+        feature: 'meeting.synthesis',
+      },
     ))
   } catch (error) {
     // GeminiError.message is already an actionable, key-free string (see
@@ -1688,15 +1706,29 @@ listed app clearly fits or when no app lists were given.`
     // across every segment and reading the captured screens. It runs once
     // per meeting, so a Pro-first chain costs a rounding error of the
     // request budget the per-segment calls already spend.
+    //
+    // meeting-intel spans three call slugs (meeting.segment, meeting.synthesis,
+    // meeting.followups) but a user's chosen model applies ONLY to
+    // meeting.synthesis — this call. An hour-long meeting makes ~12
+    // segment-transcription calls against this one synthesis call, so
+    // pointing a Pro-tier choice at segments too would multiply this
+    // feature's cost several-fold to improve transcription flash already
+    // handles well — the opposite of what someone choosing a model wants.
+    // Applying the choice only to the call whose output a person actually
+    // reads is both the cheaper and the more useful reading of their intent.
+    // Do NOT thread this into meeting.segment or meeting.followups "for
+    // consistency" — see model-choice.ts's DEFAULT_CHAIN comment.
+    const prefs = await getAiPrefs(session.user.id)
+    const models = resolveChain('meeting-intel', prefs['meeting-intel'].model)
     ;({ text: raw, model: modelUsed } =
       images.length > 0
         ? await callGeminiWithImages(session.user.id, [{ text: prompt }], images, {
-            models: SYNTHESIS_MODELS,
+            models,
             responseJson: true,
             feature: 'meeting.synthesis',
           })
         : await callGemini(session.user.id, [{ text: prompt }], {
-            models: SYNTHESIS_MODELS,
+            models,
             responseJson: true,
             feature: 'meeting.synthesis',
           }))
@@ -1986,10 +2018,10 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
         id: liveTasks.id,
         title: liveTasks.title,
         status: liveTasks.status,
-        appSlug: apps.slug,
+        appSlug: liveApps.slug,
       })
       .from(liveTasks)
-      .leftJoin(apps, eq(liveTasks.appId, apps.id))
+      .leftJoin(liveApps, eq(liveTasks.appId, liveApps.id))
       .where(inArray(liveTasks.id, linkedTaskIds))
     for (const row of taskRows) {
       linkedTaskById.set(row.id, { id: row.id, title: row.title, status: row.status, appSlug: row.appSlug })
@@ -2124,11 +2156,11 @@ export async function getMeetingPrep(meetingId: string): Promise<ActionResult<At
     .select({
       userId: assignments.userId,
       appId: assignments.appId,
-      appName: apps.name,
-      appSlug: apps.slug,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
     })
     .from(assignments)
-    .innerJoin(apps, eq(assignments.appId, apps.id))
+    .innerJoin(liveApps, eq(assignments.appId, liveApps.id))
     .where(inArray(assignments.userId, attendeeIds))
 
   // Same "running now" predicate as getActiveSprints (sprints/queries.ts):
@@ -2142,12 +2174,12 @@ export async function getMeetingPrep(meetingId: string): Promise<ActionResult<At
       sprintId: liveSprints.id,
       sprintName: liveSprints.name,
       appId: liveSprints.appId,
-      appName: apps.name,
-      appSlug: apps.slug,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
       startDate: liveSprints.startDate,
     })
     .from(liveSprints)
-    .innerJoin(apps, eq(liveSprints.appId, apps.id))
+    .innerJoin(liveApps, eq(liveSprints.appId, liveApps.id))
     .where(
       or(
         eq(liveSprints.status, 'active'),
@@ -2875,10 +2907,10 @@ const suggestedUsers = alias(users, 'note_suggested_users')
 // liveTasks subquery instead of aliasing the raw table, so a suggestion
 // whose created task was later trashed doesn't still show it as live here.
 const suggestionTasks = liveTasksAs('note_suggestion_tasks')
-const suggestionApps = alias(apps, 'note_suggestion_apps')
+const suggestionApps = liveAppsAs('note_suggestion_apps')
 // The app a suggestion was ROUTED to (suggestedAppId) — distinct from
 // suggestionApps above, which is the created task's actual app.
-const suggestionTargetApps = alias(apps, 'note_suggestion_target_apps')
+const suggestionTargetApps = liveAppsAs('note_suggestion_target_apps')
 
 /**
  * Open task suggestions for a meeting, as the UI needs them: open cards AND
@@ -3630,7 +3662,7 @@ export async function assignSpeaker(input: {
   // caller is told the assignment is outstanding.
   const needsAssignment = plan.addAssignment && meeting.appId !== null && !parsed.data.assignment
   const [appRow] = needsAssignment
-    ? await db.select({ name: apps.name }).from(apps).where(eq(apps.id, meeting.appId!))
+    ? await db.select({ name: liveApps.name }).from(liveApps).where(eq(liveApps.id, meeting.appId!))
     : [undefined]
 
   if (needsAssignment && isAdmin) {
@@ -4181,7 +4213,7 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
   // vanished from wherever it was filed, not only from this meeting's panel.
   // task.appId, not meeting.appId: a routed task lived on a different board
   // than the meeting's own app.
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, task.appId))
+  const [app] = await db.select({ slug: liveApps.slug }).from(liveApps).where(eq(liveApps.id, task.appId))
   if (app) revalidatePath('/apps/' + app.slug)
   revalidatePath('/meetings')
   return ok(undefined)

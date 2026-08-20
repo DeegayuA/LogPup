@@ -29,6 +29,7 @@ import {
   users,
 } from '@/db/schema'
 import {
+  buildAppTrashRow,
   buildAssignmentTrashRow,
   buildKeyframeTrashRow,
   buildMeetingTrashRow,
@@ -44,6 +45,8 @@ const PER_SOURCE_LIMIT = 50
 
 export async function getTrash(): Promise<TrashGroup[]> {
   const [
+    appRows,
+    [appTotal],
     meetingRows,
     [meetingTotal],
     taskRows,
@@ -57,6 +60,25 @@ export async function getTrash(): Promise<TrashGroup[]> {
     assignmentRows,
     [assignmentTotal],
   ] = await Promise.all([
+    // Apps first, matching TRASH_KINDS: a deleted project explains why a pile
+    // of its meetings and sprints stopped appearing, and reading that
+    // explanation after the consequences is the wrong order.
+    db
+      .select({
+        id: apps.id,
+        name: apps.name,
+        status: apps.status,
+        deletedAt: apps.deletedAt,
+        deletedByName: users.name,
+        deletedByAvatarUrl: users.avatarUrl,
+      })
+      .from(apps)
+      .leftJoin(users, eq(apps.deletedBy, users.id))
+      .where(isNotNull(apps.deletedAt))
+      .orderBy(desc(apps.deletedAt))
+      .limit(PER_SOURCE_LIMIT),
+    db.select({ total: count() }).from(apps).where(isNotNull(apps.deletedAt)),
+
     db
       .select({
         id: meetings.id,
@@ -189,6 +211,12 @@ export async function getTrash(): Promise<TrashGroup[]> {
   ])
 
   return [
+    toTrashGroup(
+      'app',
+      appRows.map((r) => ({ ...r, deletedAt: r.deletedAt! })),
+      appTotal?.total ?? 0,
+      buildAppTrashRow,
+    ),
     toTrashGroup(
       'meeting',
       // The WHERE isNotNull(meetings.deletedAt) above guarantees deletedAt is

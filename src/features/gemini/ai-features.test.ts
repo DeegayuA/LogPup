@@ -122,17 +122,19 @@ describe('MODEL_CHOICES', () => {
 })
 
 describe('resolvePrefs', () => {
-  it('defaults every feature to enabled when no rows exist', () => {
+  it('defaults every feature to enabled with no model chosen when no rows exist', () => {
     const prefs = resolvePrefs([])
-    for (const f of AI_FEATURES) expect(prefs[f.id]).toBe(true)
+    for (const f of AI_FEATURES) expect(prefs[f.id]).toEqual({ enabled: true, model: null })
   })
 
-  it('a stored false wins; unknown stored ids are ignored', () => {
+  it('a stored row wins; unknown stored ids are ignored', () => {
     const prefs = resolvePrefs([
-      { feature: 'worklog-draft', enabled: false },
-      { feature: 'retired-feature', enabled: false },
+      { feature: 'worklog-draft', enabled: false, model: null },
+      { feature: 'meeting-intel', enabled: true, model: 'gemini-2.5-pro' },
+      { feature: 'retired-feature', enabled: false, model: null },
     ])
-    expect(prefs['worklog-draft']).toBe(false)
-    expect(prefs['meeting-intel']).toBe(true)
+    expect(prefs['worklog-draft']).toEqual({ enabled: false, model: null })
+    expect(prefs['meeting-intel']).toEqual({ enabled: true, model: 'gemini-2.5-pro' })
+    expect(prefs['sprint-draft']).toEqual({ enabled: true, model: null })
   })
 })

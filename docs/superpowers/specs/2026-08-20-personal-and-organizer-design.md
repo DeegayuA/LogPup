@@ -2,7 +2,8 @@
 
 Date: 2026-08-20
 Status: awaiting review
-Spec D of 5 (see "Why this is five specs" in the substrate spec). Depends on A and C.
+Spec D of 5 (see "Why this is five specs" in the substrate spec). Depends on A and C,
+and on B for one step only — promoting an item to somebody other than yourself.
 
 ## Purpose
 
@@ -100,6 +101,7 @@ Exactly these fields cross the boundary:
 | `due_date` | `due_date` | your date becomes the shared date. Spec C's `due_kind` defaults to `'target'` — promotion never mints a commitment |
 | — | `app_id` | chosen in the dialog, required. Defaults to the person's highest-allocation app, the fallback `quickAssignTask` already uses |
 | — | `assignee_id` | chosen in the dialog. May be yourself |
+| — | `assignment_state` | **an assignee other than yourself opens an OFFER**, not an assignment — spec B's handshake, see below |
 | — | `description` | typed fresh in the dialog. Empty by default |
 | `note` | **never** | this is the entire point of the feature |
 | sub-items | **never** | the checklist is your working method, not the deliverable |
@@ -110,6 +112,20 @@ into, read-only. Copying is a keystroke; auto-filling is an accident, and the
 accident is irreversible the moment the task is created.
 
 The `personal_items` row survives with `promoted_task_id` set.
+
+**Promoting to somebody else opens an offer; it does not hand them the work.**
+Spec B's rule is that assigning to anyone but yourself opens an offer interval in
+`task_assignment_history` with `assignment_state = 'offered'` and emits
+`task.offered`, and promotion is a **fourth** write path to `tasks.assignee_id`
+alongside `updateTask`, `moveTaskOnBoard` and `bulkUpdateTasks` — the one nobody
+would think to look at, because it starts on a private list. A promotion that
+wrote `assignee_id` directly would be the single door in the product that skips
+the handshake, and the person on the other end would learn about the work from
+the board rather than from a bell. So the two-step preview dialog says
+**"Nuwan will be asked to accept"**, never wording that implies the work has
+landed, and the item's own row reads "offered to Nuwan" until they answer.
+Self-promotion lands `accepted` directly, per spec B's self-assign rule, with no
+offer and no notification. Spec B's test 8 covers this door.
 
 **Rejected: promotion as a move.** Deleting the personal row loses your handle on
 work you originated at the exact moment it becomes other people's business, and
@@ -143,12 +159,45 @@ question — unrelated, and it must not ride along on these migrations." This sp
 is where it comes due, and it is stated here rather than smuggled in under a
 different name.
 
-Two capability rows, both `own` or `none` and nothing else:
+Two capability rows. They are **not** the same shape, and an earlier draft of
+this spec made them so — which would have 404ed `/my-day` for everybody.
 
-```
-'personal.item.manage':  superadmin O, admin O, manager O, editor O, member O, stakeholder N, auditor N
-'organizer.view':        superadmin O, admin O, manager O, editor O, member O, stakeholder N, auditor N
-```
+| Action | superadmin | admin | manager | editor | member | stakeholder | auditor | `ownerId` source |
+|---|---|---|---|---|---|---|---|---|
+| `personal.item.manage` | own | own | own | own | own | none | none | `personal_items.owner_id` |
+| `organizer.view` | all | all | all | all | all | none | none | — (no resource) |
+
+**`organizer.view` is granted `all`, not `own`, and the reason is mechanical.**
+`can()` is pure, synchronous and fails closed: `if (level === 'own') return owns`,
+where `owns = resource?.ownerId != null && resource.ownerId === actor.id`
+(`src/features/auth/capabilities.ts:286-298`, verified). A route render has no
+resource to pass, so `can(actor, 'organizer.view')` at level `own` returns
+`false` for **every** seat — `/my-day` would 404 for admins and members exactly
+as it does for the stakeholder this spec intends to exclude, and the test that
+only asserts the stakeholder and auditor 404 would ship green. `organizer.view`
+is a surface-level read of your own page with no row behind it, so it takes the
+shape `trash.view` and `audit.view` already use: `all` for the seats that hold
+it, `none` for the seats that do not. The scoping is done by the *query* —
+every read on `/my-day` is filtered to `actor.id` — never by the grant level.
+
+**`personal.item.manage` stays at `own`, and its `ownerId` source is named in
+the row above rather than inherited silently**, the discipline spec B pins for
+`task.assign.answer` and spec C for `deadline.set`. A new action that inherits
+its owner source by convention is a permission bug waiting for its first
+ambiguous row.
+
+**CREATE is guarded by the write, not by `can()`.** There is no row yet, so
+there is no `ownerId` to check: passing `{ownerId: actor.id}` would be true by
+construction and gate nothing, and passing nothing would deny every create. So
+create is guarded by the seat holding `personal.item.manage` at all — i.e.
+`capFor(role, 'personal.item.manage') !== 'none'` — and by the insert writing
+`owner_id = actor.id` from the session, never from the form. Every other verb
+(edit, complete, reorder, soft-delete, restore, purge, promote) loads the row
+first and passes it as the resource, so `own` does real work there. Said out loud
+because "the create check passes for everyone" looks like a bug to the next
+reader, and it is the correct behaviour: a person may always write their own
+private list, and cannot write anybody else's because the owner column is not
+theirs to set.
 
 There is deliberately **no `personal.item.view` action at any level.** A read
 action is the cell somebody widens to `scoped` in six months "just for leads",
@@ -176,6 +225,17 @@ into the schema comment on the table, so a future compliance question is answere
 by reading the table rather than by somebody quietly adding logging to the private
 path.
 
+**And the RBAC spec's auditor row is amended in the same change that lands this
+one.** `2026-08-19-admin-rbac-design.md` currently defines the seat as "Read-only
+across everything including `activity_log` and trash", which this spec makes
+false in two ways at once — one table the auditor cannot read, and one class of
+act that writes no `activity_log` row to read. Leaving the amendment for later
+means the ladder answers a compliance question wrongly, in writing, from the
+document people go to for exactly that answer. The RBAC row names
+`personal_items` as the single documented exclusion and links here for the
+argument; the same sentence goes in the schema comment, so the exclusion is
+discoverable from both directions.
+
 And the structural refusal, because it will be tested within a quarter: a lead
 will ask to see personal items "just so I know what people are working on". If
 there is a config flag it gets turned on, and the day it does everyone moves back
@@ -195,8 +255,15 @@ that precedent is written down:
 
 1. `livePersonalItems` / `livePersonalItemsAs` in `src/db/live.ts`.
 2. A `SOFT_TABLES` entry.
-3. `live.test.ts:29` asserts `SOFT_TABLES` covers **exactly the five** soft-deleted
-   tables, by name. It becomes six.
+3. `live.test.ts:29` asserts `SOFT_TABLES` covers an exact set of soft-deleted
+   tables, by name. On disk today that set is **six** — `apps`,
+   `meeting_note_segments`, `meeting_screenshots`, `meetings`, `sprints`,
+   `tasks` (`apps` joined with `drizzle/0043_app_soft_delete.sql`). It becomes
+   **seven**. **This spec owns that count**, and the diff comment says so: the
+   assertion is going six → seven for `personal_items` and for nothing else.
+   Spec C deliberately does not pin a total — its satellite carries no
+   `deletedAt` and asserts its own absence instead — so a reviewer seeing this
+   guard test edited is seeing the one spec entitled to edit it.
 4. `SOFT_TABLE_NAMES` (`live.test.ts:152`) gains `personalItems`. That regex — not
    the array in `live.ts` — is the actual enforcement for checks 1 and 2, and it
    can only see a table named in it as a literal.
@@ -330,19 +397,24 @@ private-notes leak with autocomplete, which is why check 6 exists.
 `/my-day`, nav jump key **`T`** — D, W, A, P, M and V are taken
 (`src/components/shell/nav-items.ts:32-46`) and letters must be unique.
 
-A stakeholder or auditor navigating to `/my-day` gets `notFound()`. This repo does
-not set `experimental.authInterrupts`, so `unauthorized()` and `forbidden()` are
-unavailable; and a per-route 404 is the correct answer anyway — a client seat must
-not learn the surface exists. `params` and `searchParams` are Promises in Next 16;
+A stakeholder or auditor navigating to `/my-day` gets `notFound()`. The guard is
+`can(actor, 'organizer.view')` with **no resource argument**, which is why that
+action is granted `all` rather than `own` — see the carve-out section; `can()`
+fails closed on `own` with nothing to own, so the `own` version denies every
+seat. This repo does not set `experimental.authInterrupts`, so `unauthorized()`
+and `forbidden()` are unavailable; and a per-route 404 is the correct answer
+anyway — a client seat must not learn the surface exists. `params` and `searchParams` are Promises in Next 16;
 `error.tsx`'s second prop is `retry`, not `reset`.
 
 ## Data model
 
 **This spec adds exactly one table and zero columns to existing tables.**
-`tasks.completed_at`, `tasks_assignee_open_idx` and the `meeting_followups`
-`(user_id, status, due_date)` index come from spec A. `tasks.kind` and
-`meeting_followups.due_date` come from spec C. If either is missing, this spec does
-not build.
+`tasks.completed_at` and `tasks_assignee_open_idx` come from spec A.
+`tasks.kind`, `meeting_followups.due_date` **and the
+`meeting_followups (user_id, status, due_date)` index** all come from spec C —
+the index keys a column only C adds, so C ships it in the same migration as the
+column and spec A no longer lists it at all. If any of them is missing, this spec
+does not build.
 
 **`personal_items`** — the private antechamber to `tasks`. Promotion is the only door.
 
@@ -425,9 +497,10 @@ repo. Replay-safe throughout, modelled on `drizzle/0034_app_role_history.sql`:
 `DO $$ … EXCEPTION WHEN duplicate_object THEN null; END $$;` wrapper for each
 `ADD CONSTRAINT`, which has no `IF NOT EXISTS` form.
 
-**The number is allocated at merge time, not here.** `main` is at `0041` today and
-`0040` was claimed by four parallel sessions at once. Journal `when` values must
-strictly increase against then-current `main`.
+**The number is allocated at merge time, not here.** `main` is at `0043` today
+(`drizzle/0043_app_soft_delete.sql`) and `0040` was claimed by four parallel
+sessions at once. Journal `when` values must strictly increase against
+then-current `main`.
 
 No enum. Nothing in this spec ships `ALTER TYPE … ADD VALUE`.
 
@@ -498,8 +571,15 @@ is presentation only.
   column, which is acceptable; the list re-fetches on focus so the loser's tab does
   not show a stale order.
 - **Promotion notifies nobody until spec B lands.** Spec A ships the substrate with
-  zero kinds. Until `task.assigned` exists, the promote dialog names the recipient
-  and the confirmation repeats it, so the gap is visible rather than looking broken.
+  zero kinds, and the kind promotion needs is **`task.offered`** — spec B ships
+  that one and deliberately ships no `task.assigned`, because a bare "assigned"
+  bell re-cut as an offer two weeks later teaches two meanings for one row.
+  Until `task.offered` exists, promoting to somebody else is **disabled in the
+  dialog**, not silently un-notifying: an offer nobody is told about is an offer
+  nobody answers, and it would leave the task parked in `offered` forever.
+  Self-promotion works from day one, since it opens no offer and notifies nobody
+  by design. The dialog says which one is unavailable and why, so the gap is
+  visible rather than looking broken.
 
 ## Testing
 
@@ -526,20 +606,28 @@ Pure, table-driven, in `src/features/organizer/agenda.test.ts`:
 Structural, in `src/db/live.test.ts`:
 
 6. **Check 6** — every file reading `personalItems` also names `eq(personalItems.ownerId`.
-7. `SOFT_TABLES` covers exactly **six** tables, and `personalItems` is in
-   `SOFT_TABLE_NAMES`.
+7. `SOFT_TABLES` covers exactly **seven** tables — the six on disk today plus
+   `personal_items` — and `personalItems` is in `SOFT_TABLE_NAMES`.
 
 Capability, in `capabilities.test.ts`:
 
-8. `personal.item.manage` and `organizer.view` are `none` for `stakeholder` and
-   `auditor` and `own` for the other five — never `scoped` or `all`, asserted as a
-   negative over the whole row so widening turns it red.
+8. `personal.item.manage` is `own` for the five seats that hold it and `none` for
+   `stakeholder` and `auditor` — never `scoped` or `all`, asserted as a negative
+   over the whole row so widening turns it red. `organizer.view` is `all` for
+   those same five and `none` for the other two, asserted the same way; **and one
+   assertion that `can(actor, 'organizer.view')` with NO resource returns `true`
+   for each of the five**, which is the test that would have caught the `own`
+   version and the only one that actually exercises the route guard's calling
+   convention.
 9. No action key matching `/^personal\.item\.view/` exists.
 
 Integration, mocked-`db` idiom:
 
 10. A second user's id returns zero personal items from every read path.
-11. `/my-day` returns 404 for a stakeholder and for an auditor.
+11. `/my-day` **renders for admin, manager, editor and member** — the assertion
+    that would have caught `organizer.view` granted at `own`, since `can()` fails
+    closed with no resource and every seat would have 404ed — and returns 404 for
+    a stakeholder and for an auditor.
 12. Double promotion returns the same task id twice and creates one task.
 
 ## Build order
@@ -555,17 +643,24 @@ Integration, mocked-`db` idiom:
 5. `/my-day` — the six buckets over five sources through React `cache`, plus the
    capture rail and "Recently deleted".
 6. Promotion. Gated on spec C's `tasks.kind`, so the organizer reads one table for
-   tasks and bugs rather than growing a sixth source.
+   tasks and bugs rather than growing a sixth source — and, for promotion to
+   anyone but yourself, on spec B's offer handshake. Self-promotion ships without
+   B; promoting to somebody else is disabled until `task.offered` exists.
 7. The ⌘K quick-add fallback.
 8. The close-out row linking to `/worklog`.
 
 **Depends on spec A** (`2026-08-20-work-substrate-design.md`): `tasks.completed_at`
 and the `transitionTaskStatus` consolidation (the mirror rides it),
-`tasks_assignee_open_idx`, the `meeting_followups (user_id, status, due_date)`
-index, and the ⌘K `ctx` scoping seam.
+`tasks_assignee_open_idx`, and the ⌘K `ctx` scoping seam.
 **Depends on spec C** (`2026-08-20-deadlines-and-bugs-design.md`): `tasks.kind` for
-the single task read, and `meeting_followups.due_date` — without it the `owed`
-bucket is the only undated one and follow-ups can never enter `late` or `today`.
+the single task read, `meeting_followups.due_date` — without it the `owed` bucket
+is the only undated one and follow-ups can never enter `late` or `today` — **and
+the `meeting_followups (user_id, status, due_date)` index**, which spec C owns
+because it keys a column spec C adds. An earlier draft of this list attributed
+that index to spec A; spec A no longer ships it.
+**Depends on spec B** (`2026-08-20-reaching-people-design.md`) for step 6 only:
+promotion to somebody else opens an offer and emits `task.offered`. Steps 1–5 and
+7–8 do not need B, and self-promotion does not either.
 
 ## Out of scope (YAGNI)
 

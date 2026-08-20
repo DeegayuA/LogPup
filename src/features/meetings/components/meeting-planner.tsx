@@ -247,9 +247,23 @@ export function MeetingPlannerSection({
                 </p>
               ) : (
                 <>
-                  <p className="text-xs text-muted-foreground">
-                    Worked out from live rows every time you open this. Nothing is saved, nobody is
-                    invited, and a line vanishes the moment the work behind it closes.
+                  <p className="flex flex-wrap items-baseline gap-x-1.5 text-xs text-muted-foreground">
+                    <span>
+                      Worked out from live rows when this panel first opened. Nothing is saved,
+                      nobody is invited, and a line vanishes the moment the work behind it closes.
+                    </span>
+                    {/* The read is not repeated on its own — it costs a
+                        workspace-wide health pass — so the refresh is offered
+                        rather than the sentence claiming a freshness the code
+                        does not deliver. */}
+                    <button
+                      type="button"
+                      onClick={() => void load()}
+                      disabled={loading}
+                      className="rounded-sm underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    >
+                      {loading ? 'Re-reading…' : 'Re-read now'}
+                    </button>
                   </p>
 
                   {suggested.length > 0 ? (
@@ -497,8 +511,9 @@ function Agenda({
       {/* Stated, not implied. Nothing here is stored, so a reader must not walk
           away believing they saved a plan. */}
       <p className="text-2xs text-muted-foreground">
-        Worked out fresh each time this panel opens. What you add or take off here is not saved —
-        the questions are, because the tasks, follow-ups and check-ins behind them are.
+        Worked out from live rows when this panel first opened — re-read it any time from the link
+        above. What you add or take off here is not saved; the questions are, because the tasks,
+        follow-ups and check-ins behind them are.
       </p>
     </div>
   )

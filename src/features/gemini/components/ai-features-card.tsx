@@ -146,7 +146,7 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                     {describeUsage(used, isEstimatedFeature)}
                   </span>
                 </div>
-                <AiFeatureToggle feature={f.id} label={f.label} enabled={prefs[f.id]} />
+                <AiFeatureToggle feature={f.id} label={f.label} enabled={prefs[f.id].enabled} />
               </li>
             )
           })}

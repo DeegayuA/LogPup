@@ -40,8 +40,8 @@ keeping them separate means a new reach requirement is data, not a migration.
 | `manager` | Everything `admin` can do **that has a scope**, restricted to it (Axis B). Workspace-level acts stay with `admin`: approving a self-signup, creating a user, and granting any role above `member`. A scoped seat cannot widen the workspace. |
 | `editor` | Edits freely inside assigned apps and on own records. Every delete, and every edit outside scope or outside the open window, opens a change request instead of mutating. |
 | `member` | Logs own work, edits own records in-window, reads assigned apps. Today's `member`, unchanged. |
-| `stakeholder` | Read-only, hard-scoped to explicitly granted apps. No people directory, no admin surfaces, no other apps. The client/owner seat in an EPC engagement. |
-| `auditor` | Read-only across everything including `activity_log` and trash. Zero write capability. Compliance review without handing out an admin seat. |
+| `stakeholder` | Read-only, hard-scoped to explicitly granted apps, **plus exactly one write: reporting a defect in a granted app** (`bug.report`, from `2026-08-20-deadlines-and-bugs-design.md`). No people directory, no admin surfaces, no other apps, and no second write. The client/owner seat in an EPC engagement. |
+| `auditor` | Read-only across everything the organisation decided, including `activity_log` and trash, with **one documented exclusion: `personal_items`** (see `2026-08-20-personal-and-organizer-design.md` §"The auditor carve-out" for the argument — an unpromoted private item is not an organisational act, writes no `activity_log` row, and becomes fully auditable the moment it is promoted to a task). Zero write capability. Compliance review without handing out an admin seat. |
 
 Roles are NOT nested by integer level. `manager` is not "admin minus one" — it is
 admin capability with a scope predicate. The implementation is an explicit
@@ -207,6 +207,20 @@ it is exempted from the soft-delete enforcement scan by name and documented in
 place, exactly as `daily_worklogs` and `webauthn_credentials` already are in
 `src/db/live.ts`.
 
+**One rule the applier registry acquires as soon as the entity types acquire
+invariants.** `buildApplyStatement`
+(`src/features/admin/change-request-appliers.ts:58-66`) is
+`db.update(table).set(after)` — a generic spread — which is correct for a table
+whose columns are independent facts and silently wrong for one whose columns must
+be written together. `tasks` becomes the second kind in
+`2026-08-20-deadlines-and-bugs-design.md` (`original_due_date` and
+`due_changed_count` are stamped only by `applyDueDate`) and in
+`2026-08-20-work-substrate-design.md` (`completed_at` only by
+`transitionTaskStatus`), so `TABLES.task` becomes an entity-specific applier that
+calls those helpers instead of spreading. **Approval is a write path, not an
+exemption from one.** The registry keeps its closed-registry discipline; specs A
+and C own the two halves of the task applier and each states it.
+
 ### Worklog corrections — the self-only rule survives
 
 `daily_worklogs.percent` means "of what I planned today", self-scored. A manager
@@ -359,8 +373,12 @@ and an `activity_log` entry:
 | `purge*` | `trash.purge` — `superadmin` only |
 | `clearTestData` | `danger.dbclear` — `superadmin` only |
 
-`SOFT_TABLES` stays at exactly five. `live.ts`, `live.test.ts`, the Trash
-grouping, and the three delete statements are **untouched** by this pass. Delete
+`SOFT_TABLES` is **untouched by this pass** — whatever it holds when this lands,
+it holds after. (It has moved since: `apps` joined it in
+`drizzle/0043_app_soft_delete.sql`, and `personal_items` joins it in
+`2026-08-20-personal-and-organizer-design.md`. Neither is this pass's business,
+which is the point.) `live.ts`, `live.test.ts`, the Trash grouping, and the three
+delete statements are untouched here. Delete
 semantics are a separate argument from access control, and mixing them would put
 a 47-file query retarget in the same diff as the permission rewrite that reads
 those same queries.
@@ -376,14 +394,29 @@ closure mechanisms it uses and why, in the style of the existing schema comments
 
 Repo rule: `drizzle-kit generate` is forbidden until the snapshot chain is
 repaired. These are hand-written SQL plus journal entries, modelled on `0031`.
-Next free number is **0035**; journal `when` values must exceed 1786600003000 and
-strictly increase.
 
-1. **`0035_user_role_expand`** — enum widening only. Postgres cannot use a new
-   enum value in the same transaction that adds it, so this migration ships
-   alone and adds nothing else.
-2. **`0036_rbac_tables`** — the five new tables and four new enums.
-3. **`0037_admin_to_superadmin`** — remap existing `admin` rows to `superadmin`.
+**Migration numbers are allocated at merge time against then-current `main`, not
+in advance**; journal `when` values must strictly increase. An earlier version of
+this document named its numbers ahead of the work, and every one of them was
+wrong within days — which is why all five of the specs that compose with this one
+(`2026-08-20-work-substrate-design.md` and its siblings A–E) refuse to name a
+number and each cite the same failure. A number written into a branch is a merge
+conflict with a plausible-looking resolution.
+
+Three migrations, one concern each, in this order:
+
+1. **`user_role` expand** — enum widening only. Postgres cannot use a new enum
+   value in the same transaction that adds it, so this migration ships alone and
+   adds nothing else.
+2. **RBAC tables** — the five new tables and four new enums.
+3. **`admin` → `superadmin`** — remap existing `admin` rows.
+
+*Historical note, so a reader is not sent looking for files that do not exist:*
+this work shipped as `drizzle/0037_user_role_expand.sql`,
+`drizzle/0038_rbac_tables.sql` and `drizzle/0039_admin_to_superadmin.sql`. The
+numbers this document originally reserved — 0035 and 0036 — went to
+`0035_ai_usage_events` and `0036_key_sharing_prefs` while this work was in
+flight.
 
 Every migration verified against `information_schema`, never the runner's exit
 code — `npm run db:migrate` has reported success while applying nothing. Human
@@ -470,8 +503,8 @@ patterns:
 
 1. Capability matrix + scope resolver, with tests. No UI. Refactor the 48
    existing call sites onto `can()`.
-2. `0035`–`0037` migrations, applied only after human approval and verified via
-   `information_schema`.
+2. The three migrations above, numbered at merge time, applied only after human
+   approval and verified via `information_schema`.
 3. Change-request table, actions, and approval application.
 4. Schedules, absences, org holidays, and `coverage.ts`; extend `missing-days.ts`.
 5. `/admin` section layout and the eight sections.

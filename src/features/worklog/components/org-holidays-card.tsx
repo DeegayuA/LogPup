@@ -31,6 +31,12 @@ import {
 } from '@/components/ui/alert-dialog'
 import { addOrgHoliday, revokeOrgHoliday } from '@/features/worklog/org-holiday-actions'
 import type { OrgHolidayRow } from '@/features/worklog/org-holiday-queries'
+import {
+  buildHolidayCalendar,
+  splitByDay,
+  HOLIDAY_CATEGORY_LABEL,
+  type HolidayCalendarRow,
+} from '@/features/worklog/holiday-listing'
 import { LK_HOLIDAYS, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 
 /**
@@ -55,6 +61,14 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
   // calendar views use, so the past/future line falls on the same day here
   // as it does everywhere else that reads LK_HOLIDAYS.
   const todayIso = useMemo(() => toIsoDateInTimeZone(new Date()), [])
+
+  // Both sources in one list. The gazetted days are what exempt most of the
+  // year, so a page that showed only `org_holidays` could not answer the
+  // question it exists to answer.
+  const { upcoming, past } = useMemo(
+    () => splitByDay(buildHolidayCalendar(holidays), todayIso),
+    [holidays, todayIso],
+  )
 
   const gazetted = day ? LK_HOLIDAYS[day] : undefined
   const isPast = Boolean(day) && day < todayIso
@@ -102,11 +116,16 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
     })
   }
 
-  function handleRevoke(holiday: OrgHolidayRow) {
-    setRevokingId(holiday.id)
+  function handleRevoke(holiday: HolidayCalendarRow) {
+    // Gazetted rows never reach here — they have no orgId and render no
+    // Revoke control. The guard is belt-and-braces for the type, not a case
+    // the UI can produce.
+    if (!holiday.orgId) return
+    const orgId = holiday.orgId
+    setRevokingId(orgId)
     startRevoking(async () => {
       try {
-        const res = await revokeOrgHoliday({ id: holiday.id })
+        const res = await revokeOrgHoliday({ id: orgId })
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -215,30 +234,64 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Company holidays</CardTitle>
+          <CardTitle>Holiday calendar</CardTitle>
           <CardDescription>
-            Composed on top of the gazetted Sri Lankan calendar, soonest first. Revoking
-            one does not delete it — the row stays, marked cancelled from a date, so it
-            stays visible here even once it no longer counts as a holiday.
+            Every day the workspace does not work, from both sources at once. Gazetted
+            Sri Lankan holidays apply automatically and are shown here read-only;
+            company holidays sit on top of that calendar and can be revoked. Revoking
+            does not delete — the row stays, marked cancelled from a date, so it is
+            still visible once it no longer counts as a holiday.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {holidays.length === 0 ? (
+        <CardContent className="flex flex-col gap-6">
+          {upcoming.length === 0 && past.length === 0 ? (
             <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
               <CalendarOff className="size-5 text-muted-foreground/60" aria-hidden />
-              <p className="text-sm font-medium">No company holidays are set.</p>
+              <p className="text-sm font-medium">No holidays on file.</p>
               <p className="text-xs text-muted-foreground">
-                Gazetted Sri Lankan public holidays already apply automatically and are
-                not listed here — add one above only for a day the studio shuts down on
-                top of that calendar.
+                The gazetted Sri Lankan calendar only covers the years listed in
+                lk-holidays.ts — add a company holiday above for any day the studio
+                shuts down on top of it.
               </p>
             </div>
           ) : (
+            <>
+              <section className="flex flex-col gap-2">
+                <h3 className="font-heading text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Upcoming
+                </h3>
+                {upcoming.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Nothing left on the calendar — every holiday on file has passed.
+                  </p>
+                ) : (
+                  renderHolidayTable(upcoming)
+                )}
+              </section>
+
+              {past.length > 0 ? (
+                <details className="group rounded-xl border border-dashed border-border px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-medium text-muted-foreground marker:text-muted-foreground/50">
+                    Already passed ({past.length})
+                  </summary>
+                  <div className="pt-3">{renderHolidayTable(past)}</div>
+                </details>
+              ) : null}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+
+  function renderHolidayTable(rows: HolidayCalendarRow[]) {
+    return (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Day</TableHead>
                   <TableHead>Name</TableHead>
+                  <TableHead>Applies as</TableHead>
                   <TableHead>Note</TableHead>
                   <TableHead>Added by</TableHead>
                   <TableHead>Status</TableHead>
@@ -246,7 +299,7 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {holidays.map((holiday) => {
+                {rows.map((holiday) => {
                   // Cancelling always takes effect "today" (revokeOrgHoliday sets
                   // revokedFrom to Colombo's today), and orgHolidaySet's rule is
                   // strict `day < revokedFrom` — so a day that is today or still to
@@ -254,17 +307,38 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
                   // its exemption forever, no matter when it is cancelled.
                   const staysExcusedIfRevoked = holiday.day < todayIso
                   const isCancelled = holiday.revokedFrom !== null
+                  const isGazetted = holiday.source === 'gazette'
 
                   return (
-                    <TableRow key={holiday.id}>
+                    <TableRow key={holiday.key}>
                       <TableCell className="font-mono text-xs tabular-nums">{holiday.day}</TableCell>
                       <TableCell className="font-medium">{holiday.name}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {isGazetted ? (
+                            // The gazette publishes these lists separately, and
+                            // which one a day is on decides who actually gets it
+                            // off — a bank-only closing day is not a day the
+                            // studio closes. Showing the categories is the whole
+                            // point of listing gazetted days here.
+                            holiday.categories.map((category) => (
+                              <Badge key={category} variant="outline" className="text-2xs">
+                                {HOLIDAY_CATEGORY_LABEL[category]}
+                              </Badge>
+                            ))
+                          ) : (
+                            <Badge variant="secondary" className="text-2xs">Company</Badge>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{holiday.note ?? '—'}</TableCell>
                       <TableCell className="text-muted-foreground">
-                        {holiday.createdByName ?? '—'}
+                        {isGazetted ? 'Sri Lanka gazette' : holiday.addedByName ?? '—'}
                       </TableCell>
                       <TableCell>
-                        {isCancelled ? (
+                        {isGazetted ? (
+                          <Badge variant="secondary">Automatic</Badge>
+                        ) : isCancelled ? (
                           <Badge variant="outline" className="font-mono text-2xs tabular-nums">
                             Cancelled from {holiday.revokedFrom}
                           </Badge>
@@ -273,14 +347,14 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
                         )}
                       </TableCell>
                       <TableCell>
-                        {isCancelled ? null : (
+                        {isGazetted || isCancelled ? null : (
                           <AlertDialog>
                             <AlertDialogTrigger
                               render={
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  disabled={revoking && revokingId === holiday.id}
+                                  disabled={revoking && revokingId === holiday.orgId}
                                 />
                               }
                             >
@@ -298,7 +372,7 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
                               <AlertDialogFooter>
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                                 <AlertDialogAction
-                                  disabled={revoking && revokingId === holiday.id}
+                                  disabled={revoking && revokingId === holiday.orgId}
                                   onClick={() => handleRevoke(holiday)}
                                 >
                                   Revoke
@@ -313,9 +387,6 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
                 })}
               </TableBody>
             </Table>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  )
+    )
+  }
 }

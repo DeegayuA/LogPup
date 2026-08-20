@@ -27,11 +27,13 @@ import {
 import type { ActionResult } from '@/lib/action-result'
 import type { TrashKind } from '@/features/admin/trash-grouping'
 import {
+  purgeApp,
   purgeKeyframe,
   purgeMeeting,
   purgeSegment,
   purgeSprint,
   purgeTask,
+  restoreApp,
   restoreAssignment,
   restoreKeyframe,
   restoreMeeting,
@@ -49,6 +51,8 @@ import { matchesPurgeConfirm, PURGE_CONFIRM_PHRASE, restoreDisabledReason } from
  */
 async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<unknown>> {
   switch (kind) {
+    case 'app':
+      return restoreApp(id)
     case 'meeting':
       return restoreMeeting(id)
     case 'task':
@@ -72,6 +76,7 @@ async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<un
  * Deliberately absent from this map, not an oversight.
  */
 const PURGE_BY_KIND: Partial<Record<TrashKind, (id: string, confirm: string) => Promise<ActionResult>>> = {
+  app: purgeApp,
   meeting: purgeMeeting,
   task: purgeTask,
   sprint: purgeSprint,

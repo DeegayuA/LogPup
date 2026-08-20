@@ -35,7 +35,7 @@ export default async function AppsPage(props: {
   // Only AppFormDialog reads this, and only admins ever see it — a member
   // pays nothing for a preference lookup they have no control that needs it.
   const aiPrefs = isAdmin && session?.user ? await getAiPrefs(session.user.id) : null
-  const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'] : true
+  const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'].enabled : true
 
   // One shared "today" for the whole page: the header strip, every card's
   // sprint bar and every health verdict must agree on which day it is, and

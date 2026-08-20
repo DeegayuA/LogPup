@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { and, eq, exists, isNull, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { apps, assignmentHistory, assignments, users } from '@/db/schema'
+import { liveApps } from '@/db/live'
+import { assignmentHistory, assignments, users } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -52,9 +53,9 @@ function isUniqueViolation(error: unknown): boolean {
 
 async function slugForApp(appId: string): Promise<{ slug: string; name: string } | null> {
   const [app] = await db
-    .select({ slug: apps.slug, name: apps.name })
-    .from(apps)
-    .where(eq(apps.id, appId))
+    .select({ slug: liveApps.slug, name: liveApps.name })
+    .from(liveApps)
+    .where(eq(liveApps.id, appId))
   return app ?? null
 }
 

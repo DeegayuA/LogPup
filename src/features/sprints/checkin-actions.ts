@@ -4,8 +4,8 @@ import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { liveSprints } from '@/db/live'
-import { apps, sprintCheckins, users } from '@/db/schema'
+import { liveApps, liveSprints } from '@/db/live'
+import { sprintCheckins, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -109,7 +109,10 @@ export async function upsertSprintCheckin(
     return unexpected('upsertSprintCheckin', error)
   }
 
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, sprint.appId))
+  const [app] = await db
+    .select({ slug: liveApps.slug })
+    .from(liveApps)
+    .where(eq(liveApps.id, sprint.appId))
   await logActivity({
     actorId: session.user.id,
     verb: 'checked in',
@@ -180,7 +183,10 @@ export async function deleteSprintCheckin(
     .returning({ percent: sprintCheckins.percent })
   if (removed.length === 0) return err('There is no check-in to clear')
 
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, sprint.appId))
+  const [app] = await db
+    .select({ slug: liveApps.slug })
+    .from(liveApps)
+    .where(eq(liveApps.id, sprint.appId))
   await logActivity({
     actorId: session.user.id,
     verb: 'cleared',

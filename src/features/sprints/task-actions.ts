@@ -4,8 +4,8 @@ import { z } from 'zod'
 import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { liveSprints, liveTasks } from '@/db/live'
-import { apps, meetingFollowups, tasks } from '@/db/schema'
+import { liveApps, liveSprints, liveTasks } from '@/db/live'
+import { meetingFollowups, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -225,7 +225,10 @@ async function revalidateApps(appIds: readonly string[]) {
   // bulkUpdateTasks, whose selection is allowed to span apps, and a slug
   // lookup inside that loop is the textbook N+1 this codebase avoids
   // elsewhere by batching the read.
-  const rows = await db.select({ slug: apps.slug }).from(apps).where(inArray(apps.id, unique))
+  const rows = await db
+    .select({ slug: liveApps.slug })
+    .from(liveApps)
+    .where(inArray(liveApps.id, unique))
   for (const row of rows) revalidatePath('/apps/' + row.slug)
   // deleteTask routes through here (via revalidateApp) and a soft delete lands
   // a new row in the admin Trash card — see revalidateAdmin's own comment. It

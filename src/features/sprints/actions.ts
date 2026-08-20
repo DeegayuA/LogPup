@@ -4,8 +4,8 @@ import { z } from 'zod'
 import { and, count, desc, eq, isNull, ne } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { liveSprints, liveTasks } from '@/db/live'
-import { apps, sprints } from '@/db/schema'
+import { liveApps, liveSprints, liveTasks } from '@/db/live'
+import { sprints } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -74,7 +74,10 @@ function unexpected(context: string, error: unknown): ActionResult<never> {
 }
 
 async function slugForApp(appId: string): Promise<string | null> {
-  const [app] = await db.select({ slug: apps.slug }).from(apps).where(eq(apps.id, appId))
+  const [app] = await db
+    .select({ slug: liveApps.slug })
+    .from(liveApps)
+    .where(eq(liveApps.id, appId))
   return app?.slug ?? null
 }
 
