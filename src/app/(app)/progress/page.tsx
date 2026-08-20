@@ -1,7 +1,7 @@
 import { Suspense } from 'react'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { FolderKanban, SearchX, UserX, Users } from 'lucide-react'
+import { FolderKanban, SearchX, UserX, Users, Activity, Layers } from 'lucide-react'
 import { getSession } from '@/lib/session'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -32,35 +32,18 @@ import {
   ProgressMatrixSkeleton,
 } from '@/features/worklog/components/progress-matrix'
 
-export const metadata = { title: 'Progress' }
+export const metadata = { title: 'Progress — Studio Ops' }
 
-/**
- * "Each person, app, sprint, time, work progress" — read-only, per role.
- *
- * The gate is the capability matrix and nothing newer: `worklog.view` at
- * 'all' (admin, superadmin, auditor) shows everyone; at 'scoped' (manager,
- * editor) it shows the people sharing the actor's scoped apps — the scope set
- * `loadActor` already resolved from the relation `scopeSourceFor` names. At
- * 'own' (member) the answer already has a page, /worklog, so the member is
- * sent there rather than shown a matrix of one.
- *
- * The apps lane runs on `app.view`, which reaches FURTHER for a manager than
- * their worklog scope does — those extra apps get the same card without the
- * per-person row. A partial tier from existing grants, no new capability.
- */
 export default async function ProgressPage(props: {
   searchParams: Promise<RawProgressParams>
 }) {
   const session = await getSession()
   if (!session?.user) return null
 
-  // The (app) layout already bounces deactivated sessions to /deactivated,
-  // but the actor is the authority (see loadActor: no Actor means every
-  // `can()` answers no) — so the null case is designed, not assumed away.
   const actor = await loadActor()
   if (!actor) {
     return (
-      <div className="flex flex-1 flex-col p-6">
+      <div className="flex flex-1 flex-col p-6 md:p-8">
         <EmptyState
           icon={UserX}
           title="This account is deactivated"
@@ -71,8 +54,6 @@ export default async function ProgressPage(props: {
   }
 
   const grant = effectiveGrant(actor.role, actor.employmentType, 'worklog.view')
-  // A member's own progress already has a home; no grant at all has nothing
-  // to see here either way.
   if (grant !== 'all' && grant !== 'scoped') redirect('/worklog')
 
   const scope: ProgressScope = grant === 'all' ? 'all' : actor.scopeAppIds
@@ -83,16 +64,14 @@ export default async function ProgressPage(props: {
 
   const header = (
     <PageHeader
-      title="Progress"
+      title="Studio Progress"
       description="Who did what, where, and how far — each person's days beside each app's sprint."
     />
   )
 
-  // A scoped seat with no projects has an empty universe: say so with the
-  // next action instead of rendering a matrix of nobody.
   if (scope !== 'all' && scope.size === 0) {
     return (
-      <div className="flex flex-1 flex-col gap-6 p-6">
+      <div className="flex flex-1 flex-col gap-6 p-6 md:p-8">
         {header}
         <EmptyState
           icon={FolderKanban}
@@ -112,46 +91,61 @@ export default async function ProgressPage(props: {
   const parsed = parseProgressParams(raw)
   const today = resolveWorkDay(new Date())
 
-  // One thin read before the controls render: the app Select needs its
-  // options, and it must not wait behind the portfolio's aggregate queries.
   const appOptions = await listProgressAppOptions(appScope)
-  // An app id the viewer cannot see degrades to "all apps" — the same
-  // parse-totally rule every URL param on this page follows.
   const appId =
     parsed.app && appOptions.some((app) => app.id === parsed.app) ? parsed.app : null
   const params: ProgressParams = { ...parsed, app: appId }
   const window = resolveProgressWindow(params, today)
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6">
+    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8 overflow-hidden">
+      {/* Background ambient lighting */}
+      <div
+        className="pointer-events-none absolute -top-40 right-1/3 -z-10 h-[400px] w-[500px] rounded-full bg-primary/8 blur-3xl"
+        aria-hidden
+      />
+
       {header}
 
-      {/* Only the DATA waits. The header and every control render from the
-          URL alone (people/history's rule), so changing the window never
-          blanks the control that changed it. */}
-      <ProgressFilters params={params} window={window} apps={appOptions} />
+      {/* Filter Controls Bar */}
+      <div className="rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm">
+        <ProgressFilters params={params} window={window} apps={appOptions} />
+      </div>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="font-heading text-sm font-semibold">People, day by day</h2>
-          <p className="text-2xs text-muted-foreground">
-            Each cell is one person&rsquo;s own account of a day; percentages are self-scored
-            against what they planned — days, never hours. Expected days follow each
-            person&rsquo;s schedule, holidays and approved leave.
-          </p>
+      {/* People Matrix Section */}
+      <section className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
+        <div className="flex items-center justify-between border-b border-border/60 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Activity className="size-4" />
+            </div>
+            <div>
+              <h2 className="font-heading text-sm font-bold text-foreground">People, Day by Day</h2>
+              <p className="text-2xs text-muted-foreground">
+                Self-scored plan progress vs. scheduled working days, holidays, and approved leaves.
+              </p>
+            </div>
+          </div>
         </div>
         <Suspense fallback={<ProgressMatrixSkeleton />}>
           <MatrixSection params={params} scope={scope} actorId={actor.id} window={window} today={today} />
         </Suspense>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="font-heading text-sm font-semibold">Apps and sprints</h2>
-          <p className="text-2xs text-muted-foreground">
-            The running sprint, the open bug backlog, and when anything last happened — full
-            team detail on your own projects.
-          </p>
+      {/* Apps and Sprints Section */}
+      <section className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
+        <div className="flex items-center justify-between border-b border-border/60 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="flex size-7 items-center justify-center rounded-lg bg-chart-1/10 text-chart-1">
+              <Layers className="size-4" />
+            </div>
+            <div>
+              <h2 className="font-heading text-sm font-bold text-foreground">Apps &amp; Sprint Velocity</h2>
+              <p className="text-2xs text-muted-foreground">
+                Active sprints, open bug backlogs, and recent deployments across your products.
+              </p>
+            </div>
+          </div>
         </div>
         <Suspense fallback={<ProgressAppsLaneSkeleton />}>
           <AppsSection params={params} appScope={appScope} detailScope={scope} />
@@ -161,11 +155,6 @@ export default async function ProgressPage(props: {
   )
 }
 
-/**
- * Everything behind the matrix queries — split out so the page renders
- * without awaiting them, and so a failure here surfaces through the route's
- * error boundary without taking the apps lane down with it structurally.
- */
 async function MatrixSection({
   params,
   scope,
@@ -218,7 +207,6 @@ async function MatrixSection({
   return <ProgressMatrix data={data} today={today} />
 }
 
-/** The apps lane's data zone — same split, same reasoning. */
 async function AppsSection({
   params,
   appScope,

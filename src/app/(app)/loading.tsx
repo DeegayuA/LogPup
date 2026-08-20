@@ -1,5 +1,6 @@
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+  AiZoneSkeleton,
   MyDayZoneSkeleton,
   PortfolioZoneSkeleton,
   TeamZoneSkeleton,
@@ -32,14 +33,16 @@ export default function DashboardLoading() {
         Loading dashboard…
       </span>
       <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Studio Dashboard</h1>
         <Skeleton className="h-5 w-64" />
       </header>
       <MyDayZoneSkeleton />
-      <ZoneLabel>Team</ZoneLabel>
+      <ZoneLabel>Team Capacity &amp; Sprints</ZoneLabel>
       <TeamZoneSkeleton />
-      <ZoneLabel>Portfolio</ZoneLabel>
+      <ZoneLabel>App Portfolio &amp; Activity Trail</ZoneLabel>
       <PortfolioZoneSkeleton />
+      <ZoneLabel>AI Engine &amp; Model Routing</ZoneLabel>
+      <AiZoneSkeleton />
     </div>
   )
 }

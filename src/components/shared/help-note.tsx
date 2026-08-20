@@ -1,4 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -15,22 +16,6 @@ import { cn } from '@/lib/utils'
  * WHEN TO USE `HelpDetail`: the longer "how is this number worked out" answer
  * that would bury the control if it were always on screen. Closed by default,
  * keyboard-operable, and its summary has to say what opening it gets you.
- *
- * WHEN TO USE NEITHER, which is most of the time:
- * - the label already says it. A note repeating its own control is noise, and
- *   noise is what makes people stop reading the notes that matter;
- * - the fact belongs to the page rather than the control — put it under the
- *   page heading once, not beside every instance. A page-level rule rendered
- *   inside a repeated component prints eleven times down one screen;
- * - you have not read the code that makes it true. Every sentence here is a
- *   claim, and a wrong one is worse than silence.
- *
- * THERE IS DELIBERATELY NO TOOLTIP COMPONENT. A hint that opens on hover does
- * not exist on a touch screen, and `title` is the same trap with worse
- * ergonomics. If something is worth explaining it is worth rendering; if it is
- * not worth the space, it is not worth a hover either. Where width genuinely
- * forbids a sentence, follow the command palette's shortcut chips and gate the
- * hint on `sm` rather than on a pointer.
  */
 export function HelpNote({
   children,
@@ -50,17 +35,15 @@ export function HelpNote({
       id={id}
       className={cn('flex items-start gap-1.5 text-2xs text-muted-foreground', className)}
     >
-      {Icon ? <Icon aria-hidden className="mt-0.5 size-3 shrink-0" /> : null}
+      {Icon ? <Icon aria-hidden className="mt-0.5 size-3 shrink-0 text-primary" /> : null}
       <span className="min-w-0">{children}</span>
     </p>
   )
 }
 
 /**
- * A plain `<details>`, not the LazyDisclosure next door: that one exists to
- * defer MOUNTING for children that measure themselves, and help text measures
- * nothing. Server-component safe, and open/closed is the browser's own state
- * rather than React's, so it costs no client bundle at all.
+ * A styled disclosure container for policies and guidelines.
+ * Server-component safe, with animated chevron and clean card presentation.
  */
 export function HelpDetail({
   summary,
@@ -73,11 +56,17 @@ export function HelpDetail({
   className?: string
 }) {
   return (
-    <details className={cn('group', className)}>
-      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm text-2xs text-muted-foreground underline decoration-dotted underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
-        {summary}
+    <details className={cn('group rounded-xl border border-border/70 bg-card/60 p-2.5 transition-all text-xs backdrop-blur-sm', className)}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-medium text-muted-foreground transition-colors hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary select-none">
+        <span className="flex items-center gap-2">
+          <span className="size-1.5 rounded-full bg-primary" />
+          <span className="text-2xs sm:text-xs">{summary}</span>
+        </span>
+        <ChevronRight className="size-3.5 transition-transform duration-200 group-open:rotate-90 text-muted-foreground shrink-0" />
       </summary>
-      <div className="mt-1 flex flex-col gap-1 text-2xs text-muted-foreground">{children}</div>
+      <div className="mt-2.5 pt-2.5 border-t border-border/40 flex flex-col gap-2 text-2xs text-muted-foreground leading-relaxed">
+        {children}
+      </div>
     </details>
   )
 }

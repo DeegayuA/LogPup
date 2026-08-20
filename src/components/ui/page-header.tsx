@@ -1,24 +1,12 @@
 import { cn } from "@/lib/utils"
 
-/**
- * The h1 row every (app) page starts with: title, optional description,
- * optional actions pinned to the end. One component so heading order stops
- * drifting per page (several pages styled their h1 ad hoc; /pending shipped
- * with none at all) and so page actions land in the same place everywhere.
- *
- * Actions wrap UNDER the title on narrow screens rather than squeezing it —
- * the title is the page's identity and never truncates to fit a button.
- */
 function PageHeader({
   title,
   description,
   actions,
   className,
   ...props
-}: // Omit the HTML `title` attribute: intersecting it (`string`) with the prop
-// below silently narrowed `title` to string-only, rejecting element titles
-// (icon + text in the h1, as /pending uses).
-Omit<React.ComponentProps<"header">, "title"> & {
+}: Omit<React.ComponentProps<"header">, "title"> & {
   title: React.ReactNode
   description?: React.ReactNode
   actions?: React.ReactNode
@@ -27,15 +15,17 @@ Omit<React.ComponentProps<"header">, "title"> & {
     <header
       data-slot="page-header"
       className={cn(
-        "flex flex-wrap items-start justify-between gap-x-4 gap-y-2",
+        "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 pb-2",
         className
       )}
       {...props}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          {title}
+        </h1>
         {description ? (
-          <p className="text-sm text-muted-foreground">{description}</p>
+          <p className="text-xs text-muted-foreground sm:text-sm">{description}</p>
         ) : null}
       </div>
       {actions ? (

@@ -1,6 +1,7 @@
-import { and, count, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, lte } from 'drizzle-orm'
 import { db } from '@/db'
-import { absences, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
+import { absences, assignments, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
+import { liveApps } from '@/db/live'
 import type { ScheduleRow } from '@/features/worklog/schedules'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { orgHolidaySet } from '@/features/worklog/org-holidays'
@@ -302,4 +303,54 @@ export async function getOrgHolidayDays(fromIso: string, toIso: string): Promise
     .from(orgHolidays)
     .where(and(gte(orgHolidays.day, fromIso), lte(orgHolidays.day, toIso)))
   return [...orgHolidaySet(rows)]
+}
+
+export type UserAssignedApp = {
+  id: string
+  name: string
+  slug: string
+  role: string
+  allocationPct: number
+}
+
+/**
+ * Reads the active apps/projects a user is assigned to.
+ * If none are explicitly assigned, falls back to active studio apps.
+ */
+export async function getMyAssignedApps(userId: string): Promise<UserAssignedApp[]> {
+  const rows = await db
+    .select({
+      id: liveApps.id,
+      name: liveApps.name,
+      slug: liveApps.slug,
+      role: assignments.role,
+      allocationPct: assignments.allocationPct,
+    })
+    .from(assignments)
+    .innerJoin(liveApps, eq(assignments.appId, liveApps.id))
+    .where(and(eq(assignments.userId, userId), eq(liveApps.status, 'active')))
+    .orderBy(desc(assignments.allocationPct))
+
+  if (rows.length === 0) {
+    const allLive = await db
+      .select({
+        id: liveApps.id,
+        name: liveApps.name,
+        slug: liveApps.slug,
+      })
+      .from(liveApps)
+      .where(eq(liveApps.status, 'active'))
+      .orderBy(asc(liveApps.name))
+      .limit(6)
+
+    return allLive.map((a) => ({
+      id: a.id,
+      name: a.name,
+      slug: a.slug,
+      role: 'Contributor',
+      allocationPct: 0,
+    }))
+  }
+
+  return rows
 }

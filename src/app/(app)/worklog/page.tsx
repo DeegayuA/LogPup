@@ -4,6 +4,7 @@ import { format } from 'date-fns'
 import { PawPrint, TriangleAlert } from 'lucide-react'
 import { getSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
+import { getLkHoliday, excusesWork, LK_TIMEZONE } from '@/lib/lk-holidays'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { loadActor } from '@/features/auth/actor'
 import { can, isAdminRole } from '@/features/auth/capabilities'
@@ -36,6 +37,7 @@ import {
 import {
   countMyWorklogDays,
   getMyApprovedAbsences,
+  getMyAssignedApps,
   getMyPendingAbsences,
   getMyWorkSchedule,
   getMyWorklogsInRange,
@@ -110,28 +112,59 @@ export default async function WorklogPage(props: {
   const retryHref = `/worklog?month=${month}&day=${selectedDay}`
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6">
-      <div className="flex flex-col gap-2">
+    <div className="relative flex flex-1 flex-col gap-6 p-4 sm:p-6 md:p-8 overflow-hidden">
+      {/* Background ambient lighting */}
+      <div
+        className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
+        aria-hidden
+      />
+
+      <div className="flex flex-col gap-3">
         <PageHeader
-          title="Work log"
-          description={`${format(new Date(`${today}T12:00:00`), 'EEEE, MMMM d')} — one line about your day, and how far you got.`}
+          title="Daily Work Log"
+          description={`${format(new Date(`${today}T12:00:00`), 'EEEE, MMMM d, yyyy')} — one line about your day, and how far you got.`}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 font-mono text-2xs font-medium text-primary">
+                🇱🇰 Asia/Colombo (UTC+05:30)
+              </span>
+              <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2.5 py-0.5 font-mono text-2xs text-muted-foreground">
+                Shop &amp; Office Standard
+              </span>
+            </div>
+          }
         />
-        {/* The counting rules, foldable instead of the old six-line wall of
-            11px text. Always present — the catch-up panel renders only for
-            somebody already behind, so a person who has never missed a day
-            would otherwise never be told how the days are counted. */}
-        <HelpDetail summary="How days are counted">
-          <p>
-            Gazetted public holidays and company holidays never count. Otherwise Monday to Friday
-            are whole days and Saturday is a half day, unless your own work schedule says
-            different.
-          </p>
-          <p>
-            Days you missed wait in the catch-up list below the calendar, up to {MAX_BACKFILL_DAYS}{' '}
-            at once; approved leave is not one of them. What you save appears in your own calendar,
-            and in the team view that admins see.
-          </p>
-          <p>Only you can write your entries — nobody else can log a day for you.</p>
+        <HelpDetail summary="How days are counted • Sri Lanka Studio Policy & Counting Rules">
+          <div className="grid gap-3 sm:grid-cols-3 pt-1">
+            <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+              <span className="font-heading text-2xs font-bold text-foreground">
+                Working Days &amp; Weekends
+              </span>
+              <span className="text-2xs text-muted-foreground leading-relaxed">
+                <strong>Mon &ndash; Fri</strong> are 100% full sprint days. <strong>Saturday</strong> is a 50% half-day (4h). <strong>Sunday</strong> is standard studio rest.
+              </span>
+            </div>
+            <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+              <span className="font-heading text-2xs font-bold text-foreground">
+                Mercantile &amp; Poya Holidays
+              </span>
+              <span className="text-2xs text-muted-foreground leading-relaxed">
+                Gazetted Full Moon Poya days and Mercantile holidays are official studio rest days (0% expected).
+              </span>
+            </div>
+            <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+              <span className="font-heading text-2xs font-bold text-foreground">
+                Catch-Up &amp; Privacy
+              </span>
+              <span className="text-2xs text-muted-foreground leading-relaxed">
+                Unlogged owed days wait in the catch-up queue (up to {MAX_BACKFILL_DAYS} days). Only you can log your days.
+              </span>
+            </div>
+          </div>
         </HelpDetail>
       </div>
 
@@ -149,10 +182,6 @@ export default async function WorklogPage(props: {
         />
       </Suspense>
 
-      {/* The catch-up panel sits BELOW the calendar: the owed days are
-          already visible up there as rings, and a panel that streams in
-          later no longer shoves the page's heart around (the old
-          fallback={null} defect). The skeleton reserves its slot. */}
       <Suspense fallback={<CatchUpSkeleton />}>
         <CatchUpZone userId={session.user.id} today={today} retryHref={retryHref} />
       </Suspense>
@@ -416,7 +445,7 @@ async function CalendarZone({
   /* Fetching and derivation only — the JSX below renders after the catch has
      already decided between data and the error card. */
   const load = async () => {
-    const [actor, joinedOn, rows, approved, pending, schedule, orgRows, aiPrefs] =
+    const [actor, joinedOn, rows, approved, pending, schedule, orgRows, aiPrefs, assignedApps] =
       await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
@@ -426,6 +455,7 @@ async function CalendarZone({
         getMyWorkSchedule(userId),
         listOrgHolidays(),
         getAiPrefs(userId),
+        getMyAssignedApps(userId),
       ])
 
     const closed = closedStudioDays(orgRows, from, to)
@@ -497,6 +527,7 @@ async function CalendarZone({
       filed,
       owedDays,
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
+      assignedApps,
     }
   }
 
@@ -519,7 +550,13 @@ async function CalendarZone({
     filed,
     owedDays,
     aiDraftEnabled,
+    assignedApps,
   } = data
+
+  const selectedLkHoliday = getLkHoliday(new Date(`${selectedDay}T12:00:00Z`), LK_TIMEZONE)
+  const isSelectedMercantile = selectedLkHoliday
+    ? excusesWork(selectedLkHoliday.categories)
+    : Boolean(selectedHolidayName)
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
@@ -537,21 +574,29 @@ async function CalendarZone({
         className="flex min-w-0 flex-col gap-3"
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
-            {format(new Date(`${selectedDay}T12:00:00`), 'EEEE, MMMM d')}
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-heading text-base font-bold text-foreground">
+              {format(new Date(`${selectedDay}T12:00:00`), 'EEEE, MMMM d')}
+            </h2>
             {selectedHalf ? (
-              <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
-                Half day
+              <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs font-semibold text-foreground">
+                Half day (50%)
               </span>
             ) : null}
-            {selectedState === 'holiday' || selectedState === 'absence' || selectedState === 'off' ? (
+            {selectedState === 'holiday' ? (
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-chart-1/40 bg-chart-1/15 px-2.5 py-0.5 font-sans text-2xs font-semibold text-chart-1">
+                <span>🌕 {selectedHolidayName ?? 'Holiday'}</span>
+                <span className="rounded bg-chart-1/25 px-1.5 py-0.2 font-mono text-[9px] font-bold uppercase tracking-wider">
+                  {isSelectedMercantile ? 'Mercantile (Studio Off)' : 'Public / Bank'}
+                </span>
+              </span>
+            ) : selectedState === 'absence' || selectedState === 'off' ? (
               <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-muted-foreground">
-                {selectedState === 'holiday'
-                  ? (selectedHolidayName ?? DAY_STATE_LABEL.holiday)
-                  : DAY_STATE_LABEL[selectedState]}
+                {DAY_STATE_LABEL[selectedState]}
               </span>
             ) : null}
-          </h2>
+          </div>
+
           {canDeclare && selectedState === 'owed' ? (
             <DeclareAbsenceDialog
               day={selectedDay}
@@ -577,6 +622,7 @@ async function CalendarZone({
           day={selectedDay}
           initial={selectedRow ? { percent: selectedRow.percent, note: selectedRow.note } : null}
           aiDraftEnabled={aiDraftEnabled}
+          assignedApps={assignedApps}
         />
       </section>
     </div>
@@ -624,7 +670,7 @@ async function CatchUpZone({
   const to = shiftDay(today, 1)
 
   const load = async () => {
-    const [actor, joinedOn, rows, pending, approved, schedule, orgRows, aiPrefs] =
+    const [actor, joinedOn, rows, pending, approved, schedule, orgRows, aiPrefs, assignedApps] =
       await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
@@ -634,6 +680,7 @@ async function CatchUpZone({
         getMyWorkSchedule(userId),
         listOrgHolidays(),
         getAiPrefs(userId),
+        getMyAssignedApps(userId),
       ])
     if (!joinedOn) return null
 
@@ -690,6 +737,7 @@ async function CatchUpZone({
       filed,
       owedDays,
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
+      assignedApps,
     }
   }
 
@@ -703,11 +751,11 @@ async function CatchUpZone({
     return <ZoneError title="The catch-up list could not be read." retryHref={retryHref} />
   if (data === null) return null
 
-  const { gaps, pending, canDeclare, filed, owedDays, aiDraftEnabled } = data
+  const { gaps, pending, canDeclare, filed, owedDays, aiDraftEnabled, assignedApps } = data
   if (gaps.length === 0 && pending.length === 0) return null
 
   return (
-    <section className="flex flex-col gap-4 rounded-xl border bg-muted/40 p-4">
+    <section className="flex flex-col gap-4">
       {gaps.length > 0 ? (
         <CatchUpPanel
           gaps={gaps}
@@ -717,11 +765,12 @@ async function CatchUpZone({
           knownTo={to}
           canDeclare={canDeclare}
           aiDraftEnabled={aiDraftEnabled}
+          assignedApps={assignedApps}
         />
       ) : null}
 
       {pending.length > 0 ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
           <div className="flex flex-col gap-0.5">
             <h2 className="font-heading text-sm font-semibold">Filed, waiting on approval</h2>
             <p className="text-2xs text-muted-foreground">

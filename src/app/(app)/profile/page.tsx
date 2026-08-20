@@ -53,10 +53,20 @@ export default async function ProfilePage(props: {
   const showFirstLoginBanner = firstLogin === '1' || user.mustChangePassword === true
 
   return (
-    <div className="flex flex-1 flex-col p-4 sm:p-6">
+    <div className="relative flex flex-1 flex-col p-4 sm:p-6 md:p-8 overflow-hidden">
+      {/* Background ambient lighting */}
+      <div
+        className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
+        aria-hidden
+      />
+
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
         <PageHeader
-          title="Profile"
+          title="User Profile"
           description="Your name and photo as teammates see them, and the credentials you sign in with."
         />
 

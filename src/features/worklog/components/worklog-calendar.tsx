@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { format } from 'date-fns'
-import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon, Calendar as CalendarIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -12,54 +12,29 @@ import {
   loggedTone,
   type DayState,
 } from '@/features/worklog/day-state'
-
-/**
- * The month, visible: one cell per day, painted with the SHARED day-state
- * vocabulary (day-state.ts) — the same classes the /progress matrix uses, so
- * the two surfaces cannot drift into different colours for the same fact.
- *
- * A custom grid rather than react-day-picker on ui/calendar: every cell here
- * carries state, a link, a half-fill and two text layers, which is exactly
- * the control a date PICKER exists to take away.
- *
- * Server component. Selection is a URL (`?day=`), so clicking a day is a
- * navigation the server answers with that day's form — no client state, and
- * the selected day is linkable like everything else on this page.
- *
- * Colour never carries a state alone: every cell renders `dayStateText` for
- * screen readers and as its title, and the legend below names every state in
- * words (WCAG 1.4.1).
- */
+import { getLkHoliday, excusesWork, LK_TIMEZONE } from '@/lib/lk-holidays'
 
 export type CalendarDayFacts = {
   /** Self-scored percent for logged days, by ISO day. */
   loggedPercent: Readonly<Record<string, number>>
   /** ISO days covered by an APPROVED absence. Pending ones don't excuse. */
   absentDays: ReadonlySet<string>
-  /** ISO day → holiday name, ONLY days that actually close the studio
-   *  (gazetted mercantile + in-force company rows, composed upstream via
-   *  buildHolidayCalendar/closesTheStudio). */
+  /** ISO day → holiday name, ONLY days that actually close the studio */
   closedDays: Readonly<Record<string, string>>
 }
 
-/** `YYYY-MM` → the ISO first day and the count of days in that month. */
 function monthShape(month: string): { first: string; count: number } {
   const [year, monthIndex] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))]
-  // Day 0 of the NEXT month = the last day of this one. UTC throughout —
-  // these are calendar positions, not instants; day math stays in
-  // working-days.ts and day-state.ts.
   const count = new Date(Date.UTC(year, monthIndex, 0)).getUTCDate()
   return { first: `${month}-01`, count }
 }
 
-/** The `YYYY-MM` one step away. Anchored mid-month so length never bites. */
 export function shiftMonth(month: string, steps: number): string {
   const cursor = new Date(`${month}-15T12:00:00Z`)
   cursor.setUTCMonth(cursor.getUTCMonth() + steps)
   return cursor.toISOString().slice(0, 7)
 }
 
-/** Monday-first column index for an ISO day — layout only, never day policy. */
 function mondayColumn(iso: string): number {
   return (new Date(`${iso}T12:00:00Z`).getUTCDay() + 6) % 7
 }
@@ -74,7 +49,6 @@ const WEEKDAYS = [
   ['Sun', 'Sunday'],
 ] as const
 
-/** Legend order: the states a person acts on first, the ambient ones after. */
 const LEGEND_STATES: readonly DayState[] = [
   'logged',
   'owed',
@@ -85,8 +59,6 @@ const LEGEND_STATES: readonly DayState[] = [
   'outside',
 ]
 
-/** The legend's swatch for a state — `logged` shows the full-strength fill
- *  the cells use (`loggedTone`), the rest reuse DAY_STATE_CLASS verbatim. */
 function legendSwatchClass(state: DayState): string {
   if (state === 'logged') return cn(DAY_STATE_CLASS.logged, loggedTone(100))
   return DAY_STATE_CLASS[state]
@@ -99,9 +71,7 @@ export function WorklogCalendar({
   selectedDay,
   facts,
 }: {
-  /** `YYYY-MM`, already validated by the page. */
   month: string
-  /** Today as a Colombo ISO day (resolveWorkDay). */
   today: string
   joinDay: string | null
   selectedDay: string | null
@@ -114,16 +84,28 @@ export function WorklogCalendar({
   const prevMonth = shiftMonth(month, -1)
   const nextMonth = shiftMonth(month, 1)
 
-  /** Month nav keeps the selected day: paging to July does not un-answer
-   *  "which day is open in the panel". */
   const navHref = (m: string) =>
     selectedDay ? `/worklog?month=${m}&day=${selectedDay}` : `/worklog?month=${m}`
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-heading text-base font-semibold">{monthLabel}</h2>
-        <div className="flex items-center gap-1">
+    <div className="flex min-w-0 flex-col gap-4 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
+      {/* Month Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/50 pb-3">
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-8 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <CalendarIcon className="size-4" />
+          </span>
+          <div>
+            <h2 className="font-heading text-base font-bold tracking-tight text-foreground sm:text-lg">
+              {monthLabel}
+            </h2>
+            <span className="font-mono text-2xs text-muted-foreground">
+              {count} days &bull; Sri Lanka Studio Calendar
+            </span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5">
           <Button
             variant="outline"
             size="icon-sm"
@@ -135,12 +117,13 @@ export function WorklogCalendar({
               />
             }
           >
-            <ChevronLeftIcon aria-hidden />
+            <ChevronLeftIcon className="size-4" aria-hidden />
           </Button>
-          {/* Bare /worklog is "now": current month, today selected. */}
+
           <Button variant="outline" size="sm" render={<Link href="/worklog" scroll={false} />}>
             Today
           </Button>
+
           <Button
             variant="outline"
             size="icon-sm"
@@ -152,14 +135,15 @@ export function WorklogCalendar({
               />
             }
           >
-            <ChevronRightIcon aria-hidden />
+            <ChevronRightIcon className="size-4" aria-hidden />
           </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
+      {/* Weekday Grid */}
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
         {WEEKDAYS.map(([short, long]) => (
-          <div key={short} className="pb-1 text-center text-2xs font-medium text-muted-foreground">
+          <div key={short} className="pb-1 text-center font-mono text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
             <span aria-hidden>{short}</span>
             <span className="sr-only">{long}</span>
           </div>
@@ -172,6 +156,11 @@ export function WorklogCalendar({
         {days.map((iso) => {
           const percent = facts.loggedPercent[iso]
           const closed = iso in facts.closedDays
+          const lkHoliday = getLkHoliday(new Date(`${iso}T12:00:00Z`), LK_TIMEZONE)
+          const holidayName = facts.closedDays[iso] || lkHoliday?.name
+          const isMercantile = lkHoliday ? excusesWork(lkHoliday.categories) : Boolean(facts.closedDays[iso])
+          const isPoya = lkHoliday?.categories.includes('poya') ?? false
+
           const input = {
             iso,
             percent,
@@ -186,51 +175,100 @@ export function WorklogCalendar({
           const selected = iso === selectedDay
           const isToday = iso === today
           const srText = dayStateText(input)
-          const title = closed ? `${srText} — ${facts.closedDays[iso]}` : srText
+
+          const categoryDesc = isMercantile
+            ? 'Mercantile Holiday (Studio Off)'
+            : lkHoliday
+            ? 'Bank/Public Only (Working Day)'
+            : ''
+          const title = holidayName
+            ? `${srText} — ${holidayName} [${categoryDesc}]`
+            : srText
 
           const paint = (
             <>
-              <span
+              <div
                 aria-hidden
                 className={cn(
-                  'absolute inset-0 flex flex-col items-center justify-center gap-0.5 rounded-[inherit]',
+                  'absolute inset-0 flex flex-col justify-between p-1 rounded-[inherit] overflow-hidden transition-all',
                   DAY_STATE_CLASS[state],
                   state === 'logged' && percent !== undefined && loggedTone(percent),
-                  // The half-fill: a half working Saturday paints only its
-                  // bottom half, so the month reads half days at a glance.
+                  state === 'holiday' && 'border border-chart-1/40 bg-chart-1/15 text-chart-1',
                   half && 'top-1/2 rounded-t-none',
                 )}
               >
-                <span
-                  className={cn(
-                    'font-mono text-xs tabular-nums',
-                    isToday && 'font-bold underline decoration-2 underline-offset-2',
-                  )}
-                >
-                  {Number(iso.slice(8, 10))}
-                </span>
-                {state === 'logged' && percent !== undefined ? (
-                  <span className="hidden text-2xs font-medium tabular-nums md:block">
-                    {percent}%
+                {/* Top Row: Date Number & Badges */}
+                <div className="flex items-center justify-between w-full">
+                  <span
+                    className={cn(
+                      'font-mono text-xs tabular-nums',
+                      isToday && 'font-bold underline decoration-2 underline-offset-2 text-primary',
+                      selected && 'font-bold',
+                    )}
+                  >
+                    {Number(iso.slice(8, 10))}
                   </span>
+
+                  {state === 'logged' && percent !== undefined ? (
+                    <span className="font-mono text-[10px] font-semibold tabular-nums">
+                      {percent}%
+                    </span>
+                  ) : half ? (
+                    <span className="font-mono text-[9px] text-muted-foreground font-medium">
+                      ½d
+                    </span>
+                  ) : isPoya ? (
+                    <span className="size-2 rounded-full bg-chart-1 ring-1 ring-chart-1/30" title="Full Moon Poya" />
+                  ) : null}
+                </div>
+
+                {/* Bottom Row: Text Holidays & Mercantile / Non-Mercantile Indicator */}
+                {holidayName ? (
+                  <div className="flex flex-col gap-0.5 leading-tight truncate mt-auto">
+                    <span className="truncate font-heading text-[9.5px] font-bold text-chart-1 tracking-tight">
+                      {holidayName.split(' ')[0]}
+                    </span>
+                    <span
+                      className={cn(
+                        'inline-block truncate rounded px-1 py-0.2 font-mono text-[8px] font-bold uppercase tracking-wider',
+                        isMercantile
+                          ? 'bg-chart-1/25 text-chart-1'
+                          : 'bg-muted/80 text-muted-foreground',
+                      )}
+                    >
+                      {isMercantile ? 'Mercantile' : 'Public/Bank'}
+                    </span>
+                  </div>
+                ) : state === 'absence' ? (
+                  <div className="truncate mt-auto">
+                    <span className="font-mono text-[9px] font-semibold text-tag-discussion">
+                      Leave
+                    </span>
+                  </div>
+                ) : state === 'owed' ? (
+                  <div className="truncate mt-auto">
+                    <span className="font-mono text-[9px] font-medium text-chart-1">
+                      Owed
+                    </span>
+                  </div>
                 ) : null}
-              </span>
+              </div>
+
               <span className="sr-only">
                 {srText}
                 {isToday ? ', today' : ''}
                 {selected ? ', selected' : ''}
+                {holidayName ? `, ${holidayName} (${categoryDesc})` : ''}
               </span>
             </>
           )
 
           const cellClass = cn(
-            'relative block min-h-10 rounded-md sm:min-h-12',
-            selected && 'ring-2 ring-ring',
+            'relative block min-h-[58px] sm:min-h-[64px] rounded-xl border border-border/60 bg-card/60 transition-all duration-150',
+            selected && 'ring-2 ring-primary border-primary shadow-sm',
           )
 
           if (!clickable) {
-            // Not a dead click: future days and days before joining are not
-            // selectable, and they say so instead of swallowing the tap.
             return (
               <span key={iso} aria-disabled="true" title={title} className={cellClass}>
                 {paint}
@@ -247,7 +285,7 @@ export function WorklogCalendar({
               aria-current={isToday ? 'date' : selected ? 'true' : undefined}
               className={cn(
                 cellClass,
-                'outline-none transition-[box-shadow] duration-150 hover:ring-2 hover:ring-ring/40 focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none',
+                'outline-none hover:border-primary/50 hover:bg-card focus-visible:ring-2 focus-visible:ring-primary motion-reduce:transition-none cursor-pointer',
               )}
             >
               {paint}
@@ -256,14 +294,10 @@ export function WorklogCalendar({
         })}
       </div>
 
-      {/* Every state IN WORDS — the colours are reinforcement, never the
-          message. The half-fill gets its own entry because it is a modifier
-          on top of any state, not a state. */}
-      <ul className="flex flex-wrap gap-x-3 gap-y-1.5 text-2xs text-muted-foreground">
+      {/* Legend */}
+      <ul className="flex flex-wrap gap-x-4 gap-y-2 text-2xs text-muted-foreground border-t border-border/40 pt-3">
         {LEGEND_STATES.map((state) => (
           <li key={state} className="flex items-center gap-1.5">
-            {/* The base border keeps swatches for the unpainted states
-                (future, before joining) from being invisible squares. */}
             <span
               aria-hidden
               className={cn(
@@ -271,14 +305,20 @@ export function WorklogCalendar({
                 legendSwatchClass(state),
               )}
             />
-            {DAY_STATE_LABEL[state]}
+            {state === 'holiday' ? (
+              <span>
+                <strong>Holiday:</strong> Mercantile (Studio Off) / Public
+              </span>
+            ) : (
+              DAY_STATE_LABEL[state]
+            )}
           </li>
         ))}
         <li className="flex items-center gap-1.5">
-          <span aria-hidden className="relative size-3 shrink-0 overflow-hidden rounded-sm">
+          <span aria-hidden className="relative size-3 shrink-0 overflow-hidden rounded-sm border border-border/60">
             <span className="absolute inset-x-0 bottom-0 h-1/2 bg-primary" />
           </span>
-          Half day (bottom half filled)
+          Half day (Saturday 50%)
         </li>
       </ul>
     </div>

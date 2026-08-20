@@ -121,14 +121,21 @@ export default async function ActivityPage(props: {
   const state = paramState(params)
 
   return (
-    <div className="flex flex-1 flex-col gap-5 p-6">
+    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8 overflow-hidden">
+      {/* Background ambient lighting */}
+      <div
+        className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
+        aria-hidden
+      />
+
       <header className="flex flex-col gap-1">
-        {/* PageHeader's h1 treatment, not the primitive itself: the
-            description slot below is a Suspense whose fallback is a shimmer
-            div, and PageHeader renders descriptions inside a <p> — a div in
-            a p is invalid HTML and a hydration warning. Same classes, so
-            heading style cannot drift from the pages that do use it. */}
-        <h1 className="text-xl font-semibold tracking-tight">Activity</h1>
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+          Studio Activity
+        </h1>
         {/* The page has to say which slice it is showing: every row below is
             conditional on the filters, and a reader often arrives on a shared
             link without having set them. Behind its own boundary because

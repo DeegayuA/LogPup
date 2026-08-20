@@ -2,15 +2,22 @@
 
 import { useRef, useState } from 'react'
 import { format } from 'date-fns'
-import { Loader2Icon, SparklesIcon } from 'lucide-react'
+import {
+  Loader2Icon,
+  SparklesIcon,
+  CheckCircle2,
+  Calendar,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import {
   DeclareAbsenceDialog,
   type FiledAbsence,
 } from '@/features/worklog/components/declare-absence-dialog'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
+import type { UserAssignedApp } from '@/features/worklog/queries'
 
 export type CatchUpGap = {
   day: string
@@ -19,18 +26,9 @@ export type CatchUpGap = {
 }
 
 /**
- * The owed-days group of the catch-up panel: one form per gap, plus
- * "Draft all N days".
- *
- * Client component because the batch draft is a client-side SEQUENTIAL
- * fan-out of the existing per-day `draftWorklogNote` action — one call in
- * flight at a time (each is a Gemini call on the person's own keys; firing
- * ten at once trips rate limits and races the usage ledger), with the
- * per-day pending state named beside the day it belongs to.
- *
- * Every draft LANDS IN ITS DAY'S FORM for review — nothing here saves.
- * The person still reads, edits, scores and saves each day themselves;
- * `upsertDailyWorklog` stays the only write.
+ * The owed-days group of the catch-up panel.
+ * Uses an intelligent day-selector to prevent rendering 10 duplicated giant forms,
+ * giving the engineer a clean, focused catch-up workflow.
  */
 export function CatchUpPanel({
   gaps,
@@ -40,6 +38,7 @@ export function CatchUpPanel({
   knownTo,
   canDeclare,
   aiDraftEnabled,
+  assignedApps = [],
 }: {
   gaps: CatchUpGap[]
   /** Pending and approved absences, for the dialog's clash naming. */
@@ -50,14 +49,13 @@ export function CatchUpPanel({
   knownTo: string
   canDeclare: boolean
   aiDraftEnabled: boolean
+  assignedApps?: UserAssignedApp[]
 }) {
-  // Each landed draft carries a sequence number: the form is REMOUNTED per
-  // draft (key includes seq), which is how the note and the suggestion chip
-  // arrive as genuinely initial state instead of prop-to-state syncing.
   const [drafts, setDrafts] = useState<Record<string, { data: WorklogDraft; seq: number }>>({})
   const seqRef = useRef(0)
   const [draftingDay, setDraftingDay] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [activeDay, setActiveDay] = useState<string>(gaps[0]?.day ?? '')
 
   async function draftAll() {
     if (running) return
@@ -68,9 +66,6 @@ export function CatchUpPanel({
         try {
           const res = await draftWorklogNote(gap.day)
           if (!res.ok) {
-            // The likely failures — feature switched off, no key, out of
-            // quota — would repeat identically for every remaining day, so
-            // one error stops the run instead of echoing N times.
             toast.error(res.error)
             break
           }
@@ -84,99 +79,140 @@ export function CatchUpPanel({
           break
         }
       }
+      toast.success(`Drafted notes for ${gaps.length} days!`)
     } finally {
       setDraftingDay(null)
       setRunning(false)
     }
   }
 
+  const currentGap = gaps.find((g) => g.day === activeDay) ?? gaps[0]
+
+  if (gaps.length === 0) return null
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="font-heading text-sm font-semibold">
-            {gaps.length === 1
-              ? '1 earlier day has no entry'
-              : `${gaps.length} earlier days have no entry`}
-          </h2>
-          {/* How the days are counted is stated under the page header, so it
-              is not repeated here. */}
-          <p className="text-2xs text-muted-foreground">
-            Fill in the ones you worked.
-            {canDeclare ? (
-              <>
-                {' '}
-                If you were not working — leave, sick, training, a day on another project — say
-                so with <span className="font-medium text-foreground">Not a working day</span>{' '}
-                rather than writing an entry for work that did not happen.
-              </>
-            ) : null}
+    <div className="flex flex-col gap-4 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
+      {/* Header Bar */}
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/50 pb-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="flex size-7 items-center justify-center rounded-lg bg-chart-1/10 text-chart-1">
+              <Calendar className="size-4" />
+            </span>
+            <h2 className="font-heading text-sm font-semibold text-foreground">
+              Catch-Up Ledger ({gaps.length} {gaps.length === 1 ? 'day' : 'days'} unlogged)
+            </h2>
+          </div>
+          <p className="text-2xs text-muted-foreground leading-relaxed">
+            Fill in earlier days you worked. If you were on leave, training, or off-site, declare it as{' '}
+            <span className="font-medium text-foreground">Not a working day</span>.
           </p>
         </div>
+
         {aiDraftEnabled && gaps.length > 1 ? (
-          <div className="flex flex-col items-end gap-0.5">
-            <Button type="button" variant="outline" size="sm" disabled={running} onClick={draftAll}>
-              {running ? (
-                <Loader2Icon className="animate-spin" aria-hidden />
-              ) : (
-                <SparklesIcon aria-hidden />
-              )}
-              {running ? 'Drafting…' : `Draft all ${gaps.length} days`}
-            </Button>
-            <p className="text-2xs text-muted-foreground">
-              Each draft lands in its box for review — nothing saves itself.
-            </p>
-          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={running}
+            onClick={draftAll}
+            className="border-primary/30 hover:border-primary hover:bg-primary/5 text-xs font-medium"
+          >
+            {running ? (
+              <Loader2Icon className="size-3.5 animate-spin text-primary mr-1.5" aria-hidden />
+            ) : (
+              <SparklesIcon className="size-3.5 text-primary mr-1.5" aria-hidden />
+            )}
+            {running ? 'Drafting all days…' : `✨ Draft All ${gaps.length} Days`}
+          </Button>
         ) : null}
       </div>
 
-      <div className="flex flex-col gap-3">
-        {gaps.map(({ day, fraction }) => (
-          <div key={day} className="flex flex-col gap-1.5">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="flex items-baseline gap-2 font-mono text-xs tabular-nums text-muted-foreground">
-                {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
-                {/* The fraction coverage already worked out for this person,
-                    not the studio default: the percentage means "of what I
-                    planned", so a half day has to be named or a full Saturday
-                    reads as an under-delivered weekday. */}
-                {fraction === 0.5 ? (
-                  <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
-                    Half day
+      {/* Interactive Day Chips Bar */}
+      <div className="flex flex-col gap-2">
+        <span className="font-mono text-2xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Select Day to Log:
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {gaps.map(({ day, fraction }) => {
+            const isSelected = day === currentGap.day
+            const hasDraft = Boolean(drafts[day])
+            const isDrafting = draftingDay === day
+
+            return (
+              <button
+                key={day}
+                type="button"
+                onClick={() => setActiveDay(day)}
+                className={cn(
+                  'flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium transition-all cursor-pointer text-left',
+                  isSelected
+                    ? 'border-primary bg-primary/10 text-foreground ring-2 ring-primary/30 shadow-xs'
+                    : 'border-border/60 bg-card/60 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground',
+                )}
+              >
+                <div className="flex flex-col">
+                  <span className="font-heading text-xs font-bold text-foreground">
+                    {format(new Date(`${day}T12:00:00`), 'EEE, MMM d')}
                   </span>
-                ) : null}
-                {draftingDay === day ? (
-                  <span
-                    role="status"
-                    className="flex items-center gap-1 font-sans text-2xs text-muted-foreground"
-                  >
-                    <Loader2Icon className="size-3 animate-spin" aria-hidden />
-                    Drafting…
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {fraction === 0.5 ? 'Half day (50%)' : 'Full day (100%)'}
                   </span>
-                ) : null}
+                </div>
+
+                {isDrafting ? (
+                  <Loader2Icon className="size-3.5 animate-spin text-primary shrink-0" />
+                ) : hasDraft ? (
+                  <span className="flex items-center gap-1 rounded bg-primary/20 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-primary">
+                    <CheckCircle2 className="size-3" /> Drafted
+                  </span>
+                ) : (
+                  <span className="rounded bg-chart-1/15 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-chart-1">
+                    Owed
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Active Day Focused Form */}
+      {currentGap ? (
+        <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/20 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2.5">
+            <div className="flex items-center gap-2">
+              <h3 className="font-heading text-sm font-bold text-foreground">
+                {format(new Date(`${currentGap.day}T12:00:00`), 'EEEE, MMMM d, yyyy')}
               </h3>
-              {canDeclare ? (
-                <DeclareAbsenceDialog
-                  day={day}
-                  filed={filed}
-                  owedDays={owedDays}
-                  knownFrom={knownFrom}
-                  knownTo={knownTo}
-                />
+              {currentGap.fraction === 0.5 ? (
+                <span className="rounded bg-muted px-2 py-0.5 font-mono text-2xs font-semibold text-foreground">
+                  Half day (Saturday 50%)
+                </span>
               ) : null}
             </div>
-            {/* Draft with AI reads that day's own activity, so a forgotten
-                Tuesday is still recoverable from what LogPup saw. */}
-            <WorklogForm
-              key={`${day}:${drafts[day]?.seq ?? 0}`}
-              day={day}
-              initial={null}
-              aiDraftEnabled={aiDraftEnabled}
-              initialDraft={drafts[day]?.data ?? null}
-            />
+
+            {canDeclare ? (
+              <DeclareAbsenceDialog
+                day={currentGap.day}
+                filed={filed}
+                owedDays={owedDays}
+                knownFrom={knownFrom}
+                knownTo={knownTo}
+              />
+            ) : null}
           </div>
-        ))}
-      </div>
+
+          <WorklogForm
+            key={`${currentGap.day}:${drafts[currentGap.day]?.seq ?? 0}`}
+            day={currentGap.day}
+            initial={null}
+            aiDraftEnabled={aiDraftEnabled}
+            initialDraft={drafts[currentGap.day]?.data ?? null}
+            assignedApps={assignedApps}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }

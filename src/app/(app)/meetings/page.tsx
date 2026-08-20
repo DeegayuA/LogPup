@@ -15,11 +15,9 @@ import { MeetingsViews } from '@/features/meetings/components/meetings-views'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 import { isAdminRole } from '@/features/auth/capabilities'
 
+export const metadata = { title: 'Meetings & Intelligence — Studio Ops' }
+
 export default async function MeetingsPage(props: {
-  /** `view` and `date` drive the calendar surface (see calendar-view.ts);
-   *  `open` deep-links one meeting's write-up — a ⌘K hit or a shared link
-   *  lands with that meeting's panel already open instead of on a list with
-   *  the meeting collapsed somewhere down the page. */
   searchParams: Promise<{ new?: string; view?: string; date?: string; open?: string }>
 }) {
   const [
@@ -36,74 +34,54 @@ export default async function MeetingsPage(props: {
     listActiveUsers(),
   ])
 
-  // `allMeetings` is already ordered newest-first, which is what the past
-  // section wants (most recent past meeting first); splitByUpcoming
-  // re-sorts only the upcoming half to soonest-first.
   const { upcoming, past } = splitByUpcoming(allMeetings)
 
   const currentUserId = session?.user?.id ?? ''
   const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   const appOptions = apps.map((app) => ({ id: app.id, name: app.name }))
-  // Computed on the server, where reading the clock is free of the hydration
-  // and purity constraints the client components live under.
   const overview = summarizeMeetings(upcoming, past, currentUserId, new Date())
 
-  // Today in Asia/Colombo, and the view/date the URL asked for — parsed HERE,
-  // from the awaited searchParams, so the very first server paint is already
-  // the right view on the right week. Sending "today" down as a value rather
-  // than letting each side read its own clock is what stops the highlight
-  // landing on two different squares across hydration.
   const todayIso = toIsoDateInTimeZone(new Date())
   const initialView = parseCalendarView(viewParam)
   const initialDate = parseFocusedDate(dateParam, todayIso)
-  // Validated by membership, not by shape: an id that names no meeting here
-  // simply opens nothing, so the param needs no parsing beyond existence.
   const initialOpenMeetingId =
     openParam && allMeetings.some((meeting) => meeting.id === openParam) ? openParam : undefined
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6">
-      {/* The shared h1 row — same component as every other (app) page, so the
-          heading level, size and action placement cannot drift per page.
-          meetings/loading.tsx renders the identical header, so nothing shrinks
-          or de-bolds when data arrives. */}
+    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8 overflow-hidden">
+      {/* Background ambient lighting */}
+      <div
+        className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
+        aria-hidden
+      />
+
       <PageHeader
-        title="Meetings"
-        description="Everything the pack has scheduled — upcoming and past."
+        title="Meeting Intelligence"
+        description="Everything the pack has scheduled — Google Calendar synced with Gemini 2.5 transcripts."
         actions={
           <MeetingForm
             apps={appOptions}
             activeUsers={activeUsers}
-            trigger={<Button>New meeting</Button>}
+            trigger={<Button className="shadow-sm font-semibold">New meeting</Button>}
             defaultOpen={newParam === '1'}
           />
         }
       />
 
-      {/* The page's at-a-glance row. The only number here used to be a bare
-          total of every meeting ever held, which answers no question anyone
-          arrives with; these four do. "Waiting on you" and "Now" are the two
-          that carry a colour, because they are the two you can act on. */}
       {overview.total > 0 ? (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2.5 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm">
           <StatTile value={overview.today} label="Today" />
-          {/* "Next 7 days", not "This week": the number is a rolling window
-              from today, and a tile that said "This week" on a Friday would be
-              read as "two days left" when it means "through next Thursday". */}
           <StatTile value={overview.week} label="Next 7 days" />
           <StatTile value={overview.awaitingYou} label="Waiting on you" tone="warning" />
           {overview.live > 0 ? <StatTile value={overview.live} label="Now" tone="active" /> : null}
           <StatTile value={overview.past} label="Past" />
         </div>
       ) : (
-        /* Nothing has ever been scheduled here. Five tiles reading zero would
-           be the page's most prominent element saying nothing at all, so the
-           slot teaches the next step instead — and RENDERS it, rather than
-           describing the header button in prose ("New meeting above") that
-           made the reader go find it. Anyone here can act on this button:
-           createMeeting checks for a session and nothing else, so a member
-           schedules meetings on exactly the same terms as an admin. */
-        <div className="rounded-xl border border-dashed border-border">
+        <div className="rounded-2xl border border-dashed border-border/80 bg-card/40 p-8 backdrop-blur-sm">
           <EmptyState
             icon={CalendarDaysIcon}
             title="Nothing scheduled yet."

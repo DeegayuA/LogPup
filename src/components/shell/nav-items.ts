@@ -6,6 +6,7 @@ import {
   History,
   LayoutDashboard,
   NotebookPen,
+  Radar,
   ShieldCheck,
   Users,
 } from 'lucide-react'
@@ -37,6 +38,12 @@ export const navItems: NavItem[] = [
   // open every working day, and a daily habit buried under Activity is a
   // daily habit nobody forms.
   { href: '/worklog', label: 'Work log', icon: NotebookPen, key: 'W' },
+  // Third, beside the two pages opened every morning, because it answers the
+  // question asked before any of the registers below are worth opening: what
+  // needs attention today. Open to every signed-in seat — it only restates
+  // rows the dashboard already shows the same reader — so it belongs in this
+  // ungated list rather than beside Progress.
+  { href: '/intel', label: 'Intel', icon: Radar, key: 'I' },
   { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
   { href: '/people', label: 'People', icon: Users, key: 'P' },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },

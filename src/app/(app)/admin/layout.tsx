@@ -21,16 +21,21 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (!actor || !can(actor, 'admin.view')) notFound()
 
   return (
-    <div className="flex flex-1 flex-col p-6">
+    <div className="relative flex flex-1 flex-col p-6 md:p-8 overflow-hidden">
+      {/* Background ambient lighting */}
+      <div
+        className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
+        aria-hidden
+      />
+
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-        {/* The ONE h1 the admin area renders. Section pages title themselves
-            with CardTitle as="h2" (or an h2 header), so the outline reads
-            h1 Admin → h2 section → h3 groups — /admin/danger used to add a
-            second h1 of its own, and every other section skipped from this h1
-            straight to h3s. */}
         <PageHeader
-          title="Admin"
-          description="Workspace tools. These act on everyone's data — tread carefully."
+          title="Admin Console"
+          description="Workspace management tools. These act on everyone's data — tread carefully."
         />
         <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
           <AdminNav sections={visibleSections(actor)} />
