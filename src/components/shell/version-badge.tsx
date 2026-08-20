@@ -53,7 +53,10 @@ const KIND_LABEL: Record<string, string> = {
  */
 function kindClass(kind: string): string {
   if (kind === 'feat') return 'bg-primary/15 text-primary'
-  if (kind === 'fix') return 'bg-warning/15 text-foreground'
+  /* Same tint-plus-matching-text pattern as 'feat' — --warning is
+     contrast-verified against the app surfaces in globals.css, so the amber
+     text clears 4.5:1 on its own 15% tint the same way primary does. */
+  if (kind === 'fix') return 'bg-warning/15 text-warning'
   return 'bg-muted text-muted-foreground'
 }
 
@@ -134,13 +137,16 @@ export function VersionBadge() {
           groups.map((group) => (
             <section key={group.day}>
               {/* Day headings carry the count, so a heavy day reads as a heavy
-                  day before you scroll it. */}
-              <h3 className="flex items-baseline justify-between gap-2 bg-muted/40 px-3 py-1 text-2xs font-medium text-muted-foreground">
+                  day before you scroll it. A styled div, not a heading element:
+                  this popup has no h1/h2 ancestry, so an h3 here was a heading
+                  level chosen for its font — exactly what heading semantics
+                  are not for. */}
+              <div className="flex items-baseline justify-between gap-2 bg-muted/40 px-3 py-1 text-2xs font-medium text-muted-foreground">
                 <span>{dayLabel(group.day, todayIso, yesterdayIso)}</span>
                 <span className="tabular-nums">
                   {group.entries.length} {group.entries.length === 1 ? 'build' : 'builds'}
                 </span>
-              </h3>
+              </div>
               <ul className="divide-y divide-border/60">
                 {group.entries.map((entry) => {
                   const isCurrent = entry.version === CURRENT_VERSION
@@ -158,7 +164,7 @@ export function VersionBadge() {
                       </span>
                       <div className="flex min-w-0 flex-1 flex-col gap-1">
                         <p className="text-xs leading-snug text-foreground">{entry.change}</p>
-                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <div className="flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
                           <span
                             className={cn(
                               'rounded-full px-1.5 py-px font-medium',

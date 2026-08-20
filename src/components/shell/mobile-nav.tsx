@@ -154,8 +154,14 @@ export function MobileNav({ isAdmin }: { isAdmin: boolean }) {
 
               The Alta Vision mark used to sit beside it here; it now rides in
               the branding row above, next to the paw it belongs with, and is
-              deliberately not repeated in a sheet this short. */}
-          <div className="flex items-center border-t border-sidebar-border pt-3">
+              deliberately not repeated in a sheet this short.
+
+              min-h-11: the trigger inside is a real <button>, so the
+              coarse-pointer hit-slop in globals.css already guarantees a
+              44px hit area — this row just gives that invisible target room
+              to live in, instead of cramming a sub-24px chip against the
+              sheet's bottom edge. */}
+          <div className="flex min-h-11 items-center border-t border-sidebar-border pt-3">
             <VersionBadge />
           </div>
         </DialogPrimitive.Popup>

@@ -96,7 +96,11 @@ export function AccountMenu({
               type="button"
               aria-label={`Account menu for ${displayName}`}
               className={cn(
-                'flex items-center rounded-full outline-none ring-offset-2 ring-offset-background',
+                /* size-8 visible box with the 24px avatar centred inside:
+                   matches the height of every other control on the phone
+                   header row, and the coarse-pointer hit-slop in globals.css
+                   grows the invisible hit area from this box to 44px. */
+                'flex size-8 items-center justify-center rounded-full outline-none ring-offset-2 ring-offset-background',
                 'transition-[box-shadow] duration-150 motion-reduce:transition-none',
                 'hover:ring-2 hover:ring-border focus-visible:ring-2 focus-visible:ring-ring/50',
                 className,

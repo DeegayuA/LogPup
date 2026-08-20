@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { PawPrint } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Kbd } from '@/components/ui/kbd'
 import { VersionBadge } from '@/components/shell/version-badge'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { InstallButton } from '@/features/pwa/pwa'
@@ -49,9 +50,9 @@ export function NavLink({
       <Icon className="size-4 shrink-0" />
       {label}
       {hint ? (
-        <kbd className="ml-auto hidden font-mono text-2xs text-sidebar-foreground/70 group-hover:inline group-focus-visible:inline">
+        <Kbd className="ml-auto hidden border-sidebar-border bg-sidebar-accent/60 text-sidebar-foreground/80 group-hover:inline-flex group-focus-visible:inline-flex">
           G {hint}
-        </kbd>
+        </Kbd>
       ) : null}
     </Link>
   )
@@ -68,9 +69,9 @@ function CommandHint() {
 
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-2xs text-sidebar-foreground/70">
-      <kbd className="rounded border border-sidebar-border bg-sidebar-accent/60 px-1 py-0.5 font-mono leading-none">
+      <Kbd className="border-sidebar-border bg-sidebar-accent/60 text-sidebar-foreground/80">
         {isMac ? '⌘K' : 'Ctrl K'}
-      </kbd>
+      </Kbd>
       <span className="truncate">Fetch anything</span>
     </span>
   )
@@ -88,7 +89,10 @@ export function Sidebar({
   const pathname = usePathname()
 
   return (
-    <nav className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col self-start overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
+    <nav
+      aria-label="Primary"
+      className="sticky top-0 hidden h-svh w-56 shrink-0 flex-col self-start overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex"
+    >
       {/* Branding row. LogPup owns the left edge; the Alta Vision mark — the
           company that builds and operates it — sits at the right edge of the
           same row, small enough to read as attribution rather than as a second

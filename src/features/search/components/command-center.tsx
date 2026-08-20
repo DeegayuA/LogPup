@@ -229,8 +229,8 @@ export function CommandCenterProvider({
   const paletteGoPrefix = React.useRef<number | null>(null)
   const paletteGoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /* ⌘K / Ctrl+K opens; "g then <key>" jumps to whichever nav item carries
-     that letter (GO_KEYS above). */
+  /* ⌘K / Ctrl+K opens; "?" toggles the shortcuts overlay; "g then <key>"
+     jumps to whichever nav item carries that letter (GO_KEYS above). */
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'k' && (event.metaKey || event.ctrlKey)) {
@@ -239,17 +239,33 @@ export function CommandCenterProvider({
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) return
-      /* Never fire single-key jumps inside overlays (dialogs, menus, pickers),
-         during IME composition, or when the user opted out (WCAG 2.1.4). */
-      if (
-        event.isComposing ||
-        (event.target instanceof HTMLElement &&
-          event.target.closest(
-            '[role="dialog"],[role="menu"],[role="listbox"],[role="combobox"],[role="textbox"]',
-          )) ||
-        !goShortcutsEnabled()
-      )
+      if (event.isComposing) return
+      /* Overlay check shared by "?" and the g-jumps: single keys must never
+         fire inside dialogs, menus or pickers (WCAG 2.1.4) — with one
+         exception below: "?" while the shortcuts overlay ITSELF is open acts
+         as a close toggle rather than a dead key. */
+      const inOverlay =
+        event.target instanceof HTMLElement &&
+        event.target.closest(
+          '[role="dialog"],[role="menu"],[role="listbox"],[role="combobox"],[role="textbox"]',
+        ) !== null
+      if (event.key === '?') {
+        if (shortcutsOpenRef.current) {
+          event.preventDefault()
+          setShortcutsOpen(false)
+          return
+        }
+        if (inOverlay) return
+        event.preventDefault()
+        /* An armed g-prefix dies here: the overlay is modal, so the second
+           key of a half-typed jump would land inside it anyway. */
+        goPrefix.current = null
+        setShortcutsOpen(true)
         return
+      }
+      /* Never fire single-key jumps inside overlays, or when the user opted
+         out (WCAG 2.1.4). */
+      if (inOverlay || !goShortcutsEnabled()) return
       const key = event.key.toLowerCase() // tolerate Shift/Caps Lock
       if (goPrefix.current !== null && Date.now() - goPrefix.current < 800) {
         const href = GO_KEYS[key]
@@ -264,7 +280,7 @@ export function CommandCenterProvider({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [router])
+  }, [router, setShortcutsOpen])
 
   React.useEffect(() => {
     if (open) {
@@ -303,7 +319,9 @@ export function CommandCenterProvider({
     return () => clearTimeout(timer)
   }, [query])
 
-  /* Debounced server search; stale responses are dropped by sequence id. */
+  /* Debounced server search; stale responses are dropped by sequence id.
+     `searchRetry` is a dep on purpose: bumping it re-runs this effect for an
+     unchanged query, which is exactly what the error row's Retry does. */
   React.useEffect(() => {
     const trimmed = query.trim()
     if (trimmed.length < 2) {
@@ -311,22 +329,29 @@ export function CommandCenterProvider({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clear pending results when the query drops below the threshold
       setResults(EMPTY_RESULTS)
       setSearching(false)
+      setSearchError(false)
       return
     }
     setSearching(true)
+    setSearchError(false)
     const seq = ++searchSeq.current
     const timer = setTimeout(async () => {
       try {
         const res = await searchDeduper.run(trimmed, () => universalSearch(trimmed))
         if (searchSeq.current === seq) setResults(res)
       } catch {
-        if (searchSeq.current === seq) setResults(EMPTY_RESULTS)
+        /* NOT swallowed into the empty state: results are cleared so no stale
+           group lingers, and the flag routes rendering to the error row. */
+        if (searchSeq.current === seq) {
+          setResults(EMPTY_RESULTS)
+          setSearchError(true)
+        }
       } finally {
         if (searchSeq.current === seq) setSearching(false)
       }
     }, 180)
     return () => clearTimeout(timer)
-  }, [query])
+  }, [query, searchRetry])
 
   const pushRecent = React.useCallback((recent: Recent) => {
     try {
@@ -486,9 +511,16 @@ export function CommandCenterProvider({
   /* Nothing found means nothing to show at all — no result groups AND no
      static rows the query reached. Before the registry this was a hand-kept
      list of every group that could be non-empty, which is exactly the kind of
-     condition that goes stale the moment a group is added. */
+     condition that goes stale the moment a group is added. An errored fetch
+     is excluded: "the server did not answer" must never be dressed up as
+     "your workspace has nothing by that name". */
   const nothingAtAll =
-    q.length >= MIN_QUERY_LENGTH && !searching && !intent && results.length === 0 && commands.length === 0
+    q.length >= MIN_QUERY_LENGTH &&
+    !searching &&
+    !searchError &&
+    !intent &&
+    results.length === 0 &&
+    commands.length === 0
 
   const contextValue = React.useMemo(() => ({ setOpen }), [])
 
@@ -516,12 +548,38 @@ export function CommandCenterProvider({
           />
           <CommandList>
             {searching ? (
-              <CommandLoading>
-                <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-                  <Loader2 className="size-3 animate-spin" aria-hidden />
-                  Sniffing around…
+              /* Three skeleton rows shaped like real result items (same
+                 px-2 py-1.5 rhythm, icon square + title bar), so the list
+                 does not jump when groups land. cmdk's Loading slot renders
+                 role=progressbar with this label and aria-hides the visuals. */
+              <CommandLoading label="Sniffing around…">
+                <div className="p-1">
+                  {['w-3/5', 'w-2/5', 'w-1/2'].map((width) => (
+                    <div key={width} className="flex items-center gap-2 px-2 py-1.5">
+                      <Skeleton className="size-4 rounded" />
+                      <Skeleton className={cn('h-4', width)} />
+                    </div>
+                  ))}
                 </div>
               </CommandLoading>
+            ) : null}
+            {searchError && !searching ? (
+              /* A distinct row for an unreachable server — never the empty
+                 state. role=alert so the failure is announced when it lands. */
+              <div
+                role="alert"
+                className="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground"
+              >
+                <CloudOff className="size-4 shrink-0 text-destructive" aria-hidden />
+                <span>Search is unreachable.</span>
+                <button
+                  type="button"
+                  onClick={() => setSearchRetry((n) => n + 1)}
+                  className="ml-auto rounded-md border border-input px-2 py-1 text-xs font-medium text-foreground outline-none transition-colors duration-150 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
+                >
+                  Retry
+                </button>
+              </div>
             ) : null}
             {nothingAtAll ? (
               <CommandEmpty>
@@ -572,6 +630,48 @@ export function CommandCenterProvider({
                   ) : null}
                 </CommandItem>
               </CommandGroup>
+            ) : null}
+
+            {!q && recents.length === 0 ? (
+              /* First-run teach rows: with no query and no recents there is
+                 nothing above the static commands, and the placeholder is the
+                 only hint of what this box can do — and it vanishes on the
+                 first keystroke. Two quiet informational rows (plain divs, so
+                 arrow keys skip them) plus one real item that opens the
+                 shortcuts overlay. */
+              <>
+                <CommandGroup heading="Get started">
+                  <div className="flex items-start gap-2 px-2 py-1.5 text-sm text-muted-foreground">
+                    <Plus className="mt-0.5 size-4 shrink-0" aria-hidden />
+                    <span>
+                      Try “<span className="text-foreground">shanika fix login friday</span>” — it
+                      creates an assigned task
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2 px-2 py-1.5 text-sm text-muted-foreground">
+                    <Search className="mt-0.5 size-4 shrink-0" aria-hidden />
+                    <span>Type to find apps, people, meetings, tasks, and sprints</span>
+                  </div>
+                  <CommandItem
+                    value="open-shortcuts-overlay"
+                    onSelect={() => {
+                      setOpen(false)
+                      setShortcutsOpen(true)
+                    }}
+                  >
+                    <Keyboard />
+                    <span className="truncate">
+                      {goShortcutsOn
+                        ? 'g then a letter jumps — press ? for all shortcuts'
+                        : 'Press ? for all keyboard shortcuts'}
+                    </span>
+                    {/* Visible at every width, unlike the sm+ footer hints:
+                        this row is the one shortcut pointer phones get. */}
+                    <CommandShortcut>?</CommandShortcut>
+                  </CommandItem>
+                </CommandGroup>
+                <CommandSeparator />
+              </>
             ) : null}
 
             {!q && recents.length > 0 ? (
@@ -663,24 +763,41 @@ export function CommandCenterProvider({
           </CommandList>
           <div className="flex items-center gap-3 border-t px-3 py-1.5 text-2xs text-muted-foreground">
             <span>
-              <kbd className="rounded border bg-muted px-1 font-mono">↑↓</kbd> navigate
+              <Kbd>↑↓</Kbd> navigate
             </span>
             <span>
-              <kbd className="rounded border bg-muted px-1 font-mono">↵</kbd> open
+              <Kbd>↵</Kbd> open
             </span>
             {/* Gated on the same switch as the chips in "Go to" above: with
                 jumps turned off there is no g+key to describe. */}
             {goShortcutsOn ? (
               <span className="hidden sm:inline">
-                <kbd className="rounded border bg-muted px-1 font-mono">g</kbd>+key jump
+                <Kbd>g</Kbd>+key jump
               </span>
             ) : null}
+            {/* Keyboard hints stay sm+ (a phone cannot press them); the teach
+                group's "?" row is the all-widths pointer to the same overlay. */}
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setShortcutsOpen(true)
+              }}
+              className="hidden items-center gap-1 rounded-sm outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none sm:inline-flex"
+            >
+              <Kbd>?</Kbd> shortcuts
+            </button>
             <span className="ml-auto inline-flex items-center gap-1">
               <PawPrint className="size-3" aria-hidden /> LogPup
             </span>
           </div>
         </Command>
       </CommandDialog>
+      <ShortcutsOverlay
+        open={shortcutsOpen}
+        onOpenChange={setShortcutsOpen}
+        goShortcutsOn={goShortcutsOn}
+      />
     </CommandCenterContext.Provider>
   )
 }
@@ -706,9 +823,7 @@ export function CommandCenterTrigger({ className }: { className?: string }) {
     >
       <Search className="size-3.5 shrink-0" aria-hidden />
       <span className="truncate">Fetch anything…</span>
-      <kbd className="ml-auto rounded border bg-muted px-1.5 py-0.5 font-mono text-2xs leading-none">
-        {isMac ? '⌘K' : 'Ctrl K'}
-      </kbd>
+      <Kbd className="ml-auto px-1.5">{isMac ? '⌘K' : 'Ctrl K'}</Kbd>
     </button>
   )
 }
