@@ -44,14 +44,15 @@ const FEATURES = readdirSync(FEATURES_DIR, { withFileTypes: true })
 const NO_COMMANDS: Readonly<Record<string, string>> = {
   admin: 'every action needs a target row, and the purges need a typed confirmation',
   calendar: 'an internal Google Calendar wrapper, no user-facing action',
+  dashboard: 'no actions; its page is a nav row',
   // Pure cost arithmetic today — cost.ts and its test, no route, no server
   // action, no component. There is nothing to navigate to and nothing to
-  // invoke. RETIRE THIS the moment a /finance route or a cost action exists:
-  // project cost is superadmin/admin-only, so its rows will need visible()
-  // through the capability layer rather than a bare role comparison.
-  finance: 'pure cost arithmetic; no route and no invocable action yet',
-  dashboard: 'no actions; its page is a nav row',
-  finance: 'pure maths over rows passed in; it has no action of any kind yet, and the one that would set a rate is blocked on a capability nobody owns',
+  // invoke, and the one action that would exist (setting a rate) is blocked on
+  // a capability nobody owns yet. RETIRE THIS the moment a /finance route or a
+  // cost action exists: project cost is superadmin/admin-only, so its rows will
+  // need visible() through the capability layer rather than a bare role
+  // comparison.
+  finance: 'pure cost arithmetic; no route, no invocable action, and the rate-setting one is blocked on an unowned capability',
   notion: 'its one action needs a sprintId',
   onboarding: 'renders only on /pending, where the palette does not exist',
   pwa: 'its affordances are components wired to browser events, not callables',
@@ -68,8 +69,12 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   auth: 'own-account data only',
   calendar: 'no tables of its own',
   dashboard: 'no tables of its own',
-  finance: 'rates are salary-adjacent and project value is commercial; neither belongs in a workspace-wide index anyone can type into',
-  finance: 'rate cards and project value are figures you read on a project, not rows you jump to',
+  // Two reasons, both true and neither sufficient alone: the shape is wrong
+  // (these are figures you read ON a project, not rows you jump TO) and the
+  // content is sensitive (rates are salary-adjacent, project value is
+  // commercial). If the shape argument ever stops holding, the privacy one
+  // still does.
+  finance: 'figures you read on a project rather than rows you jump to — and rates are salary-adjacent, project value commercial, so neither belongs in an index anyone can type into',
   gemini: "a user's own API keys are private, not workspace-searchable",
   intel: 'no tables of its own — it reads other features’ rows and links back to them',
   notifications: 'a personal inbox, not a workspace index',
