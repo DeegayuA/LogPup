@@ -54,6 +54,15 @@ export const employmentType = pgEnum('employment_type', ['permanent', 'probation
 // forever. Zeroing their pattern is not the fix — that claims they are not
 // working, and they are.
 export const loggingExpectation = pgEnum('logging_expectation', ['daily', 'none'])
+// What KIND of work an hour was. `task` is the task-linked case and every
+// other value is real work that closes no ticket — which is the whole point:
+// a day of meetings, review and support has to be expressible, or the honest
+// full day of anyone doing that work computes as zero. See worklog_entries.
+export const worklogEntryCategory = pgEnum('worklog_entry_category', ['task', 'meeting', 'review', 'support', 'admin', 'learning', 'other'])
+// Where an entry came from. Exists so we can later measure how often an AI
+// draft is accepted unedited — the only honest way to tell whether the
+// drafting feature helps or merely makes work.
+export const worklogEntrySource = pgEnum('worklog_entry_source', ['manual', 'ai_suggested'])
 // The two roles app_role_history tracks as-of intervals for. Closed set, like
 // every other "kind" column in this file, hence a pg enum rather than free
 // text (contrast assignments.role / assignmentHistory.role, which are
@@ -1028,6 +1037,76 @@ export const dailyWorklogs = pgTable('daily_worklogs', {
   uniqueIndex('daily_worklogs_user_day_idx').on(t.userId, t.day),
   // The team view reads a day range across everybody.
   index('daily_worklogs_day_idx').on(t.day),
+])
+
+// WHERE the hours actually went — many entries per person per day, alongside
+// the one self-scored `percent` above rather than replacing it.
+//
+// THE TWO NUMBERS ARE NOT THE SAME QUESTION, and this table exists partly to
+// keep them apart. `daily_worklogs.percent` is a JUDGEMENT — "of what I set
+// out to do, how much did I get done". The figure derived from these rows
+// (minutes logged over minutes scheduled) is COVERAGE — "how much of my
+// scheduled day is accounted for". A good day can be 100% on one and 60% on
+// the other, so the derived one is called "Accounted" and is never labelled,
+// exported, or tiled as a percent. Two numbers under two names is healthy;
+// two numbers under one name is how this repo already ended up with
+// FOLLOWUP_STALE_DAYS exported twice with different values.
+//
+// A TIME ENTRY DOES NOT REQUIRE A TASK. A tech lead whose Tuesday was four
+// meetings, two reviews and a production incident closed no ticket and moved
+// no card. If only task-linked time counted, their honest full day would
+// compute as zero — the app calling somebody lazy for doing their job.
+// `category` carries the non-task cases and every one counts toward the day.
+//
+// Hangs off (user_id, day), NOT off a daily_worklogs.id: logging time never
+// requires the header row to exist first, which is what makes backfilling a
+// day you never self-scored possible at all.
+//
+// SELF-ONLY WRITES, inherited from daily_worklogs. There is deliberately no
+// `worklog.write.any` for any of the seven seats (capabilities.test.ts
+// asserts the key does not exist), because the record is a FIRST-PERSON
+// STATEMENT about somebody's own day. This table does not introduce one.
+export const worklogEntries = pgTable('worklog_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // Asia/Colombo calendar day via resolveWorkDay (features/worklog/worklog-day.ts),
+  // never a UTC slice — the same contract as daily_worklogs.day.
+  day: date('day').notNull(),
+  // MINUTES, NOT HOURS. 90 beats 1.5 for a person typing it, and integers
+  // cannot drift the way floats do once a month of half-hours is summed.
+  // Division by 60 happens at the display edge, never in storage.
+  minutes: integer('minutes').notNull(),
+  // Set ONLY when the time went to a tracked task. SET NULL rather than
+  // cascade: deleting a task must not delete the record that somebody spent
+  // three hours on it — the hours were still worked.
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  category: worklogEntryCategory('category').notNull(),
+  // The cost/worth design derives earned value from exactly this flag. It
+  // lands with the table rather than in a later migration, because adding it
+  // afterwards means an ALTER on a table that by then holds every hour
+  // anybody logged, with no defensible value to backfill.
+  billable: boolean('billable').notNull().default(false),
+  // One line: what it was.
+  note: text('note'),
+  source: worklogEntrySource('source').notNull().default('manual'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  // Soft delete, per the repo rule — registered in SOFT_TABLES (src/db/live.ts)
+  // in the SAME change that creates the table, before any reader exists.
+  //
+  // No `deletedBy` column, unlike bug_reports/apps: writes here are self-only,
+  // so the deleter is always `userId` and a second column would be a copy of
+  // it that could one day disagree.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+}, (t) => [
+  // The day editor's only read: one person, one day (or a month's range).
+  // Partial on live rows because every read filters soft-deleted ones out.
+  index('worklog_entries_user_day_live_idx')
+    .on(t.userId, t.day)
+    .where(sql`${t.deletedAt} is null`),
+  // "How many hours went into this task" — what the effort and cost reports
+  // are built on.
+  index('worklog_entries_task_live_idx').on(t.taskId).where(sql`${t.deletedAt} is null`),
 ])
 
 // One registered passkey (WebAuthn credential) per row. `id` IS the

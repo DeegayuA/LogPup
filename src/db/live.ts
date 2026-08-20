@@ -2,6 +2,7 @@ import { QueryBuilder } from 'drizzle-orm/pg-core'
 import { isNull } from 'drizzle-orm'
 import {
   apps, bugReports, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
+  worklogEntries,
 } from './schema'
 
 // Connection-free: QueryBuilder builds SQL without a client, so importing
@@ -31,6 +32,8 @@ export const liveNoteSegmentsAs = (name: string) =>
   qb.select().from(meetingNoteSegments).where(isNull(meetingNoteSegments.deletedAt)).as(name)
 export const liveScreenshotsAs = (name: string) =>
   qb.select().from(meetingScreenshots).where(isNull(meetingScreenshots.deletedAt)).as(name)
+export const liveWorklogEntriesAs = (name: string) =>
+  qb.select().from(worklogEntries).where(isNull(worklogEntries.deletedAt)).as(name)
 
 export const liveApps = liveAppsAs('live_apps')
 export const liveBugReports = liveBugReportsAs('live_bug_reports')
@@ -39,6 +42,7 @@ export const liveTasks = liveTasksAs('live_tasks')
 export const liveSprints = liveSprintsAs('live_sprints')
 export const liveNoteSegments = liveNoteSegmentsAs('live_note_segments')
 export const liveScreenshots = liveScreenshotsAs('live_screenshots')
+export const liveWorklogEntries = liveWorklogEntriesAs('live_worklog_entries')
 
 /**
  * Every column of `apps`, taken from the LIVE subquery.
@@ -85,6 +89,12 @@ export const SOFT_TABLES = [
   { table: sprints, sqlName: 'sprints', live: liveSprints, liveAs: liveSprintsAs },
   { table: meetingNoteSegments, sqlName: 'meeting_note_segments', live: liveNoteSegments, liveAs: liveNoteSegmentsAs },
   { table: meetingScreenshots, sqlName: 'meeting_screenshots', live: liveScreenshots, liveAs: liveScreenshotsAs },
+  // Registered in the SAME change that creates the table, before its first
+  // reader exists — the rule meetingApps and bugReports established. A
+  // worklog entry is a first-person statement about somebody's own day, so a
+  // deleted one reappearing in a total is the app contradicting them about
+  // their own hours.
+  { table: worklogEntries, sqlName: 'worklog_entries', live: liveWorklogEntries, liveAs: liveWorklogEntriesAs },
 ] as const
 
 // Registered BEFORE anything reads them. Both tables arrived with later

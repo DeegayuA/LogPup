@@ -26,11 +26,11 @@ import {
 // --- live.ts sanity ---------------------------------------------------------
 
 describe('live.ts subqueries', () => {
-  it('SOFT_TABLES covers exactly the seven soft-deleted tables', () => {
+  it('SOFT_TABLES covers exactly the eight soft-deleted tables', () => {
     expect(SOFT_TABLES.map((t) => t.sqlName).sort()).toEqual(
       [
         'apps', 'bug_reports', 'meeting_note_segments', 'meeting_screenshots',
-        'meetings', 'sprints', 'tasks',
+        'meetings', 'sprints', 'tasks', 'worklog_entries',
       ].sort(),
     )
   })
@@ -158,7 +158,13 @@ describe('allowlist hygiene', () => {
 // simply stopped seeing a call the moment prettier wrapped it, which is a
 // silent hole rather than a failing test. (Verified: a probe file using that
 // spelling turns checks 1, 2 and 3 red.)
-const SOFT_TABLE_NAMES = '(apps|bugReports|meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots)'
+// worklogEntries is listed here in the commit that creates the table, before
+// its first reader exists — like meetingApps before it. This regex, not
+// SOFT_TABLES, is the actual enforcement for checks 1 and 2, and it can only
+// see a table named here as a LITERAL, so a table registered in live.ts but
+// missing from this string is guarded by check 5 alone (which only asks that
+// it be registered, never that anybody reads it through the live subquery).
+const SOFT_TABLE_NAMES = '(apps|bugReports|meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots|worklogEntries)'
 const RAW_FROM_RE = new RegExp(`\\.from\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const RAW_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const ALIAS_RE = new RegExp(`alias\\(\\s*${SOFT_TABLE_NAMES}\\b`)
