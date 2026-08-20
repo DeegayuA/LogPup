@@ -530,21 +530,16 @@ export default function PublicHomePage() {
             <Link href="/sign-in" className={cn(buttonVariants({ size: 'lg' }), CTA)}>
               Sign in
             </Link>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              {['Sign-in methods', 'Google', 'Passkey', 'One Tap', 'Password'].map(
-                (method, index) => (
-                  <span key={method} className="flex items-center gap-3">
-                    {index > 0 ? (
-                      <span aria-hidden className="hidden text-muted-foreground sm:inline">
-                        ·
-                      </span>
-                    ) : null}
-                    <span className="font-mono text-2xs tracking-[0.18em] text-muted-foreground uppercase">
-                      {method}
-                    </span>
-                  </span>
-                ),
-              )}
+            {/* The label was previously the first item of the same array as
+                the four methods, rendered in the same class — so "Sign-in
+                methods" read as a fifth method, and below sm even the
+                separator dot disappeared, leaving five equal words. A label
+                and its values are not peers. */}
+            <div className="flex flex-col gap-1.5">
+              <Eyebrow>Sign-in methods</Eyebrow>
+              <p className="text-sm text-muted-foreground">
+                Google, passkey, One Tap, or an administrator-issued password.
+              </p>
             </div>
           </div>
         </div>
@@ -578,10 +573,6 @@ export default function PublicHomePage() {
             <div className="flex flex-col gap-1">
               <Eyebrow>Location</Eyebrow>
               <span className="text-sm text-foreground">Colombo, Sri Lanka</span>
-            </div>
-            <div className="flex flex-col gap-1">
-              <Eyebrow>Set in</Eyebrow>
-              <span className="text-sm text-foreground">Cabinet Grotesk &amp; Satoshi</span>
             </div>
           </div>
         </div>

@@ -80,12 +80,6 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               >
                 Terms of Service
               </Link>
-              <a
-                href="mailto:deeghayus@altavision.lk"
-                className="rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              >
-                deeghayus@altavision.lk
-              </a>
             </nav>
 
             {/* Separated from the three links rather than becoming a fourth:
