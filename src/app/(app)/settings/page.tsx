@@ -238,15 +238,28 @@ export default async function SettingsPage() {
         </Card>
 
         {/* 3b. The keys themselves — the control that changes the verdict
-            above, directly under it instead of at the end of another page. */}
-        <GeminiKeysCard keys={geminiKeys} usedBy={usedBy} />
+            above, directly under it instead of at the end of another page.
+            `id` is a link target, not decoration: the palette's "Manage Gemini
+            keys" row lands on /settings#gemini, and most of that row's value is
+            arriving AT the card rather than at the top of a long page.
+            scroll-mt clears the sticky header, which would otherwise cover the
+            thing the fragment just scrolled to. */}
+        <div id="gemini" className="scroll-mt-20">
+          <GeminiKeysCard keys={geminiKeys} usedBy={usedBy} />
+        </div>
 
         {/* 3c. AI features hub: per-feature costs, 30-day measured usage, and
             the on/off switch for each. Suspense-split: it runs its own three
             reads, and the rest of the page shouldn't wait on them. */}
-        <Suspense fallback={<AiFeaturesCardSkeleton />}>
-          <AiFeaturesCard userId={user.id} />
-        </Suspense>
+        {/* The id lives on the wrapper rather than inside the Suspense child,
+            so the fragment resolves during the fallback too — an anchor that
+            only exists after the data lands is an anchor that misses on a cold
+            navigation, which is exactly when someone follows a palette row. */}
+        <div id="ai-features" className="scroll-mt-20">
+          <Suspense fallback={<AiFeaturesCardSkeleton />}>
+            <AiFeaturesCard userId={user.id} />
+          </Suspense>
+        </div>
 
         {/* 4. About. The version had exactly one home — the desktop sidebar
             footer, which is `hidden md:flex` — so on a phone there was no way
