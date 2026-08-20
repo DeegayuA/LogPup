@@ -31,7 +31,7 @@ export function MonthSummary({
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {/* 1. Expected Days */}
-      <div className="group flex flex-col justify-between gap-2 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm transition-all duration-200 hover:border-border hover:bg-card">
+      <div className="group flex flex-col justify-between gap-2 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm transition-[background-color,border-color,color,box-shadow] duration-200 motion-reduce:transition-none hover:border-border hover:bg-card">
         <div className="flex items-center justify-between">
           <span className="font-heading text-xs font-semibold text-muted-foreground">
             Expected in {monthLabel}
@@ -52,7 +52,7 @@ export function MonthSummary({
       </div>
 
       {/* 2. Logged Days */}
-      <div className="group flex flex-col justify-between gap-2 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm transition-all duration-200 hover:border-primary/50 hover:bg-card">
+      <div className="group flex flex-col justify-between gap-2 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm transition-[background-color,border-color,color,box-shadow] duration-200 motion-reduce:transition-none hover:border-primary/50 hover:bg-card">
         <div className="flex items-center justify-between">
           <span className="font-heading text-xs font-semibold text-muted-foreground">
             Logged Entries
@@ -72,7 +72,7 @@ export function MonthSummary({
         {/* Micro progress bar */}
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
           <div
-            className="h-full bg-primary transition-all duration-500 rounded-full"
+            className="h-full bg-primary transition-[width] duration-200 motion-reduce:transition-none rounded-full"
             style={{ width: `${Math.min(100, Math.round((loggedCount / (expected || 1)) * 100))}%` }}
           />
         </div>
@@ -81,7 +81,7 @@ export function MonthSummary({
       {/* 3. Coverage */}
       <div
         className={cn(
-          'group flex flex-col justify-between gap-2 rounded-2xl border p-4 shadow-xs backdrop-blur-sm transition-all duration-200',
+          'group flex flex-col justify-between gap-2 rounded-2xl border p-4 shadow-xs backdrop-blur-sm transition-[background-color,border-color,color,box-shadow] duration-200 motion-reduce:transition-none',
           isAttentionCoverage
             ? 'border-chart-1/40 bg-chart-1/5'
             : isHealthyCoverage
@@ -122,9 +122,9 @@ export function MonthSummary({
       {/* 4. Streak */}
       <div
         className={cn(
-          'group flex flex-col justify-between gap-2 rounded-2xl border p-4 shadow-xs backdrop-blur-sm transition-all duration-200',
+          'group flex flex-col justify-between gap-2 rounded-2xl border p-4 shadow-xs backdrop-blur-sm transition-[background-color,border-color,color,box-shadow] duration-200 motion-reduce:transition-none',
           streak >= 3
-            ? 'border-primary/40 bg-gradient-to-br from-primary/10 via-card/80 to-card/60'
+            ? 'border-primary/40 bg-primary/5'
             : 'border-border/70 bg-card/60',
         )}
       >
@@ -138,7 +138,7 @@ export function MonthSummary({
               streak > 0 ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground',
             )}
           >
-            <Flame className={cn('size-4', streak >= 3 && 'animate-pulse text-primary')} />
+            <Flame className={cn('size-4', streak >= 3 && 'animate-pulse motion-reduce:animate-none text-primary')} />
           </span>
         </div>
         <div className="flex items-baseline gap-2">

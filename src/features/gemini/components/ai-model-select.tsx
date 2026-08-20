@@ -119,22 +119,22 @@ export function AiModelSelect({
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="font-medium text-foreground">{c.label}</span>
                   {c.stability === 'preview' && (
-                    <span className="rounded bg-chart-1/10 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-chart-1">
+                    <span className="rounded bg-chart-1/10 px-1.5 py-0.5 font-mono text-2xs font-semibold text-chart-1">
                       preview
                     </span>
                   )}
                   {c.stability === 'alias' && (
-                    <span className="rounded bg-primary/10 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-primary">
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-2xs font-semibold text-primary">
                       alias
                     </span>
                   )}
                   {!c.freeTier && (
-                    <span className="rounded bg-destructive/10 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-destructive">
+                    <span className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-2xs font-semibold text-destructive">
                       paid keys only
                     </span>
                   )}
                   {suggestion?.id === c.id && (
-                    <span className="rounded bg-primary/10 px-1.5 py-0.2 font-mono text-[9px] font-bold text-primary flex items-center gap-0.5">
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-2xs font-bold text-primary flex items-center gap-0.5">
                       <Sparkles className="size-2.5" /> suggested
                     </span>
                   )}

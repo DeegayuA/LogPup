@@ -32,7 +32,7 @@ export function NavLink({
       href={href}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'group relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium transition-all duration-150',
+        'group relative flex items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium transition-[background-color,color,box-shadow] duration-150 motion-reduce:transition-none',
         active
           ? 'bg-primary/15 text-primary font-semibold shadow-xs ring-1 ring-primary/30'
           : 'text-sidebar-foreground/75 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground',
@@ -41,7 +41,7 @@ export function NavLink({
       <span
         aria-hidden
         className={cn(
-          'absolute left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-full bg-primary transition-all duration-200',
+          'absolute left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-full bg-primary transition-[opacity,transform] duration-200 motion-reduce:transition-none',
           active ? 'opacity-100 scale-100' : 'opacity-0 scale-50',
         )}
       />

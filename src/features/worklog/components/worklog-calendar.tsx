@@ -190,10 +190,15 @@ export function WorklogCalendar({
               <div
                 aria-hidden
                 className={cn(
-                  'absolute inset-0 flex flex-col justify-between p-1 rounded-[inherit] overflow-hidden transition-all',
+                  'absolute inset-0 flex flex-col justify-between p-1 rounded-[inherit] overflow-hidden transition-[background-color,color,box-shadow] duration-150 motion-reduce:transition-none',
+                  // DAY_STATE_CLASS is the ONLY paint for a state. A local
+                  // override here (holiday was repainted in --chart-1) puts
+                  // this calendar and the /progress matrix on two different
+                  // colour systems for the same fact, which is exactly what
+                  // day-state.ts exists to prevent — and --chart-1 is the
+                  // data-viz ember, already meaning "attention" elsewhere.
                   DAY_STATE_CLASS[state],
                   state === 'logged' && percent !== undefined && loggedTone(percent),
-                  state === 'holiday' && 'border border-chart-1/40 bg-chart-1/15 text-chart-1',
                   half && 'top-1/2 rounded-t-none',
                 )}
               >
@@ -210,11 +215,11 @@ export function WorklogCalendar({
                   </span>
 
                   {state === 'logged' && percent !== undefined ? (
-                    <span className="font-mono text-[10px] font-semibold tabular-nums">
+                    <span className="font-mono text-2xs font-semibold tabular-nums">
                       {percent}%
                     </span>
                   ) : half ? (
-                    <span className="font-mono text-[9px] text-muted-foreground font-medium">
+                    <span className="font-mono text-2xs text-muted-foreground font-medium">
                       ½d
                     </span>
                   ) : isPoya ? (
@@ -230,7 +235,7 @@ export function WorklogCalendar({
                     </span>
                     <span
                       className={cn(
-                        'inline-block truncate rounded px-1 py-0.2 font-mono text-[8px] font-bold uppercase tracking-wider',
+                        'inline-block truncate rounded px-1 py-0.5 font-mono text-2xs font-bold uppercase tracking-wider',
                         isMercantile
                           ? 'bg-chart-1/25 text-chart-1'
                           : 'bg-muted/80 text-muted-foreground',
@@ -241,13 +246,13 @@ export function WorklogCalendar({
                   </div>
                 ) : state === 'absence' ? (
                   <div className="truncate mt-auto">
-                    <span className="font-mono text-[9px] font-semibold text-tag-discussion">
+                    <span className="font-mono text-2xs font-semibold text-tag-discussion">
                       Leave
                     </span>
                   </div>
                 ) : state === 'owed' ? (
                   <div className="truncate mt-auto">
-                    <span className="font-mono text-[9px] font-medium text-chart-1">
+                    <span className="font-mono text-2xs font-medium text-chart-1">
                       Owed
                     </span>
                   </div>
@@ -264,7 +269,7 @@ export function WorklogCalendar({
           )
 
           const cellClass = cn(
-            'relative block min-h-[58px] sm:min-h-[64px] rounded-xl border border-border/60 bg-card/60 transition-all duration-150',
+            'relative block min-h-[58px] sm:min-h-[64px] rounded-xl border border-border/60 bg-card/60 transition-[background-color,border-color,color,box-shadow] duration-150 motion-reduce:transition-none',
             selected && 'ring-2 ring-primary border-primary shadow-sm',
           )
 

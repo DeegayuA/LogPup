@@ -212,7 +212,7 @@ export function WorklogForm({
                 type="button"
                 onClick={() => setPercent(preset.val)}
                 className={cn(
-                  'flex items-center gap-1 rounded-lg border px-2.5 py-1 font-mono text-2xs font-medium transition-all cursor-pointer',
+                  'flex items-center gap-1 rounded-lg border px-2.5 py-1 font-mono text-2xs font-medium transition-[background-color,border-color,color,box-shadow] motion-reduce:transition-none cursor-pointer',
                   isSelected
                     ? 'border-primary bg-primary text-primary-foreground font-bold shadow-xs'
                     : 'border-border/60 bg-card/80 text-muted-foreground hover:border-primary/40 hover:text-foreground',
@@ -320,14 +320,14 @@ export function WorklogForm({
         {singleProject ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2">
             <div className="flex items-center gap-2">
-              <span className="size-2 rounded-full bg-primary animate-pulse" />
+              <span className="size-2 rounded-full bg-primary animate-pulse motion-reduce:animate-none" />
               <span className="font-heading text-xs font-bold text-foreground">
                 {singleProject.name}
               </span>
               <span className="font-mono text-2xs text-muted-foreground">
                 ({singleProject.allocationPct > 0 ? `${singleProject.allocationPct}% allocation` : 'Primary'})
               </span>
-              <span className="rounded-full bg-primary/20 px-2 py-0.2 font-mono text-[10px] font-semibold text-primary">
+              <span className="rounded-full bg-primary/20 px-2 py-0.5 font-mono text-2xs font-semibold text-primary">
                 Auto-Selected
               </span>
             </div>
@@ -360,7 +360,7 @@ export function WorklogForm({
                     type="button"
                     onClick={() => handleTagProject(app.name)}
                     className={cn(
-                      'group relative flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-all cursor-pointer text-left',
+                      'group relative flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-[background-color,border-color,color,box-shadow] motion-reduce:transition-none cursor-pointer text-left',
                       isFilled
                         ? 'border-primary/40 bg-primary/10 text-foreground font-medium shadow-xs'
                         : 'border-border/60 bg-card/60 text-muted-foreground hover:border-primary/50 hover:bg-card hover:text-foreground',
@@ -386,11 +386,11 @@ export function WorklogForm({
                     ) : null}
 
                     {isFilled ? (
-                      <span className="rounded bg-primary/20 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-primary">
+                      <span className="rounded bg-primary/20 px-1.5 py-0.5 font-mono text-2xs font-semibold text-primary">
                         Logged
                       </span>
                     ) : (
-                      <span className="rounded bg-chart-1/15 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-chart-1 group-hover:bg-primary/20 group-hover:text-primary transition-colors">
+                      <span className="rounded bg-chart-1/15 px-1.5 py-0.5 font-mono text-2xs font-semibold text-chart-1 group-hover:bg-primary/20 group-hover:text-primary transition-colors">
                         ○ Unfilled
                       </span>
                     )}
@@ -479,7 +479,7 @@ export function WorklogForm({
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
           <span className="font-mono text-2xs text-muted-foreground">
-            <kbd className="rounded border border-border/80 bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">⌘ + Enter</kbd> to save
+            <kbd className="rounded border border-border/80 bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">⌘ + Enter</kbd> to save
           </span>
 
           <Button

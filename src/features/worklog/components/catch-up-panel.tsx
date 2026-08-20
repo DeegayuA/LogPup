@@ -159,7 +159,7 @@ export function CatchUpPanel({
                 type="button"
                 onClick={() => setActiveDay(day)}
                 className={cn(
-                  'flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium transition-all cursor-pointer text-left',
+                  'flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium transition-[background-color,border-color,color,box-shadow] motion-reduce:transition-none cursor-pointer text-left',
                   isSelected
                     ? 'border-primary bg-primary/10 text-foreground ring-2 ring-primary/30 shadow-xs'
                     : 'border-border/60 bg-card/60 text-muted-foreground hover:border-border hover:bg-card hover:text-foreground',
@@ -169,7 +169,7 @@ export function CatchUpPanel({
                   <span className="font-heading text-xs font-bold text-foreground">
                     {format(new Date(`${day}T12:00:00`), 'EEE, MMM d')}
                   </span>
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span className="font-mono text-2xs text-muted-foreground">
                     {fraction === 0.5 ? 'Half day (50%)' : 'Full day (100%)'}
                   </span>
                 </div>
@@ -177,11 +177,11 @@ export function CatchUpPanel({
                 {isDrafting ? (
                   <Loader2Icon className="size-3.5 animate-spin text-primary shrink-0" />
                 ) : hasDraft ? (
-                  <span className="flex items-center gap-1 rounded bg-primary/20 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-primary">
+                  <span className="flex items-center gap-1 rounded bg-primary/20 px-1.5 py-0.5 font-mono text-2xs font-semibold text-primary">
                     <CheckCircle2 className="size-3" /> Drafted
                   </span>
                 ) : (
-                  <span className="rounded bg-chart-1/15 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-chart-1">
+                  <span className="rounded bg-chart-1/15 px-1.5 py-0.5 font-mono text-2xs font-semibold text-chart-1">
                     Owed
                   </span>
                 )}

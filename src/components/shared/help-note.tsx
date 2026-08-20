@@ -71,7 +71,7 @@ export function HelpDetail({
   className?: string
 }) {
   return (
-    <details className={cn('group rounded-xl border border-border/70 bg-card/60 p-2.5 transition-all text-xs backdrop-blur-sm', className)}>
+    <details className={cn('group rounded-xl border border-border/70 bg-card/60 p-2.5 transition-[background-color,border-color] duration-150 motion-reduce:transition-none text-xs backdrop-blur-sm', className)}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-medium text-muted-foreground transition-colors hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary select-none">
         <span className="flex items-center gap-2">
           <span className="size-1.5 rounded-full bg-primary" />

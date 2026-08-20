@@ -39,8 +39,16 @@ export default async function DashboardPage() {
     : greetingFor(businessHourOf(now))
 
   return (
-    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8 overflow-hidden">
-      {/* Background ambient lighting */}
+    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8">
+      {/* Decorative only. The orbs are wider than the viewport by design, so
+          they need clipping — but the clip belongs on THIS wrapper, not on the
+          page root. `overflow-hidden` on the root makes it the nearest scroll
+          container for everything inside, which silently stops `position:
+          sticky` working for its descendants: the activity trail's day markers
+          and the progress matrix's frozen person column both stick to a
+          container that never scrolls. Same paint, without taking sticky
+          positioning away from the whole page. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
       <div
         className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
         aria-hidden
@@ -49,6 +57,7 @@ export default async function DashboardPage() {
         className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
         aria-hidden
       />
+      </div>
 
       <PageHeader
         title="Studio Dashboard"

@@ -25,7 +25,7 @@ export function Header({
   canSeeProgress: boolean
 }) {
   return (
-    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/70 bg-background/80 px-4 backdrop-blur-md transition-all">
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/70 bg-background/80 px-4 backdrop-blur-md">
       {/* Mobile nav drawer button */}
       <div className="md:hidden">
         <MobileNav isAdmin={isAdmin} canSeeProgress={canSeeProgress} />
