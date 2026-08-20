@@ -3,6 +3,7 @@ import { adminNavItems, navItems } from '@/components/shell/nav-items'
 import { isAdminRole } from '@/features/auth/capabilities'
 import { settingsNavItem } from '@/features/settings/nav'
 import { commands as appsCommands } from '@/features/apps/commands'
+import { commands as activityCommands } from '@/features/activity/commands'
 import { commands as authCommands } from '@/features/auth/commands'
 import { commands as bugsCommands } from '@/features/bugs/commands'
 import { commands as intelCommands } from '@/features/intel/commands'
@@ -10,6 +11,7 @@ import { commands as meetingsCommands } from '@/features/meetings/commands'
 import { commands as notificationsCommands } from '@/features/notifications/commands'
 import { commands as peopleCommands } from '@/features/people/commands'
 import { commands as settingsCommands } from '@/features/settings/commands'
+import { commands as worklogCommands } from '@/features/worklog/commands'
 import type { CommandApi, CommandDescriptor, PaletteContext } from './types'
 
 /**
@@ -36,6 +38,7 @@ import type { CommandApi, CommandDescriptor, PaletteContext } from './types'
  * advertise a jump nothing listened for.
  */
 const FEATURE_COMMANDS: CommandDescriptor[] = [
+  ...activityCommands,
   ...appsCommands,
   ...authCommands,
   ...bugsCommands,
@@ -44,6 +47,7 @@ const FEATURE_COMMANDS: CommandDescriptor[] = [
   ...notificationsCommands,
   ...peopleCommands,
   ...settingsCommands,
+  ...worklogCommands,
 ]
 
 /** A row, with everything state-dependent already decided. */

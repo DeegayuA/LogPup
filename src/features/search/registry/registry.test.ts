@@ -42,7 +42,6 @@ const FEATURES = readdirSync(FEATURES_DIR, { withFileTypes: true })
  * features nobody got round to".
  */
 const NO_COMMANDS: Readonly<Record<string, string>> = {
-  activity: 'no palette-invocable action; its page is already a nav row',
   admin: 'every action needs a target row, and the purges need a typed confirmation',
   calendar: 'an internal Google Calendar wrapper, no user-facing action',
   dashboard: 'no actions; its page is a nav row',
@@ -54,7 +53,6 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   speech: 'needs a microphone or a selection; not fire-and-forget',
   sprints: 'every action needs an app, sprint or task id',
   transcription: 'needs a meetingId and an env feature flag',
-  worklog: 'logging happens on its page, which is a nav row',
 }
 
 /** Features with nothing searchable. Same rule: say why. */
