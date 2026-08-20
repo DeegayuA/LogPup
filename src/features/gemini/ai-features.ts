@@ -12,6 +12,8 @@ export type AiCallSlug =
   | 'meeting.followups'
   | 'meeting.assistant'
   | 'worklog.draft'
+  | 'worklog.entries-draft'
+  | 'worklog.entries-check'
   | 'sprint.draft'
   | 'app.metadata'
   | 'speech.dictation'
@@ -156,6 +158,53 @@ export const AI_FEATURES = [
     estimate: {
       label: 'per draft',
       tokens: { model: 'gemini-3.6-flash', inputTokens: 2_000, outputTokens: 200 },
+    },
+  },
+  {
+    id: 'worklog-entries-draft',
+    label: 'Hours drafting',
+    description: 'Proposes where a day’s hours went, from your meetings and your own activity.',
+    chain: 'Analysis',
+    kind: 'text',
+    slugs: ['worklog.entries-draft'],
+    estimate: {
+      label: 'per draft',
+      // One call over a day's evidence pack: the meetings somebody sat in, that
+      // day's activity rows (capped at 60) and their in-progress tasks — a few
+      // dozen short lines. Output is at most twelve proposed entries
+      // (MAX_PROPOSED_ENTRIES) of four small fields each.
+      //
+      // Larger than worklog-draft's 2k/200 because that feature drafts one
+      // paragraph from activity alone; this one also carries meetings with
+      // their times and projects, and the task ids it is fenced to.
+      //
+      // No chosenModelApplies: one call, so the choice reprices the whole
+      // shape, which is correct.
+      tokens: { model: 'gemini-3.6-flash', inputTokens: 4_000, outputTokens: 500 },
+    },
+  },
+  {
+    id: 'worklog-entries-check',
+    label: 'Hours cross-check',
+    description: 'Puts what the app noticed about a saved day into plain words.',
+    chain: 'Quick',
+    kind: 'text',
+    slugs: ['worklog.entries-check'],
+    estimate: {
+      label: 'per check that finds something',
+      // THE LABEL IS THE POINT. This feature does not call a model on most
+      // saves at all: findDiscrepancies (entry-check.ts) is pure, and when it
+      // returns nothing the action returns before a prompt exists. Silence is
+      // the common case, so a "per save" figure would overstate the real cost
+      // several times over; this quotes the call that actually happens.
+      //
+      // Tiny, and deliberately so: the prompt is a handful of already-computed
+      // observations with their facts, and the reply is one short sentence
+      // each. The model never sees the entries, the meetings, the activity log
+      // or the schedule — it is asked only to reword, which is what keeps a
+      // feature about somebody's working hours both cheap and incapable of
+      // finding anything on its own.
+      tokens: { model: 'gemini-3.5-flash-lite', inputTokens: 900, outputTokens: 150 },
     },
   },
   {

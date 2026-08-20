@@ -30,6 +30,19 @@ import {
  *                         transcription, just one clip instead of a meeting)
  * - worklog-draft     -> ANALYSIS_MODELS    (draft-actions.ts: callGemini
  *                         with no `models` override, same default chain)
+ * - worklog-entries-draft -> ANALYSIS_MODELS (registry chain: 'Analysis' —
+ *                         entry-ai-actions.ts draftWorklogEntries, one pass
+ *                         over a day's meetings, activity and open tasks;
+ *                         reading a day's evidence and apportioning it is
+ *                         analysis, the same shape as the note draft above)
+ * - worklog-entries-check -> QUICK_MODELS   (registry chain: 'Quick' —
+ *                         entry-ai-actions.ts checkWorklogEntries. Quick and
+ *                         not Analysis ON PURPOSE: findDiscrepancies has
+ *                         ALREADY decided what is wrong, so the call is short
+ *                         mechanical rewording of facts that are handed to it.
+ *                         A heavier chain would buy reasoning this feature
+ *                         must not have, on the save path of every day that
+ *                         has something to say.)
  * - sprint-draft      -> ANALYSIS_MODELS    (suggest-actions.ts: ditto)
  * - app-metadata      -> QUICK_MODELS       (apps/actions.ts)
  * - workspace-ask     -> ANALYSIS_MODELS    (registry chain: 'Analysis' — one
@@ -45,6 +58,8 @@ const DEFAULT_CHAIN: Record<AiFeatureId, readonly string[]> = {
   'read-aloud': TTS_MODEL_FALLBACK_ORDER,
   dictation: ANALYSIS_MODELS,
   'worklog-draft': ANALYSIS_MODELS,
+  'worklog-entries-draft': ANALYSIS_MODELS,
+  'worklog-entries-check': QUICK_MODELS,
   'sprint-draft': ANALYSIS_MODELS,
   'app-metadata': QUICK_MODELS,
   'workspace-ask': ANALYSIS_MODELS,
