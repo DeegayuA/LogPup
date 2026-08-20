@@ -32,6 +32,11 @@ import {
  *                         with no `models` override, same default chain)
  * - sprint-draft      -> ANALYSIS_MODELS    (suggest-actions.ts: ditto)
  * - app-metadata      -> QUICK_MODELS       (apps/actions.ts)
+ * - workspace-ask     -> ANALYSIS_MODELS    (registry chain: 'Analysis' — one
+ *                         grounded generateContent call over the context pack)
+ * - daily-briefing    -> ANALYSIS_MODELS    (registry chain: 'Analysis' — same
+ *                         pack, longer output; NOT Synthesis, which stays
+ *                         reserved for the one Pro pass per meeting)
  */
 const DEFAULT_CHAIN: Record<AiFeatureId, readonly string[]> = {
   'meeting-intel': SYNTHESIS_MODELS,
@@ -42,11 +47,32 @@ const DEFAULT_CHAIN: Record<AiFeatureId, readonly string[]> = {
   'worklog-draft': ANALYSIS_MODELS,
   'sprint-draft': ANALYSIS_MODELS,
   'app-metadata': QUICK_MODELS,
+  'workspace-ask': ANALYSIS_MODELS,
+  'daily-briefing': ANALYSIS_MODELS,
 }
 
-/** The chain a feature calls Gemini with when the user has chosen nothing. */
+/**
+ * The chain a feature calls Gemini with when the user has chosen nothing.
+ *
+ * The guard is not defensive padding — the Record's type LIES at runtime.
+ * `Record<AiFeatureId, ...>` makes a missing key a compile error, so TypeScript
+ * treats every lookup as defined; but `next dev` serves pages with type errors
+ * present, so a feature registered in AI_FEATURES without an entry here returns
+ * `undefined`, and resolveChain spreads it into "undefined is not iterable" —
+ * thrown from deep inside an AI action, naming nothing useful. That has already
+ * happened once, when two features reached the registry ahead of this map.
+ * Failing here instead names the feature and the file to fix.
+ */
 export function defaultChainFor(featureId: AiFeatureId): readonly string[] {
-  return DEFAULT_CHAIN[featureId]
+  const chain = DEFAULT_CHAIN[featureId]
+  if (!chain) {
+    throw new Error(
+      `No default model chain for AI feature "${featureId}". Every feature in ` +
+        `AI_FEATURES needs an entry in DEFAULT_CHAIN (src/features/gemini/model-choice.ts); ` +
+        `use the chain constant that feature's call site already passes.`,
+    )
+  }
+  return chain
 }
 
 /**
