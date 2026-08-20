@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm'
 import {
   bigint,
   pgTable, pgEnum, text, uuid, integer, doublePrecision, boolean, date, timestamp,
-  index, uniqueIndex, primaryKey, jsonb,
+  numeric, index, uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
 
 // The seven seats. Additive over the original admin|member: existing rows keep
@@ -1438,4 +1438,146 @@ export const userDeletions = pgTable('user_deletions', {
     .on(t.userId)
     .where(sql`${t.restoredAt} is null`),
   index('user_deletions_removed_at_idx').on(t.removedAt),
+])
+
+// ---------------------------------------------------------------------------
+// Money: what an hour costs and what a project is worth (migration 0048)
+// ---------------------------------------------------------------------------
+//
+// THE SUBSTRATE ONLY. These three tables and the pure maths in
+// src/features/finance/cost.ts are the whole of this change: no action reads
+// or writes any of them yet, and in particular NOTHING READS person_rates.
+// That is deliberate — see the comment on that table.
+//
+// EVERY AMOUNT IS numeric, NEVER doublePrecision. This file already uses
+// doublePrecision for allocation fractions, where a rounding error is a
+// cosmetic one. Money summed as a float drifts, and a cost report that
+// disagrees with itself by a cent between two screens is a report nobody
+// trusts again. Drizzle hands `numeric` back as a STRING for exactly this
+// reason; the finance module parses it at its boundary and treats an
+// unparseable value as "no rate", never as zero.
+
+// What an hour of a given job role costs. The BASE rate — the normal case,
+// and the only one most people ever have.
+//
+// `role` is `users.title`, the job-role text already carried on a person
+// ("Senior Engineer"), matched by value rather than by a foreign key: titles
+// are free text an admin types, and a rate card must keep pricing hours that
+// were logged under a title nobody holds today.
+//
+// AS-OF INTERVALS, NEVER A MUTABLE NUMBER — half-open [effective_from,
+// effective_to), the same shape as app_role_history and work_schedules, and
+// resolved by the same rule (a row whose effective_to equals the day does NOT
+// cover it, so two adjacent rows cannot both claim the boundary).
+//
+// This is the entire reason the table has a shape at all rather than being an
+// `hourly` column on some settings row. A rate that is simply EDITED silently
+// re-prices every hour ever worked: last quarter's finished project changes
+// cost, months after it closed, because somebody got a raise this week. The
+// number on a cost report has to be computed against the rate in force on the
+// day the work happened, and only an interval can answer that.
+//
+// DATE, not timestamp, unlike the two history tables above. A rate change is
+// something a person states as a calendar day ("from 1 July he bills at X"),
+// and worklog_entries.day is a date too — pricing a day against an interval
+// keyed to an instant would mean picking an hour for the boundary, which is
+// the Colombo/UTC off-by-one this repo has already been bitten by.
+export const rateCards = pgTable('rate_cards', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  role: text('role').notNull(),
+  hourly: numeric('hourly', { precision: 12, scale: 2 }).notNull(),
+  // One workspace currency. Mixing them is a later problem, and the finance
+  // module refuses to sum across two rather than pretending it can.
+  currency: text('currency').notNull(),
+  effectiveFrom: date('effective_from').notNull(),
+  effectiveTo: date('effective_to'),
+  setBy: uuid('set_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // The only read: "every rate this role has ever had", walked to find the one
+  // covering a day.
+  index('rate_cards_role_from_idx').on(t.role, t.effectiveFrom),
+  // AT MOST ONE open interval per role, the same guard as
+  // app_role_history_one_open_idx and work_schedules_one_open_idx. Two open
+  // rows would make "what did this role cost on 12 June" ambiguous, and an
+  // ambiguous cost is worse than no cost.
+  uniqueIndex('rate_cards_one_open_idx')
+    .on(t.role)
+    .where(sql`${t.effectiveTo} is null`),
+])
+
+// The optional per-person override, for someone whose rate genuinely differs
+// from their role's. Same shape, same half-open interval, same resolution
+// rule; an override beats the role rate for the days it covers, and its
+// ABSENCE means the role rate, which is the normal case and must stay so.
+//
+// THIS IS SALARY DATA AND IS TREATED AS SUCH. The design (docs/superpowers/
+// specs/2026-08-20-project-cost-and-worth-design.md) is explicit:
+//
+//   - It is gated by ITS OWN capability, which DOES NOT EXIST YET. The
+//     capability matrix belongs to another session and nobody currently holds
+//     it. The table can land without that decision; anything that EXPOSES a
+//     rate cannot, so no query, action or loader in this repo reads this
+//     table, on purpose. Whoever adds the first reader must add the gate in
+//     the same change — not after it.
+//   - Never rendered in any per-person view: not the person page, not the
+//     directory, not a tooltip.
+//   - NO COST-PER-PERSON CHART, EVER. A bar chart of cost by person is a
+//     salary chart with extra steps. Cost aggregates to project, team, role
+//     or time, never to an individual.
+export const personRates = pgTable('person_rates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  hourly: numeric('hourly', { precision: 12, scale: 2 }).notNull(),
+  currency: text('currency').notNull(),
+  effectiveFrom: date('effective_from').notNull(),
+  effectiveTo: date('effective_to'),
+  setBy: uuid('set_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('person_rates_user_from_idx').on(t.userId, t.effectiveFrom),
+  // Same invariant as rate_cards_one_open_idx, per person.
+  uniqueIndex('person_rates_one_open_idx')
+    .on(t.userId)
+    .where(sql`${t.effectiveTo} is null`),
+])
+
+// What a project is worth. One row per app.
+//
+// TWO KINDS OF MONEY, TWO COLUMNS, AND THEY ARE NEVER ADDED TOGETHER. A
+// fixed-price build (contract_value) and a monthly retainer
+// (subscription_monthly) answer different questions — "what is this build
+// worth" versus "what does this earn while it runs" — and a single "worth"
+// figure quietly merging them is the two-numbers-under-one-name disease
+// docs/kpi-inventory.md already catalogues thirteen instances of. The finance
+// module returns them separately and makes the caller label each.
+//
+// BOTH ARE NULLABLE, and null means "not stated", never zero. An internal
+// tool has no contract value; that is not the same fact as a contract worth
+// nothing, and margin against it must report "cannot say" rather than a
+// number.
+//
+// SUBSCRIPTION IS A DATE RANGE, NOT A LEDGER. subscriptionAccrued() walks
+// [subscription_from, subscription_to) at READ time. There are deliberately no
+// per-month rows: a missed cron would silently under-report revenue, and the
+// under-report looks exactly like a quiet month. The range is the source of
+// truth and it cannot fall behind.
+export const projectValue = pgTable('project_value', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  contractValue: numeric('contract_value', { precision: 14, scale: 2 }),
+  subscriptionMonthly: numeric('subscription_monthly', { precision: 14, scale: 2 }),
+  subscriptionFrom: date('subscription_from'),
+  // HALF-OPEN, like every other interval in this file: the subscription runs
+  // up to but not including this day, so an end and the next start can share a
+  // date without billing it twice.
+  subscriptionTo: date('subscription_to'),
+  currency: text('currency').notNull(),
+  setBy: uuid('set_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // ONE row per app, enforced rather than assumed. Two rows would make "what
+  // is this project worth" ambiguous in the one place the question is asked.
+  uniqueIndex('project_value_app_idx').on(t.appId),
 ])

@@ -330,6 +330,13 @@
       "when": 1787156300000,
       "tag": "0047_worklog_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1787156400000,
+      "tag": "0048_project_finance",
+      "breakpoints": true
     }
   ]
 }
