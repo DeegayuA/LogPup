@@ -48,6 +48,7 @@ import {
 import { computeCoverage, formatCoverage } from '@/features/worklog/coverage'
 import { buildHolidayCalendar, closesTheStudio } from '@/features/worklog/holiday-listing'
 import { listOrgHolidays, type OrgHolidayRow } from '@/features/worklog/org-holiday-queries'
+import { absenceDays } from '@/features/worklog/absence-days'
 import { patternForDay } from '@/features/worklog/schedules'
 import { MAX_BACKFILL_DAYS } from '@/features/worklog/missing-days'
 import { WORK_DAY_PATTERN, resolveWorkDay, worklogDaysBack } from '@/features/worklog/worklog-day'
@@ -220,27 +221,6 @@ function shiftDay(iso: string, days: number): string {
   const cursor = new Date(`${iso}T12:00:00Z`)
   cursor.setUTCDate(cursor.getUTCDate() + days)
   return cursor.toISOString().slice(0, 10)
-}
-
-/**
- * Every day an absence covers that falls inside the half-open window
- * `[from, to)`.
- *
- * An absence's own bounds are INCLUSIVE on both ends — they are dates a person
- * stated in words — so the two conventions are clipped against each other in
- * exactly one place rather than wherever a day could be gained or lost.
- */
-function absenceDays(
-  ranges: readonly { startDate: string; endDate: string }[],
-  from: string,
-  to: string,
-): Set<string> {
-  const days = new Set<string>()
-  for (const range of ranges) {
-    let day = range.startDate < from ? from : range.startDate
-    for (; day <= range.endDate && day < to; day = shiftDay(day, 1)) days.add(day)
-  }
-  return days
 }
 
 /**

@@ -257,7 +257,12 @@ export function WorklogForm({
               <span className="font-mono font-bold tabular-nums text-foreground">
                 {suggestion.percent}%
               </span>
-              {' &bull; based on '}
+              {/* A literal •, not the HTML entity: this is a JS string inside
+                  braces, where JSX does no entity decoding, so "&bull;" would
+                  render as those six characters verbatim. Entities are only
+                  decoded in raw JSX text — which is why the same "&bull;"
+                  elsewhere in this feature is correct and this one was not. */}
+              {' • based on '}
               <span className="font-mono font-medium text-foreground">{suggestion.activityCount}</span>
               {suggestion.activityCount === 1 ? ' activity' : ' activities'} recorded.
             </p>
