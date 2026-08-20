@@ -382,8 +382,8 @@ export function HeroShowcase() {
   const speech = useSpeech()
 
   const textToSpeak = sinhalaMode
-    ? `${activeMeeting.title}. ${activeMeeting.actionSi}`
-    : `${activeMeeting.title}. ${activeMeeting.actionEn}`
+    ? `${activeMeeting.title}. ${activeMeeting.actionItemSi}`
+    : `${activeMeeting.title}. ${activeMeeting.actionItemEn}`
 
   const handleToggleAudio = () => {
     if (isPlayingAudio) {
@@ -414,22 +414,40 @@ export function HeroShowcase() {
     return () => clearInterval(interval)
   }, [isPlayingAudio, speech])
 
-  // Stop audio on tab switch
-  useEffect(() => {
-    if (activeTab !== 'intel' && isPlayingAudio) {
+  const handleSelectTab = (tabId: TabKey) => {
+    if (tabId !== 'intel' && isPlayingAudio) {
       speech.stop()
       setIsPlayingAudio(false)
     }
-  }, [activeTab, isPlayingAudio, speech])
+    setActiveTab(tabId)
+  }
 
-  // Update speech when switching meetings or language while playing
-  useEffect(() => {
+  const handleToggleLanguage = () => {
+    const nextMode = !sinhalaMode
+    setSinhalaMode(nextMode)
     if (isPlayingAudio) {
       speech.stop()
-      speech.speak(textToSpeak).catch(() => {})
+      const nextText = nextMode
+        ? `${activeMeeting.title}. ${activeMeeting.actionItemSi}`
+        : `${activeMeeting.title}. ${activeMeeting.actionItemEn}`
+      speech.speak(nextText).catch(() => {})
       setAudioProgress(0)
     }
-  }, [currentMeetingIdx, sinhalaMode, textToSpeak, isPlayingAudio, speech])
+  }
+
+  const handleSwitchMeeting = () => {
+    const nextIdx = (currentMeetingIdx + 1) % MEETINGS_DATA.length
+    setCurrentMeetingIdx(nextIdx)
+    if (isPlayingAudio) {
+      speech.stop()
+      const nextMeeting = MEETINGS_DATA[nextIdx]
+      const nextText = sinhalaMode
+        ? `${nextMeeting.title}. ${nextMeeting.actionItemSi}`
+        : `${nextMeeting.title}. ${nextMeeting.actionItemEn}`
+      speech.speak(nextText).catch(() => {})
+      setAudioProgress(0)
+    }
+  }
 
   // Auto-cycle models in Intel tab
   useEffect(() => {
@@ -519,7 +537,7 @@ export function HeroShowcase() {
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleSelectTab(tab.id)}
                 className={cn(
                   'flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-2xs font-semibold transition-all duration-150 cursor-pointer whitespace-nowrap',
                   isActive
@@ -971,7 +989,7 @@ export function HeroShowcase() {
 
                 <button
                   type="button"
-                  onClick={() => setSinhalaMode(!sinhalaMode)}
+                  onClick={handleToggleLanguage}
                   className="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[10px] font-medium hover:border-primary cursor-pointer"
                 >
                   <Languages className="size-3 text-primary" />
@@ -1042,7 +1060,7 @@ export function HeroShowcase() {
 
               <button
                 type="button"
-                onClick={() => setCurrentMeetingIdx((prev) => (prev + 1) % MEETINGS_DATA.length)}
+                onClick={handleSwitchMeeting}
                 className="flex items-center gap-1 rounded-md border border-border/70 bg-card px-2 py-1.5 text-[10px] text-foreground hover:border-primary cursor-pointer shrink-0"
               >
                 <span>{activeMeeting.title.split(' ')[0]}</span>
