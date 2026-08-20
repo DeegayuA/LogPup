@@ -88,6 +88,12 @@ export type TaskIntentPreview = {
 export async function previewTaskIntent(raw: string): Promise<TaskIntentPreview | null> {
   const session = await auth()
   if (!session?.user) return null
+  /* Approved, not merely signed in — the same gate universalSearch carries
+     above, for the same reason. This one reads `assignableUsers()`, so without
+     it a pending account could enumerate every approved teammate's name one
+     guess at a time: precisely the enumeration the search gate was added to
+     stop, through the door beside it. */
+  if (!canAccessApp(session.user.status, true)) return null
 
   const input = z.string().max(400).safeParse(raw)
   if (!input.success) return null
@@ -126,6 +132,12 @@ export async function previewTaskIntent(raw: string): Promise<TaskIntentPreview 
 export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAssignData>> {
   const session = await auth()
   if (!session?.user) return err('Sign in required')
+  /* The sharpest of the three. This one WRITES: without the gate an account
+     that an administrator has not approved — or has deactivated — could insert
+     tasks into any app and assign them to anyone. The message deliberately
+     says approval rather than naming a status, so it reads the same to someone
+     waiting in the queue as to someone whose access was withdrawn. */
+  if (!canAccessApp(session.user.status, true)) return err('Your account is awaiting approval')
 
   const input = z.string().max(400).safeParse(raw)
   if (!input.success) return err('Try "@name task title" or "assign <task> to <name> on <app>"')
