@@ -13,6 +13,10 @@ export function Header({
   canSeeProgress,
 }: {
   user: AccountUser
+  // Both, and not one derived from the other: MobileNav gates on the admin
+  // family, while AccountMenu names the actual seat. Collapsing them would
+  // show a superadmin their own badge as "Admin" — a demotion in the one
+  // place that confirms who you are signed in as.
   role: UserRole
   isAdmin: boolean
   // Passed straight through to MobileNav: below `md` the sheet is the only
@@ -32,7 +36,11 @@ export function Header({
         <CommandCenterTrigger className="h-9 rounded-xl border-border/80 bg-card/80 shadow-xs hover:border-primary/50 hover:bg-card focus-visible:ring-primary/40" />
       </div>
 
-      {/* Right Action Icons: Notification, Theme, Profile */}
+      {/* Account and install live in the sidebar footer on desktop. Below `md`
+          there is no sidebar, so this row carries them instead — one visible
+          instance at any width, never both. That is what every `md:hidden`
+          here is for; removing one duplicates a control rather than revealing
+          it. */}
       <div className="flex items-center gap-1 sm:gap-1.5">
         <InstallButton className="md:hidden" />
         <NotificationBell />

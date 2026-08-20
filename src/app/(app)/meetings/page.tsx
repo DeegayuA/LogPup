@@ -34,6 +34,9 @@ export default async function MeetingsPage(props: {
     listActiveUsers(),
   ])
 
+  // `allMeetings` arrives newest-first, which is what the past side wants and
+  // the reverse of what upcoming does — splitByUpcoming owns that flip. Sorting
+  // either half again here would silently undo it.
   const { upcoming, past } = splitByUpcoming(allMeetings)
 
   const currentUserId = session?.user?.id ?? ''
@@ -41,6 +44,11 @@ export default async function MeetingsPage(props: {
   const appOptions = apps.map((app) => ({ id: app.id, name: app.name }))
   const overview = summarizeMeetings(upcoming, past, currentUserId, new Date())
 
+  // Today in Asia/Colombo, not UTC: an evening here is already tomorrow in
+  // UTC, so a UTC-derived "today" would open the calendar on the wrong day
+  // for half the working week. The view and date the URL asked for are parsed
+  // HERE, from the awaited searchParams, so every value the calendar starts
+  // from is resolved in one place rather than re-derived per component.
   const todayIso = toIsoDateInTimeZone(new Date())
   const initialView = parseCalendarView(viewParam)
   const initialDate = parseFocusedDate(dateParam, todayIso)

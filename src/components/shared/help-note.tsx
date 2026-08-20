@@ -16,6 +16,21 @@ import { cn } from '@/lib/utils'
  * WHEN TO USE `HelpDetail`: the longer "how is this number worked out" answer
  * that would bury the control if it were always on screen. Closed by default,
  * keyboard-operable, and its summary has to say what opening it gets you.
+ *
+ * A HINT THAT OPENS ON HOVER DOES NOT EXIST ON A TOUCH SCREEN, and `title` is
+ * the same trap with worse ergonomics. If something is worth explaining it is
+ * worth rendering; if it is not worth the space, it is not worth a hover
+ * either. Where width genuinely forbids a sentence, follow the command
+ * palette's shortcut chips and gate the hint on `sm` rather than on a pointer.
+ *
+ * KNOWN VIOLATION, recorded rather than sanctioned: a Tooltip primitive was
+ * added in the 2026-08-20 redesign (src/components/ui/tooltip.tsx) and is used
+ * on the five icon-only actions in gemini-keys-card.tsx. It does not solve the
+ * problem it was added for. Those buttons already carry `sr-only` labels, so
+ * screen readers were never the gap; the gap was sighted users, and a tooltip
+ * serves the mouse half of them while leaving every touch user exactly where
+ * they were. The rule above already prescribes the better answer for that row.
+ * Treat the primitive as debt to unwind, not as precedent.
  */
 export function HelpNote({
   children,

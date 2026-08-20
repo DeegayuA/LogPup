@@ -149,6 +149,12 @@ export function WorklogForm({
           toast.error(res.error)
           return
         }
+        // Overwrites deliberately, like "Draft with AI" on the sprint form
+        // (features/sprints/components/task-composer.tsx): the button is the
+        // statement of intent, so appending to whatever is already in the box
+        // would leave a person to clean up after their own click. Nothing is
+        // saved until they press save, so the draft is reversible by not
+        // saving it.
         setNote(res.data.note)
         setSuggestion(
           res.data.suggestedPercent !== null

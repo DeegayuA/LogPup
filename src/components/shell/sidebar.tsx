@@ -56,7 +56,10 @@ export function NavLink({
   )
 }
 
-/* The ⌘K hint, matching CommandCenterTrigger's chip */
+/* The ⌘K hint, matching CommandCenterTrigger's chip. Server-rendered as the
+   Mac form and corrected after hydration, so the markup is stable either way —
+   which is what the eslint-disable below is buying, and the only reason it is
+   allowed to stay. */
 function CommandHint() {
   const [isMac, setIsMac] = useState(true)
   useEffect(() => {
@@ -93,7 +96,13 @@ export function Sidebar({
       aria-label="Primary"
       className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col self-start overflow-y-auto border-r border-sidebar-border/80 bg-sidebar/95 text-sidebar-foreground backdrop-blur-md md:flex"
     >
-      {/* Branding row */}
+      {/* Branding row. LogPup owns the left edge; the Alta Vision mark — the
+          company that builds and operates it — sits at the right edge of the
+          same row, small enough to read as attribution rather than as a second
+          brand of equal weight. The two are SIBLINGS in a flex row, not
+          nested: one is an internal Link and one is an external anchor, and an
+          <a> inside an <a> is invalid markup. Both are `shrink-0` because the
+          sidebar is a fixed w-60 — neither mark may squash the other. */}
       <div className="flex items-center justify-between border-b border-sidebar-border/60 px-4 py-3.5">
         <Link href="/" className="flex shrink-0 items-center gap-2.5 transition-opacity hover:opacity-90">
           <span className="flex size-8 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md shadow-primary/20">
@@ -142,6 +151,13 @@ export function Sidebar({
           />
         ) : null}
 
+        {/* Settings sits after the workspace destinations rather than inside
+            navItems, because navItems is shared data about the WORKSPACE and
+            this is the one row that is about you. It is still a single
+            declaration (features/settings/nav.ts) rendered by both nav
+            surfaces through the same NavLink, so the desktop sidebar and the
+            mobile sheet cannot drift. mobile-nav.tsx points here for this
+            reason — keep the two in step. */}
         <NavLink
           href={settingsNavItem.href}
           label={settingsNavItem.label}

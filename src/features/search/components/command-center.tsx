@@ -239,6 +239,9 @@ export function CommandCenterProvider({
         return
       }
       if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) return
+      // During IME composition: a composed keystroke is mid-word, not a
+      // shortcut. Without this, typing Sinhala — the second language this app
+      // is written in — would fire g-jumps mid-word.
       if (event.isComposing) return
       /* Overlay check shared by "?" and the g-jumps: single keys must never
          fire inside dialogs, menus or pickers (WCAG 2.1.4) — with one
