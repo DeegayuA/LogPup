@@ -17,6 +17,12 @@ import { PlateBriefing, PlateCapacity, PlateWriteup } from './plates'
 import { MouseFollower } from './mouse-follower'
 
 export const metadata: Metadata = {
+  // `absolute` rather than a plain string: the root layout sets
+  // template: "%s · LogPup", which a bare string opts into, and this title
+  // already opens with the product name — so the tab and the SERP entry would
+  // both read "LogPup — … · LogPup". Google's brand verification compares this
+  // against the name on the consent screen, and a doubled mark is exactly the
+  // inconsistency that check exists to catch.
   title: { absolute: 'LogPup — engineering ops for Alta Vision teams' },
   description:
     'LogPup tracks the apps a studio runs, who works on them, what each team ships this sprint, and what happened in every meeting with Gemini AI transcription.',
@@ -117,7 +123,21 @@ export default function PublicHomePage() {
             </div>
 
             {/* Right Column: Hero Live Interactive Ops Preview (7 Cols) */}
-            <div className="lg:col-span-7">
+            {/* HEIGHT-CAPPED, SCROLLING INSIDE ITSELF ON LARGE SCREENS.
+                The sandbox stacks a tab bar and up to six blocks; uncapped it
+                ran past 1400px and made the first screen of a marketing page
+                taller than two viewports, while the left column finished ~570px
+                earlier. Capping to the viewport minus the sticky header holds
+                the hero to one screen and lets the panel scroll its own
+                overflow — which suits a sandbox of a product that scrolls.
+
+                `svh` not `vh`: mobile browser chrome resizes the viewport as
+                you scroll, and `vh` would leave the panel taller than the space
+                it was given. Deliberately lg-only — below that the columns are
+                stacked, so there is no imbalance to correct, and a nested
+                scroll inside a page scroll means you swipe and the wrong thing
+                moves. */}
+            <div className="lg:col-span-7 lg:max-h-[calc(100svh-7rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
               <HeroShowcase />
             </div>
           </div>

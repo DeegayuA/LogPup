@@ -57,6 +57,12 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
         <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-6 px-6 py-8 md:px-10">
           <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex flex-col gap-2.5">
+              {/* `self-start` is load-bearing, not spacing. This sits in a
+                  `flex flex-col`, whose default `align-items: stretch`
+                  overrides `w-auto` and pulls the image to the column's full
+                  width while `h-4` holds the height — so the wordmark rendered
+                  horizontally stretched. Sizing the item to its content
+                  restores the 3774x607 aspect. */}
               <AltaVisionLogo className="h-4 w-auto self-start" />
               <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
                 LogPup is an internal engineering operations system built and operated by{' '}

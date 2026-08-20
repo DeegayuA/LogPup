@@ -4,6 +4,18 @@ import { ShieldCheck, Lock, ExternalLink, CheckCircle2 } from 'lucide-react'
 import { LEGAL_PROSE } from '../prose'
 import { TableOfContents } from '../table-of-contents'
 
+/**
+ * PUBLICLY REACHABLE ON PURPOSE — do not put this behind auth.
+ *
+ * Google's OAuth review team fetches this URL directly, with no session,
+ * before granting the sensitive `calendar.events` scope, and rejects the
+ * application if it redirects to a login screen. That is why `home|privacy|
+ * terms` are excluded from the auth matcher in src/proxy.ts.
+ *
+ * Dropping that exclusion breaks verification silently: nothing a signed-in
+ * user does would ever reveal it, because a signed-in user is never redirected.
+ * The failure surfaces weeks later as a refused scope.
+ */
 export const metadata: Metadata = {
   title: 'Privacy Policy — LogPup',
   description:
