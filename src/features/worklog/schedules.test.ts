@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { STUDIO_DEFAULT_PATTERN, overlaps, patternForDay } from '@/features/worklog/schedules'
+import { MINUTES_PER_FULL_DAY, STUDIO_DEFAULT_PATTERN, overlaps, patternForDay, scheduledMinutesForFraction } from '@/features/worklog/schedules'
 
 const row = (from: string, to: string | null, sat: number) => ({
   effectiveFrom: from,
@@ -72,5 +72,32 @@ describe('overlaps', () => {
       { startDate: '2026-04-08', endDate: '2026-04-08' },
       { startDate: '2026-04-08', endDate: '2026-04-08' },
     )).toBe(true)
+  })
+})
+
+describe('MINUTES_PER_FULL_DAY', () => {
+  it('is eight hours, the figure the user decided', () => {
+    // Pinned so a change is a decision somebody makes deliberately rather than
+    // a number that drifts. Everything below is derived from it.
+    expect(MINUTES_PER_FULL_DAY).toBe(480)
+  })
+
+  it('turns the studio week into 44 hours', () => {
+    const week = Object.values(STUDIO_DEFAULT_PATTERN).reduce((sum, f) => sum + f, 0)
+    expect(scheduledMinutesForFraction(week)).toBe(44 * 60)
+  })
+
+  it('makes Saturday a 240-minute day', () => {
+    expect(scheduledMinutesForFraction(STUDIO_DEFAULT_PATTERN.sat)).toBe(240)
+    expect(scheduledMinutesForFraction(STUDIO_DEFAULT_PATTERN.sun)).toBe(0)
+  })
+
+  it('rounds once, so a fraction can never produce a fractional minute', () => {
+    // A third of a day is 160 exactly; an eighth is 60. The rounding exists for
+    // patterns that do not divide evenly, and it must happen HERE rather than
+    // in each caller, or two surfaces disagree by a minute and the difference
+    // shows up as somebody being short.
+    expect(Number.isInteger(scheduledMinutesForFraction(0.3))).toBe(true)
+    expect(scheduledMinutesForFraction(0.125)).toBe(60)
   })
 })

@@ -22,6 +22,36 @@ export const STUDIO_DEFAULT_PATTERN: SchedulePattern = {
   sun: 0,
 }
 
+/**
+ * How long a full day is, in minutes. Decided by the user: eight hours, so
+ * Saturday's 0.5 is 240 and a Monday-to-Saturday week is 44 hours.
+ *
+ * THE ONLY DEFINITION, and it lives here because the pattern above and this
+ * number together are the whole answer to "how long is this person's day".
+ * Split across two modules they drift, and the drift stays invisible until two
+ * surfaces disagree about whether somebody is short on hours — at which point
+ * it reads as an accusation of under-logging rather than as a bug.
+ *
+ * NOTE WHAT THIS IS NOT. `daily_worklogs.percent` is a self-scored fraction of
+ * what somebody PLANNED that day, not time, and presenting it as hours would
+ * be a lie (the worklog spec is explicit about this). This constant exists for
+ * the separate per-task minutes measure, where minutes are genuinely recorded.
+ * It converts a SCHEDULE into minutes and says nothing about what anyone
+ * logged.
+ *
+ * Callers should keep taking scheduled minutes as a PARAMETER wherever they
+ * can, so a function that cannot obtain a schedule answers "cannot say"
+ * instead of computing against an assumed day. There is deliberately no
+ * `?? 480` fallback anywhere: a silently-assumed working day is the exact
+ * failure this constant exists to prevent.
+ */
+export const MINUTES_PER_FULL_DAY = 480
+
+/** A schedule fraction as minutes. One conversion, one rounding rule. */
+export function scheduledMinutesForFraction(fraction: number): number {
+  return Math.round(fraction * MINUTES_PER_FULL_DAY)
+}
+
 export type ScheduleRow = {
   effectiveFrom: string
   effectiveTo: string | null
