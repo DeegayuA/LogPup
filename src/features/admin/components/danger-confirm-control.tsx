@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useState, useTransition, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, useTransition, type ReactNode } from 'react'
 import { Loader2Icon, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -54,12 +54,24 @@ export function DangerConfirmControl({
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [pending, start] = useTransition()
+  // Two-step WITH focus management: arming moves focus into the phrase field,
+  // and closing (Cancel or a finished run) hands it back to the button that
+  // armed the control — without this, both steps dropped keyboard focus on
+  // <body> because each replaces the element that held it.
+  const openButtonRef = useRef<HTMLButtonElement>(null)
+  const confirmInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (open) confirmInputRef.current?.focus()
+  }, [open])
 
   const matches = matchesConfirm(confirm, phrase)
 
   function close() {
     setOpen(false)
     setConfirm('')
+    // The open button remounts on the next render; focus it once it exists.
+    requestAnimationFrame(() => openButtonRef.current?.focus())
   }
 
   return (
@@ -70,7 +82,7 @@ export function DangerConfirmControl({
         radius.reversible ? 'border-border bg-card' : 'border-destructive/30 bg-destructive/5',
       )}
     >
-      <h2
+      <h4
         id={`${inputId}-title`}
         className="flex items-center gap-2 font-heading text-sm font-semibold"
       >
@@ -78,7 +90,7 @@ export function DangerConfirmControl({
           <TriangleAlert aria-hidden className="size-4 shrink-0 text-destructive" />
         )}
         {title}
-      </h2>
+      </h4>
       <p className="text-sm text-muted-foreground">{lead}</p>
 
       <BlastRadiusLists radius={radius} />
@@ -97,10 +109,13 @@ export function DangerConfirmControl({
               <div className="flex flex-wrap items-center gap-2">
                 <Input
                   id={inputId}
+                  ref={confirmInputRef}
                   value={confirm}
                   onChange={(event) => setConfirm(event.target.value)}
                   placeholder={phrase}
                   autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                   spellCheck={false}
                   disabled={pending}
                   className="h-9 w-full max-w-[280px] font-mono text-sm"
@@ -128,6 +143,7 @@ export function DangerConfirmControl({
           ) : (
             <div>
               <Button
+                ref={openButtonRef}
                 variant={radius.reversible ? 'outline' : 'destructive'}
                 disabled={phrase === ''}
                 onClick={() => setOpen(true)}

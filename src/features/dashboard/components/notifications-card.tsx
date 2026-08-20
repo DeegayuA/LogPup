@@ -1,7 +1,8 @@
 import Link from 'next/link'
-import { formatDistanceToNow } from 'date-fns'
+import { formatDistance } from 'date-fns'
 import { AtSign, Bell, CalendarPlus, PawPrint } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import type { NotificationItem } from '@/features/notifications/queries'
 import { cn } from '@/lib/utils'
 
@@ -12,7 +13,7 @@ import { cn } from '@/lib/utils'
  * that mutation here would race it for no benefit. Unread rows are simply
  * bolder, with unreadness carried in words for screen readers.
  */
-function RowBody({ item }: { item: NotificationItem }) {
+function RowBody({ item, now }: { item: NotificationItem; now: Date }) {
   const Icon = item.type === 'mention' ? AtSign : CalendarPlus
   return (
     <>
@@ -37,41 +38,53 @@ function RowBody({ item }: { item: NotificationItem }) {
           <span className="truncate text-xs text-muted-foreground">{item.body}</span>
         ) : null}
         <span className="font-mono text-xs tabular-nums text-muted-foreground">
-          {formatDistanceToNow(item.createdAt, { addSuffix: true })}
+          {/* formatDistance against the zone's injected `now`, NOT
+              formatDistanceToNow: the grid-mate RecentActivityCard counts back
+              from an injected clock, and two "ago" conventions on one page can
+              visibly disagree about the same minute. */}
+          {formatDistance(item.createdAt, now, { addSuffix: true })}
         </span>
       </span>
     </>
   )
 }
 
-export function NotificationsCard({ items }: { items: NotificationItem[] }) {
+export function NotificationsCard({
+  items,
+  now,
+}: {
+  items: NotificationItem[]
+  /** Passed in so every relative timestamp on the page agrees on "ago". */
+  now: Date
+}) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+        <CardTitle as="h3" className="flex items-center gap-2">
           <Bell className="size-4" aria-hidden /> Notifications
         </CardTitle>
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-            <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
-            <p className="text-sm font-medium">All caught up.</p>
-            <p className="text-xs text-muted-foreground">
-              Mentions and meeting invites land here.
-            </p>
-          </div>
+          <EmptyState
+            icon={PawPrint}
+            title="All caught up."
+            description="Mentions and meeting invites land here on their own — nothing to do."
+          />
         ) : (
           <ul className="flex flex-col divide-y divide-border">
             {items.map((item) => (
               <li key={item.id} className="py-2">
                 {item.link ? (
-                  <Link href={item.link} className="flex items-start gap-2.5 hover:opacity-80">
-                    <RowBody item={item} />
+                  <Link
+                    href={item.link}
+                    className="flex items-start gap-2.5 rounded-md outline-none hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring/50"
+                  >
+                    <RowBody item={item} now={now} />
                   </Link>
                 ) : (
                   <span className="flex items-start gap-2.5">
-                    <RowBody item={item} />
+                    <RowBody item={item} now={now} />
                   </span>
                 )}
               </li>

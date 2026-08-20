@@ -106,6 +106,13 @@ export function decodeActivityCursor(
   return { createdAt, id }
 }
 
+/**
+ * One trail page, everywhere a page is fetched: the /activity page's first
+ * render and the load-older server action must agree, or the keyset walk
+ * skips or repeats rows at every seam.
+ */
+export const ACTIVITY_PAGE_SIZE = 30
+
 /** What the /activity URL currently says, one string per filter. '' means "not filtered". */
 export type ActivityParamState = {
   person: string

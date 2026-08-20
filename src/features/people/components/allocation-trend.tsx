@@ -1,4 +1,5 @@
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
+import { isoDayOf } from '@/features/people/iso-day'
 import type { TrendPoint } from '@/features/people/allocation-history'
 import { cn } from '@/lib/utils'
 
@@ -113,13 +114,17 @@ export function AllocationTrend({
           vectorEffect="non-scaling-stroke"
         />
       </svg>
+      {/* Axis labels are the Colombo calendar day, via the same isoDayOf the
+          neighbouring cards age things with — toISOString() is the UTC day,
+          which reads one day off the dates printed right next to this chart
+          for the first 5.5 hours of every Colombo day. */}
       <div className="flex justify-between text-2xs text-muted-foreground">
         <time dateTime={points[0].at.toISOString()} className="font-mono tabular-nums">
-          {points[0].at.toISOString().slice(0, 10)}
+          {isoDayOf(points[0].at)}
         </time>
         <span className="font-mono tabular-nums">{referenceLabel}</span>
         <time dateTime={new Date(endMs).toISOString()} className="font-mono tabular-nums">
-          {new Date(endMs).toISOString().slice(0, 10)}
+          {isoDayOf(new Date(endMs))}
         </time>
       </div>
     </div>

@@ -19,12 +19,14 @@ import {
  * The page's controls: which slice is in front, how far back the comparison
  * reaches, a name filter, and the "only what moved" switch.
  *
- * Every control is a LINK that sets query params — the page stays a server
- * component, and whatever view someone is looking at can be pasted to a
- * colleague. The one exception is the text box, which needs local state while
- * typing; it commits on submit or blur (the same draft-then-commit rule the
+ * Navigation controls are LINKS that set query params — the page stays a
+ * server component, and whatever view someone is looking at can be pasted to
+ * a colleague. Two exceptions: the text box, which needs local state while
+ * typing and commits on submit or blur (the same draft-then-commit rule the
  * as-of picker and the activity date filters follow) rather than pushing a
- * route on every keystroke.
+ * route on every keystroke; and "Only what moved", which is a real toggle
+ * button because a filter's on/off state is aria-pressed's job, not
+ * aria-current's.
  */
 export function HistoryFilters({ params }: { params: HistoryParams }) {
   // `key` on the inner form is what resyncs the draft when the committed
@@ -57,6 +59,7 @@ function HistoryFiltersInner({ params }: { params: HistoryParams }) {
             key={view}
             variant={params.view === view ? 'secondary' : 'ghost'}
             size="sm"
+            className="pointer-coarse:min-h-11"
             aria-current={params.view === view ? 'page' : undefined}
             render={<Link href={historyHref(params, { view, q: draft.trim() })} />}
           >
@@ -81,6 +84,7 @@ function HistoryFiltersInner({ params }: { params: HistoryParams }) {
               key={days}
               variant={params.window === days ? 'secondary' : 'outline'}
               size="sm"
+              className="pointer-coarse:min-h-11"
               aria-current={params.window === days ? 'page' : undefined}
               render={<Link href={historyHref(params, { window: days, q: draft.trim() })} />}
             >
@@ -91,16 +95,31 @@ function HistoryFiltersInner({ params }: { params: HistoryParams }) {
 
         {/* Only meaningful where rows ARE people — the app rollup and the
             change log have no per-person movement to filter on, and a control
-            that silently does nothing is worse than one that isn't there. */}
+            that silently does nothing is worse than one that isn't there.
+
+            A real toggle BUTTON with aria-pressed, unlike its link siblings:
+            this is a filter with two states, not navigation between places,
+            and the link version carried aria-current="true" — a token that
+            means "current page" and is not a toggle semantic at all. Buttons
+            get no free prefetch, so the hover/focus warm-up is added by hand,
+            same as the as-of presets. */}
         {params.view === 'people' ? (
           <Button
+            type="button"
             variant={params.movedOnly ? 'secondary' : 'outline'}
             size="sm"
-            aria-current={params.movedOnly ? 'true' : undefined}
-            render={
-              <Link
-                href={historyHref(params, { movedOnly: !params.movedOnly, q: draft.trim() })}
-              />
+            aria-pressed={params.movedOnly}
+            className="pointer-coarse:min-h-11"
+            onClick={() =>
+              startTransition(() =>
+                router.push(historyHref(params, { movedOnly: !params.movedOnly, q: draft.trim() })),
+              )
+            }
+            onPointerEnter={() =>
+              router.prefetch(historyHref(params, { movedOnly: !params.movedOnly, q: draft.trim() }))
+            }
+            onFocus={() =>
+              router.prefetch(historyHref(params, { movedOnly: !params.movedOnly, q: draft.trim() }))
             }
           >
             {params.movedOnly ? 'Showing only what moved' : 'Only what moved'}

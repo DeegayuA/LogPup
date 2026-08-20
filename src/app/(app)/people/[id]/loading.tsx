@@ -1,10 +1,10 @@
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 /**
- * The same `shimmer` class string people/loading.tsx uses, not a local
- * <Shimmer> component. The previous version defined its own, and the two had
- * already drifted in radius and pulse — two skeletons for one product should
- * not be distinguishable.
+ * Built on the shared <Skeleton> primitive — every feature used to hand-roll
+ * its own pulse string and the copies had already drifted in radius and
+ * motion; two skeletons for one product should not be distinguishable.
  *
  * THIS SKELETON MODELS THE PAGE IT STANDS IN FOR, block for block: back link,
  * identity header, seven stat tiles, then four half-width cards and two
@@ -16,18 +16,16 @@ import { cn } from '@/lib/utils'
  * are sized to their typical filled height. That is what makes this a
  * placeholder rather than a second, differently-shaped page.
  */
-const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
-
 function CardSkeleton({ rows, className }: { rows: number; className?: string }) {
   return (
     <div className={cn('flex flex-col gap-4 rounded-xl bg-card p-4 ring-1 ring-foreground/10', className)}>
       <div className="flex items-center justify-between gap-3">
-        <div className={cn(shimmer, 'h-5 w-28')} />
-        <div className={cn(shimmer, 'h-3 w-24')} />
+        <Skeleton className="h-5 w-28" />
+        <Skeleton className="h-3 w-24" />
       </div>
       <div className="flex flex-col gap-2">
         {Array.from({ length: rows }, (_, i) => (
-          <div key={i} className={cn(shimmer, 'h-11 w-full rounded-lg')} />
+          <Skeleton key={i} className="h-11 w-full rounded-lg" />
         ))}
       </div>
     </div>
@@ -42,20 +40,20 @@ export default function PersonDetailLoading() {
       </span>
 
       <div className="flex flex-col gap-4" aria-hidden>
-        <div className={cn(shimmer, 'h-8 w-24 rounded-lg')} />
+        <Skeleton className="h-8 w-24 rounded-lg" />
         <div className="flex flex-wrap items-start gap-4">
-          <div className={cn(shimmer, 'size-14 rounded-full')} />
+          <Skeleton className="size-14 rounded-full" />
           <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1.5">
-            <div className={cn(shimmer, 'h-7 w-48')} />
-            <div className={cn(shimmer, 'h-4 w-56')} />
-            <div className={cn(shimmer, 'h-3 w-64')} />
+            <Skeleton className="h-7 w-48" />
+            <Skeleton className="h-4 w-56" />
+            <Skeleton className="h-3 w-64" />
             <div className="flex flex-wrap gap-1.5 pt-0.5">
               {Array.from({ length: 3 }, (_, i) => (
-                <div key={i} className={cn(shimmer, 'h-5 w-24 rounded-4xl')} />
+                <Skeleton key={i} className="h-5 w-24 rounded-4xl" />
               ))}
             </div>
           </div>
-          <div className={cn(shimmer, 'h-8 w-32 rounded-lg')} />
+          <Skeleton className="h-8 w-32 rounded-lg" />
         </div>
       </div>
 
@@ -72,9 +70,9 @@ export default function PersonDetailLoading() {
             key={i}
             className="flex min-h-[4.75rem] flex-col justify-start gap-1.5 rounded-xl bg-card px-3 py-2.5 ring-1 ring-foreground/10"
           >
-            <div className={cn(shimmer, 'h-7 w-12')} />
-            <div className={cn(shimmer, 'h-3 w-16')} />
-            <div className={cn(shimmer, 'h-2.5 w-20')} />
+            <Skeleton className="h-7 w-12" />
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-2.5 w-20" />
           </div>
         ))}
       </div>
@@ -86,17 +84,17 @@ export default function PersonDetailLoading() {
         <CardSkeleton rows={3} />
         <div className="flex flex-col gap-4 rounded-xl bg-card p-4 ring-1 ring-foreground/10 lg:col-span-2">
           <div className="flex items-center justify-between gap-3">
-            <div className={cn(shimmer, 'h-5 w-20')} />
-            <div className={cn(shimmer, 'h-3 w-32')} />
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-3 w-32" />
           </div>
           {/* The contribution grid: 7 rows of blocks, not one big rectangle,
               so the shape reads as a calendar while it loads. */}
           <div className="flex flex-col gap-1">
             {Array.from({ length: 7 }, (_, i) => (
-              <div key={i} className={cn(shimmer, 'h-3 w-full max-w-80 rounded-xs')} />
+              <Skeleton key={i} className="h-3 w-full max-w-80 rounded-xs" />
             ))}
           </div>
-          <div className={cn(shimmer, 'h-3 w-56')} />
+          <Skeleton className="h-3 w-56" />
         </div>
         <CardSkeleton rows={4} className="lg:col-span-2" />
       </div>

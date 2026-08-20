@@ -51,7 +51,7 @@ export function PersonFollowupsCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Follow-ups</CardTitle>
+        <CardTitle as="h2">Follow-ups</CardTitle>
         <CardAction>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {owed.length} owed · {awaiting.length} awaited

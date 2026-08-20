@@ -26,7 +26,7 @@ export default async function AdminPeoplePage() {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>People</CardTitle>
+          <CardTitle as="h2">People</CardTitle>
           <CardDescription>
             Approved teammates only — pending self-signups are under Approvals, and a
             rejected account is gone from every list. Add teammates by email, tag their
@@ -47,7 +47,7 @@ export default async function AdminPeoplePage() {
       {managersWithoutScope.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Managers need a recorded project role</CardTitle>
+            <CardTitle as="h2" className="text-base">Managers need a recorded project role</CardTitle>
             <CardDescription>
               A manager&apos;s reach comes from being the recorded PM or lead on an app,
               not from a job title typed into an assignment. Until someone is recorded

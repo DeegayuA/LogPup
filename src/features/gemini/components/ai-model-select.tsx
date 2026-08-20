@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { TriangleAlert } from 'lucide-react'
+import { Sparkles, TriangleAlert } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -24,6 +24,16 @@ function priceLabel(id: string): string {
   return `$${price.inputPer1M.toFixed(2)}/1M in / $${price.outputPer1M.toFixed(2)}/1M out`
 }
 
+/** A cheaper-than-current model the server computed from this user's own
+ *  last-30d usage — see suggestModelFor in ai-features-card.tsx. `hint` is
+ *  preformatted there (via formatUsd, keeping the ≈ contract) so this
+ *  component never derives a dollar figure of its own. */
+export type ModelSuggestion = {
+  id: string
+  label: string
+  hint: string
+}
+
 /**
  * Per-row model picker beside the feature's on/off Switch. Options come from
  * MODEL_CHOICES[kind] — the curated list valid for this feature's endpoint —
@@ -43,6 +53,7 @@ export function AiModelSelect({
   model,
   enabled,
   hasPaidKey,
+  suggestion = null,
 }: {
   feature: AiFeatureId
   label: string
@@ -50,6 +61,7 @@ export function AiModelSelect({
   model: string | null
   enabled: boolean
   hasPaidKey: boolean
+  suggestion?: ModelSuggestion | null
 }) {
   const [isPending, startTransition] = useTransition()
   const [value, setValue] = useState(model ?? DEFAULT_VALUE)
@@ -68,6 +80,7 @@ export function AiModelSelect({
   // so it has to be said here, at the point of choice, and said accurately:
   // promising refusal would send someone to add billing they don't need.
   const needsPaidWarning = !!selected && !selected.freeTier && !hasPaidKey
+  const showSuggestion = !!suggestion && enabled && suggestion.id !== value
 
   function handleChange(next: string | null) {
     if (!next) return
@@ -90,9 +103,11 @@ export function AiModelSelect({
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex w-full flex-col gap-1">
       <Select value={value} onValueChange={handleChange} disabled={!enabled || isPending}>
-        <SelectTrigger size="sm" aria-label={`${label} model`} className="w-56">
+        {/* Full-width below sm: a fixed w-56 inside the row's wrap barely fit
+            a 320px card and broke the select + switch onto ragged lines. */}
+        <SelectTrigger size="sm" aria-label={`${label} model`} className="w-full sm:w-56">
           <SelectValue>{(v: string) => labels[v] ?? v}</SelectValue>
         </SelectTrigger>
         <SelectContent>
@@ -104,6 +119,7 @@ export function AiModelSelect({
                   {c.label}
                   {c.stability !== 'stable' ? ` · ${c.stability}` : ''}
                   {!c.freeTier ? ' · paid keys only' : ''}
+                  {suggestion?.id === c.id ? ' · suggested for you' : ''}
                 </span>
                 <span className="font-mono text-2xs tabular-nums text-muted-foreground">
                   {priceLabel(c.id)}
@@ -113,12 +129,29 @@ export function AiModelSelect({
           ))}
         </SelectContent>
       </Select>
+      {showSuggestion ? (
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={() => handleChange(suggestion.id)}
+          className="inline-flex items-center gap-1 self-start rounded-sm text-left text-xs text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-50"
+        >
+          <Sparkles className="size-3 shrink-0" aria-hidden />
+          <span>
+            Suggested for you: {suggestion.label} — {suggestion.hint} on your recent usage
+          </span>
+        </button>
+      ) : null}
       {needsPaidWarning ? (
+        // Body copy in the default foreground at text-xs: the old
+        // text-warning-on-warning/5 at 11px sat at the AA contrast line; the
+        // warning hue now lives in the border and icon, which only reinforce
+        // the words (WCAG 1.4.1 / 1.4.3).
         <p
           role="alert"
-          className="flex max-w-56 items-start gap-1.5 rounded-lg border border-warning/35 bg-warning/5 px-2 py-1.5 text-2xs text-warning"
+          className="flex w-full items-start gap-1.5 rounded-lg border border-warning/35 bg-warning/5 px-2 py-1.5 text-xs sm:max-w-96"
         >
-          <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
           <span>
             {selected.label} is paid-tier only, and none of your active keys is marked paid.{' '}
             {label} keeps working: each call is refused here, then falls through to the default

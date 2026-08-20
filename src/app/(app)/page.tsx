@@ -1,6 +1,7 @@
 import { isAdminRole } from '@/features/auth/capabilities'
 import { Suspense } from 'react'
 import { getSession } from '@/lib/session'
+import { PageHeader } from '@/components/ui/page-header'
 import { PasskeyNudge } from '@/features/auth/components/passkey-nudge'
 import { FirstLogNudge } from '@/features/worklog/components/first-log-nudge'
 import {
@@ -15,25 +16,13 @@ import {
   TeamZone,
   TeamZoneSkeleton,
   UnreadMentionsPill,
+  ZoneLabel,
 } from '@/features/dashboard/components/dashboard-zones'
 
 function greetingFor(hour: number): string {
   if (hour < 12) return 'Good morning'
   if (hour < 18) return 'Good afternoon'
   return 'Good evening'
-}
-
-/**
- * Muted divider label between the page's zones. "My day" needs no label — it
- * starts at the greeting — but the switch from personal to team data, and
- * from team to portfolio, reads clearer with one word than with nothing.
- */
-function ZoneLabel({ children }: { children: string }) {
-  return (
-    <h2 className="mt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-      {children}
-    </h2>
-  )
 }
 
 /**
@@ -72,19 +61,17 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            {greeting} · {formatBusinessWeekdayLong(now)}
-          </p>
-        </div>
-        {user ? (
-          <Suspense fallback={null}>
-            <UnreadMentionsPill userId={user.id} />
-          </Suspense>
-        ) : null}
-      </header>
+      <PageHeader
+        title="Dashboard"
+        description={`${greeting} · ${formatBusinessWeekdayLong(now)}`}
+        actions={
+          user ? (
+            <Suspense fallback={null}>
+              <UnreadMentionsPill userId={user.id} />
+            </Suspense>
+          ) : undefined
+        }
+      />
 
       {/* Two one-time pointers, each rendering only while its own condition
           holds and each streaming on its own so neither can hold up the
@@ -109,9 +96,15 @@ export default async function DashboardPage() {
 
       {/* ——— My day ——— */}
       {user ? (
-        <Suspense fallback={<MyDayZoneSkeleton />}>
-          <MyDayZone userId={user.id} userName={user.name ?? 'You'} />
-        </Suspense>
+        <>
+          {/* Visually the zone starts at the greeting and needs no label; the
+              heading exists for heading NAVIGATION, which otherwise lands on
+              "Team" with the reader's own zone unreachable. */}
+          <h2 className="sr-only">My day</h2>
+          <Suspense fallback={<MyDayZoneSkeleton />}>
+            <MyDayZone userId={user.id} userName={user.name ?? 'You'} />
+          </Suspense>
+        </>
       ) : null}
 
       {/* ——— Team ——— */}

@@ -51,7 +51,7 @@ export function PersonMeetingsCard({ meetings }: { meetings: PersonMeetingsView 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Meetings</CardTitle>
+        <CardTitle as="h2">Meetings</CardTitle>
         <CardAction>
           {/* Says what the number IS. `meeting_attendees.response` defaults to
               'pending' and most people never move it, so this counts meetings

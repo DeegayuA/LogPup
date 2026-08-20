@@ -27,6 +27,7 @@ import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { createUser } from '@/features/admin/actions'
 import { PERSONAL_EMAIL_MAX_LENGTH } from '@/features/auth/personal-email-schema'
 import { OrgTagsField } from '@/features/admin/components/org-tags-field'
+import { orgForEmail } from '@/lib/org-from-domain'
 import type { UserRole } from '@/features/auth/capabilities'
 
 type FormState = {
@@ -112,6 +113,17 @@ export function AddUserDialog({ existingOrgTags }: { existingOrgTags: string[] }
               autoComplete="off"
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              onBlur={(e) => {
+                // The people table already derives an organization from the
+                // email domain (orgForEmail at user-table's OrgTagsCell); the
+                // dialog used to ignore the same signal. Prefill only when the
+                // admin has not typed any tag — a guess must never overwrite a
+                // choice, and it stays editable below.
+                const derived = orgForEmail(e.target.value.trim())
+                if (derived) {
+                  setForm((f) => (f.orgTags.length === 0 ? { ...f, orgTags: [derived] } : f))
+                }
+              }}
               required
             />
           </div>

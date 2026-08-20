@@ -27,7 +27,7 @@ export function AppRoleHistoryCard({ history }: { history: AppRoleHistoryEntry[]
   return (
     <Card>
       <CardHeader>
-        <CardTitle>PM &amp; lead history</CardTitle>
+        <CardTitle as="h2">PM &amp; lead history</CardTitle>
         {history.length > 0 ? (
           <CardAction>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -58,11 +58,11 @@ export function AppRoleHistoryCard({ history }: { history: AppRoleHistoryEntry[]
                     <span className="truncate text-sm font-medium">
                       {entry.userName ?? 'Unknown user'}
                     </span>
-                    <Badge variant="secondary" className="text-[10px]">
+                    <Badge variant="secondary" className="text-2xs">
                       {ROLE_LABEL[entry.role]}
                     </Badge>
                     {entry.effectiveTo === null ? (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-2xs">
                         Current
                       </Badge>
                     ) : null}

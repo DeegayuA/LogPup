@@ -1,5 +1,4 @@
 import Link from 'next/link'
-import { format } from 'date-fns'
 import {
   ArrowDownRightIcon,
   ArrowUpRightIcon,
@@ -16,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { CapacityBar, capacityBand } from '@/features/people/components/capacity-bar'
 import { SectionEmpty } from '@/features/people/components/section-empty'
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
+import { formatBusinessDayMonthTime } from '@/features/people/format-instant'
 import { describeAllocationChange } from '@/features/people/allocation-history'
 import { historyHref, type HistoryParams } from '@/features/people/history-params'
 import type {
@@ -164,7 +164,7 @@ export function HistoryPeopleTable({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Who is carrying what</CardTitle>
+        <CardTitle as="h2">Who is carrying what</CardTitle>
         <CardDescription>
           Load on the chosen date, against {compareLabel}. Percentages are of one person&rsquo;s full
           capacity.
@@ -302,7 +302,7 @@ export function HistoryAppsTable({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Where the effort went</CardTitle>
+        <CardTitle as="h2">Where the effort went</CardTitle>
         <CardDescription>
           Every app someone was allocated to on this date, heaviest first. &ldquo;People&rdquo; is the
           allocation total, not a headcount — 240% is roughly two and a half people&rsquo;s time.
@@ -428,7 +428,7 @@ export function HistoryChangeLog({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>What changed, and who changed it</CardTitle>
+        <CardTitle as="h2">What changed, and who changed it</CardTitle>
         <CardDescription>
           Every allocation edit inside the window, newest first — with the note whoever made the
           change left behind.
@@ -441,11 +441,15 @@ export function HistoryChangeLog({
               key={change.id}
               className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-6 py-2.5"
             >
+              {/* Business timezone (format-instant.ts) — this is a server
+                  component, so date-fns format() here stamped every change in
+                  the SERVER's zone (UTC on Vercel), hours off the day the
+                  as-of picker above resolves in. */}
               <time
                 dateTime={change.effectiveFrom.toISOString()}
-                className="w-24 shrink-0 font-mono text-2xs tabular-nums text-muted-foreground"
+                className="w-32 shrink-0 font-mono text-2xs tabular-nums text-muted-foreground"
               >
-                {format(change.effectiveFrom, 'd MMM HH:mm')}
+                {formatBusinessDayMonthTime(change.effectiveFrom)}
               </time>
               <span className="min-w-0 flex-1 text-sm">
                 <Link
@@ -492,7 +496,7 @@ export function OverloadCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Time spent over capacity</CardTitle>
+        <CardTitle as="h2">Time spent over capacity</CardTitle>
         <CardDescription>
           Continuous stretches above 100% in the last {windowDays} days, longest first.
         </CardDescription>

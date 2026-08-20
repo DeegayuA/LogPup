@@ -23,6 +23,7 @@ import {
   isDueToday,
   isOverdue,
 } from '@/features/sprints/board-view'
+import { isoDayAdd } from '@/features/people/iso-day'
 import { deleteTask, updateTask } from '@/features/sprints/task-actions'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 
@@ -268,6 +269,33 @@ export function TaskCard({
         onSelect: () => runUpdate({ status }, `Moved to ${STATUS_LABEL[status]}`),
       })
     }
+    items.push({ type: 'separator', key: 'sep-due' })
+    // Due date is the most common overdue-recovery edit, and it used to be
+    // the ONLY per-card field with no 2-click path — dialog round trip every
+    // time. Two absolute targets (tomorrow / a week out), named with the
+    // date they resolve to so nothing is applied sight-unseen.
+    const tomorrow = isoDayAdd(todayIso, 1)
+    const nextWeek = isoDayAdd(todayIso, 7)
+    items.push({
+      type: 'item',
+      key: 'due-tomorrow',
+      label: `Due tomorrow (${formatDueDate(tomorrow)})`,
+      onSelect: () => runUpdate({ dueDate: tomorrow }, `Due ${formatDueDate(tomorrow)}`),
+    })
+    items.push({
+      type: 'item',
+      key: 'due-next-week',
+      label: `Due in a week (${formatDueDate(nextWeek)})`,
+      onSelect: () => runUpdate({ dueDate: nextWeek }, `Due ${formatDueDate(nextWeek)}`),
+    })
+    if (task.dueDate) {
+      items.push({
+        type: 'item',
+        key: 'due-clear',
+        label: 'Remove due date',
+        onSelect: () => runUpdate({ dueDate: null }, 'Due date removed'),
+      })
+    }
     items.push({ type: 'separator', key: 'sep-priority' })
     for (const key of Object.keys(PRIORITY_LABEL)) {
       const value = Number(key)
@@ -363,7 +391,11 @@ export function TaskCard({
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card',
             // Hidden until it is useful, but never hidden once a selection
             // exists — and always present for keyboard/AT.
-            !selectionMode && 'opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100',
+            // pointer-coarse: touch has no hover, so without this the ONLY
+            // entry point into multi-select would be invisible until a
+            // selection already exists.
+            !selectionMode &&
+              'opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
           )}
         />
 
@@ -435,7 +467,9 @@ export function TaskCard({
               'transition-[color,opacity] duration-150 hover:text-foreground',
               'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
               'cursor-grab active:cursor-grabbing',
-              'opacity-0 group-hover/card:opacity-100',
+              // Visible on touch: hover-revealed affordances do not exist on
+              // a coarse pointer, and the grip is the drag hint there.
+              'opacity-0 group-hover/card:opacity-100 pointer-coarse:opacity-100',
             )}
           >
             <GripVertical className="size-4" aria-hidden />

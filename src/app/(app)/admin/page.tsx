@@ -1,6 +1,8 @@
-import Link from 'next/link'
+import { Suspense } from 'react'
 import { notFound } from 'next/navigation'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { StatTile } from '@/components/ui/stat-tile'
 import { AiAdoptionCard } from '@/features/admin/components/ai-adoption-card'
 import { listAllUsers, listPendingUsers } from '@/features/admin/queries'
 import { getTrash } from '@/features/admin/trash-queries'
@@ -33,30 +35,28 @@ export default async function AdminOverviewPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid gap-4 sm:grid-cols-3">
-        <Stat
+        <StatTile
           label="Waiting on someone"
           value={waiting}
           href="/admin/approvals"
-          detail={`${pendingUsers.length} signups · ${pendingAbsences.length} leave`}
+          tone={waiting > 0 ? 'attention' : 'default'}
+          meta={`${pendingUsers.length} signups · ${pendingAbsences.length} leave`}
         />
-        <Stat
+        <StatTile
           label="Active people"
           value={activeUserCount}
           href="/admin/people"
-          detail={`of ${allUsers.length} approved`}
+          meta={`of ${allUsers.length} approved`}
         />
-        <Stat
-          label="In the trash"
-          value={trashCount}
-          href="/admin/trash"
-          detail="restorable"
-        />
+        <StatTile label="In the trash" value={trashCount} href="/admin/trash" meta="restorable" />
       </div>
 
       {waiting === 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Nothing is waiting on you</CardTitle>
+            <CardTitle as="h2" className="text-base">
+              Nothing is waiting on you
+            </CardTitle>
             <CardDescription>
               Signups, leave requests and change requests all land in Approvals. When one
               arrives it shows up here with its age.
@@ -65,34 +65,37 @@ export default async function AdminOverviewPage() {
         </Card>
       )}
 
-      <AiAdoptionCard activeUserCount={activeUserCount} />
+      {/* Its own boundary: the adoption card aggregates 30 days of activity —
+          the slowest read on the page — and used to gate the first paint of
+          the stat tiles above it, the fastest content here. */}
+      <Suspense fallback={<AdoptionSkeleton />}>
+        <AiAdoptionCard activeUserCount={activeUserCount} />
+      </Suspense>
     </div>
   )
 }
 
-function Stat({
-  label,
-  value,
-  href,
-  detail,
-}: {
-  label: string
-  value: number
-  href: string
-  detail: string
-}) {
+/** Shaped like the adoption card: title row, description, a table of rows. */
+function AdoptionSkeleton() {
   return (
-    <Link
-      href={href}
-      className="rounded-xl border border-border p-4 transition-colors duration-150 ease-out hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-    >
-      <CardContent className="flex flex-col gap-1 p-0">
-        <span className="text-2xs text-muted-foreground">{label}</span>
-        {/* Data values are mono and tabular, and never larger than text-lg —
-            hierarchy comes from weight and colour before size. */}
-        <span className="font-mono text-lg font-semibold tabular-nums">{value}</span>
-        <span className="text-2xs text-muted-foreground">{detail}</span>
-      </CardContent>
-    </Link>
+    <div className="flex flex-col gap-4 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+      <span className="sr-only" role="status">
+        Loading AI feature adoption…
+      </span>
+      <div aria-hidden className="flex flex-col gap-2">
+        <Skeleton className="h-5 w-44" />
+        <Skeleton className="h-4 w-full max-w-xl" />
+      </div>
+      <div aria-hidden className="flex flex-col gap-2">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="flex items-center gap-3">
+            <Skeleton className="h-4 w-40 max-w-full" />
+            <Skeleton className="h-4 w-10" />
+            <Skeleton className="h-4 w-10" />
+            <Skeleton className="ml-auto h-5 w-24" />
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

@@ -42,6 +42,7 @@ export function MeetingsViews({
   initialView,
   initialDate,
   todayIso,
+  initialOpenMeetingId,
 }: {
   upcoming: MeetingSummary[]
   past: MeetingSummary[]
@@ -59,6 +60,10 @@ export function MeetingsViews({
   /** Today in Asia/Colombo, read once on the server. Both sides of hydration
    *  need the same answer or "today" lands on two different squares. */
   todayIso: string
+  /** From the page's `?open=` param, already membership-checked — the meeting
+   *  whose write-up should open on arrival, which is what makes a ⌘K hit or a
+   *  shared link land ON the meeting instead of near it. */
+  initialOpenMeetingId?: string
 }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -109,8 +114,12 @@ export function MeetingsViews({
    * did nothing else, so it delivered you to a list with the write-up it had
    * just named still collapsed somewhere down the page. It kept its implicit
    * promise (get me to the meeting) and broke the one in its label.
+   *
+   * Seeded from the URL's `?open=` so a deep link opens the meeting on the
+   * very first paint — the past section's own membership test then expands
+   * itself when the meeting lives there.
    */
-  const [openMeetingId, setOpenMeetingId] = useState<string | undefined>(undefined)
+  const [openMeetingId, setOpenMeetingId] = useState<string | undefined>(initialOpenMeetingId)
 
   function openMeetingInList(meeting: MeetingSummary) {
     setDay(meeting.startsAt)

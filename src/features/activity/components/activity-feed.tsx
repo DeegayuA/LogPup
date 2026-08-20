@@ -108,11 +108,19 @@ const FOCUS = 'rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ri
  * navigate to the person) and contains the visible text verbatim, so speech
  * input still works — WCAG 2.5.3, Label in Name.
  *
- * Hover is DOTTED. Two kinds of link sit in the same sentence and do opposite
- * things: this one narrows the page you are on, while the subject link leaves
- * it. A shared solid underline would make them indistinguishable until after
- * the click; dotted-versus-solid is the cheapest honest distinction, and it
- * never carries meaning by colour alone.
+ * The underline is DOTTED, and it is there AT REST. Two kinds of link sit in
+ * the same sentence and do opposite things: this one narrows the page you are
+ * on, while the subject link leaves it. Dotted-versus-solid is the cheapest
+ * honest distinction, and it never carries meaning by colour alone. Rest
+ * visibility matters more than it looks: hover-only underlines made the
+ * page's signature affordance undiscoverable by sight and carried nothing on
+ * touch — the actor read as ordinary bold text, the type word as ordinary
+ * muted text. Quiet at rest (low-opacity decoration), full on hover.
+ *
+ * `pointer-coarse:py-1`: these are inline elements, so vertical padding
+ * grows the TAP TARGET without moving a single line box — the globals.css
+ * hit-slop rule covers only button-shaped elements, leaving plain inline
+ * links at the text's own ~17px height on the devices that need more.
  */
 function FilterLink({
   href,
@@ -129,7 +137,7 @@ function FilterLink({
     <Link
       href={href}
       aria-label={label}
-      className={`${FOCUS} underline-offset-2 hover:underline hover:decoration-dotted ${className ?? ''}`}
+      className={`${FOCUS} underline decoration-dotted decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70 pointer-coarse:py-1 ${className ?? ''}`}
     >
       {children}
     </Link>
@@ -187,18 +195,31 @@ function AppChip({ row, current }: { row: ActivityRow; current: ActivityParamSta
     <FilterLink
       href={activityFilterHref(current, { app: row.appId })}
       label={`Filter activity by ${row.appName}`}
-      className={`${className} transition-colors duration-150 ease-out hover:bg-accent hover:text-accent-foreground motion-reduce:transition-none`}
+      // pointer-coarse padding: at text-2xs + py-px this chip is ~18px tall —
+      // the trail's most frequent tap target, and under the 24px minimum.
+      // Being inline-block, the extra padding grows the chip itself on coarse
+      // pointers (line boxes absorb it) without touching pointer-fine layout.
+      className={`${className} transition-colors duration-150 ease-out hover:bg-accent hover:text-accent-foreground motion-reduce:transition-none pointer-coarse:px-2.5 pointer-coarse:py-1.5`}
     >
       {row.appName}
     </FilterLink>
   )
 }
 
-/** The entity, linked to itself when the write recorded a destination. */
+/**
+ * The entity, linked to itself when the write recorded a destination. SOLID
+ * underline at rest where FilterLink's is dotted — the pairing that lets a
+ * reader tell "narrows this page" from "leaves it" before clicking. The
+ * unlinked fallback stays bare, so linked and unlinked subjects stop being
+ * visually identical.
+ */
 function Subject({ row }: { row: ActivityRow }) {
   if (!row.pagePath) return <span className="font-medium">{row.entityLabel}</span>
   return (
-    <Link href={row.pagePath} className={`${FOCUS} font-medium underline-offset-2 hover:underline`}>
+    <Link
+      href={row.pagePath}
+      className={`${FOCUS} font-medium underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70 pointer-coarse:py-1`}
+    >
       {row.entityLabel}
     </Link>
   )
@@ -413,12 +434,20 @@ function DayMarker({
   const weekday = format(new Date(`${dayIso}T12:00:00`), 'EEEE')
 
   return (
-    <h2 className="sticky top-14 z-10 -mx-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-background/90 px-2 py-1.5 backdrop-blur">
+    // `top-(--shell-header-h,…)`: the marker sticks under the app header, and
+    // the header's height is the SHELL's decision, not this file's. The var
+    // is an override hook the shell may define; the fallback is its current
+    // h-14 (3.5rem), so nothing changes until the header does — and when it
+    // does, one variable fixes every consumer instead of a hunt for magic
+    // numbers. The -mx-2/px-2 pair nets to zero on the text position; it only
+    // bleeds the blur backdrop over the rail line as rows scroll under.
+    <h2 className="sticky top-[var(--shell-header-h,3.5rem)] z-10 -mx-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-background/90 px-2 py-1.5 backdrop-blur">
       <Link
         href={activityFilterHref(current, { from: dayIso, to: dayIso })}
         aria-label={`Filter activity to ${weekday} ${dayIso} only`}
-        // Dotted like every other filter affordance on the page — see FilterLink.
-        className={`${FOCUS} inline-flex items-baseline gap-2 underline-offset-4 hover:underline hover:decoration-dotted`}
+        // Dotted at rest like every other filter affordance on the page — see
+        // FilterLink.
+        className={`${FOCUS} inline-flex items-baseline gap-2 underline decoration-dotted decoration-foreground/30 underline-offset-4 hover:decoration-foreground/70`}
       >
         <span className="text-xs font-semibold tracking-wide uppercase">
           {relativeLabel || weekday}

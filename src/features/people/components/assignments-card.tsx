@@ -49,7 +49,7 @@ export function AssignmentsCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Workload</CardTitle>
+        <CardTitle as="h2">Workload</CardTitle>
         <CardAction>
           <span className={cn(PCT_CLASS, 'text-xs text-muted-foreground')}>
             {assignments.length} {assignments.length === 1 ? 'app' : 'apps'}
@@ -69,8 +69,10 @@ export function AssignmentsCard({
             {assignments.map((entry) => (
               <div key={entry.appId} className="flex flex-col gap-1.5 py-2.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  {/* Lands on the app's Team panel — the only place this
+                      allocation can be edited — rather than the page top. */}
                   <Link
-                    href={`/apps/${entry.slug}`}
+                    href={`/apps/${entry.slug}#team`}
                     className={cn('truncate text-sm font-medium', linkClass)}
                   >
                     {entry.appName}

@@ -27,8 +27,11 @@ import type { SearchProvider } from '@/features/search/registry/types'
  * NAME, not by join-row id, so the two names that survive the "+N" overflow
  * are the same on two searches of the same unchanged meeting.
  *
- * Every hit links to the /meetings list rather than a detail page, because
- * there is no /meetings/[id] route to link to.
+ * Every hit links to the /meetings list — there is no /meetings/[id] route —
+ * but carries `?open=<id>`, which the page parses (see meetings/page.tsx) to
+ * land with that meeting's write-up already open and the Past section already
+ * expanded. A bare '/meetings' href delivered people to a list with the
+ * meeting they searched for still collapsed somewhere down the page.
  */
 
 // Unit separator: a delimiter no project name can contain, so splitting the
@@ -83,7 +86,7 @@ export const searchProviders: SearchProvider[] = [
           // apart two meetings called "Weekly sync" when neither belongs to a
           // project, and it is the only thing separating those two rows.
           subtitle: names.length > 0 ? formatAppNames(names) : format(meeting.startsAt, 'MMM d'),
-          href: '/meetings',
+          href: `/meetings?open=${meeting.id}`,
           kind: 'meeting' as const,
         }
       })

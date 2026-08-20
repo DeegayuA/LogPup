@@ -45,11 +45,40 @@ export function AssignDialog({
   const [allocationPct, setAllocationPct] = useState(
     assignment ? String(assignment.allocationPct) : '',
   )
+  // Whether the operator has typed in the % field. Picking a member prefills
+  // their remaining headroom, but a number somebody typed is never overwritten
+  // by a later member switch.
+  const [allocTouched, setAllocTouched] = useState(false)
+
+  /**
+   * The picked person's CURRENT load, from listActiveUsers' summed totals —
+   * what turns the old blind-save-then-warn loop into information before the
+   * save. In edit mode the ceiling excludes this assignment's own share, so
+   * "fits within 100%" is about what the edit may grow to, not double-counted.
+   */
+  const selectedId = isEdit ? assignment!.userId : userId
+  const selected = activeUsers.find((user) => user.id === selectedId)
+  const totalPct = typeof selected?.totalPct === 'number' ? selected.totalPct : null
+  const elsewherePct =
+    totalPct === null ? null : Math.max(0, totalPct - (assignment?.allocationPct ?? 0))
+  const headroom = elsewherePct === null ? null : 100 - elsewherePct
+
+  function pickMember(nextId: string) {
+    setUserId(nextId)
+    if (allocTouched || isEdit) return
+    const next = activeUsers.find((user) => user.id === nextId)
+    if (typeof next?.totalPct !== 'number') return
+    const free = 100 - next.totalPct
+    // Prefill only when a legal share fits — an over-loaded person gets the
+    // sentence below the field instead of a number that cannot be saved.
+    setAllocationPct(free >= 5 ? String(Math.min(free, 100)) : '')
+  }
 
   function resetForm() {
     setUserId(assignment?.userId ?? '')
     setRole(assignment?.role ?? '')
     setAllocationPct(assignment ? String(assignment.allocationPct) : '')
+    setAllocTouched(false)
   }
 
   function handleOpenChange(next: boolean) {
@@ -109,7 +138,7 @@ export function AssignDialog({
           {isEdit ? null : (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="assign-user">Member</Label>
-              <Select value={userId} onValueChange={(value) => setUserId(value ?? '')}>
+              <Select value={userId} onValueChange={(value) => pickMember(value ?? '')}>
                 <SelectTrigger id="assign-user" className="w-full">
                   {/* Explicit label mapping — the raw id is the Select's `value`,
                       so without this the trigger falls back to rendering that id
@@ -159,14 +188,50 @@ export function AssignDialog({
               min={5}
               max={100}
               value={allocationPct}
-              onChange={(e) => setAllocationPct(e.target.value)}
+              onChange={(e) => {
+                setAllocTouched(true)
+                setAllocationPct(e.target.value)
+              }}
               placeholder="60"
               className="font-mono"
               required
             />
-            <p className="text-xs text-muted-foreground">5–100% of their time.</p>
+            {/* Current load + headroom, BEFORE the save — the over-allocation
+                warning used to arrive only as a post-save toast. Words carry
+                the state; the numbers are data, so they are mono/tabular. */}
+            {headroom !== null && elsewherePct !== null ? (
+              headroom <= 0 ? (
+                <p className="text-xs text-warning">
+                  Already at{' '}
+                  <span className="font-mono tabular-nums">{elsewherePct}%</span>
+                  {isEdit ? ' on their other apps' : ' across apps'} — anything{' '}
+                  {isEdit ? 'kept here' : 'added'} puts them over capacity. Saving still works;
+                  it just says so.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {isEdit ? 'On their other apps they are at ' : 'Currently at '}
+                  <span className="font-mono tabular-nums">{elsewherePct}%</span>
+                  {' — up to '}
+                  <span className="font-mono tabular-nums">{Math.min(headroom, 100)}%</span>
+                  {' fits within full capacity.'}
+                </p>
+              )
+            ) : (
+              <p className="text-xs text-muted-foreground">5–100% of their time.</p>
+            )}
           </div>
           <DialogFooter>
+            {/* An explicit way out — Esc and the X exist, but a footer with
+                only a destructive-of-attention Save reads as a one-way door. */}
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={isPending}
+              onClick={() => handleOpenChange(false)}
+            >
+              Cancel
+            </Button>
             <Button type="submit" disabled={isPending || (!isEdit && !userId)}>
               {isPending ? 'Saving…' : submitLabel}
             </Button>

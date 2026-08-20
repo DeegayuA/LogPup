@@ -1,11 +1,13 @@
 'use client'
 
 import { useMemo, useState, useTransition } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Archive, Download, PawPrint, Trash2, UserCog } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   Table,
   TableBody,
@@ -170,6 +172,155 @@ function Labelled({ label, children }: { label: string; children: React.ReactNod
   )
 }
 
+/**
+ * One row's own wait. These controls used to share the table's single
+ * useTransition, so reassigning one app's lead disabled every select and
+ * button in the table until the write settled. Each cell now owns its
+ * transition; the table-level one is reserved for bulk runs, which really do
+ * touch many rows at once.
+ */
+function useRowRun() {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+
+  function run(label: string, action: () => Promise<{ ok: boolean; error?: string }>) {
+    startTransition(async () => {
+      try {
+        const res = await action()
+        if (!res.ok) {
+          toast.error(res.error ?? 'Something went wrong. Please try again.')
+          return
+        }
+        toast.success(label)
+        router.refresh()
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
+  return { pending, run }
+}
+
+function LeadCell({
+  app,
+  users,
+  bulkPending,
+}: {
+  app: AppWithMembers
+  users: ActiveUser[]
+  bulkPending: boolean
+}) {
+  const { pending, run } = useRowRun()
+  return (
+    <LeadSelect
+      value={app.leadId}
+      users={users}
+      disabled={pending || bulkPending}
+      ariaLabel={`Lead for ${app.name}`}
+      onChange={(leadId) => run('Lead updated', () => updateApp(app.id, { leadId }))}
+    />
+  )
+}
+
+function PmCell({
+  app,
+  users,
+  bulkPending,
+}: {
+  app: AppWithMembers
+  users: ActiveUser[]
+  bulkPending: boolean
+}) {
+  const { pending, run } = useRowRun()
+  return (
+    <PmSelect
+      value={app.pmId}
+      users={users}
+      disabled={pending || bulkPending}
+      ariaLabel={`PM for ${app.name}`}
+      onChange={(pmId) => run('PM updated', () => updateApp(app.id, { pmId }))}
+    />
+  )
+}
+
+function RowActions({ app, bulkPending }: { app: AppWithMembers; bulkPending: boolean }) {
+  const { pending, run } = useRowRun()
+  const isArchived = app.status === 'archived'
+  return (
+    <div className="flex items-center gap-0.5">
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={isArchived || pending || bulkPending}
+              aria-label={`Archive ${app.name}`}
+            />
+          }
+        >
+          <Archive aria-hidden className="size-4" />
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive {app.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This marks the app as archived. It stays in the system and can be restored
+              later by changing its status.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={pending}
+              onClick={() => run('App archived', () => archiveApp(app.id))}
+            >
+              Archive
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={pending || bulkPending}
+              aria-label={`Delete ${app.name}`}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+            />
+          }
+        >
+          <Trash2 aria-hidden className="size-4" />
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {app.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It disappears from every view — index, board, search and dashboards — but
+              nothing is destroyed: an admin can restore it from Trash, sprints and tasks
+              included.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={pending}
+              onClick={() => run('App moved to trash', () => deleteApp(app.id))}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
 const CSV_HEADERS = ['Name', 'Slug', 'Status', 'Lead', 'PM', 'Members', 'Created'] as const
 
 export function AppsTable({
@@ -201,22 +352,6 @@ export function AppsTable({
         : toggleSelected(pruneSelection(current, ids), id),
     )
     setAnchorId(id)
-  }
-
-  function runRow(label: string, run: () => Promise<{ ok: boolean; error?: string }>) {
-    startTransition(async () => {
-      try {
-        const res = await run()
-        if (!res.ok) {
-          toast.error(res.error ?? 'Something went wrong. Please try again.')
-          return
-        }
-        toast.success(label)
-        router.refresh()
-      } catch {
-        toast.error('Something went wrong. Please try again.')
-      }
-    })
   }
 
   function runBulk(
@@ -256,91 +391,18 @@ export function AppsTable({
     downloadCsv('apps', CSV_HEADERS, rows)
   }
 
-  function rowActions(app: AppWithMembers) {
-    const isArchived = app.status === 'archived'
-    return (
-      <div className="flex items-center gap-0.5">
-        <AlertDialog>
-          <AlertDialogTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                disabled={isArchived || isPending}
-                aria-label={`Archive ${app.name}`}
-              />
-            }
-          >
-            <Archive aria-hidden className="size-4" />
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Archive {app.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This marks the app as archived. It stays in the system and can be restored
-                later by changing its status.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                disabled={isPending}
-                onClick={() => runRow('App archived', () => archiveApp(app.id))}
-              >
-                Archive
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        <AlertDialog>
-          <AlertDialogTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                disabled={isPending}
-                aria-label={`Delete ${app.name}`}
-                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-              />
-            }
-          >
-            <Trash2 aria-hidden className="size-4" />
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {app.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                It disappears from every view — index, board, search and dashboards — but
-                nothing is destroyed: an admin can restore it from Trash, sprints and tasks
-                included.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                disabled={isPending}
-                onClick={() => runRow('App moved to trash', () => deleteApp(app.id))}
-              >
-                Delete
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </div>
-    )
-  }
-
   if (apps.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-1 py-8 text-center">
-        <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
-        <p className="text-sm font-medium">No apps yet.</p>
-        <p className="text-xs text-muted-foreground">
-          Add one from the Apps page to manage it here.
-        </p>
-      </div>
+      <EmptyState
+        icon={PawPrint}
+        title="No apps yet."
+        description="Add one from the Apps page to manage it here."
+        action={
+          <Button variant="outline" size="sm" render={<Link href="/apps" />}>
+            Go to Apps
+          </Button>
+        }
+      />
     )
   }
 
@@ -467,28 +529,14 @@ export function AppsTable({
                   {STATUS_LABEL[app.status]}
                 </Badge>
               </div>
-              {rowActions(app)}
+              <RowActions app={app} bulkPending={isPending} />
             </div>
             <div className="flex flex-col gap-2">
               <Labelled label="Lead">
-                <LeadSelect
-                  value={app.leadId}
-                  users={activeUsers}
-                  disabled={isPending}
-                  ariaLabel={`Lead for ${app.name}`}
-                  onChange={(leadId) =>
-                    runRow('Lead updated', () => updateApp(app.id, { leadId }))
-                  }
-                />
+                <LeadCell app={app} users={activeUsers} bulkPending={isPending} />
               </Labelled>
               <Labelled label="PM">
-                <PmSelect
-                  value={app.pmId}
-                  users={activeUsers}
-                  disabled={isPending}
-                  ariaLabel={`PM for ${app.name}`}
-                  onChange={(pmId) => runRow('PM updated', () => updateApp(app.id, { pmId }))}
-                />
+                <PmCell app={app} users={activeUsers} bulkPending={isPending} />
               </Labelled>
             </div>
           </li>
@@ -552,27 +600,15 @@ export function AppsTable({
                   </div>
                 </TableCell>
                 <TableCell className="align-middle">
-                  <LeadSelect
-                    value={app.leadId}
-                    users={activeUsers}
-                    disabled={isPending}
-                    ariaLabel={`Lead for ${app.name}`}
-                    onChange={(leadId) =>
-                      runRow('Lead updated', () => updateApp(app.id, { leadId }))
-                    }
-                  />
+                  <LeadCell app={app} users={activeUsers} bulkPending={isPending} />
                 </TableCell>
                 <TableCell className="align-middle">
-                  <PmSelect
-                    value={app.pmId}
-                    users={activeUsers}
-                    disabled={isPending}
-                    ariaLabel={`PM for ${app.name}`}
-                    onChange={(pmId) => runRow('PM updated', () => updateApp(app.id, { pmId }))}
-                  />
+                  <PmCell app={app} users={activeUsers} bulkPending={isPending} />
                 </TableCell>
                 <TableCell className="align-middle text-right">
-                  <div className="flex justify-end">{rowActions(app)}</div>
+                  <div className="flex justify-end">
+                    <RowActions app={app} bulkPending={isPending} />
+                  </div>
                 </TableCell>
               </TableRow>
             ))}

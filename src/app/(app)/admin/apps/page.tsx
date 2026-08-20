@@ -15,7 +15,7 @@ export default async function AdminAppsPage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Apps</CardTitle>
+        <CardTitle as="h2">Apps</CardTitle>
         <CardDescription>
           Reassign an app&apos;s PM or lead, archive it, or move it to Trash. Archived apps
           are shown muted. Recording someone as PM or lead here is also what gives a

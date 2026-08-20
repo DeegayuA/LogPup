@@ -27,6 +27,7 @@ import {
 } from '@/features/people/cohorts'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
 import { HelpNote } from '@/components/shared/help-note'
+import { Skeleton } from '@/components/ui/skeleton'
 
 /**
  * The three cohort views on /people — "By project", "Shared" and "Overlap".
@@ -39,10 +40,11 @@ import { HelpNote } from '@/components/shared/help-note'
  * project or per person anywhere behind it.
  *
  * THE SHARED DISCIPLINE, same as history-views.tsx: nothing on screen may say
- * more than the data behind it supports. A percentage the reader is not
- * cleared to see is absent, not blurred; a sort order is named by what it
+ * more than the data behind it supports. A sort order is named by what it
  * actually sorted on; a health verdict is the one app-health.ts computed, never
- * a second opinion assembled here.
+ * a second opinion assembled here. Allocation percentages are teammate-visible
+ * by design (the directory and person page already show them to everyone
+ * signed in), so no per-viewer gate exists here.
  */
 
 const linkFocus =
@@ -90,15 +92,15 @@ function PersonLink({
 }
 
 /**
- * A member row: who they are, what they are called on this project, and — only
- * where the viewer is cleared for it — how much of them the project has.
- *
- * When the number is withheld the row does not leave a gap or a dash where it
- * would have been: an em-dash in a percentage column reads as "zero" or
- * "unknown", and it is neither. The row simply ends at the role, and the notice
- * above the list is what explains why.
+ * A member row: who they are, what they are called on this project, and how
+ * much of them the project has. The percentage is shown unconditionally —
+ * allocation figures are teammate-visible by design, exactly as the directory
+ * and the person page already show them. (An earlier draft carried a
+ * `showPct` gate whose comments promised per-viewer withholding that was
+ * never implemented; a hardwired-open gate is a lie about the permission
+ * model, so the gate is gone rather than left looking load-bearing.)
  */
-function MemberRow({ member, showPct }: { member: CohortMember; showPct: boolean }) {
+function MemberRow({ member }: { member: CohortMember }) {
   return (
     <li className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
       <PersonLink
@@ -111,11 +113,9 @@ function MemberRow({ member, showPct }: { member: CohortMember; showPct: boolean
         {member.role ? (
           <span className="text-xs text-muted-foreground">{member.role}</span>
         ) : null}
-        {showPct ? (
-          <span className={cn(PCT_CLASS, 'text-xs text-foreground')}>
-            {formatPct(member.allocationPct)}
-          </span>
-        ) : null}
+        <span className={cn(PCT_CLASS, 'text-xs text-foreground')}>
+          {formatPct(member.allocationPct)}
+        </span>
       </span>
     </li>
   )
@@ -215,11 +215,10 @@ export function ProjectCohortList({
     <div className="flex flex-col gap-3">
       {apps.map((app) => {
         const members = cohorts.get(app.id)?.members ?? []
-        const showPct = true
         return (
           <Card key={app.id}>
             <CardHeader>
-              <CardTitle className="flex min-w-0 items-center gap-2">
+              <CardTitle as="h2" className="flex min-w-0 items-center gap-2">
                 <ProjectDot appId={app.id} />
                 <Link href={`/apps/${app.slug}`} className={cn('truncate hover:underline', linkFocus)}>
                   {app.name}
@@ -271,7 +270,7 @@ export function ProjectCohortList({
               <CardContent>
                 <ul className="flex flex-col divide-y divide-border">
                   {members.map((member) => (
-                    <MemberRow key={member.userId} member={member} showPct={showPct} />
+                    <MemberRow key={member.userId} member={member} />
                   ))}
                 </ul>
               </CardContent>
@@ -328,15 +327,11 @@ export function SharedPeopleList({
     )
   }
 
-  // Counted over the projects actually named by the rows below, so the notice
-  // describes this list rather than the workspace.
-  const listed = new Set(rows.flatMap((row) => row.projects.map((project) => project.appId)))
-
   return (
     <div className="flex flex-col gap-3">
       <Card>
         <CardHeader>
-          <CardTitle>Shared across projects</CardTitle>
+          <CardTitle as="h2">Shared across projects</CardTitle>
           <CardDescription>
             {rankBySplit
               ? 'Most evenly split first — the people with no single project holding most of their time.'
@@ -366,11 +361,9 @@ export function SharedPeopleList({
                     >
                       <ProjectDot appId={project.appId} />
                       <span className="truncate text-foreground">{project.appName}</span>
-                      {true ? (
-                        <span className={cn(PCT_CLASS, 'shrink-0')}>
-                          {formatPct(project.allocationPct)}
-                        </span>
-                      ) : null}
+                      <span className={cn(PCT_CLASS, 'shrink-0')}>
+                        {formatPct(project.allocationPct)}
+                      </span>
                     </span>
                   ))}
                 </span>
@@ -469,10 +462,6 @@ export function ProjectOverlapView({
   }
 
   const { anchor, overlaps } = report
-  // The projects this view can actually name: the anchor and the ones that
-  // share people with it. Nothing else is on screen, so nothing else is
-  // counted in the notice.
-  const listed = [anchor, ...overlaps.map((overlap) => overlap.project)]
 
   return (
     <div className="flex flex-col gap-3">
@@ -499,7 +488,7 @@ export function ProjectOverlapView({
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex min-w-0 items-center gap-2">
+          <CardTitle as="h2" className="flex min-w-0 items-center gap-2">
             <ProjectDot appId={anchor.appId} />
             <Link href={`/apps/${anchor.slug}`} className={cn('truncate hover:underline', linkFocus)}>
               {anchor.name}
@@ -515,11 +504,7 @@ export function ProjectOverlapView({
         <CardContent>
           <ul className="flex flex-col divide-y divide-border">
             {anchor.members.map((member) => (
-              <MemberRow
-                key={member.userId}
-                member={member}
-                showPct={true}
-              />
+              <MemberRow key={member.userId} member={member} />
             ))}
           </ul>
         </CardContent>
@@ -546,7 +531,7 @@ export function ProjectOverlapView({
         overlaps.map((overlap) => (
           <Card key={overlap.project.appId}>
             <CardHeader>
-              <CardTitle className="flex min-w-0 items-center gap-2">
+              <CardTitle as="h2" className="flex min-w-0 items-center gap-2">
                 <ProjectDot appId={overlap.project.appId} />
                 <Link
                   href={`/apps/${overlap.project.slug}`}
@@ -581,11 +566,7 @@ export function ProjectOverlapView({
                     anchor's own figure is on the card above, and showing both
                     on one row invites reading them as a single number. */}
                 {overlap.shared.map((member) => (
-                  <MemberRow
-                    key={member.userId}
-                    member={member}
-                    showPct={true}
-                  />
+                  <MemberRow key={member.userId} member={member} />
                 ))}
               </ul>
             </CardContent>
@@ -600,13 +581,16 @@ export function ProjectOverlapView({
 // Loading
 // ---------------------------------------------------------------------------
 
-const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
-
 /**
  * Stands in for the DATA only. The page's title and the view switch above it
  * are rendered for real from the URL before anything is awaited, so a skeleton
  * covering them would replace a working control with a grey box the moment
  * somebody used it.
+ *
+ * Models what a cohort view actually resolves to — stacked cards, each with a
+ * header (title + description + verdict dot) and member rows — instead of the
+ * three bare rectangles this used to be, so the arriving cards land in the
+ * shape already on screen rather than replacing generic blocks.
  */
 export function CohortDataSkeleton() {
   return (
@@ -616,7 +600,27 @@ export function CohortDataSkeleton() {
       </span>
       <div className="flex flex-col gap-3" aria-hidden>
         {[0, 1, 2].map((card) => (
-          <div key={card} className={cn(shimmer, 'h-44')} />
+          <div key={card} className="flex flex-col gap-4 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-4 w-64 max-w-full" />
+              </div>
+              <Skeleton className="size-2.5 shrink-0 rounded-full" />
+            </div>
+            <div className="flex flex-col divide-y divide-border">
+              {[0, 1, 2].map((row) => (
+                <div key={row} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+                  <Skeleton className="size-7 shrink-0 rounded-full" />
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <Skeleton className="h-3.5 w-28" />
+                    <Skeleton className="h-2.5 w-20" />
+                  </div>
+                  <Skeleton className="ml-auto h-3.5 w-16 shrink-0" />
+                </div>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
     </>
@@ -642,22 +646,25 @@ export function DirectoryDataSkeleton() {
       <div className="flex flex-col gap-3" aria-hidden>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[0, 1, 2, 3].map((tile) => (
-            <div key={tile} className="flex flex-col gap-1.5 rounded-xl border bg-card p-3">
-              <div className={cn(shimmer, 'h-6 w-12')} />
-              <div className={cn(shimmer, 'h-3 w-20')} />
+            <div key={tile} className="flex flex-col gap-1.5 rounded-lg border bg-card px-3 py-2">
+              <Skeleton className="h-6 w-12" />
+              <Skeleton className="h-3 w-20" />
             </div>
           ))}
         </div>
-        <div className={cn(shimmer, 'h-9 w-full max-w-xs rounded-lg')} />
+        <div className="flex items-center justify-between gap-2">
+          <Skeleton className="h-9 w-full max-w-xs rounded-lg" />
+          <Skeleton className="h-8 w-44 rounded-lg" />
+        </div>
         <div className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
           {[0, 1, 2, 3, 4, 5, 6, 7].map((row) => (
             <div key={row} className="flex items-center gap-4 px-4 py-3">
-              <div className={cn(shimmer, 'size-8 shrink-0 rounded-full')} />
+              <Skeleton className="size-8 shrink-0 rounded-full" />
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                <div className={cn(shimmer, 'h-4 w-32')} />
-                <div className={cn(shimmer, 'h-3 w-24')} />
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-3 w-24" />
               </div>
-              <div className={cn(shimmer, 'h-2 w-40 shrink-0 rounded-full')} />
+              <Skeleton className="h-2 w-40 shrink-0 rounded-full" />
             </div>
           ))}
         </div>

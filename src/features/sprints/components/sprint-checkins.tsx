@@ -81,7 +81,14 @@ export async function SprintCheckins({
   ]
 
   return (
-    <section aria-label="Sprint check-ins" className="flex flex-col gap-3">
+    <section
+      // The anchor PlanReadStrip's "check-ins disagree" chip points at, from
+      // the Roadmap tab. scroll-mt clears the sticky app chrome so the
+      // heading isn't cut off when the fragment lands.
+      id="checkins"
+      aria-label="Sprint check-ins"
+      className="flex scroll-mt-20 flex-col gap-3"
+    >
       <div className="flex items-baseline gap-2">
         <h2 className="font-heading text-base font-medium">Check-ins</h2>
         {checkins.length > 0 ? (

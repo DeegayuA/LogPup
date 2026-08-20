@@ -1,8 +1,11 @@
+import { Suspense } from 'react'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { format } from 'date-fns'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { getSession } from '@/lib/session'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
@@ -196,7 +199,15 @@ export default async function AppDetailPage(props: {
     // dialogs — a member pays nothing for a preference lookup they have no
     // control that needs it.
     isAdmin && session?.user ? getAiPrefs(session.user.id) : Promise.resolve(null),
-    tab === 'bugs' ? listBugsForApp(app.id, bugFilters) : Promise.resolve([]),
+    // `null`, not a rethrow: one failed Neon read on the bug list should
+    // degrade to BugList's own inline error (the admin queue already does
+    // this), not blank the whole app page from the route boundary.
+    tab === 'bugs'
+      ? listBugsForApp(app.id, bugFilters).catch((cause): null => {
+          console.error('[bugs] app tab list failed', cause)
+          return null
+        })
+      : Promise.resolve([]),
     // The ONE exception to "only the active tab's data": the count is the
     // badge ON the tab, so fetching it only while the tab is open is the one
     // moment it is not needed. One partial-index count, and only for a viewer
@@ -453,19 +464,24 @@ export default async function AppDetailPage(props: {
           {currentSprint ? (
             <>
               <AppSprintBand sprint={currentSprint} tasks={tasks} today={today} />
-              <SprintCheckins
-                appId={app.id}
-                sprintId={currentSprint.id}
-                currentUser={
-                  session?.user
-                    ? {
-                        id: session.user.id,
-                        name: session.user.name ?? session.user.email,
-                        avatarUrl: session.user.image ?? null,
-                      }
-                    : null
-                }
-              />
+              {/* Async server component with two more queries of its own
+                  (getBoard + getSprintCheckins) — streamed, so the heaviest
+                  Overview section no longer holds the whole page hostage. */}
+              <Suspense fallback={<CheckinsSkeleton />}>
+                <SprintCheckins
+                  appId={app.id}
+                  sprintId={currentSprint.id}
+                  currentUser={
+                    session?.user
+                      ? {
+                          id: session.user.id,
+                          name: session.user.name ?? session.user.email,
+                          avatarUrl: session.user.image ?? null,
+                        }
+                      : null
+                  }
+                />
+              </Suspense>
             </>
           ) : (
             <section className="flex flex-col gap-2 rounded-xl border bg-card p-4">
@@ -610,9 +626,13 @@ export default async function AppDetailPage(props: {
           ) : null}
 
           {isBacklog ? (
-            <p className="text-sm text-muted-foreground">
-              Backlog — tasks not assigned to any sprint.
-            </p>
+            // A real h2, not a paragraph: the board's column headings are h3s,
+            // and on the backlog view this is the only ancestor between them
+            // and the page h1.
+            <div className="flex flex-col gap-0.5">
+              <h2 className="font-heading text-base font-semibold">Backlog</h2>
+              <p className="text-sm text-muted-foreground">Tasks not assigned to any sprint.</p>
+            </div>
           ) : null}
 
           {board && session?.user ? (
@@ -625,16 +645,20 @@ export default async function AppDetailPage(props: {
               currentUser={{ id: session.user.id, role: session.user.role }}
             />
           ) : (
-            <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border px-6 py-12 text-center">
-              <p className="font-heading text-base font-semibold">Nothing to fetch here yet</p>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                {isAdmin
-                  ? 'This app has no sprints. Create the first one and LogPup will keep watch over the board.'
-                  : 'No sprints planned for this app yet. LogPup is keeping an eye out — check back soon.'}
-              </p>
-              {isAdmin ? (
-                <SprintFormDialog appId={app.id} aiDraftEnabled={sprintDraftEnabled} />
-              ) : null}
+            <div className="rounded-xl border border-dashed border-border">
+              <EmptyState
+                title="Nothing to fetch here yet"
+                description={
+                  isAdmin
+                    ? 'This app has no sprints. Create the first one and LogPup will keep watch over the board.'
+                    : 'No sprints planned for this app yet. LogPup is keeping an eye out — check back soon.'
+                }
+                action={
+                  isAdmin ? (
+                    <SprintFormDialog appId={app.id} aiDraftEnabled={sprintDraftEnabled} />
+                  ) : undefined
+                }
+              />
             </div>
           )}
 
@@ -680,6 +704,7 @@ export default async function AppDetailPage(props: {
 
       {tab === 'meetings' ? (
         <div className="flex flex-col gap-4">
+          <h2 className="sr-only">Meetings</h2>
           <div className="flex justify-end">
             <MeetingForm
               apps={assignableApps.map((a) => ({ id: a.id, name: a.name }))}
@@ -700,6 +725,9 @@ export default async function AppDetailPage(props: {
 
       {tab === 'bugs' ? (
         <div className="flex flex-col gap-4">
+          {/* The bug rows' titles are h3s; without this the tab jumps from the
+              page h1 straight to them. Same fix on Meetings and Activity. */}
+          <h2 className="sr-only">Bugs</h2>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <p className="max-w-prose text-sm text-muted-foreground">
               What is broken in {app.name}, and who has it. Reports arrive from wherever
@@ -712,7 +740,12 @@ export default async function AppDetailPage(props: {
             <BugCsvImportDialog appId={app.id} appName={app.name} canImport={canTriageBugs} />
           </div>
           <BugList
-            bugs={bugs}
+            bugs={bugs ?? []}
+            error={
+              bugs === null
+                ? 'The list could not be read. Refresh, and if it keeps happening tell an admin.'
+                : null
+            }
             filters={bugFilters}
             filterHrefFor={(patch) => bugFilterHref(slug, bugFilters, patch)}
             emptyHint={
@@ -728,11 +761,14 @@ export default async function AppDetailPage(props: {
       ) : null}
 
       {tab === 'activity' ? (
-        <AppActivity
-          items={activity}
-          today={today}
-          emptyHint="Comments, tasks, meetings and team changes all land here — the first one will show up as soon as someone does something."
-        />
+        <section className="flex flex-col gap-3" aria-label="Activity">
+          <h2 className="sr-only">Activity</h2>
+          <AppActivity
+            items={activity}
+            today={today}
+            emptyHint="Comments, tasks, meetings and team changes all land here — the first one will show up as soon as someone does something."
+          />
+        </section>
       ) : null}
 
       {tab === 'settings' ? (
@@ -782,5 +818,32 @@ export default async function AppDetailPage(props: {
         </div>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Shaped like the Check-ins strip it stands in for: a heading-width line,
+ * then avatar rows in the same bordered list — so the swap is a fill-in,
+ * not a layout shift.
+ */
+function CheckinsSkeleton() {
+  return (
+    <section aria-label="Sprint check-ins" className="flex flex-col gap-3">
+      <span role="status" className="sr-only">
+        Loading check-ins
+      </span>
+      <Skeleton className="h-6 w-24" />
+      <div className="flex flex-col divide-y divide-border rounded-xl border border-border">
+        {Array.from({ length: 3 }, (_, index) => (
+          <div key={index} className="flex items-center gap-3 px-3 py-2.5">
+            <Skeleton className="size-8 shrink-0 rounded-full" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Skeleton className="h-3.5 w-32 max-w-full" />
+              <Skeleton className="h-3 w-48 max-w-full" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }

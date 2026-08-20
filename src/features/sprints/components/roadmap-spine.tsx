@@ -95,7 +95,9 @@ const MIN_BAR_PX = 132
  * than that it is out of time. Same wording as readSprint's own summary.
  */
 function remainingLabel(progress: SprintRead['progress']): string {
-  return progress.remainingDays <= 0 ? 'ends today' : `${progress.remainingDays}d left`
+  if (progress.remainingDays <= 0) return 'ends today'
+  // Worded, not "5d": an abbreviation saves six pixels and costs a unit.
+  return progress.remainingDays === 1 ? '1 day left' : `${progress.remainingDays} days left`
 }
 
 export function RoadmapSpine({
@@ -172,7 +174,11 @@ export function RoadmapSpine({
               href={zoomHrefFor(level)}
               aria-current={level === zoom ? 'true' : undefined}
               className={cn(
-                'rounded-md px-1.5 py-0.5 text-2xs outline-none',
+                // h-7 (28px): the same height as the full timeline's zoom
+                // Buttons below, and above the 24px target minimum this
+                // codebase enforces — the old px-1.5 py-0.5 text-2xs chip was
+                // an ~18px target for the same ?zoom= param one scroll away.
+                'inline-flex h-7 items-center rounded-md px-2 text-xs outline-none',
                 'transition-colors duration-150 motion-reduce:transition-none',
                 'focus-visible:ring-2 focus-visible:ring-ring',
                 level === zoom

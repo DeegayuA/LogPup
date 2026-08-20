@@ -1,10 +1,9 @@
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { Bot, Info, LogOut, PawPrint, SquareArrowOutUpRight, UserRound } from 'lucide-react'
+import { Bot, Info, LogOut, Sparkles, SquareArrowOutUpRight, UserRound } from 'lucide-react'
 import { getSession } from '@/lib/session'
-import { listPasskeys } from '@/features/auth/webauthn-actions'
-import { PasskeysCard } from '@/features/auth/components/passkeys-card'
 import { signOut } from '@/lib/auth'
 import { CURRENT_VERSION, VERSION_HISTORY } from '@/lib/changelog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
@@ -17,10 +16,17 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
 import { getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
-import { listGeminiKeys, listPoolKeyHealth } from '@/features/gemini/queries'
+import {
+  listGeminiKeys,
+  listPoolKeyHealth,
+  sharedKeyUsageByCaller,
+} from '@/features/gemini/queries'
 import { assessRecordingReadiness } from '@/features/gemini/readiness'
 import { AiFeaturesCard } from '@/features/gemini/components/ai-features-card'
+import { GeminiKeysCard } from '@/features/gemini/components/gemini-keys-card'
 import { isLiveTranscriptionEnabled } from '@/features/transcription/flag'
 import { AppearanceCard } from '@/features/settings/components/appearance-card'
 import { describeAiStatus, findRelease } from '@/features/settings/overview'
@@ -35,18 +41,17 @@ export const metadata: Metadata = {
 /**
  * Everything that is true of YOU rather than of the workspace, on one page.
  *
- * Deliberately not a second Profile. /profile owns the fields you EDIT about
- * yourself (avatar, phone, password, Gemini keys); this owns the things that
- * decide how the app behaves for you and the facts you occasionally need to
- * read off it — the theme choice the header toggle can't fully express, an
- * honest answer to "is my AI set up", and the version, which until now was
- * only ever rendered in the desktop sidebar footer and so was invisible on a
- * phone.
+ * The AI setup loop lives here WHOLE: the readiness verdict, the keys that
+ * fix a "Not ready" verdict, and the per-feature switches, top to bottom.
+ * It used to be split — verdict and switches here, keys at the foot of
+ * /profile — which turned "paste one key" into nav → read verdict → follow a
+ * link → land under the sticky header → scroll. /profile keeps what you EDIT
+ * about your identity (avatar, phone, password, passkeys) and a pointer stub
+ * at /profile#gemini for old deep links.
  *
- * Where a control already exists elsewhere this page LINKS to it instead of
- * growing a second copy: two forms writing one column is how they drift, and
- * the Gemini actions revalidate `/profile` specifically, so a duplicate form
- * here would show stale rows straight after a write.
+ * The Gemini key actions still revalidate /profile (their historical home,
+ * frozen elsewhere), so GeminiKeysCard refreshes the router itself after
+ * every successful write — see the note in that component.
  */
 /**
  * "20 Aug 2026, 14:32" in Asia/Colombo.
@@ -68,6 +73,8 @@ function formatBuildStamp(at: string): string {
   }).format(new Date(at))
 }
 
+const USAGE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
 export default async function SettingsPage() {
   const session = await getSession()
   const user = session?.user
@@ -75,15 +82,13 @@ export default async function SettingsPage() {
   // types honestly rather than scattering `?.` through the render.
   if (!user?.id) redirect('/sign-in')
 
-  // Server-fetched so the card opens populated — no client waterfall.
-  const passkeysRes = await listPasskeys()
-  const passkeys = passkeysRes.ok ? passkeysRes.data : []
-
-  const [geminiKeys, poolKeys, avatarUrl, title] = await Promise.all([
+  const now = new Date()
+  const [geminiKeys, poolKeys, avatarUrl, title, usedBy] = await Promise.all([
     listGeminiKeys(user.id),
     listPoolKeyHealth(user.id),
     getOwnAvatarUrl(user.id),
     getOwnTitle(user.id),
+    sharedKeyUsageByCaller(user.id, new Date(now.getTime() - USAGE_WINDOW_MS)),
   ])
 
   // Two row sets, two different questions, deliberately not interchangeable.
@@ -95,6 +100,13 @@ export default async function SettingsPage() {
   // it is the count of keys this person can actually manage.
   const readiness = assessRecordingReadiness(poolKeys)
   const status = describeAiStatus(readiness.level)
+  // readiness.ts (frozen) still words its blocked-state advice for the era
+  // when the key form lived on /profile. The form is now the very next card,
+  // so the destination is re-pointed at render time; if the upstream sentence
+  // ever changes, the original text shows unmodified rather than mangled.
+  const advice =
+    readiness.advice?.replace('Add a key in Profile → Gemini API keys.', 'Add a key below.') ??
+    null
   const liveEnabled = isLiveTranscriptionEnabled()
   const release = findRelease(CURRENT_VERSION, VERSION_HISTORY)
   const roleName = roleLabel(user.role)
@@ -103,12 +115,10 @@ export default async function SettingsPage() {
   return (
     <div className="flex flex-1 flex-col p-4 sm:p-6">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-bold tracking-tight">Settings</h1>
-          <p className="text-sm text-muted-foreground">
-            How LogPup behaves for you. Nothing here changes anything for your teammates.
-          </p>
-        </div>
+        <PageHeader
+          title="Settings"
+          description="How LogPup behaves for you. Nothing here changes anything for your teammates."
+        />
 
         {/* 1. Who you are. Read-only on purpose: every one of these fields
             already has exactly one editor (Profile for the avatar, Admin →
@@ -116,9 +126,9 @@ export default async function SettingsPage() {
             be a second thing to keep in step. */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle as="h2" className="flex items-center gap-2">
               <UserRound className="size-4 shrink-0" aria-hidden />
-              <h2>You</h2>
+              You
             </CardTitle>
             <CardDescription>
               What teammates see next to your name across the workspace.
@@ -156,21 +166,17 @@ export default async function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* 2. Appearance — the only control on this page that is actually new
-            rather than gathered. Client component: the choice lives in
+        {/* 2. Appearance. Client component: the choice lives in
             localStorage, not the database. */}
         <AppearanceCard />
 
-        {/* Passkeys: the faster door in after the first sign-in. */}
-        <PasskeysCard initial={passkeys} />
-
-        {/* 3. AI & voice. A read-out, not a form — the keys themselves are
-            managed on Profile (see the note in this file's doc comment). */}
+        {/* 3. AI, whole: verdict → the keys that change the verdict → the
+            per-feature switches those keys unlock. Top to bottom, one page. */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle as="h2" className="flex items-center gap-2">
               <Bot className="size-4 shrink-0" aria-hidden />
-              <h2>AI &amp; voice</h2>
+              AI &amp; voice
             </CardTitle>
             <CardDescription>
               Transcription, meeting notes and read-aloud run on your own Gemini keys first,
@@ -185,34 +191,26 @@ export default async function SettingsPage() {
                 <Badge variant={status.variant}>{status.word}</Badge>
                 {/* "of your own" because the verdict beside it can be carried
                     by a teammate's shared key that is not in this count and
-                    never appears on this page. */}
+                    never appears in the readiness pool's wording. */}
                 <span className="font-mono text-xs tabular-nums text-muted-foreground">
                   {geminiKeys.length} key{geminiKeys.length === 1 ? '' : 's'} of your own
                 </span>
               </div>
               <p className="text-sm">{readiness.headline}</p>
-              {readiness.advice ? (
-                <p className="text-sm text-muted-foreground">{readiness.advice}</p>
+              {advice ? <p className="text-sm text-muted-foreground">{advice}</p> : null}
+              {/* Running on a teammate's shared key is a data-custody fact,
+                  not a detail: their Google project processes this user's
+                  recordings and pays for any paid usage. Said here because
+                  the verdict above can read "Ready" while every key serving
+                  it belongs to someone else. */}
+              {geminiKeys.length === 0 && readiness.level !== 'blocked' ? (
+                <p className="text-sm text-muted-foreground">
+                  Your AI is running on a teammate&rsquo;s org-shared key, so their Google
+                  project processes your recordings and pays for any paid usage. Add your own
+                  key below to stop drawing on theirs.
+                </p>
               ) : null}
             </div>
-
-            {/* Own-keys empty state, but it has to agree with the pool-aware
-                verdict above it: someone running on a teammate's shared key
-                has no key here and yet nothing is waiting for them, so the
-                "only the transcript waits" line would be simply untrue. */}
-            {geminiKeys.length === 0 ? (
-              <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-                <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
-                <p className="text-sm font-medium">
-                  {readiness.level === 'blocked' ? 'No Gemini key yet.' : 'No key of your own yet.'}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {readiness.level === 'blocked'
-                    ? 'Create a free one in Google AI Studio, then paste it into Profile → Gemini API keys. Recording works without it; only the transcript waits.'
-                    : 'Your AI is running on a teammate’s org-shared key, so their Google project processes your recordings and pays for any paid usage. Add your own in Profile → Gemini API keys to stop drawing on theirs.'}
-                </p>
-              </div>
-            ) : null}
 
             <dl className="flex flex-col gap-2 border-t border-border pt-3 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -226,17 +224,19 @@ export default async function SettingsPage() {
                 </dd>
               </div>
             </dl>
-
-            <Button variant="outline" size="sm" className="self-start" render={<Link href="/profile#gemini" />}>
-              Manage Gemini keys
-            </Button>
           </CardContent>
         </Card>
 
-        {/* 3b. AI features hub. Complements the AI & voice card above: that
-            one is a readiness read-out, this is the per-feature registry —
-            costs, 30-day measured usage, and the on/off switch for each. */}
-        <AiFeaturesCard userId={user.id} />
+        {/* 3b. The keys themselves — the control that changes the verdict
+            above, directly under it instead of at the end of another page. */}
+        <GeminiKeysCard keys={geminiKeys} usedBy={usedBy} />
+
+        {/* 3c. AI features hub: per-feature costs, 30-day measured usage, and
+            the on/off switch for each. Suspense-split: it runs its own three
+            reads, and the rest of the page shouldn't wait on them. */}
+        <Suspense fallback={<AiFeaturesCardSkeleton />}>
+          <AiFeaturesCard userId={user.id} />
+        </Suspense>
 
         {/* 4. About. The version had exactly one home — the desktop sidebar
             footer, which is `hidden md:flex` — so on a phone there was no way
@@ -245,9 +245,9 @@ export default async function SettingsPage() {
             what actually changed. */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle as="h2" className="flex items-center gap-2">
               <Info className="size-4 shrink-0" aria-hidden />
-              <h2>About LogPup</h2>
+              About LogPup
             </CardTitle>
             <CardDescription>
               Handy when you report something — an admin can tell which build you saw it on.
@@ -301,9 +301,9 @@ export default async function SettingsPage() {
         {/* 5. Account. Last, because it is the destructive one. */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle as="h2" className="flex items-center gap-2">
               <LogOut className="size-4 shrink-0" aria-hidden />
-              <h2>Account</h2>
+              Account
             </CardTitle>
             <CardDescription>
               Signing out ends this session on this device only. Nothing you have recorded
@@ -336,9 +336,49 @@ export default async function SettingsPage() {
           >
             Profile <SquareArrowOutUpRight className="size-3" aria-hidden />
           </Link>{' '}
-          holds your avatar, phone number, password and Gemini keys.
+          holds your avatar, phone number, password and passkeys.
         </p>
       </div>
     </div>
+  )
+}
+
+/** Shape-matched fallback for the AI features card while its three reads run:
+ *  same Card, same title, summary-grid and row silhouettes — no jump on swap. */
+function AiFeaturesCardSkeleton() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle as="h2" className="flex items-center gap-2 font-heading">
+          <Sparkles className="size-4" aria-hidden /> AI features
+        </CardTitle>
+        <CardDescription>
+          <span className="sr-only" role="status">
+            Loading your AI feature usage…
+          </span>
+          <Skeleton aria-hidden className="h-4 w-64 max-w-full" />
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4" aria-hidden>
+        <div className="grid grid-cols-2 gap-3 rounded-lg border p-3 sm:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="flex flex-col gap-1">
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-4 w-12" />
+            </div>
+          ))}
+        </div>
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="flex flex-col gap-2 py-1">
+            <div className="flex items-start justify-between gap-3">
+              <Skeleton className="h-4 w-40 max-w-full" />
+              <Skeleton className="h-5 w-9 rounded-full" />
+            </div>
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-8 w-full sm:w-56" />
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }

@@ -115,6 +115,10 @@ const bulkUpdateInput = z.object({
       assigneeId: z.uuid().nullable(),
       priority: z.number().int().min(0).max(3),
       sprintId: z.uuid().nullable(),
+      // Same field updateTask already writes. Its absence here was the reason
+      // rescheduling N overdue cards was N full dialog round-trips: the bulk
+      // bar covered every other quick-menu edit except the date.
+      dueDate: z.iso.date().nullable(),
     })
     .partial(),
 })

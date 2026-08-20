@@ -96,6 +96,32 @@ export function businessHourOf(date: Date): number {
   return Number(hour)
 }
 
+/** `Aug 12, 2026` — history rows that must name the year. */
+export function formatBusinessDate(date: Date): string {
+  const { month, day, year } = partsOf(date, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  return `${month} ${day}, ${year}`
+}
+
+/**
+ * `Aug 12, 2026 · 2:05 PM` — an audit-trail instant. Used by the allocation
+ * history renderers, which are SERVER components: date-fns `format()` there
+ * printed the server's timezone (UTC on Vercel), so a change made at 2:05 PM
+ * Colombo read as 08:35 — the exact trap this module's docblock documents.
+ */
+export function formatBusinessDateTime(date: Date): string {
+  return `${formatBusinessDate(date)} · ${formatBusinessTime(date)}`
+}
+
+/** `12 Aug · 2:05 PM` — the change log's compact stamp, business timezone. */
+export function formatBusinessDayMonthTime(date: Date): string {
+  const { month, day } = partsOf(date, { month: 'short', day: 'numeric' })
+  return `${day} ${month} · ${formatBusinessTime(date)}`
+}
+
 /** `Aug 2026` — the "joined" line in the header. */
 export function formatBusinessMonthYear(date: Date): string {
   const { month, year } = partsOf(date, { month: 'short', year: 'numeric' })

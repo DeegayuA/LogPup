@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { Loader2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -36,9 +36,36 @@ export function PendingAbsenceList({ absences }: { absences: MyAbsence[] }) {
   )
 }
 
+/**
+ * Withdraw ARMS FIRST. It used to fire on one click, and a misclick destroyed
+ * a filing that then had to be re-entered in full — dates, kind, reason.
+ *
+ * Focus is MANAGED through the swap, because arming replaces the button under
+ * the keyboard user's focus: it moves to the confirm when armed and back to
+ * Withdraw when disarmed, and Escape disarms. (delete-bug-button on the
+ * neighbouring surface arms without doing this, and focus drops to body —
+ * that defect is not copied here.) The question is a live region, so the
+ * state change is announced, not just repainted.
+ */
 function PendingAbsenceRow({ absence }: { absence: MyAbsence }) {
   const [withdrawing, startWithdrawing] = useTransition()
+  const [armed, setArmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const armRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const hasArmed = useRef(false)
+
+  // Focus follows the state, not the click: keyboard and pointer arrive at
+  // the same place. Runs on every armed flip, including Escape's — but never
+  // on mount, where grabbing focus would hijack the page.
+  useEffect(() => {
+    if (armed) {
+      hasArmed.current = true
+      confirmRef.current?.focus()
+    } else if (hasArmed.current) {
+      armRef.current?.focus({ preventScroll: true })
+    }
+  }, [armed])
 
   function handleWithdraw() {
     setError(null)
@@ -49,17 +76,27 @@ function PendingAbsenceRow({ absence }: { absence: MyAbsence }) {
           // Most likely someone reviewed it a moment ago. The action
           // revalidates either way, so the row rerenders as whatever it now is.
           setError(res.error)
+          setArmed(false)
           return
         }
         toast.success('Withdrawn')
       } catch {
         setError('Could not withdraw that — try again')
+        setArmed(false)
       }
     })
   }
 
   return (
-    <li className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2">
+    <li
+      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && armed) {
+          event.stopPropagation()
+          setArmed(false)
+        }
+      }}
+    >
       <span className="w-40 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
         {formatAbsenceRange(absence.startDate, absence.endDate)}
       </span>
@@ -76,16 +113,46 @@ function PendingAbsenceRow({ absence }: { absence: MyAbsence }) {
           {error}
         </span>
       ) : null}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={handleWithdraw}
-        disabled={withdrawing}
-      >
-        {withdrawing ? <Loader2Icon className="animate-spin" aria-hidden /> : null}
-        Withdraw
-      </Button>
+      {armed ? (
+        <span className="flex items-center gap-1.5">
+          <span role="status" className="text-2xs text-muted-foreground">
+            Withdraw this filing?
+          </span>
+          <Button
+            ref={confirmRef}
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={handleWithdraw}
+            disabled={withdrawing}
+          >
+            {withdrawing ? <Loader2Icon className="animate-spin" aria-hidden /> : null}
+            Withdraw
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setArmed(false)}
+            disabled={withdrawing}
+          >
+            Keep it
+          </Button>
+        </span>
+      ) : (
+        <Button
+          ref={armRef}
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setError(null)
+            setArmed(true)
+          }}
+        >
+          Withdraw
+        </Button>
+      )}
     </li>
   )
 }

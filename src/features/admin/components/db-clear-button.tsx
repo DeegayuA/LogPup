@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useEffect, useState } from 'react'
+import { useActionState, useEffect, useRef, useState } from 'react'
 import { useFormStatus } from 'react-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,15 @@ function ConfirmButton() {
 export function DbClearButton() {
   const [open, setOpen] = useState(false)
   const [state, formAction] = useActionState<ActionResult | null, FormData>(clearTestData, null)
+  // Two-step with focus management: opening puts focus in the phrase field
+  // (autoFocus below), and Cancel hands it back to the button that opened the
+  // form instead of dropping it on <body>.
+  const openButtonRef = useRef<HTMLButtonElement>(null)
+
+  function close() {
+    setOpen(false)
+    requestAnimationFrame(() => openButtonRef.current?.focus())
+  }
 
   useEffect(() => {
     if (!state) return
@@ -34,7 +43,12 @@ export function DbClearButton() {
 
   if (!open) {
     return (
-      <Button variant="destructive" className="self-start" onClick={() => setOpen(true)}>
+      <Button
+        ref={openButtonRef}
+        variant="destructive"
+        className="self-start"
+        onClick={() => setOpen(true)}
+      >
         Clear database…
       </Button>
     )
@@ -56,11 +70,15 @@ export function DbClearButton() {
           name="confirm"
           placeholder="CLEAR"
           autoComplete="off"
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           aria-label="Type CLEAR to confirm"
           className="h-9 max-w-[160px] font-mono text-sm"
         />
         <ConfirmButton />
-        <Button type="button" variant="ghost" size="lg" onClick={() => setOpen(false)}>
+        <Button type="button" variant="ghost" size="lg" onClick={close}>
           Cancel
         </Button>
       </div>

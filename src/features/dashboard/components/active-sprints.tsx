@@ -3,7 +3,9 @@ import { format } from 'date-fns'
 import { PawPrint } from 'lucide-react'
 import { StatNumber } from '@/components/animate-ui/stat-number'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import type { ActiveSprintSummary, UpcomingSprintSummary } from '@/features/sprints/queries'
 import { sprintProgress, daysRemaining } from '@/features/dashboard/sprint-progress'
 import { cn } from '@/lib/utils'
@@ -54,7 +56,7 @@ export function ActiveSprints({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Active sprints</CardTitle>
+        <CardTitle as="h3">Active sprints</CardTitle>
         {sprints.length > 0 ? (
           <CardAction>
             <span className="font-mono text-xs text-muted-foreground">
@@ -79,13 +81,17 @@ export function ActiveSprints({
             </p>
           </Link>
         ) : sprints.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 py-4 text-center">
-            <PawPrint className="size-5 text-muted-foreground/60" aria-hidden />
-            <p className="text-sm font-medium">Nothing on the run.</p>
-            <p className="text-xs text-muted-foreground">
-              Start a sprint on an app and LogPup will keep watch here.
-            </p>
-          </div>
+          <EmptyState
+            icon={PawPrint}
+            title="Nothing on the run."
+            description="Start a sprint on an app and LogPup will keep watch here."
+            className="py-4"
+            action={
+              <Button variant="outline" size="sm" render={<Link href="/apps" />}>
+                Go to apps
+              </Button>
+            }
+          />
         ) : (
           <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
             {sprints.map((sprint) => {
@@ -102,11 +108,7 @@ export function ActiveSprints({
                       <span className="flex min-w-0 items-baseline gap-1.5">
                         <span className="truncate text-sm font-medium">{sprint.sprintName}</span>
                         {sprint.status === 'planned' ? (
-                          <Badge
-                            variant="outline"
-                            className="shrink-0 text-muted-foreground"
-                            title="Running by date, but its status hasn't been flipped to Active yet"
-                          >
+                          <Badge variant="outline" className="shrink-0 text-muted-foreground">
                             not started
                           </Badge>
                         ) : null}
@@ -128,6 +130,16 @@ export function ActiveSprints({
                         {formatSprintDate(sprint.startDate)} – {formatSprintDate(sprint.endDate)}
                       </span>
                     </div>
+                    {/* The badge's explanation, as VISIBLE text rather than a
+                        title tooltip — a title is invisible on touch,
+                        unreachable by keyboard and unannounced by most screen
+                        readers, which left "not started" unexplained for
+                        everyone who needed it explained. */}
+                    {sprint.status === 'planned' ? (
+                      <p className="text-2xs text-muted-foreground">
+                        Running by its dates, but not flipped to Active yet.
+                      </p>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted" aria-hidden>
                         <div

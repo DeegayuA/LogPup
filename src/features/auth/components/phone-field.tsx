@@ -39,7 +39,7 @@ export function PhoneField({ phone }: { phone: string | null }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 font-heading">
+        <CardTitle as="h2" className="flex items-center gap-2 font-heading">
           <Phone className="size-4" aria-hidden /> Phone
         </CardTitle>
         <CardDescription>

@@ -60,6 +60,7 @@ export function MeetingList({
   apps = [],
   offerCreate = false,
   openMeetingId,
+  onGlance,
 }: {
   meetings: MeetingSummary[]
   currentUserId: string
@@ -102,6 +103,13 @@ export function MeetingList({
   apps?: { id: string; name: string }[]
   /** Meeting whose write-up panel should open on arrival (see MeetingIntelPanel.autoOpen). */
   openMeetingId?: string
+  /**
+   * Every row already hands its glance (follow-up/action/notes counts) up to
+   * itself for the chip row; this lifts the same object one level further so
+   * the list's OWNER can offer list-wide quick filters over it (see
+   * upcoming-filter.tsx). Optional — lists without filters pay nothing.
+   */
+  onGlance?: (meetingId: string, glance: MeetingGlance | null) => void
 }) {
   // One clock read for the whole list rather than one per row, so every row's
   // "Tomorrow" / "3 days ago" is measured against the same instant and cannot
@@ -171,6 +179,7 @@ export function MeetingList({
           users={users}
           apps={apps}
           autoOpen={openMeetingId === meeting.id}
+          onGlance={onGlance}
         />
       ))}
     </ul>
@@ -278,6 +287,7 @@ function MeetingRow({
   users,
   apps,
   autoOpen,
+  onGlance,
 }: {
   meeting: MeetingSummary
   now: Date
@@ -289,6 +299,7 @@ function MeetingRow({
   users: MentionUser[]
   apps: { id: string; name: string }[]
   autoOpen: boolean
+  onGlance?: (meetingId: string, glance: MeetingGlance | null) => void
 }) {
   const [isPending, startTransition] = useTransition()
   // Handed up by the panel each time it (re)loads this meeting's intel, so the
@@ -509,7 +520,12 @@ function MeetingRow({
           attendees={meeting.attendees}
           appIds={meeting.apps.map((app) => app.id)}
           mentionUsers={users}
-          onGlanceChange={setGlance}
+          onGlanceChange={(next) => {
+            setGlance(next)
+            // The same object, one level further up — the list owner's quick
+            // filters count what the rows already know.
+            onGlance?.(meeting.id, next)
+          }}
           autoOpen={autoOpen}
         />
       </article>

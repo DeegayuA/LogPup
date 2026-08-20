@@ -1,4 +1,4 @@
-const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
+import { Skeleton } from '@/components/ui/skeleton'
 
 /**
  * Skeletons for /activity, shaped like what is actually coming: a rail with
@@ -17,19 +17,29 @@ const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
  * drift into showing different shapes for the same wait.
  */
 
-/** The filter bar: search box, three selects, two date fields. */
+/**
+ * The filter bar: search box + mic, the "My changes" chip, three selects,
+ * two date fields, three preset chips.
+ */
 export function ActivityControlsSkeleton() {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="sr-only" role="status">
         Loading activity filters
       </span>
-      <div className={`${shimmer} h-8 w-56`} />
-      <div className={`${shimmer} h-8 w-40`} />
-      <div className={`${shimmer} h-8 w-36`} />
-      <div className={`${shimmer} h-8 w-40`} />
-      <div className={`${shimmer} h-8 w-36`} />
-      <div className={`${shimmer} h-8 w-36`} />
+      <div className="flex items-center gap-1" aria-hidden>
+        <Skeleton className="h-8 w-56" />
+        <Skeleton className="size-7" />
+      </div>
+      <Skeleton aria-hidden className="h-7 w-24" />
+      <Skeleton aria-hidden className="h-8 w-40" />
+      <Skeleton aria-hidden className="h-8 w-36" />
+      <Skeleton aria-hidden className="h-8 w-40" />
+      <Skeleton aria-hidden className="h-8 w-36" />
+      <Skeleton aria-hidden className="h-8 w-36" />
+      <Skeleton aria-hidden className="h-7 w-14" />
+      <Skeleton aria-hidden className="h-7 w-16" />
+      <Skeleton aria-hidden className="h-7 w-20" />
     </div>
   )
 }
@@ -43,8 +53,8 @@ function DaySkeleton({ rows }: { rows: number }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-baseline gap-2 py-1.5">
-        <div className={`${shimmer} h-3.5 w-24`} />
-        <div className={`${shimmer} h-3 w-32`} />
+        <Skeleton className="h-3.5 w-24" />
+        <Skeleton className="h-3 w-32" />
       </div>
       <div className="ml-2 flex flex-col border-l border-border">
         {Array.from({ length: rows }, (_, index) => (
@@ -56,8 +66,8 @@ function DaySkeleton({ rows }: { rows: number }) {
               aria-hidden
               className="absolute top-3.5 left-0 size-2 -translate-x-1/2 rounded-full bg-muted ring-2 ring-background"
             />
-            <div className={`${shimmer} h-4 max-w-full ${ROW_WIDTHS[index % ROW_WIDTHS.length]}`} />
-            <div className={`${shimmer} h-3 w-16 shrink-0`} />
+            <Skeleton className={`h-4 max-w-full ${ROW_WIDTHS[index % ROW_WIDTHS.length]}`} />
+            <Skeleton className="h-3 w-16 shrink-0" />
           </div>
         ))}
       </div>

@@ -70,7 +70,7 @@ const PCT_HINT = `Allocation must be a whole number between ${MIN_PCT} and ${MAX
  * big enough and exactly where it looks.
  */
 const chipClass =
-  'inline-flex items-center justify-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground ring-1 ring-transparent transition-[color,background-color,box-shadow] duration-150 motion-reduce:transition-none hover:bg-secondary/70 hover:ring-ring/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-busy:ring-ring/40 disabled:pointer-events-none disabled:opacity-60 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-2.5 pointer-coarse:[&::after]:size-full'
+  'inline-flex items-center justify-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-2xs font-medium text-secondary-foreground ring-1 ring-transparent transition-[color,background-color,box-shadow] duration-150 motion-reduce:transition-none hover:bg-secondary/70 hover:ring-ring/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-busy:ring-ring/40 disabled:pointer-events-none disabled:opacity-60 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-2.5 pointer-coarse:[&::after]:size-full'
 
 /**
  * The app's identity swatch on a chip: one app, one colour, the same hue its

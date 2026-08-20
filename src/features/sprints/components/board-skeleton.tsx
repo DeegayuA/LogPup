@@ -17,14 +17,15 @@
  * subtree. Until then the route blocks on the query as it always has.
  */
 
+import { Skeleton } from '@/components/ui/skeleton'
+
 const COLUMN_CARD_COUNTS = [4, 2, 3]
 
+/** The shared Skeleton primitive, kept under the local name the layout below
+ *  was written against. One shimmer for the whole app — radius, tone and
+ *  motion (incl. motion-reduce) come from the primitive, not this file. */
 function Bar({ className }: { className: string }) {
-  return (
-    <span
-      className={`block rounded-md bg-muted motion-safe:animate-pulse ${className}`}
-    />
-  )
+  return <Skeleton className={className} />
 }
 
 export function BoardSkeleton() {

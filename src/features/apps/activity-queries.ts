@@ -1,7 +1,7 @@
 import { desc, eq } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
-import { liveMeetings, liveTasks } from '@/db/live'
+import { liveApps, liveMeetings, liveTasks } from '@/db/live'
 import {
   appComments,
   assignmentHistory,
@@ -13,6 +13,7 @@ import {
   mergeActivity,
   type AppActivityItem,
 } from '@/features/apps/activity'
+import { appTabHref, boardHref } from '@/features/apps/tabs'
 
 /**
  * Per-source cap. Each branch is fetched at this depth and the merge trims to
@@ -52,7 +53,13 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
   const person = alias(users, 'activity_person')
   const actor = alias(users, 'activity_actor')
 
-  const [commentRows, taskRows, meetingRows, allocationRows] = await Promise.all([
+  const [appRows, commentRows, taskRows, meetingRows, allocationRows] = await Promise.all([
+    // The slug, so every item can carry a real destination. The feed was a
+    // read-only cul-de-sac: item ids and kinds were known but no href was
+    // built, so acting on anything meant re-finding it by hand on the right
+    // tab. One tiny indexed read keeps getAppActivity's signature unchanged
+    // for its (frozen) caller.
+    db.select({ slug: liveApps.slug }).from(liveApps).where(eq(liveApps.id, appId)),
     db
       .select({
         id: appComments.id,
@@ -126,6 +133,8 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
       .limit(PER_SOURCE_LIMIT),
   ])
 
+  const slug = appRows[0]?.slug ?? null
+
   const comments: AppActivityItem[] = commentRows.map((row) => ({
     id: `comment:${row.id}`,
     kind: 'comment',
@@ -134,7 +143,7 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
     actorAvatarUrl: row.authorAvatarUrl,
     title: `${row.authorName} commented`,
     detail: firstLine(row.body),
-    href: null,
+    href: slug ? appTabHref(slug, 'discussion') : null,
   }))
 
   const taskItems: AppActivityItem[] = taskRows.map((row) => ({
@@ -145,7 +154,11 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
     actorAvatarUrl: row.assigneeAvatarUrl,
     title: `Task added — ${row.title}`,
     detail: row.assigneeName ? `Assigned to ${row.assigneeName}` : 'Unassigned',
-    href: null,
+    // Best effort, honestly limited: the board's `q` filter finds the card by
+    // its title within the selected sprint. A task parked in an older sprint
+    // lands on a filtered board whose columns say so in words — still one
+    // click closer than re-finding it by hand.
+    href: slug ? boardHref(slug, undefined, { q: row.title }) : null,
   }))
 
   const meetingItems: AppActivityItem[] = meetingRows.map((row) => ({
@@ -156,7 +169,9 @@ export async function getAppActivity(appId: string, limit = 40): Promise<AppActi
     actorAvatarUrl: row.creatorAvatarUrl,
     title: `Meeting scheduled — ${row.title}`,
     detail: null,
-    href: null,
+    // The meetings tab of this app, not /meetings/[id] — no such route exists
+    // (same rule the search provider follows).
+    href: slug ? appTabHref(slug, 'meetings') : null,
   }))
 
   const allocationItems: AppActivityItem[] = allocationRows.map((row) => ({

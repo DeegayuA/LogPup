@@ -7,6 +7,7 @@ import { CalendarOff, Loader2Icon, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -146,7 +147,7 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
     <div className="flex flex-col gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Add a company holiday</CardTitle>
+          <CardTitle as="h2">Add a company holiday</CardTitle>
           <CardDescription>
             This applies to everyone in the workspace, not just one team or office —
             every person&apos;s coverage is exempt on this day once it is added.
@@ -240,7 +241,7 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Holiday calendar</CardTitle>
+          <CardTitle as="h2">Holiday calendar</CardTitle>
           <CardDescription>
             Every gazetted and company holiday, from both sources at once — and whether
             each one actually shuts the studio. Only the Mercantile list (Shop and
@@ -254,15 +255,12 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
           {upcoming.length === 0 && past.length === 0 ? (
-            <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-              <CalendarOff className="size-5 text-muted-foreground/60" aria-hidden />
-              <p className="text-sm font-medium">No holidays on file.</p>
-              <p className="text-xs text-muted-foreground">
-                The gazetted Sri Lankan calendar only covers the years listed in
-                lk-holidays.ts — add a company holiday above for any day the studio
-                shuts down on top of it.
-              </p>
-            </div>
+            <EmptyState
+              icon={CalendarOff}
+              title="No holidays on file."
+              description="The gazetted Sri Lankan calendar only covers the years listed in lk-holidays.ts — add a company holiday above for any day the studio shuts down on top of it."
+              className="rounded-xl border border-dashed border-border"
+            />
           ) : (
             <>
               <section className="flex flex-col gap-2">
@@ -293,130 +291,188 @@ export function OrgHolidaysCard({ holidays }: { holidays: OrgHolidayRow[] }) {
     </div>
   )
 
+  /**
+   * The revoke control, shared by both layouts. The two dialog sentences are
+   * load-bearing: a past day keeps its exemption forever (strict
+   * `day < revokedFrom` in orgHolidaySet), a future day genuinely reopens.
+   */
+  function renderRevoke(holiday: HolidayCalendarRow, staysExcusedIfRevoked: boolean) {
+    if (holiday.source === 'gazette' || holiday.revokedFrom !== null) return null
+    return (
+      <AlertDialog>
+        <AlertDialogTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={revoking && revokingId === holiday.orgId}
+            />
+          }
+        >
+          Revoke
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke {holiday.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {staysExcusedIfRevoked
+                ? 'This day has already passed, so cancelling it changes nothing about coverage — everyone who already had it off keeps it excused. It only marks the holiday cancelled in the record; this cancellation cannot be undone.'
+                : 'This day will count as a working day again for everyone. Coverage already reported for it does not change. This cancellation cannot be undone.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={revoking && revokingId === holiday.orgId}
+              onClick={() => handleRevoke(holiday)}
+            >
+              Revoke
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    )
+  }
+
+  /** The per-row facts both layouts print. Derived once, rendered twice. */
+  function rowFacts(holiday: HolidayCalendarRow) {
+    // Cancelling always takes effect "today" (revokeOrgHoliday sets
+    // revokedFrom to Colombo's today), and orgHolidaySet's rule is
+    // strict `day < revokedFrom` — so a day that is today or still to
+    // come drops out of force, but a day that already passed keeps
+    // its exemption forever, no matter when it is cancelled.
+    const staysExcusedIfRevoked = holiday.day < todayIso
+    const isCancelled = holiday.revokedFrom !== null
+    const isGazetted = holiday.source === 'gazette'
+    // The consequence, not the paperwork. Category badges are evidence
+    // for this line; on their own they ask the reader to know which
+    // gazette list means a day off, which is the thing they came here
+    // to look up.
+    const closes = closesTheStudio(holiday)
+    return { staysExcusedIfRevoked, isCancelled, isGazetted, closes }
+  }
+
+  function renderAppliesAs(holiday: HolidayCalendarRow, isGazetted: boolean, closes: boolean) {
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap gap-1">
+          {isGazetted ? (
+            // The gazette publishes these lists separately, and
+            // which one a day is on decides who actually gets it
+            // off — a bank-only closing day is not a day the
+            // studio closes. Showing the categories is the whole
+            // point of listing gazetted days here.
+            holiday.categories.map((category) => (
+              <Badge key={category} variant="outline" className="text-2xs">
+                {HOLIDAY_CATEGORY_LABEL[category]}
+              </Badge>
+            ))
+          ) : (
+            <Badge variant="secondary" className="text-2xs">Company</Badge>
+          )}
+        </div>
+        {/* Words, not a colour: the two outcomes have to be
+            distinguishable to a reader who cannot compare hues. */}
+        <span
+          className={cn(
+            'text-2xs',
+            closes ? 'font-medium text-foreground' : 'text-muted-foreground',
+          )}
+        >
+          {closes
+            ? 'Studio closed — no work logged'
+            : isGazetted
+              ? 'Studio open — not a mercantile holiday'
+              : 'Studio open — this holiday was cancelled'}
+        </span>
+      </div>
+    )
+  }
+
+  function renderStatus(holiday: HolidayCalendarRow, isGazetted: boolean, isCancelled: boolean) {
+    if (isGazetted) return <Badge variant="secondary">Automatic</Badge>
+    if (isCancelled)
+      return (
+        <Badge variant="outline" className="font-mono text-2xs tabular-nums">
+          Cancelled from {holiday.revokedFrom}
+        </Badge>
+      )
+    return <Badge variant="secondary">In force</Badge>
+  }
+
+  /**
+   * Two layouts for one list. The 7-column table needs ~640px; below md it
+   * relied on ui/table's generic horizontal scroll, which parked the Status
+   * and Revoke columns off-screen where nobody discovers them — so small
+   * screens get stacked cards with every fact (and the Revoke control)
+   * visible, and the table keeps the scan-down-a-column read from md up.
+   */
   function renderHolidayTable(rows: HolidayCalendarRow[]) {
     return (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Day</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Applies as</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Added by</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-0" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((holiday) => {
-                  // Cancelling always takes effect "today" (revokeOrgHoliday sets
-                  // revokedFrom to Colombo's today), and orgHolidaySet's rule is
-                  // strict `day < revokedFrom` — so a day that is today or still to
-                  // come drops out of force, but a day that already passed keeps
-                  // its exemption forever, no matter when it is cancelled.
-                  const staysExcusedIfRevoked = holiday.day < todayIso
-                  const isCancelled = holiday.revokedFrom !== null
-                  const isGazetted = holiday.source === 'gazette'
-                  // The consequence, not the paperwork. Category badges are evidence
-                  // for this line; on their own they ask the reader to know which
-                  // gazette list means a day off, which is the thing they came here
-                  // to look up.
-                  const closes = closesTheStudio(holiday)
+      <>
+        <ul className="flex flex-col gap-2 md:hidden">
+          {rows.map((holiday) => {
+            const { staysExcusedIfRevoked, isCancelled, isGazetted, closes } = rowFacts(holiday)
+            return (
+              <li key={holiday.key} className="flex flex-col gap-2 rounded-lg border border-border p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                      {holiday.day}
+                    </span>
+                    <span className="font-medium">{holiday.name}</span>
+                  </div>
+                  {renderStatus(holiday, isGazetted, isCancelled)}
+                </div>
+                {renderAppliesAs(holiday, isGazetted, closes)}
+                {holiday.note ? (
+                  <p className="text-xs text-muted-foreground">{holiday.note}</p>
+                ) : null}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-2xs text-muted-foreground">
+                    {isGazetted ? 'Sri Lanka gazette' : (holiday.addedByName ?? '—')}
+                  </span>
+                  {renderRevoke(holiday, staysExcusedIfRevoked)}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
 
-                  return (
-                    <TableRow key={holiday.key}>
-                      <TableCell className="font-mono text-xs tabular-nums">{holiday.day}</TableCell>
-                      <TableCell className="font-medium">{holiday.name}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <div className="flex flex-wrap gap-1">
-                            {isGazetted ? (
-                              // The gazette publishes these lists separately, and
-                              // which one a day is on decides who actually gets it
-                              // off — a bank-only closing day is not a day the
-                              // studio closes. Showing the categories is the whole
-                              // point of listing gazetted days here.
-                              holiday.categories.map((category) => (
-                                <Badge key={category} variant="outline" className="text-2xs">
-                                  {HOLIDAY_CATEGORY_LABEL[category]}
-                                </Badge>
-                              ))
-                            ) : (
-                              <Badge variant="secondary" className="text-2xs">Company</Badge>
-                            )}
-                          </div>
-                          {/* Words, not a colour: the two outcomes have to be
-                              distinguishable to a reader who cannot compare hues. */}
-                          <span
-                            className={cn(
-                              'text-2xs',
-                              closes ? 'font-medium text-foreground' : 'text-muted-foreground',
-                            )}
-                          >
-                            {closes
-                              ? 'Studio closed — no work logged'
-                              : isGazetted
-                                ? 'Studio open — not a mercantile holiday'
-                                : 'Studio open — this holiday was cancelled'}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{holiday.note ?? '—'}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {isGazetted ? 'Sri Lanka gazette' : holiday.addedByName ?? '—'}
-                      </TableCell>
-                      <TableCell>
-                        {isGazetted ? (
-                          <Badge variant="secondary">Automatic</Badge>
-                        ) : isCancelled ? (
-                          <Badge variant="outline" className="font-mono text-2xs tabular-nums">
-                            Cancelled from {holiday.revokedFrom}
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary">In force</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {isGazetted || isCancelled ? null : (
-                          <AlertDialog>
-                            <AlertDialogTrigger
-                              render={
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  disabled={revoking && revokingId === holiday.orgId}
-                                />
-                              }
-                            >
-                              Revoke
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Revoke {holiday.name}?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  {staysExcusedIfRevoked
-                                    ? 'This day has already passed, so cancelling it changes nothing about coverage — everyone who already had it off keeps it excused. It only marks the holiday cancelled in the record; this cancellation cannot be undone.'
-                                    : 'This day will count as a working day again for everyone. Coverage already reported for it does not change. This cancellation cannot be undone.'}
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  disabled={revoking && revokingId === holiday.orgId}
-                                  onClick={() => handleRevoke(holiday)}
-                                >
-                                  Revoke
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+        <div className="hidden md:block">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Day</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Applies as</TableHead>
+                <TableHead>Note</TableHead>
+                <TableHead>Added by</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-0" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((holiday) => {
+                const { staysExcusedIfRevoked, isCancelled, isGazetted, closes } = rowFacts(holiday)
+                return (
+                  <TableRow key={holiday.key}>
+                    <TableCell className="font-mono text-xs tabular-nums">{holiday.day}</TableCell>
+                    <TableCell className="font-medium">{holiday.name}</TableCell>
+                    <TableCell>{renderAppliesAs(holiday, isGazetted, closes)}</TableCell>
+                    <TableCell className="text-muted-foreground">{holiday.note ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {isGazetted ? 'Sri Lanka gazette' : (holiday.addedByName ?? '—')}
+                    </TableCell>
+                    <TableCell>{renderStatus(holiday, isGazetted, isCancelled)}</TableCell>
+                    <TableCell>{renderRevoke(holiday, staysExcusedIfRevoked)}</TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      </>
     )
   }
 }

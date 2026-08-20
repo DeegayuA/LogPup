@@ -24,5 +24,9 @@ export function downloadCsv(
   link.href = url
   link.download = csvFilename(prefix, new Date())
   link.click()
-  URL.revokeObjectURL(url)
+  // Revoked on the next tick, not synchronously: Safari reads the href AFTER
+  // the click handler returns, so an immediate revoke hands it a dead URL and
+  // the download is a silently empty file — the exact bug danger-backup-card
+  // already documents and dodges the same way.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }

@@ -8,9 +8,10 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
-  useEffect,
   useState,
+  useSyncExternalStore,
   type ComponentType,
   type ReactNode,
 } from 'react'
@@ -116,6 +117,106 @@ export const PANEL_DEFAULT_OPEN: Record<PanelId, boolean> = {
   record: false,
 }
 
+/* --- persisted preferences: localStorage as an external store ----------- */
+
+/*
+ * Density, per-panel open state and the summary language are read through
+ * `useSyncExternalStore` rather than hydrated into `useState` from an effect.
+ * localStorage IS an external system, and this is React's own contract for
+ * one: the server snapshot is the default (so SSR and the hydration render
+ * agree byte-for-byte), and the client snapshot is what this browser
+ * remembers — React swaps to it right after hydration without a mismatch,
+ * which is exactly the one-frame trade-off the old effect made, minus the
+ * setState-in-effect cascade. Same-tab writes announce themselves on a
+ * custom event; the native 'storage' event covers other tabs for free.
+ */
+const PANEL_PREFS_EVENT = 'logpup:writeup-prefs'
+
+function subscribeToPanelPrefs(callback: () => void): () => void {
+  window.addEventListener('storage', callback)
+  window.addEventListener(PANEL_PREFS_EVENT, callback)
+  return () => {
+    window.removeEventListener('storage', callback)
+    window.removeEventListener(PANEL_PREFS_EVENT, callback)
+  }
+}
+
+/** Where a value lands when localStorage refuses the write (private mode,
+ *  hardened browser): the toggle still works for this session, it just is
+ *  not remembered — which is what the old useState version effectively did. */
+const memoryFallback = new Map<string, string>()
+
+/** Reads never throw: blocked storage just means defaults (or this session's
+ *  in-memory value) instead of a remembered preference. */
+function readStored(key: string): string | null {
+  const fallback = memoryFallback.get(key)
+  if (fallback !== undefined) return fallback
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+/** Writes never throw either — a preference that cannot be saved is not an
+ *  error worth interrupting anyone over. Callers broadcast after the batch. */
+function writeStored(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value)
+    memoryFallback.delete(key)
+  } catch {
+    memoryFallback.set(key, value)
+  }
+}
+
+function broadcastPanelPrefs() {
+  window.dispatchEvent(new Event(PANEL_PREFS_EVENT))
+}
+
+function getDensitySnapshot(): Density {
+  return resolveDensity(readStored(DENSITY_STORAGE_KEY))
+}
+function getDensityServerSnapshot(): Density {
+  return resolveDensity(null)
+}
+
+/** Stable server-side answer for the open map: empty, so every Panel falls
+ *  back to its own PANEL_DEFAULT_OPEN entry — exactly what the server HTML
+ *  showed before this store existed. */
+const EMPTY_OPEN_MAP: Partial<Record<PanelId, boolean>> = {}
+
+/**
+ * getSnapshot must return a REFERENTIALLY stable value while the store is
+ * unchanged, or useSyncExternalStore loops — so the parsed map is cached
+ * against the raw stored strings and only rebuilt when one of them moves.
+ * Module-level on purpose: localStorage is global, so its cache is too.
+ */
+let openMapCache: { raw: string; value: Partial<Record<PanelId, boolean>> } | null = null
+
+function getOpenMapSnapshot(): Partial<Record<PanelId, boolean>> {
+  const stored = PANEL_IDS.map((id) => readStored(PANEL_STORAGE_PREFIX + id) ?? '')
+  const raw = stored.join('|')
+  if (openMapCache && openMapCache.raw === raw) return openMapCache.value
+  const value: Partial<Record<PanelId, boolean>> = {}
+  PANEL_IDS.forEach((id, index) => {
+    // Only stored answers land in the map — a panel nobody has ever toggled
+    // stays absent, so its own default keeps deciding (see Panel).
+    if (stored[index] !== '') value[id] = resolvePanelOpen(stored[index], PANEL_DEFAULT_OPEN[id])
+  })
+  openMapCache = { raw, value }
+  return value
+}
+function getOpenMapServerSnapshot(): Partial<Record<PanelId, boolean>> {
+  return EMPTY_OPEN_MAP
+}
+
+function getSummaryLanguageSnapshot(): SummaryLanguage {
+  return resolveSummaryLanguage(readStored(SUMMARY_LANGUAGE_STORAGE_KEY))
+}
+function getSummaryLanguageServerSnapshot(): SummaryLanguage {
+  return DEFAULT_SUMMARY_LANGUAGE
+}
+
 /* --- context ------------------------------------------------------------ */
 
 type PanelsContextValue = {
@@ -154,50 +255,37 @@ export function MeetingPanelsProvider({
   children: ReactNode
 }) {
   const [filters, setFilters] = useState<ActiveFilters>(NO_FILTERS)
-  const [density, setDensityState] = useState<Density>('comfortable')
-  const [openMap, setOpenMap] = useState<Partial<Record<PanelId, boolean>>>({})
-
-  // Hydrate persisted preferences once on mount. Server render and the very
-  // first client paint both use PANEL_DEFAULT_OPEN (openMap starts empty, so
-  // every Panel falls back to its own default) — this effect may then flip
-  // some panels per what this browser remembers, same one-frame trade-off
-  // every localStorage-hydrated preference in a Next app makes.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    setDensityState(resolveDensity(window.localStorage.getItem(DENSITY_STORAGE_KEY)))
-    const initial: Partial<Record<PanelId, boolean>> = {}
-    for (const id of PANEL_IDS) {
-      initial[id] = resolvePanelOpen(window.localStorage.getItem(PANEL_STORAGE_PREFIX + id), PANEL_DEFAULT_OPEN[id])
-    }
-    setOpenMap(initial)
-  }, [])
+  // The store IS the state: writing localStorage and broadcasting is what
+  // re-renders every subscriber (this provider, and any other open tab).
+  const density = useSyncExternalStore(
+    subscribeToPanelPrefs,
+    getDensitySnapshot,
+    getDensityServerSnapshot,
+  )
+  const openMap = useSyncExternalStore(
+    subscribeToPanelPrefs,
+    getOpenMapSnapshot,
+    getOpenMapServerSnapshot,
+  )
 
   function setPanelOpen(id: PanelId, value: boolean) {
-    setOpenMap((prev) => ({ ...prev, [id]: value }))
-    if (typeof window !== 'undefined') window.localStorage.setItem(PANEL_STORAGE_PREFIX + id, value ? '1' : '0')
+    writeStored(PANEL_STORAGE_PREFIX + id, value ? '1' : '0')
+    broadcastPanelPrefs()
   }
 
   function expandAll() {
-    const next: Partial<Record<PanelId, boolean>> = {}
-    for (const id of PANEL_IDS) {
-      next[id] = true
-      if (typeof window !== 'undefined') window.localStorage.setItem(PANEL_STORAGE_PREFIX + id, '1')
-    }
-    setOpenMap((prev) => ({ ...prev, ...next }))
+    for (const id of PANEL_IDS) writeStored(PANEL_STORAGE_PREFIX + id, '1')
+    broadcastPanelPrefs()
   }
 
   function collapseAll() {
-    const next: Partial<Record<PanelId, boolean>> = {}
-    for (const id of PANEL_IDS) {
-      next[id] = false
-      if (typeof window !== 'undefined') window.localStorage.setItem(PANEL_STORAGE_PREFIX + id, '0')
-    }
-    setOpenMap((prev) => ({ ...prev, ...next }))
+    for (const id of PANEL_IDS) writeStored(PANEL_STORAGE_PREFIX + id, '0')
+    broadcastPanelPrefs()
   }
 
   function setDensity(value: Density) {
-    setDensityState(value)
-    if (typeof window !== 'undefined') window.localStorage.setItem(DENSITY_STORAGE_KEY, value)
+    writeStored(DENSITY_STORAGE_KEY, value)
+    broadcastPanelPrefs()
   }
 
   const value: PanelsContextValue = {
@@ -229,15 +317,18 @@ export function useFilteredRows<T>(rows: T[], toItem: (row: T) => FilterableItem
 }
 
 export function useSummaryLanguage(): [SummaryLanguage, (value: SummaryLanguage) => void] {
-  const [value, setValue] = useState<SummaryLanguage>(DEFAULT_SUMMARY_LANGUAGE)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    setValue(resolveSummaryLanguage(window.localStorage.getItem(SUMMARY_LANGUAGE_STORAGE_KEY)))
+  // Same store contract as the provider above: the server snapshot is the
+  // default, this browser's remembered choice arrives right after hydration,
+  // and every mounted control (and other tabs) re-reads on the broadcast.
+  const value = useSyncExternalStore(
+    subscribeToPanelPrefs,
+    getSummaryLanguageSnapshot,
+    getSummaryLanguageServerSnapshot,
+  )
+  const set = useCallback((next: SummaryLanguage) => {
+    writeStored(SUMMARY_LANGUAGE_STORAGE_KEY, next)
+    broadcastPanelPrefs()
   }, [])
-  function set(next: SummaryLanguage) {
-    setValue(next)
-    if (typeof window !== 'undefined') window.localStorage.setItem(SUMMARY_LANGUAGE_STORAGE_KEY, next)
-  }
   return [value, set]
 }
 

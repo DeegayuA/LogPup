@@ -98,7 +98,7 @@ export function PersonActivityCard({ activity }: { activity: PersonActivity }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Activity</CardTitle>
+        <CardTitle as="h2">Activity</CardTitle>
         <CardAction>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {total} {total === 1 ? 'task' : 'tasks'} · {activeDays} active{' '}

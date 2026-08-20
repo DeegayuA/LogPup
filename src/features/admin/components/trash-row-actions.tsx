@@ -52,7 +52,7 @@ import { matchesPurgeConfirm, PURGE_CONFIRM_PHRASE, restoreDisabledReason } from
  * its own docblock in trash-actions.ts), which is why this returns
  * `ActionResult<unknown>` rather than one shared literal data type.
  */
-async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<unknown>> {
+export async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<unknown>> {
   switch (kind) {
     case 'app':
       return restoreApp(id)
@@ -93,7 +93,7 @@ async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<un
  * leave the rest of the trail pointing at nothing. Removal is a tombstone
  * exactly so that never becomes a button.
  */
-const PURGE_BY_KIND: Partial<Record<TrashKind, (id: string, confirm: string) => Promise<ActionResult>>> = {
+export const PURGE_BY_KIND: Partial<Record<TrashKind, (id: string, confirm: string) => Promise<ActionResult>>> = {
   app: purgeApp,
   bug: purgeBug,
   meeting: purgeMeeting,
@@ -167,13 +167,13 @@ export function TrashRowActions({
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-1.5">
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <div className="flex items-center gap-1.5">
       <Button
         variant="outline"
         size="sm"
         type="button"
         disabled={Boolean(disabledReason) || restorePending}
-        title={disabledReason ?? undefined}
         onClick={handleRestore}
       >
         {restorePending ? (
@@ -243,6 +243,13 @@ export function TrashRowActions({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      ) : null}
+      </div>
+      {/* VISIBLE, not a title attribute: a title tooltip never reaches touch
+          users and is unreliable for screen readers — and the reason is the
+          only way a disabled Restore explains itself. */}
+      {disabledReason ? (
+        <span className="text-2xs text-muted-foreground">{disabledReason}</span>
       ) : null}
     </div>
   )

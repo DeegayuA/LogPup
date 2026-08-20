@@ -282,43 +282,51 @@ export function MeetingForm({
   // render-time sync watching a bare boolean does not. A caller that wants a
   // form seeded differently mounts a new one under a new `key` (the calendar
   // does, per clicked slot) rather than driving an `open` prop.
+  //
+  // Auto-fill: the moment the debounced parse yields something usable, it
+  // flows straight into the form — no "Apply" step. Manual edits afterward
+  // stick until the next change to the quick-add text re-parses. Both the
+  // settle and the fill happen inside the TIMER CALLBACK, not the effect
+  // body: the effect's only job is wiring up the debounce timer (an external
+  // system), and setState from its callback is an event, not a render-time
+  // cascade — which is also what keeps this off the set-state-in-effect lint.
   useEffect(() => {
-    const timer = setTimeout(() => setSettled(quickAdd), QUICK_ADD_DEBOUNCE_MS)
+    const timer = setTimeout(() => {
+      setSettled(quickAdd)
+      const parsed = quickAdd.trim() ? resolveQuickAdd(quickAdd, activeUsers, apps) : null
+      if (!parsed) return
+      setForm((f) => ({
+        ...f,
+        title: parsed.title.slice(0, 120),
+        // A phrase names ONE project and ADDS it — it does not re-point the
+        // meeting off the projects already chosen, because with several
+        // allowed there is nothing to re-point from.
+        appIds:
+          parsed.appId && !f.appIds.includes(parsed.appId)
+            ? [...f.appIds, parsed.appId]
+            : f.appIds,
+        start: parsed.startsAt ?? f.start,
+        end: parsed.endsAt ?? f.end,
+        meetingUrl: parsed.meetingUrl ?? f.meetingUrl,
+        // Named people join (or are promoted to) manual. `appChanged` is false
+        // on purpose: that flag withdraws the previous app's team prefill, and
+        // adding a project withdraws nothing — the prefilled set is the union
+        // of the selected projects' teams, so it only shrinks when one is
+        // REMOVED. The phrase's project team is still deliberately not fetched
+        // (see applyQuickAddAttendees): in a phrase, the names ARE the
+        // decision.
+        ...applyQuickAddAttendees(f, parsed.attendees.map((a) => a.id), false),
+      }))
+    }, QUICK_ADD_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [quickAdd])
+  }, [quickAdd, activeUsers, apps])
 
+  // What the preview line below the field reads — recomputed from the settled
+  // text so it can never disagree with what the timer just applied.
   const preview = useMemo(
     () => (settled.trim() ? resolveQuickAdd(settled, activeUsers, apps) : null),
     [settled, activeUsers, apps],
   )
-
-  // Auto-fill: the moment the debounced parse yields something usable, it flows
-  // straight into the form — no "Apply" step. Manual edits afterward stick until
-  // the next change to the quick-add text re-parses.
-  useEffect(() => {
-    if (!preview) return
-    setForm((f) => ({
-      ...f,
-      title: preview.title.slice(0, 120),
-      // A phrase names ONE project and ADDS it — it does not re-point the
-      // meeting off the projects already chosen, because with several allowed
-      // there is nothing to re-point from.
-      appIds:
-        preview.appId && !f.appIds.includes(preview.appId)
-          ? [...f.appIds, preview.appId]
-          : f.appIds,
-      start: preview.startsAt ?? f.start,
-      end: preview.endsAt ?? f.end,
-      meetingUrl: preview.meetingUrl ?? f.meetingUrl,
-      // Named people join (or are promoted to) manual. `appChanged` is false
-      // on purpose: that flag withdraws the previous app's team prefill, and
-      // adding a project withdraws nothing — the prefilled set is the union of
-      // the selected projects' teams, so it only shrinks when one is REMOVED.
-      // The phrase's project team is still deliberately not fetched (see
-      // applyQuickAddAttendees): in a phrase, the names ARE the decision.
-      ...applyQuickAddAttendees(f, preview.attendees.map((a) => a.id), false),
-    }))
-  }, [preview])
 
   function handleOpenChange(next: boolean) {
     setOpen(next)

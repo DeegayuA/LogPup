@@ -1,7 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import {
   ChevronRight,
   CircleDashed,
@@ -15,6 +16,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { StatTile } from '@/components/ui/stat-tile'
 import { StatNumber } from '@/components/animate-ui/stat-number'
 import {
   Select,
@@ -44,6 +47,46 @@ const SORT_LABEL: Record<SortKey, string> = {
   name: 'Name A–Z',
   'load-desc': 'Most loaded first',
   'load-asc': 'Least loaded first',
+}
+
+const DEFAULT_SORT: SortKey = 'name'
+const SEARCH_DEBOUNCE_MS = 250
+
+function parseSort(raw: string | null): SortKey {
+  // Explicit comparisons, not `raw in SORT_LABEL` — `in` walks the prototype
+  // chain, so ?sort=toString would sneak past as a "valid" key.
+  return raw === 'load-desc' || raw === 'load-asc' ? raw : DEFAULT_SORT
+}
+
+/**
+ * Filter state lives in the URL (`?q=&org=&sort=`), written with
+ * `history.replaceState` — the SHALLOW route update Next wires into
+ * `useSearchParams`, so a keystroke re-renders this client component and
+ * nothing else. `router.replace` would re-run the whole server page (two
+ * queries) per commit for a filter that is applied entirely on the client;
+ * plain component state (what this used to be) meant a filtered view could
+ * not be linked, shared, or survive back-navigation — breaking the URL-state
+ * discipline every sibling view (cohorts, history) follows.
+ *
+ * Defaults are DROPPED from the query string, so a bare /people stays the
+ * canonical link, exactly as cohort-params.ts does for `view`.
+ */
+function writeFilterParams(patch: { q?: string; org?: string | null; sort?: SortKey }) {
+  const next = new URLSearchParams(window.location.search)
+  if (patch.q !== undefined) {
+    if (patch.q) next.set('q', patch.q)
+    else next.delete('q')
+  }
+  if (patch.org !== undefined) {
+    if (patch.org) next.set('org', patch.org)
+    else next.delete('org')
+  }
+  if (patch.sort !== undefined) {
+    if (patch.sort !== DEFAULT_SORT) next.set('sort', patch.sort)
+    else next.delete('sort')
+  }
+  const query = next.toString()
+  window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname)
 }
 
 /** Sortable, org-filterable directory rows for the People page. */
@@ -121,9 +164,43 @@ export function PeopleDirectory({
   /** Resolved server-side in the business timezone; never `new Date()` here. */
   todayIso: string
 }) {
-  const [sort, setSort] = useState<SortKey>('name')
-  const [org, setOrg] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
+  // Sort and org are read STRAIGHT from the URL — one source of truth, no
+  // mirror state to fall out of sync. The search box keeps a local draft
+  // (typing must never wait on anything) and debounces it into the URL.
+  const searchParams = useSearchParams()
+  const sort = parseSort(searchParams.get('sort'))
+  const org = searchParams.get('org')
+  const urlQ = searchParams.get('q') ?? ''
+  const [search, setSearch] = useState(urlQ)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Adjust-while-rendering (the as-of picker's pattern): when the URL's q
+  // changes underneath us — bfcache restore, an external replaceState — the
+  // draft follows it. Our own debounced write stores the draft VERBATIM
+  // (untrimmed), so the resync after it is always a no-op and can never eat
+  // what is being typed; only a genuinely foreign URL change moves the field.
+  const [lastUrlQ, setLastUrlQ] = useState(urlQ)
+  if (urlQ !== lastUrlQ) {
+    setLastUrlQ(urlQ)
+    if (urlQ !== search) setSearch(urlQ)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) clearTimeout(debounceRef.current)
+    }
+  }, [])
+
+  function commitSearch(value: string) {
+    setSearch(value)
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      // Verbatim, not trimmed — see the resync note above. The row filter
+      // trims when matching, so the URL carrying a trailing space is inert.
+      writeFilterParams({ q: value })
+    }, SEARCH_DEBOUNCE_MS)
+  }
 
   const orgs = useMemo(
     () => [...new Set(people.flatMap((p) => p.user.orgTags))].sort((a, b) => a.localeCompare(b)),
@@ -131,7 +208,7 @@ export function PeopleDirectory({
   )
 
   // The chip row is derived from `people`, which changes with the header
-  // search, while `org` is component state that survives that navigation. An
+  // search, while `org` rides the URL, which survives that navigation. An
   // org that is no longer on screen must not keep filtering — otherwise the
   // whole chip group (including "All") unmounts and there is no way to clear.
   const activeOrg = org && orgs.includes(org) ? org : null
@@ -155,6 +232,16 @@ export function PeopleDirectory({
     })
   }, [people, activeOrg, sort, search])
 
+  // Where the "Over capacity" tile lands: the same view, worst-loaded first,
+  // with whatever filter is already applied carried along rather than reset.
+  const overHref = useMemo(() => {
+    const qs = new URLSearchParams()
+    qs.set('sort', 'load-desc')
+    if (activeOrg) qs.set('org', activeOrg)
+    if (search.trim()) qs.set('q', search.trim())
+    return `/people?${qs.toString()}`
+  }, [activeOrg, search])
+
   // Derived from `rows`, not `people`: the strip and the list below it describe
   // the same set, so an org filter can never leave them contradicting each other.
   const stats = useMemo(() => {
@@ -175,13 +262,18 @@ export function PeopleDirectory({
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {/* The shared StatTile: mono numbers, worded labels — and the one
+            alarming figure LINKS to its answering rows (most loaded first)
+            instead of naming a problem it won't take you to. */}
         {stats.map((stat) => (
-          <div key={stat.label} className="flex flex-col gap-0.5 rounded-xl border bg-card p-3">
-            <span className={cn('font-mono text-xl font-semibold', stat.alert && 'text-destructive')}>
-              <StatNumber value={stat.value} />
-            </span>
-            <span className="text-xs text-muted-foreground">{stat.label}</span>
-          </div>
+          <StatTile
+            key={stat.label}
+            label={stat.label}
+            value={<StatNumber value={stat.value} />}
+            tone={stat.alert ? 'destructive' : 'default'}
+            href={stat.alert ? overHref : undefined}
+            meta={stat.alert ? 'opens the list worst-loaded first' : undefined}
+          />
         ))}
       </div>
 
@@ -194,7 +286,7 @@ export function PeopleDirectory({
         <InputGroupInput
           type="text"
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => commitSearch(event.target.value)}
           placeholder="Filter by name, role or org — ⌘K fetches everything"
           aria-label="Filter people"
         />
@@ -203,12 +295,16 @@ export function PeopleDirectory({
       <div className="flex flex-wrap items-center gap-2">
         {orgs.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by organization">
+            {/* pointer-coarse:min-h-11 — the surface's own touch-target
+                convention (as-of-picker.tsx set it); 26px chips were the
+                directory's smallest tap targets. */}
             <button
               type="button"
               aria-pressed={activeOrg === null}
-              onClick={() => setOrg(null)}
+              onClick={() => writeFilterParams({ org: null })}
               className={cn(
                 'rounded-full border px-2.5 py-1 text-xs transition-colors duration-150',
+                'pointer-coarse:min-h-11 pointer-coarse:px-4',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                 activeOrg === null
                   ? 'border-primary bg-primary text-primary-foreground'
@@ -222,9 +318,10 @@ export function PeopleDirectory({
                 key={tag}
                 type="button"
                 aria-pressed={activeOrg === tag}
-                onClick={() => setOrg(activeOrg === tag ? null : tag)}
+                onClick={() => writeFilterParams({ org: activeOrg === tag ? null : tag })}
                 className={cn(
                   'rounded-full border px-2.5 py-1 text-xs transition-colors duration-150',
+                  'pointer-coarse:min-h-11 pointer-coarse:px-4',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   activeOrg === tag
                     ? 'border-primary bg-primary text-primary-foreground'
@@ -237,8 +334,17 @@ export function PeopleDirectory({
           </div>
         ) : null}
         <div className="ml-auto">
-          <Select value={sort} onValueChange={(value: string | null) => setSort((value as SortKey) ?? 'name')}>
-            <SelectTrigger size="sm" className="h-8 w-44" aria-label="Sort people">
+          <Select
+            value={sort}
+            onValueChange={(value: string | null) =>
+              writeFilterParams({ sort: parseSort(value) })
+            }
+          >
+            <SelectTrigger
+              size="sm"
+              className="pointer-coarse:min-h-11 h-8 w-44"
+              aria-label="Sort people"
+            >
               <SelectValue>{(value: string) => SORT_LABEL[value as SortKey]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -253,29 +359,29 @@ export function PeopleDirectory({
       </div>
 
       {rows.length === 0 ? (
-        <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-16 text-center">
-          <PawPrint className="size-8 text-muted-foreground" aria-hidden />
-          <div className="flex flex-col gap-1">
-            <p className="font-heading font-semibold">
-              {search.trim() ? 'No one matches your search.' : `No one in ${activeOrg} yet.`}
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {search.trim()
+        <div className="rounded-xl border border-dashed px-6 py-8">
+          <EmptyState
+            icon={PawPrint}
+            title={search.trim() ? 'No one matches your search.' : `No one in ${activeOrg} yet.`}
+            description={
+              search.trim()
                 ? 'Try ⌘K — it fetches apps, tasks and meetings too.'
-                : 'Clear the filter to see everyone.'}
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            onClick={() => {
-              setSearch('')
-              setOrg(null)
-            }}
-          >
-            Clear filters
-          </Button>
+                : 'Clear the filter to see everyone.'
+            }
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                onClick={() => {
+                  setSearch('')
+                  writeFilterParams({ q: '', org: null })
+                }}
+              >
+                Clear filters
+              </Button>
+            }
+          />
         </div>
       ) : (
         <ul className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
@@ -372,7 +478,11 @@ export function PeopleDirectory({
                   'Unassigned'
                 )}
               </span>
-              <div className="w-40 shrink-0">
+              {/* Below sm the meter takes its own full-width line, LAST in
+                  the row — a fixed w-40 in this flex-wrap row wrapped under
+                  some names and not others at 320-375px, so the meters never
+                  lined up column-wise while scanning. */}
+              <div className="order-last w-full basis-full shrink-0 sm:order-none sm:w-40 sm:basis-auto">
                 <CapacityBar totalPct={totalPct} />
               </div>
               {/* relative z-10 lifts the anchors above the row's

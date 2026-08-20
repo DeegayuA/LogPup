@@ -56,9 +56,9 @@ export function DangerBackupCard() {
       aria-labelledby="danger-backup-title"
       className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
     >
-      <h2 id="danger-backup-title" className="font-heading text-sm font-semibold">
+      <h4 id="danger-backup-title" className="font-heading text-sm font-semibold">
         Export workspace backup
-      </h2>
+      </h4>
       <p className="text-sm text-muted-foreground">
         Every row in the workspace — people, projects, sprints, tasks, meetings and their
         AI write-ups — as one AES-256-GCM encrypted file. Password hashes and Google

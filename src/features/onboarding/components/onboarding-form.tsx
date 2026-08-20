@@ -77,25 +77,33 @@ export function OnboardingForm({
           className="font-mono"
         />
       </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="onboarding-org">Company / organization</Label>
-        <Input
-          id="onboarding-org"
-          value={derivedOrg ?? organization}
-          onChange={(event) => setOrganization(event.target.value)}
-          readOnly={!!derivedOrg}
-          disabled={!!derivedOrg || isPending}
-          maxLength={30}
-          required={!derivedOrg}
-          placeholder={derivedOrg ? undefined : 'Your company name'}
-          className={derivedOrg ? 'text-muted-foreground' : undefined}
-        />
-        <p className="text-xs text-muted-foreground">
-          {derivedOrg
-            ? 'Detected from your email domain.'
-            : "Not on a known company domain — type it in, an admin can adjust it later."}
-        </p>
-      </div>
+      {derivedOrg ? (
+        // A plain read-only row, not a disabled input: the server re-derives
+        // and prefers this value anyway, and a disabled control drops the one
+        // value the admin most needs the user to VERIFY below AA contrast and
+        // out of the tab order. Text is honest about being text.
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-medium">Company / organization</span>
+          <p className="text-sm">{derivedOrg}</p>
+          <p className="text-xs text-muted-foreground">Detected from your email domain.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="onboarding-org">Company / organization</Label>
+          <Input
+            id="onboarding-org"
+            value={organization}
+            onChange={(event) => setOrganization(event.target.value)}
+            disabled={isPending}
+            maxLength={30}
+            required
+            placeholder="Your company name"
+          />
+          <p className="text-xs text-muted-foreground">
+            Not on a known company domain — type it in, an admin can adjust it later.
+          </p>
+        </div>
+      )}
       <Button type="submit" disabled={isPending} className="self-start">
         {isPending ? 'Submitting…' : 'Submit for approval'}
       </Button>

@@ -28,6 +28,7 @@ export function CohortNav({ params }: { params: CohortParams }) {
           key={view}
           variant={params.view === view ? 'secondary' : 'ghost'}
           size="sm"
+          className="pointer-coarse:min-h-11"
           aria-current={params.view === view ? 'page' : undefined}
           render={<Link href={peopleHref(params, { view })} />}
         >

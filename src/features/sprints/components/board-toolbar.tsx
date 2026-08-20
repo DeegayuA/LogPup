@@ -53,7 +53,9 @@ function Stat({
     <div className="flex flex-col gap-0.5">
       <span
         className={cn(
-          'font-heading text-xl leading-none font-bold tabular-nums',
+          // font-mono, matching the portfolio strip and the app header tiles:
+          // one typeface for data values on this whole surface (house rule).
+          'font-mono text-xl leading-none font-semibold tabular-nums',
           // Colour carries meaning, never decoration: a count is only red
           // when it is a count of something wrong, and only when it is
           // non-zero — "0 overdue" in red would be a false alarm.
@@ -154,7 +156,7 @@ export function BoardToolbar({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-x-8 gap-y-4 rounded-xl bg-card p-3 ring-1 ring-foreground/10">
         <div className="flex flex-col gap-1.5">
-          <span className="font-heading text-xl leading-none font-bold tabular-nums">
+          <span className="font-mono text-xl leading-none font-semibold tabular-nums">
             <StatNumber value={summary.done} />
             <span className="text-muted-foreground">/</span>
             <StatNumber value={summary.total} />
@@ -201,7 +203,7 @@ export function BoardToolbar({
           value={view.groupBy}
           onValueChange={(value) => onChange({ ...view, groupBy: (value ?? 'status') as GroupBy })}
         >
-          <SelectTrigger className="h-8 w-40" aria-label="Group cards by">
+          <SelectTrigger className="h-8 w-40 max-w-full" aria-label="Group cards by">
             <SelectValue>
               {(value: string) => `Group: ${GROUP_BY_LABEL[value as GroupBy] ?? 'Status'}`}
             </SelectValue>

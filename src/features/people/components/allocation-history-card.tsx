@@ -1,9 +1,10 @@
 import Link from 'next/link'
-import { format } from 'date-fns'
 import { History } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AllocationTrend } from '@/features/people/components/allocation-trend'
+import { SectionEmpty } from '@/features/people/components/section-empty'
+import { formatBusinessDateTime } from '@/features/people/format-instant'
 import {
   describeAllocationChange,
   type ChangeKind,
@@ -46,7 +47,7 @@ export function AllocationHistoryCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Allocation history</CardTitle>
+        <CardTitle as="h2">Allocation history</CardTitle>
         {timeline.length > 0 ? (
           <CardAction>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -56,13 +57,14 @@ export function AllocationHistoryCard({
         ) : null}
       </CardHeader>
       {timeline.length === 0 ? (
-        <CardContent className="flex flex-col items-center gap-1.5 py-4 text-center">
-          <History className="size-5 text-muted-foreground/60" aria-hidden />
-          <p className="text-sm font-medium">No changes recorded yet.</p>
-          <p className="text-xs text-muted-foreground">
-            Allocation edits will show up here with who made them.
-          </p>
-        </CardContent>
+        // SectionEmpty, not a hand-rolled block: this card had drifted into
+        // its own rhythm (py-4, no min-h floor) — the exact drift the shared
+        // empty state exists to prevent.
+        <SectionEmpty
+          icon={History}
+          title="No changes recorded yet."
+          hint="Allocation edits will show up here with who made them."
+        />
       ) : (
         <>
           <CardContent>
@@ -86,7 +88,7 @@ export function AllocationHistoryCard({
                       </Link>
                       <Badge
                         variant={entry.changeKind === 'removed' ? 'outline' : 'secondary'}
-                        className="text-[10px]"
+                        className="text-2xs"
                       >
                         {KIND_LABEL[entry.changeKind]}
                       </Badge>
@@ -99,11 +101,14 @@ export function AllocationHistoryCard({
                         {entry.changedByName ?? 'Unknown user'}
                       </span>
                       {' · '}
+                      {/* Business timezone, never date-fns format() — this is
+                          a server component, so format() resolves against the
+                          SERVER's zone (UTC on Vercel). See format-instant.ts. */}
                       <time
                         dateTime={entry.effectiveFrom.toISOString()}
                         className="font-mono tabular-nums whitespace-nowrap"
                       >
-                        {format(entry.effectiveFrom, 'MMM d, yyyy · HH:mm')}
+                        {formatBusinessDateTime(entry.effectiveFrom)}
                       </time>
                     </p>
                     {entry.note ? (

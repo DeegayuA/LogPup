@@ -73,9 +73,12 @@ export function BoardColumn({
     >
       <div className="flex flex-col gap-1.5 px-1 pb-2">
         <div className="flex items-baseline justify-between gap-2">
-          <h3 id={headingId} className="truncate font-heading text-sm font-semibold">
+          {/* h2, not h3: on the backlog view these columns sit directly under
+              the page h1 (the sprint-name h2 only renders for a real sprint),
+              so h3 here skipped a level in exactly the view with no h2. */}
+          <h2 id={headingId} className="truncate font-heading text-sm font-semibold">
             {group.title}
-          </h3>
+          </h2>
           <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
             {group.tasks.length}
           </span>

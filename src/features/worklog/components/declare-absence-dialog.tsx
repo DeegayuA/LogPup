@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -332,6 +333,10 @@ export function DeclareAbsenceDialog({
         </div>
 
         <DialogFooter>
+          {/* An explicit way out. Esc and the backdrop still work, but a
+              dialog whose only button files the thing teaches people the only
+              exit is submitting — the same defect ReportBugDialog fixed. */}
+          <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
           <Button
             type="button"
             onClick={handleSubmit}

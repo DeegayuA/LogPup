@@ -12,8 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { DictateButton } from '@/features/speech/components/dictate-button'
 import { activityParams } from '@/features/activity/filters'
 import { ACTIVITY_ENTITY_TYPES } from '@/features/activity/types'
+import { isoDayAdd, isoDayOf } from '@/features/people/iso-day'
 
 /**
  * One date bound, typed locally and committed on blur or Enter.
@@ -26,8 +28,11 @@ import { ACTIVITY_ENTITY_TYPES } from '@/features/activity/types'
  * was impossible; only the picker worked.
  *
  * The parent gives each instance a `key` derived from the committed value, so
- * a navigation (Clear, back button, a shared link) remounts this with the new
- * value as its initial draft — resyncing without a setState-in-effect.
+ * a navigation (Clear, back button, a shared link, a preset) remounts this
+ * with the new value as its initial draft — resyncing without a
+ * setState-in-effect. The remount is harmless HERE because commits happen on
+ * blur, when focus has already left; the search field commits mid-focus and
+ * needs the gentler resync below.
  */
 function DateFilter({
   value,
@@ -66,10 +71,16 @@ function DateFilter({
  * as "live" in a way a date field doesn't, so navigating after every
  * keystroke would be too slow but waiting for blur would feel broken.
  *
- * Same local-draft-plus-remount pattern as DateFilter above: the parent keys
- * this by the committed value so a navigation that changes `q` out from
- * under it (Clear, back button, a shared link) resets the draft instead of
- * fighting a stale local state.
+ * NO key= remount here, unlike DateFilter. This input commits WHILE FOCUSED
+ * (every 400ms debounce), and the old remount-on-committed-value pattern
+ * threw the focused element away when the navigation landed — anyone typing
+ * a multi-word query slower than the debounce window lost focus mid-phrase.
+ * Instead the component tracks the last value IT committed and adjusts state
+ * during render (React's sanctioned "derive from props" form): a `value` that
+ * arrives equal to our own last commit is our echo and is ignored; anything
+ * else (Clear, back button, a shared link) is an external change and replaces
+ * the draft. Both trackers are state, not refs — refs may not be read during
+ * render, and the echo test runs exactly there.
  */
 function SearchFilter({
   value,
@@ -79,7 +90,14 @@ function SearchFilter({
   onCommit: (next: string) => void
 }) {
   const [draft, setDraft] = useState(value)
+  const [prevValue, setPrevValue] = useState(value)
+  const [lastCommitted, setLastCommitted] = useState(value)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  if (value !== prevValue) {
+    setPrevValue(value)
+    if (value !== lastCommitted) setDraft(value)
+  }
 
   useEffect(() => {
     return () => {
@@ -90,40 +108,59 @@ function SearchFilter({
   function commit(next: string) {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
-    if (next !== value) onCommit(next)
+    if (next !== value) {
+      setLastCommitted(next)
+      onCommit(next)
+    }
   }
 
   return (
-    <div className="relative">
-      <Search
-        aria-hidden
-        className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
-      />
-      <Input
-        type="text"
-        value={draft}
-        onChange={(e) => {
-          const next = e.target.value
-          setDraft(next)
-          if (timer.current) clearTimeout(timer.current)
-          // 400ms: long enough that a normal typing burst doesn't fire a
-          // navigation per keystroke, short enough that search still feels
-          // live rather than laggy.
-          timer.current = setTimeout(() => commit(next), 400)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            commit(draft)
-          }
-          if (e.key === 'Escape') {
+    <div className="flex items-center gap-1">
+      <div className="relative">
+        <Search
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+        />
+        <Input
+          type="text"
+          value={draft}
+          onChange={(e) => {
+            const next = e.target.value
+            setDraft(next)
             if (timer.current) clearTimeout(timer.current)
-            setDraft(value)
-          }
+            // 400ms: long enough that a normal typing burst doesn't fire a
+            // navigation per keystroke, short enough that search still feels
+            // live rather than laggy.
+            timer.current = setTimeout(() => commit(next), 400)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit(draft)
+            }
+            if (e.key === 'Escape') {
+              if (timer.current) clearTimeout(timer.current)
+              setDraft(value)
+            }
+          }}
+          placeholder="Search the trail…"
+          aria-label="Search activity"
+          className="h-8 w-56 pl-7 text-xs"
+        />
+      </div>
+      {/* Voice into the same box — the existing speech.dictation chain
+          (features/speech), no new AI wiring. Most valuable exactly where
+          this filter bar is most fiddly: coarse-pointer devices. Renders
+          nothing where recording isn't supported. */}
+      <DictateButton
+        size="icon-sm"
+        label="Search by voice"
+        onText={(text) => {
+          const spoken = text.trim()
+          if (!spoken) return
+          setDraft(spoken)
+          commit(spoken)
         }}
-        placeholder="Search the trail…"
-        aria-label="Search activity"
-        className="h-8 w-56 pl-7 text-xs"
       />
     </div>
   )
@@ -152,10 +189,18 @@ export function ActivityFilterBar({
   people,
   apps,
   current,
+  sessionUserId = null,
 }: {
   people: { id: string; name: string }[]
   apps: { id: string; name: string }[]
   current: ActivityFilterState
+  /**
+   * The signed-in user, threaded from the server so "My changes" is ONE
+   * click. Without it, filtering to yourself was open the person select →
+   * find your own name → click — three interactions for the page's most
+   * common narrowing.
+   */
+  sessionUserId?: string | null
 }) {
   const router = useRouter()
 
@@ -195,9 +240,33 @@ export function ActivityFilterBar({
     ...ACTIVITY_ENTITY_TYPES.map((type) => ({ value: type, label: type })),
   ]
 
+  const mine = sessionUserId !== null && sessionUserId !== '' && current.person === sessionUserId
+
+  // The business-timezone today (iso-day.ts — Asia/Colombo, never the device
+  // clock's calendar), so a preset clicked at 1 AM UTC names the same day the
+  // trail's own day markers do.
+  const todayIso = isoDayOf(new Date())
+  const presets = [
+    { label: 'Today', from: todayIso, to: todayIso },
+    { label: '7 days', from: isoDayAdd(todayIso, -6), to: todayIso },
+    { label: 'This month', from: `${todayIso.slice(0, 8)}01`, to: todayIso },
+  ]
+
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <SearchFilter key={`q-${current.q}`} value={current.q} onCommit={(q) => apply({ q })} />
+      <SearchFilter value={current.q} onCommit={(q) => apply({ q })} />
+
+      {sessionUserId ? (
+        <Button
+          type="button"
+          variant={mine ? 'secondary' : 'outline'}
+          size="sm"
+          aria-pressed={mine}
+          onClick={() => apply({ person: mine ? '' : sessionUserId })}
+        >
+          My changes
+        </Button>
+      ) : null}
 
       <Select
         value={current.person || ALL}
@@ -266,6 +335,28 @@ export function ActivityFilterBar({
         label="To date"
         onCommit={(to) => apply({ to })}
       />
+
+      {/* The common slices, one click each — a "last week" range through the
+          two native date pickers costs 6–10 interactions. A preset that is
+          already active toggles the range OFF, so these double as a visible
+          "which slice am I on" indicator (aria-pressed carries it to AT). */}
+      {presets.map((preset) => {
+        const active = current.from === preset.from && current.to === preset.to
+        return (
+          <Button
+            key={preset.label}
+            type="button"
+            variant={active ? 'secondary' : 'ghost'}
+            size="sm"
+            aria-pressed={active}
+            onClick={() =>
+              apply(active ? { from: '', to: '' } : { from: preset.from, to: preset.to })
+            }
+          >
+            {preset.label}
+          </Button>
+        )
+      })}
 
       {anyFilter ? (
         <Button

@@ -73,7 +73,11 @@ export function CapacityHeat({
                       // wherever it is named. It is NOT status: the amber a
                       // few pixels below means "near capacity", and the word
                       // on that badge is what carries it.
-                      <Badge key={entry.appId} variant="secondary" className="gap-1 text-[10px]">
+                      //
+                      // text-2xs, not an arbitrary text-[10px]: 11px is the
+                      // smallest step on the type scale, and app names are
+                      // user-entered (potentially Sinhala) text.
+                      <Badge key={entry.appId} variant="secondary" className="gap-1 text-2xs">
                         <span
                           aria-hidden
                           className={cn(

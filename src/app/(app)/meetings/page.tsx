@@ -1,5 +1,8 @@
+import { CalendarDaysIcon } from 'lucide-react'
 import { getSession } from '@/lib/session'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
 import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { listMeetings } from '@/features/meetings/queries'
 import { listApps } from '@/features/apps/queries'
@@ -13,11 +16,14 @@ import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 import { isAdminRole } from '@/features/auth/capabilities'
 
 export default async function MeetingsPage(props: {
-  /** `view` and `date` drive the calendar surface — see calendar-view.ts. */
-  searchParams: Promise<{ new?: string; view?: string; date?: string }>
+  /** `view` and `date` drive the calendar surface (see calendar-view.ts);
+   *  `open` deep-links one meeting's write-up — a ⌘K hit or a shared link
+   *  lands with that meeting's panel already open instead of on a list with
+   *  the meeting collapsed somewhere down the page. */
+  searchParams: Promise<{ new?: string; view?: string; date?: string; open?: string }>
 }) {
   const [
-    { new: newParam, view: viewParam, date: dateParam },
+    { new: newParam, view: viewParam, date: dateParam, open: openParam },
     session,
     allMeetings,
     apps,
@@ -50,26 +56,29 @@ export default async function MeetingsPage(props: {
   const todayIso = toIsoDateInTimeZone(new Date())
   const initialView = parseCalendarView(viewParam)
   const initialDate = parseFocusedDate(dateParam, todayIso)
+  // Validated by membership, not by shape: an id that names no meeting here
+  // simply opens nothing, so the param needs no parsing beyond existence.
+  const initialOpenMeetingId =
+    openParam && allMeetings.some((meeting) => meeting.id === openParam) ? openParam : undefined
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      {/* Same header shape as Apps/People (and as meetings/loading.tsx, which
-          already rendered the 2xl-bold version) — the title used to visibly
-          shrink and de-bold the moment data arrived. */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-bold tracking-tight">Meetings</h1>
-          <p className="text-sm text-muted-foreground">
-            Everything the pack has scheduled — upcoming and past.
-          </p>
-        </div>
-        <MeetingForm
-          apps={appOptions}
-          activeUsers={activeUsers}
-          trigger={<Button>New meeting</Button>}
-          defaultOpen={newParam === '1'}
-        />
-      </div>
+      {/* The shared h1 row — same component as every other (app) page, so the
+          heading level, size and action placement cannot drift per page.
+          meetings/loading.tsx renders the identical header, so nothing shrinks
+          or de-bolds when data arrives. */}
+      <PageHeader
+        title="Meetings"
+        description="Everything the pack has scheduled — upcoming and past."
+        actions={
+          <MeetingForm
+            apps={appOptions}
+            activeUsers={activeUsers}
+            trigger={<Button>New meeting</Button>}
+            defaultOpen={newParam === '1'}
+          />
+        }
+      />
 
       {/* The page's at-a-glance row. The only number here used to be a bare
           total of every meeting ever held, which answers no question anyone
@@ -89,19 +98,29 @@ export default async function MeetingsPage(props: {
       ) : (
         /* Nothing has ever been scheduled here. Five tiles reading zero would
            be the page's most prominent element saying nothing at all, so the
-           slot carries the two things the tiles cannot answer instead: who may
-           make the first meeting, and what a meeting is still worth after it
-           has happened. Same border language as the tiles it stands in for.
-
-           "Anyone here" is the real rule, not a softening: createMeeting
-           checks for a session and nothing else, so a member schedules
-           meetings on exactly the same terms as an admin. "New meeting above"
-           is the header button, which renders unconditionally. */
-        <p className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground">
-          Nothing scheduled yet. Anyone here can schedule the first one with New
-          meeting above, and a meeting keeps its notes, transcript and follow-ups
-          long after it ends.
-        </p>
+           slot teaches the next step instead — and RENDERS it, rather than
+           describing the header button in prose ("New meeting above") that
+           made the reader go find it. Anyone here can act on this button:
+           createMeeting checks for a session and nothing else, so a member
+           schedules meetings on exactly the same terms as an admin. */
+        <div className="rounded-xl border border-dashed border-border">
+          <EmptyState
+            icon={CalendarDaysIcon}
+            title="Nothing scheduled yet."
+            description="A meeting keeps its notes, transcript and follow-ups long after it ends — schedule the first one and everyone invited gets a notification."
+            action={
+              <MeetingForm
+                apps={appOptions}
+                activeUsers={activeUsers}
+                trigger={
+                  <Button variant="outline" size="sm">
+                    Schedule the first meeting
+                  </Button>
+                }
+              />
+            }
+          />
+        </div>
       )}
 
       <MeetingsViews
@@ -114,6 +133,7 @@ export default async function MeetingsPage(props: {
         initialView={initialView}
         initialDate={initialDate}
         todayIso={todayIso}
+        initialOpenMeetingId={initialOpenMeetingId}
       />
     </div>
   )

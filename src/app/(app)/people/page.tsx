@@ -2,6 +2,8 @@ import { Suspense } from 'react'
 import Link from 'next/link'
 import { History, PawPrint } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
 import { getPeopleNow, getUserCapacities } from '@/features/people/queries'
 import { listApps, type AppPortfolioEntry } from '@/features/apps/queries'
 import { loadActor } from '@/features/auth/actor'
@@ -78,17 +80,17 @@ import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
  */
 
 // Only the "nobody exists yet" case lives here now — an empty *search* result
-// is rendered by PeopleDirectory, which owns the query text.
-function EmptyState() {
+// is rendered by PeopleDirectory, which owns the query text. No action slot:
+// people join through sign-up approval, so this emptiness is genuinely
+// terminal for whoever is reading it.
+function NobodyYet() {
   return (
-    <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-16 text-center">
-      <PawPrint className="size-8 text-muted-foreground" aria-hidden />
-      <div className="flex flex-col gap-1">
-        <p className="font-heading font-semibold">Nobody in the pack yet.</p>
-        <p className="text-sm text-muted-foreground">
-          Teammates appear here once they join the workspace.
-        </p>
-      </div>
+    <div className="rounded-xl border border-dashed px-6 py-8">
+      <EmptyState
+        icon={PawPrint}
+        title="Nobody in the pack yet."
+        description="Teammates appear here once they join the workspace."
+      />
     </div>
   )
 }
@@ -101,17 +103,17 @@ export default async function PeoplePage(props: {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <h1 className="font-heading text-2xl font-bold tracking-tight">People</h1>
-            {/* One sentence per view, from cohort-params.ts, so the lead under
-                the title always describes what is actually below it. */}
-            <p className="text-sm text-muted-foreground">{COHORT_VIEW_HINT[params.view]}</p>
-          </div>
-          <Button variant="outline" size="sm" render={<Link href="/people/history" />}>
-            <History aria-hidden /> Capacity history
-          </Button>
-        </div>
+        {/* One sentence per view, from cohort-params.ts, so the lead under
+            the title always describes what is actually below it. */}
+        <PageHeader
+          title="People"
+          description={COHORT_VIEW_HINT[params.view]}
+          actions={
+            <Button variant="outline" size="sm" render={<Link href="/people/history" />}>
+              <History aria-hidden /> Capacity history
+            </Button>
+          }
+        />
 
         <CohortNav params={params} />
       </div>
@@ -147,7 +149,7 @@ async function DirectoryData() {
 
   // The stat strip lives inside PeopleDirectory — it has to count the rows the
   // org filter actually leaves on screen, not every search result.
-  if (people.length === 0) return <EmptyState />
+  if (people.length === 0) return <NobodyYet />
   return <PeopleDirectory people={people} now={now} todayIso={todayIso} />
 }
 

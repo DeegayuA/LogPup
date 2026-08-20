@@ -61,7 +61,7 @@ function DateFilter({
         if (e.key === 'Escape') setDraft(value)
       }}
       aria-label={label}
-      className="h-8 w-36 font-mono text-xs"
+      className="h-8 w-full min-w-0 flex-1 font-mono text-xs sm:w-36 sm:flex-none"
     />
   )
 }
@@ -92,7 +92,7 @@ function SearchFilter({ value, onCommit }: { value: string; onCommit: (next: str
   }
 
   return (
-    <div className="relative">
+    <div className="relative w-full sm:w-auto">
       <Search
         aria-hidden
         className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -121,7 +121,7 @@ function SearchFilter({ value, onCommit }: { value: string; onCommit: (next: str
         }}
         placeholder="Search who, what, detail…"
         aria-label="Search the audit trail"
-        className="h-8 w-56 pl-7 text-xs"
+        className="h-8 w-full pl-7 text-xs sm:w-56"
       />
     </div>
   )
@@ -175,7 +175,10 @@ export function AuditFilterBar({
   ]
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    /* Full-width stacked controls below sm; the familiar wrap row above it.
+       At 320px the old fixed widths (w-56/w-40/w-36) wrapped into a ragged
+       four-to-five-row pile that filled half the first viewport. */
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
       <SearchFilter key={`q-${current.q}`} value={current.q} onCommit={(q) => apply({ q })} />
 
       <Select
@@ -183,7 +186,7 @@ export function AuditFilterBar({
         items={actorItems}
         onValueChange={(value) => apply({ actor: !value || value === ALL ? '' : String(value) })}
       >
-        <SelectTrigger size="sm" className="w-40" aria-label="Filter by who made the change">
+        <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Filter by who made the change">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -201,7 +204,7 @@ export function AuditFilterBar({
         items={typeItems}
         onValueChange={(value) => apply({ type: !value || value === ALL ? '' : String(value) })}
       >
-        <SelectTrigger size="sm" className="w-36" aria-label="Filter by what was changed">
+        <SelectTrigger size="sm" className="w-full sm:w-36" aria-label="Filter by what was changed">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -219,7 +222,7 @@ export function AuditFilterBar({
         items={verbItems}
         onValueChange={(value) => apply({ verb: !value || value === ALL ? '' : String(value) })}
       >
-        <SelectTrigger size="sm" className="w-36" aria-label="Filter by action">
+        <SelectTrigger size="sm" className="w-full sm:w-36" aria-label="Filter by action">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -232,38 +235,42 @@ export function AuditFilterBar({
         </SelectContent>
       </Select>
 
-      <DateFilter
-        key={`from-${current.from}`}
-        value={current.from}
-        label="From date"
-        onCommit={(from) => apply({ from })}
-      />
-      <span className="text-xs text-muted-foreground">to</span>
-      <DateFilter
-        key={`to-${current.to}`}
-        value={current.to}
-        label="To date"
-        onCommit={(to) => apply({ to })}
-      />
+      <div className="flex w-full items-center gap-2 sm:w-auto">
+        <DateFilter
+          key={`from-${current.from}`}
+          value={current.from}
+          label="From date"
+          onCommit={(from) => apply({ from })}
+        />
+        <span className="text-xs text-muted-foreground">to</span>
+        <DateFilter
+          key={`to-${current.to}`}
+          value={current.to}
+          label="To date"
+          onCommit={(to) => apply({ to })}
+        />
+      </div>
 
       {/* The one filter this surface has that /activity does not: the
           self-approval mark is why the audit read exists at all, and a
           reviewer looking for three of them should not have to page through
           four hundred rows. */}
-      <Button
-        variant={current.self ? 'secondary' : 'ghost'}
-        size="sm"
-        aria-pressed={current.self}
-        onClick={() => apply({ self: !current.self })}
-      >
-        Self-approved only
-      </Button>
-
-      {hasAuditFilters(current) ? (
-        <Button variant="ghost" size="sm" onClick={() => apply(clearedAuditState(current))}>
-          <X aria-hidden /> Clear
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant={current.self ? 'secondary' : 'ghost'}
+          size="sm"
+          aria-pressed={current.self}
+          onClick={() => apply({ self: !current.self })}
+        >
+          Self-approved only
         </Button>
-      ) : null}
+
+        {hasAuditFilters(current) ? (
+          <Button variant="ghost" size="sm" onClick={() => apply(clearedAuditState(current))}>
+            <X aria-hidden /> Clear
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }

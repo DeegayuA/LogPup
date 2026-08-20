@@ -21,6 +21,7 @@ import {
   type AuditSortKey,
 } from '@/features/admin/audit-filters'
 import type { AuditEntry, AuditPage } from '@/features/admin/audit-queries'
+import { AuditCsvButton } from '@/features/admin/components/audit-csv-button'
 import { formatBusinessDayMonth, formatBusinessTime } from '@/features/people/format-instant'
 
 /**
@@ -469,21 +470,40 @@ export function AuditTrail({
 }) {
   const grouped = shouldGroupAuditByDay(state.sort)
   const depthNotice = auditDepthNotice(result.total)
+  const rangeLabel = auditRangeLabel({
+    page: result.page,
+    shown: result.rows.length,
+    total: result.total,
+    pageSize: result.pageSize,
+  })
+
+  // Flattened HERE, server-side, so the client button ships no row logic and
+  // the CSV always matches what this exact page rendered.
+  const csvRows = result.rows.map((row) => [
+    row.createdAt.toISOString(),
+    row.actorName,
+    row.verb,
+    row.entityType,
+    row.entityLabel,
+    row.detail,
+    row.appName,
+    row.selfApproved ? 'self-approved' : '',
+    row.entityId,
+    row.actorId,
+  ])
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SortStrip state={state} />
-        {/* The bound, always stated. A bounded read that does not say it is
-            bounded is indistinguishable from a complete one. */}
-        <p role="status" className="font-mono text-2xs tabular-nums text-muted-foreground">
-          {auditRangeLabel({
-            page: result.page,
-            shown: result.rows.length,
-            total: result.total,
-            pageSize: result.pageSize,
-          })}
-        </p>
+        <div className="flex items-center gap-2">
+          {/* The bound, always stated. A bounded read that does not say it is
+              bounded is indistinguishable from a complete one. */}
+          <p role="status" className="font-mono text-2xs tabular-nums text-muted-foreground">
+            {rangeLabel}
+          </p>
+          <AuditCsvButton rows={csvRows} shownOf={rangeLabel} />
+        </div>
       </div>
 
       {depthNotice ? (

@@ -18,6 +18,16 @@ export type HandoverItem = {
   appId: string | null
   /** Only set for assignments: the percentage that must be preserved on split. */
   allocationPct?: number
+  /**
+   * Only set for assignments: the leaver's own free-text project role,
+   * carried across on transfer rather than invented — applyHandover requires
+   * it, and the form used to have no way to supply it (which is how
+   * allocations ended up hardcoded to [] on submit).
+   */
+  role?: string
+  /** Only set for app_roles: the structural pm/lead kind, straight from the
+   *  row — the form used to GUESS it from the display label's suffix. */
+  roleKind?: 'pm' | 'lead'
 }
 
 export type HandoverGroup = {
@@ -55,7 +65,13 @@ export async function getHandoverInventory(
   const [assignmentRows, roleRows, taskRows, meetingRows, requestRows, absenceRows, grantRows] =
     await Promise.all([
       db
-        .select({ id: assignments.id, appId: assignments.appId, appName: liveApps.name, pct: assignments.allocationPct })
+        .select({
+          id: assignments.id,
+          appId: assignments.appId,
+          appName: liveApps.name,
+          pct: assignments.allocationPct,
+          role: assignments.role,
+        })
         .from(assignments)
         .innerJoin(liveApps, eq(liveApps.id, assignments.appId))
         .where(eq(assignments.userId, userId)),
@@ -94,13 +110,18 @@ export async function getHandoverInventory(
       group: 'assignments',
       label: 'Project allocations',
       items: assignmentRows.map((r) => ({
-        id: r.id, label: r.appName, appId: r.appId, allocationPct: r.pct ?? 0,
+        id: r.id, label: r.appName, appId: r.appId, allocationPct: r.pct ?? 0, role: r.role,
       })),
     },
     {
       group: 'app_roles',
       label: 'PM and lead roles',
-      items: roleRows.map((r) => ({ id: r.id, label: `${r.appName} — ${r.role}`, appId: r.appId })),
+      items: roleRows.map((r) => ({
+        id: r.id,
+        label: `${r.appName} — ${r.role}`,
+        appId: r.appId,
+        roleKind: r.role,
+      })),
     },
     {
       group: 'tasks',

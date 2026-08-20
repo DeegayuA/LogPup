@@ -64,7 +64,7 @@ export function AppContributions({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+        <CardTitle as="h2" className="flex items-center gap-2">
           <UsersRound className="size-4" aria-hidden /> Contribution
         </CardTitle>
         <CardDescription>

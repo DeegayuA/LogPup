@@ -4,14 +4,16 @@ import Link from 'next/link'
 import { PawPrint, SearchX } from 'lucide-react'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
-import { ActivityTrail } from '@/features/activity/components/activity-feed'
+import { EmptyState } from '@/components/ui/empty-state'
 import { ActivityFilterBar } from '@/features/activity/components/activity-filter-bar'
+import { ActivityTrailPager } from '@/features/activity/components/activity-trail-pager'
 import {
   ActivityControlsSkeleton,
   ActivityTrailSkeleton,
 } from '@/features/activity/components/activity-skeleton'
 import { describeActivityFilters } from '@/features/activity/describe'
 import {
+  ACTIVITY_PAGE_SIZE,
   activityParams,
   decodeActivityCursor,
   encodeActivityCursor,
@@ -24,13 +26,12 @@ import {
 } from '@/features/activity/queries'
 import { activityRowSearchText, fuzzyActivityFallback, rankActivityMatches } from '@/features/activity/search'
 import { ACTIVITY_ENTITY_TYPES, type ActivityFilters } from '@/features/activity/types'
+import { getSession } from '@/lib/session'
 
 export const metadata: Metadata = {
   title: 'Activity',
   description: 'Everything anyone changed, newest first — the complete backtrack.',
 }
-
-const PAGE_SIZE = 30
 
 /**
  * The team's shared memory: what changed, who changed it, and does it need me.
@@ -53,6 +54,11 @@ const PAGE_SIZE = 30
  *   4. Loading and error states exist at all (activity-skeleton.tsx,
  *      error.tsx, loading.tsx), and the empty state offers an action rather
  *      than describing one.
+ *
+ * 2026-08-20: "Load older" went from a replace-navigation to a client append
+ * (activity-trail-pager.tsx + the loadOlderActivity server action) — the URL
+ * cursor survives for deep-linking, but walking back no longer throws away
+ * the rows already read.
  */
 
 /**
@@ -117,7 +123,12 @@ export default async function ActivityPage(props: {
   return (
     <div className="flex flex-1 flex-col gap-5 p-6">
       <header className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-bold tracking-tight">Activity</h1>
+        {/* PageHeader's h1 treatment, not the primitive itself: the
+            description slot below is a Suspense whose fallback is a shimmer
+            div, and PageHeader renders descriptions inside a <p> — a div in
+            a p is invalid HTML and a hydration warning. Same classes, so
+            heading style cannot drift from the pages that do use it. */}
+        <h1 className="text-xl font-semibold tracking-tight">Activity</h1>
         {/* The page has to say which slice it is showing: every row below is
             conditional on the filters, and a reader often arrives on a shared
             link without having set them. Behind its own boundary because
@@ -182,13 +193,28 @@ async function ActivityDescription({ params }: { params: ActivityPageParams }) {
  * `selectDistinct` queries; the trail is a paged scan that may run a second
  * fallback query behind it. Sharing one boundary meant every filter change
  * blanked the control the user had just touched.
+ *
+ * The session read is `getSession` — request-deduplicated, already paid for
+ * by the (app) layout — and it is what makes the bar's one-click "My changes"
+ * chip possible at all.
  */
 async function ActivityControls({ state }: { state: ActivityParamState }) {
   // From the trail, not from the live roster — see the queries' note: a
   // deactivated teammate or an archived app still owns rows here, and
   // those are the rows a filter is most often reached for.
-  const [people, apps] = await Promise.all([listActivityActors(), listActivityApps()])
-  return <ActivityFilterBar people={people} apps={apps} current={state} />
+  const [people, apps, session] = await Promise.all([
+    listActivityActors(),
+    listActivityApps(),
+    getSession(),
+  ])
+  return (
+    <ActivityFilterBar
+      people={people}
+      apps={apps}
+      current={state}
+      sessionUserId={session?.user?.id ?? null}
+    />
+  )
 }
 
 async function ActivityTrailSection({
@@ -208,7 +234,7 @@ async function ActivityTrailSection({
   }
   const cursor = decodeActivityCursor(params.before) ?? undefined
 
-  const { rows, hasMore } = await listActivity({ limit: PAGE_SIZE, filters, cursor })
+  const { rows, hasMore } = await listActivity({ limit: ACTIVITY_PAGE_SIZE, filters, cursor })
 
   // LAYER 2 of /activity search (see features/activity/search.ts): SQL
   // ilike (Layer 1, just above) is typo-INTOLERANT — "meetign" matches
@@ -228,7 +254,7 @@ async function ActivityTrailSection({
       displayRows = rankActivityMatches(rows, params.q, activityRowSearchText)
     } else {
       const { rows: unfilteredRows } = await listActivity({
-        limit: PAGE_SIZE,
+        limit: ACTIVITY_PAGE_SIZE,
         filters: { ...filters, q: undefined },
         cursor,
       })
@@ -239,12 +265,13 @@ async function ActivityTrailSection({
 
   const now = new Date()
 
-  // The Load-more link: same filters (q included), cursor at the PRIMARY
-  // (SQL-ordered) page's last row — never the re-ranked/fallback view, which
-  // has no keyset order to continue from. `hasMore` came off that same
-  // primary query, so it's already false whenever the fallback is in play.
+  // The pager's starting cursor: same filters (q included), keyed off the
+  // PRIMARY (SQL-ordered) page's last row — never the re-ranked/fallback
+  // view, which has no keyset order to continue from. `hasMore` came off that
+  // same primary query, so it's already false whenever the fallback is in
+  // play.
   const lastRow = rows[rows.length - 1]
-  const loadMoreParams = activityParams(state, lastRow ? encodeActivityCursor(lastRow) : undefined)
+  const initialCursor = hasMore && lastRow ? encodeActivityCursor(lastRow) : null
 
   const anyFilter = Boolean(
     params.person || params.type || params.app || params.from || params.to || params.q,
@@ -252,28 +279,30 @@ async function ActivityTrailSection({
 
   if (displayRows.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border p-12 text-center">
-        <PawPrint aria-hidden className="size-8 text-muted-foreground/60" />
-        <p className="font-heading font-semibold">
-          {anyFilter ? 'Nothing matches these filters.' : 'Nothing tracked yet.'}
-        </p>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          {anyFilter
-            ? 'Nothing in the trail answers all of those at once. Widen the date range, or start over.'
-            : 'From now on, every change anyone makes — tasks, sprints, meetings, people — lands here with who, where and when.'}
-        </p>
-        {/* An empty state has to OFFER the next action, not describe it. The
-            old copy said "clear them all" and gave the reader nothing to
-            click. */}
-        {anyFilter ? (
-          <Button variant="outline" size="sm" render={<Link href="/activity" />}>
-            Clear all filters
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" render={<Link href="/apps" />}>
-            Go to apps
-          </Button>
-        )}
+      <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-border p-6">
+        <EmptyState
+          icon={PawPrint}
+          title={anyFilter ? 'Nothing matches these filters.' : 'Nothing tracked yet.'}
+          description={
+            anyFilter
+              ? 'Nothing in the trail answers all of those at once. Widen the date range, or start over.'
+              : 'From now on, every change anyone makes — tasks, sprints, meetings, people — lands here with who, where and when.'
+          }
+          // An empty state has to OFFER the next action, not describe it. The
+          // old copy said "clear them all" and gave the reader nothing to
+          // click.
+          action={
+            anyFilter ? (
+              <Button variant="outline" size="sm" render={<Link href="/activity" />}>
+                Clear all filters
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" render={<Link href="/apps" />}>
+                Go to apps
+              </Button>
+            )
+          }
+        />
       </div>
     )
   }
@@ -303,20 +332,22 @@ async function ActivityTrailSection({
           trail's reading order; a search's rows are ordered by relevance
           (rankActivityMatches / fuzzyActivityFallback) and stay flat so that
           order is visible rather than re-shuffled by day. Burst collapsing is
-          suppressed with it, for the same reason. */}
-      <ActivityTrail rows={displayRows} now={now} grouped={!params.q} current={state} />
+          suppressed with it, for the same reason.
 
-      {hasMore ? (
-        <div className="flex justify-center">
-          <Button
-            variant="outline"
-            size="sm"
-            render={<Link href={`/activity?${loadMoreParams.toString()}`} />}
-          >
-            Load older
-          </Button>
-        </div>
-      ) : null}
+          The pager is KEYED by the canonical querystring: a filter change or
+          back-button navigation must remount it with a fresh seed, or pages
+          accumulated under the old filters would leak into the new view. Our
+          own history.replaceState cursor updates don't re-render this server
+          tree, so appends never remount themselves. */}
+      <ActivityTrailPager
+        key={activityParams(state, params.before).toString()}
+        initialRows={displayRows}
+        initialHasMore={hasMore}
+        initialCursor={initialCursor}
+        state={state}
+        grouped={!params.q}
+        now={now}
+      />
     </div>
   )
 }

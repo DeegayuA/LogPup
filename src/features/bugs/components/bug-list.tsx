@@ -1,7 +1,9 @@
 import Link from 'next/link'
 import { formatDistanceToNowStrict } from 'date-fns'
-import { TriangleAlert } from 'lucide-react'
+import { BugOff, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import {
   BUG_STATUSES,
@@ -18,6 +20,7 @@ import type { BugQueueRow, BugRow } from '@/features/bugs/queries'
 import { BugTriageControls } from '@/features/bugs/components/bug-triage-controls'
 import { DeleteBugButton } from '@/features/bugs/components/delete-bug-button'
 import { BugContentEditor } from '@/features/bugs/components/bug-content-editor'
+import { BugDescription } from '@/features/bugs/components/bug-description'
 
 /**
  * The body of the Bugs tab, and of the admin triage queue — one component, so
@@ -45,12 +48,22 @@ import { BugContentEditor } from '@/features/bugs/components/bug-content-editor'
  */
 type BugListRow = BugRow & Partial<Pick<BugQueueRow, 'appId' | 'appName' | 'appSlug'>>
 
+/**
+ * Past this, a description gets the client-side clamp island instead of plain
+ * text. Short reports stay server-rendered paragraphs — the island costs
+ * hydration, and a two-line report clamped to three lines with a toggle that
+ * does nothing would be worse than no toggle.
+ */
+const CLAMP_DESCRIPTION_AT = 280
+const CLAMP_DESCRIPTION_LINES = 4
+
 export function BugList({
   bugs,
   error = null,
   emptyHint,
   filters,
   filterHrefFor,
+  statusChoices = BUG_STATUSES,
   canTriage,
   canDelete,
   assignableUsers = [],
@@ -63,6 +76,10 @@ export function BugList({
   /** Omit both of these to render without a filter row (the triage queue). */
   filters?: BugFilters
   filterHrefFor?: (patch: { status?: BugStatus; severity?: BugSeverity }) => string
+  /** Which status chips the filter row offers. The admin queue passes the open
+   *  set only — its query never returns a resolved or closed row, so a chip
+   *  for either would be a filter that always answers with nothing. */
+  statusChoices?: readonly BugStatus[]
   canTriage?: (bug: BugListRow) => boolean
   canDelete?: (bug: BugListRow) => boolean
   assignableUsers?: readonly { id: string; name: string }[]
@@ -88,13 +105,12 @@ export function BugList({
   return (
     <div className="flex flex-col gap-3">
       {filters && filterHrefFor ? (
-        <BugFilterBar filters={filters} hrefFor={filterHrefFor} />
+        <BugFilterBar filters={filters} hrefFor={filterHrefFor} statusChoices={statusChoices} />
       ) : null}
 
       {bugs.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-12 text-center">
-          <p className="font-heading text-base font-semibold">Nothing broken here</p>
-          <p className="max-w-sm text-sm text-muted-foreground">{emptyHint}</p>
+        <div className="rounded-xl border border-dashed border-border">
+          <EmptyState icon={BugOff} title="Nothing broken here" description={emptyHint} />
         </div>
       ) : (
         <ul className="flex flex-col gap-2">
@@ -124,9 +140,17 @@ export function BugList({
                   </div>
                 </div>
 
-                <p className="text-sm break-words whitespace-pre-wrap text-muted-foreground">
-                  {bug.description}
-                </p>
+                {/* Clamped only when long: the schema allows 4000 characters,
+                    and one verbose report rendered in full destroys the queue's
+                    scanability for everyone below it. */}
+                {bug.description.length > CLAMP_DESCRIPTION_AT ||
+                bug.description.split('\n').length > CLAMP_DESCRIPTION_LINES ? (
+                  <BugDescription text={bug.description} />
+                ) : (
+                  <p className="text-sm break-words whitespace-pre-wrap text-muted-foreground">
+                    {bug.description}
+                  </p>
+                )}
 
                 <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-muted-foreground">
                   {showApp && bug.appName && bug.appSlug ? (
@@ -204,9 +228,11 @@ export function BugList({
 function BugFilterBar({
   filters,
   hrefFor,
+  statusChoices,
 }: {
   filters: BugFilters
   hrefFor: (patch: { status?: BugStatus; severity?: BugSeverity }) => string
+  statusChoices: readonly BugStatus[]
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -214,7 +240,7 @@ function BugFilterBar({
         <FilterChip href={hrefFor({ status: undefined })} active={!filters.status}>
           All
         </FilterChip>
-        {BUG_STATUSES.map((status) => (
+        {statusChoices.map((status) => (
           <FilterChip
             key={status}
             href={hrefFor({ status })}
@@ -267,7 +293,9 @@ function FilterChip({
       href={href}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'shrink-0 rounded-full border px-2.5 py-0.5 text-xs whitespace-nowrap outline-none',
+        // pointer-coarse grows the chip to a real 44px touch box; on fine
+        // pointers the row keeps its density.
+        'inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs whitespace-nowrap outline-none pointer-coarse:min-h-11 pointer-coarse:px-3',
         'transition-colors duration-150 motion-reduce:transition-none',
         'focus-visible:ring-2 focus-visible:ring-ring',
         active
@@ -279,8 +307,6 @@ function FilterChip({
     </Link>
   )
 }
-
-const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
 
 /**
  * Shaped like what is coming: a filter row, then cards with a title, two
@@ -295,23 +321,23 @@ export function BugListSkeleton({ rows = 3 }: { rows?: number }) {
         Loading bugs
       </span>
       <div className="flex items-center gap-1">
-        <div className={`${shimmer} h-5 w-14`} />
-        <div className={`${shimmer} h-5 w-16`} />
-        <div className={`${shimmer} h-5 w-20`} />
+        <Skeleton className="h-5 w-14" />
+        <Skeleton className="h-5 w-16" />
+        <Skeleton className="h-5 w-20" />
       </div>
       <div className="flex flex-col gap-2">
         {Array.from({ length: rows }, (_, index) => (
           <div key={index} className="flex flex-col gap-2 rounded-xl border bg-card p-4">
             <div className="flex items-center justify-between gap-2">
-              <div className={`${shimmer} h-4 w-56 max-w-full`} />
+              <Skeleton className="h-4 w-56 max-w-full" />
               <div className="flex shrink-0 gap-1.5">
-                <div className={`${shimmer} h-5 w-16 rounded-4xl`} />
-                <div className={`${shimmer} h-5 w-14 rounded-4xl`} />
+                <Skeleton className="h-5 w-16 rounded-4xl" />
+                <Skeleton className="h-5 w-14 rounded-4xl" />
               </div>
             </div>
-            <div className={`${shimmer} h-3.5 w-full`} />
-            <div className={`${shimmer} h-3.5 w-3/5`} />
-            <div className={`${shimmer} h-3 w-40`} />
+            <Skeleton className="h-3.5 w-full" />
+            <Skeleton className="h-3.5 w-3/5" />
+            <Skeleton className="h-3 w-40" />
           </div>
         ))}
       </div>

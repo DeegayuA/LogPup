@@ -69,8 +69,8 @@ export function AppSprintBand({
             )}
           >
             {overrun
-              ? `${-progress.remainingDays}d over`
-              : `${progress.remainingDays}d left`}
+              ? `${-progress.remainingDays} ${-progress.remainingDays === 1 ? 'day' : 'days'} over`
+              : `${progress.remainingDays} ${progress.remainingDays === 1 ? 'day' : 'days'} left`}
           </span>
         </div>
 

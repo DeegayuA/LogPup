@@ -21,6 +21,14 @@ export function buildWorklogDraftPrompt(input: {
   name: string
   day: string
   activity: DraftActivity[]
+  /**
+   * When true, the prompt asks for JSON — `{"note": string, "percent":
+   * number|null}` — so the action can also PROPOSE a percent instead of the
+   * form silently defaulting one. Optional and false by default, so every
+   * existing caller (and the tests pinning the plain-text draft) keeps the
+   * prose prompt unchanged.
+   */
+  suggestPercent?: boolean
 }): string {
   const lines = input.activity
     .map(
@@ -34,10 +42,17 @@ export function buildWorklogDraftPrompt(input: {
       ? `What LogPup recorded them doing that day:\n${lines}\n`
       : 'LogPup has no recorded activity for them that day.\n'
 
+  const shape = input.suggestPercent
+    ? `Respond as JSON, exactly this shape: {"note": string, "percent": number | null}.
+The note follows every rule below. The percent is a rough SUGGESTION for "how much of what they planned did they get through", 0-100 in steps of 5, judged only from how much recorded activity there is — a suggestion they will confirm or change, never a verdict. If there is no recorded activity, percent MUST be null.
+
+`
+    : ''
+
   return `You are drafting ${input.name}'s own work log entry for ${input.day}, which they will edit before saving.
 
 ${recorded}
-Rules:
+${shape}Rules:
 - Write in the FIRST PERSON, as ${input.name} ("Finished the login redirect fix…"). This is their entry, not a report about them.
 - 2-4 short sentences. No bullet characters, no markdown, no headings.
 - Use ONLY the activity above. NEVER invent work, hours, blockers or outcomes that are not listed.

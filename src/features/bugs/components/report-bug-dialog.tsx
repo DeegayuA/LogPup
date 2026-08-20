@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { DictateButton } from '@/features/speech/components/dictate-button'
 import { reportBug } from '@/features/bugs/actions'
 
 /**
@@ -61,14 +62,11 @@ export function ReportBugDialog({
   const query = searchParams.toString()
   const pagePath = `${pathname}${query ? `?${query}` : ''}`.slice(0, PAGE_PATH_LIMIT)
 
-  function handleOpenChange(next: boolean) {
-    setOpen(next)
-    // Reset on every transition, not only on close: a dialog reopened after a
-    // successful report must not still hold the last one's text, which reads
-    // as "it didn't save".
-    setTitle('')
-    setDescription('')
-  }
+  // The fields deliberately SURVIVE a close. An accidental Esc or backdrop
+  // click mid-report used to discard everything typed; now reopening the
+  // dialog finds the draft where it was left. The reset lives in the success
+  // path instead — a dialog reopened after a successful report must not still
+  // hold the last one's text, which reads as "it didn't save".
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -80,7 +78,9 @@ export function ReportBugDialog({
           return
         }
         toast.success('Bug reported', { description: `${appName} · someone will triage it` })
-        handleOpenChange(false)
+        setTitle('')
+        setDescription('')
+        setOpen(false)
       } catch {
         // A server action can REJECT as well as resolve with `{ ok: false }`.
         // Unhandled, the dialog sits open with the button un-stuck and says
@@ -91,7 +91,7 @@ export function ReportBugDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={trigger ?? <Button variant="outline" size="sm" />}>
         <Bug aria-hidden />
         Report a bug
@@ -118,7 +118,21 @@ export function ReportBugDialog({
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="bug-description">What you were doing</Label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Label htmlFor="bug-description">What you were doing</Label>
+              {/* Same wiring as the worklog note's mic: the transcript lands
+                  appended, never replacing what was already typed. */}
+              <DictateButton
+                onText={(text) =>
+                  setDescription((current) =>
+                    current.trim() ? `${current.trim()} ${text}` : text,
+                  )
+                }
+                disabled={pending}
+                label="Speak it"
+                size="sm"
+              />
+            </div>
             <Textarea
               id="bug-description"
               value={description}
@@ -136,7 +150,7 @@ export function ReportBugDialog({
             </p>
           </div>
           <DialogFooter>
-            <Button type="button" variant="ghost" disabled={pending} onClick={() => handleOpenChange(false)}>
+            <Button type="button" variant="ghost" disabled={pending} onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button type="submit" disabled={pending}>

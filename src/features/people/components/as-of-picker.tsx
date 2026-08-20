@@ -2,16 +2,18 @@
 
 import { useState, useTransition, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { CalendarClock } from 'lucide-react'
+import { CalendarClock, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { isoDaysAgo, todayIso } from '@/features/people/as-of-date'
+import { isoDayAdd } from '@/features/people/iso-day'
 import { historyHref, type HistoryParams } from '@/features/people/history-params'
 import { cn } from '@/lib/utils'
 
 const PRESETS: { label: string; days: number }[] = [
   { label: 'Today', days: 0 },
+  { label: 'Yesterday', days: 1 },
   { label: '1 week ago', days: 7 },
   { label: '1 month ago', days: 30 },
   { label: '3 months ago', days: 90 },
@@ -91,6 +93,23 @@ export function AsOfPicker({
       <form onSubmit={handleSubmit} className="flex flex-col gap-1.5">
         <Label htmlFor="as-of-date">Show the team as of</Label>
         <div className="flex items-end gap-1.5">
+          {/* Day steppers: one click walks the shown day, where an arbitrary
+              date used to need the field PLUS an explicit Show. The forward
+              arrow greys out at today — resolveAsOf clamps the future anyway,
+              but a button that could never do anything must say so. */}
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            disabled={isPending}
+            onClick={() => go(isoDayAdd(iso, -1))}
+            onPointerEnter={() => router.prefetch(historyHref(params, { at: isoDayAdd(iso, -1) }))}
+            onFocus={() => router.prefetch(historyHref(params, { at: isoDayAdd(iso, -1) }))}
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+          >
+            <ChevronLeft aria-hidden />
+            <span className="sr-only">Previous day</span>
+          </Button>
           <Input
             id="as-of-date"
             type="date"
@@ -100,6 +119,19 @@ export function AsOfPicker({
             onChange={(event) => setDraft(event.target.value)}
             className="pointer-coarse:min-h-11 w-44 font-mono tabular-nums"
           />
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            disabled={isPending || isToday}
+            onClick={() => go(isoDayAdd(iso, 1))}
+            onPointerEnter={() => router.prefetch(historyHref(params, { at: isoDayAdd(iso, 1) }))}
+            onFocus={() => router.prefetch(historyHref(params, { at: isoDayAdd(iso, 1) }))}
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+          >
+            <ChevronRight aria-hidden />
+            <span className="sr-only">Next day</span>
+          </Button>
           <Button
             type="submit"
             size="sm"

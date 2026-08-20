@@ -1,5 +1,6 @@
 'use client'
 
+import { format } from 'date-fns'
 import { CheckCheck, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { PRIORITY_LABEL, STATUS_LABEL, TASK_STATUSES } from '@/features/sprints/board-view'
+import { isoDayAdd } from '@/features/people/iso-day'
 import type { SprintOption } from '@/features/sprints/actions'
 
 export type BulkPatch = {
@@ -18,6 +20,15 @@ export type BulkPatch = {
   assigneeId?: string | null
   priority?: number
   sprintId?: string | null
+  /** ISO `yyyy-mm-dd`, or null to clear. */
+  dueDate?: string | null
+}
+
+/** Same noon-anchored rule as the task card: a `date` column is a calendar
+ *  day, and parsing it at UTC midnight renders the previous day west of
+ *  Greenwich. */
+function shortDate(iso: string): string {
+  return format(new Date(`${iso}T12:00:00`), 'MMM d')
 }
 
 /**
@@ -34,6 +45,7 @@ export function BoardBulkBar({
   sprintOptions,
   sprintOptionsFailed,
   team,
+  todayIso,
   isPending,
   onApply,
   onClear,
@@ -47,6 +59,8 @@ export function BoardBulkBar({
    *  and the menu spins a lie forever. */
   sprintOptionsFailed: boolean
   team: { userId: string; name: string }[]
+  /** Colombo-local `yyyy-mm-dd` — the anchor the due-date shortcuts add to. */
+  todayIso: string
   isPending: boolean
   onApply: (patch: BulkPatch) => void
   onClear: () => void
@@ -111,6 +125,26 @@ export function BoardBulkBar({
               {PRIORITY_LABEL[priority]}
             </DropdownMenuItem>
           ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button size="sm" variant="outline" disabled={isPending} />}>
+          Due date
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {/* Absolute dates in the labels: "tomorrow" applied to 12 cards is
+              exactly the kind of write worth being explicit about. */}
+          <DropdownMenuItem onClick={() => onApply({ dueDate: isoDayAdd(todayIso, 1) })}>
+            Tomorrow ({shortDate(isoDayAdd(todayIso, 1))})
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onApply({ dueDate: isoDayAdd(todayIso, 7) })}>
+            In a week ({shortDate(isoDayAdd(todayIso, 7))})
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => onApply({ dueDate: null })}>
+            Remove due date
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 

@@ -15,7 +15,10 @@ function PageHeader({
   actions,
   className,
   ...props
-}: React.ComponentProps<"header"> & {
+}: // Omit the HTML `title` attribute: intersecting it (`string`) with the prop
+// below silently narrowed `title` to string-only, rejecting element titles
+// (icon + text in the h1, as /pending uses).
+Omit<React.ComponentProps<"header">, "title"> & {
   title: React.ReactNode
   description?: React.ReactNode
   actions?: React.ReactNode

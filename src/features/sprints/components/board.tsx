@@ -15,9 +15,10 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, PawPrint } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { BoardColumn, groupIdFromDroppable } from '@/features/sprints/components/board-column'
 import { BoardToolbar } from '@/features/sprints/components/board-toolbar'
@@ -452,12 +453,12 @@ export function Board({
       <BoardToolbar view={view} summary={summary} team={team} onChange={setView} />
 
       {tasks.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-8 text-center">
-          <p className="font-heading text-base font-semibold">Nothing to fetch here yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Type into any column below to add the first task. LogPup will keep watch over it.
-          </p>
-        </div>
+        <EmptyState
+          icon={PawPrint}
+          title="Nothing to fetch here yet"
+          description="Type into any column below to add the first task. LogPup will keep watch over it."
+          className="rounded-xl border border-dashed border-border"
+        />
       ) : null}
 
       {moveError ? (
@@ -530,6 +531,7 @@ export function Board({
           sprintOptions={sprintOptions}
           sprintOptionsFailed={sprintOptionsFailed}
           team={team}
+          todayIso={todayIso}
           isPending={isPending}
           onApply={applyBulk}
           onClear={() => setSelectedIds(new Set())}

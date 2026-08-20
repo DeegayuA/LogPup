@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import { notFound } from 'next/navigation'
 import { TriangleAlert } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { DbClearButton } from '@/features/admin/components/db-clear-button'
 import { DangerAppResetCard } from '@/features/admin/components/danger-app-reset-card'
 import { DangerBackupCard } from '@/features/admin/components/danger-backup-card'
@@ -46,10 +47,12 @@ export default async function AdminDangerPage() {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <h1 className="flex items-center gap-2 font-heading text-lg font-semibold">
+        {/* h2, not h1 — the admin layout already renders the page's h1
+            ("Admin"), and this section used to add a second one. */}
+        <h2 className="flex items-center gap-2 font-heading text-lg font-semibold">
           <TriangleAlert aria-hidden className="size-4 text-destructive" />
           Danger zone
-        </h1>
+        </h2>
         <p className="max-w-prose text-sm text-muted-foreground">
           Each control below says what it destroys and what it leaves standing, and asks
           you to type something only the thing in front of you can tell you. They are
@@ -65,12 +68,12 @@ export default async function AdminDangerPage() {
 
       {can(actor, 'danger.dbclear') && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+          <h3 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
             Testing tooling
-          </h2>
+          </h3>
           <Card className="ring-destructive/30">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle as="h4" className="flex items-center gap-2">
                 <TriangleAlert aria-hidden className="size-4 text-destructive" />
                 Clear database
               </CardTitle>
@@ -140,17 +143,17 @@ async function DangerControls({ actor }: { actor: Actor }) {
     <>
       {recoverable.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+          <h3 className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
             Recoverable
-          </h2>
+          </h3>
           {recoverable}
         </section>
       )}
       {permanent.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-2xs font-medium tracking-wide text-destructive uppercase">
+          <h3 className="text-2xs font-medium tracking-wide text-destructive uppercase">
             Cannot be undone
-          </h2>
+          </h3>
           {permanent}
         </section>
       )}
@@ -161,16 +164,18 @@ async function DangerControls({ actor }: { actor: Actor }) {
 /** Skeleton, not a spinner: the page's shape is known before its numbers are. */
 function DangerSkeleton() {
   return (
-    <div className="flex flex-col gap-3" aria-hidden>
+    <div className="flex flex-col gap-3">
+      <span className="sr-only" role="status">
+        Loading the danger zone controls
+      </span>
       {[0, 1, 2].map((i) => (
-        <div key={i} className="flex flex-col gap-3 rounded-xl border border-border p-4">
-          <div className="h-4 w-40 animate-pulse rounded bg-muted" />
-          <div className="h-3 w-full animate-pulse rounded bg-muted" />
-          <div className="h-3 w-3/4 animate-pulse rounded bg-muted" />
-          <div className="h-9 w-36 animate-pulse rounded-lg bg-muted" />
+        <div key={i} aria-hidden className="flex flex-col gap-3 rounded-xl border border-border p-4">
+          <Skeleton className="h-4 w-40 max-w-full" />
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-3/4" />
+          <Skeleton className="h-9 w-36 max-w-full rounded-lg" />
         </div>
       ))}
-      <span className="sr-only">Loading the danger zone controls</span>
     </div>
   )
 }

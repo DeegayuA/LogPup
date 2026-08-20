@@ -1,293 +1,184 @@
 import { Suspense } from 'react'
+import Link from 'next/link'
 import { format } from 'date-fns'
+import { PawPrint, TriangleAlert } from 'lucide-react'
 import { getSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
-import { isMercantileHoliday } from '@/lib/lk-holidays'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { loadActor } from '@/features/auth/actor'
 import { can, isAdminRole } from '@/features/auth/capabilities'
+import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
+import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
+import {
+  WorklogCalendar,
+  shiftMonth,
+  type CalendarDayFacts,
+} from '@/features/worklog/components/worklog-calendar'
+import { MonthSummary } from '@/features/worklog/components/month-summary'
+import { CatchUpPanel, type CatchUpGap } from '@/features/worklog/components/catch-up-panel'
 import {
   DeclareAbsenceDialog,
   type FiledAbsence,
 } from '@/features/worklog/components/declare-absence-dialog'
 import { PendingAbsenceList } from '@/features/worklog/components/pending-absence-list'
 import {
+  DAY_STATE_LABEL,
+  classifyDay,
+  dayStateText,
+  isHalfDay,
+  loggedTone,
+  DAY_STATE_CLASS,
+} from '@/features/worklog/day-state'
+import {
+  countMyWorklogDays,
   getMyApprovedAbsences,
   getMyPendingAbsences,
   getMyWorkSchedule,
-  getMyWorklogDays,
-  getMyWorklogs,
-  getOrgHolidayDays,
+  getMyWorklogsInRange,
+  getTeamApprovedAbsences,
   getTeamWorklogs,
   getUserJoinDay,
-  type MyAbsence,
 } from '@/features/worklog/queries'
-import { computeCoverage, type CoverageStatus } from '@/features/worklog/coverage'
+import { computeCoverage, formatCoverage } from '@/features/worklog/coverage'
+import { buildHolidayCalendar, closesTheStudio } from '@/features/worklog/holiday-listing'
+import { listOrgHolidays, type OrgHolidayRow } from '@/features/worklog/org-holiday-queries'
 import { patternForDay } from '@/features/worklog/schedules'
 import { MAX_BACKFILL_DAYS } from '@/features/worklog/missing-days'
-import { resolveWorkDay, worklogDaysBack } from '@/features/worklog/worklog-day'
+import { WORK_DAY_PATTERN, resolveWorkDay, worklogDaysBack } from '@/features/worklog/worklog-day'
 import { getAiPrefs } from '@/features/gemini/prefs'
 
 export const metadata = { title: 'Work log' }
 
-/** How much history the personal list shows, and how far the team view looks back. */
-const MY_DAYS = 14
+/** How far the admin team view looks back. */
 const TEAM_DAYS = 7
 
 /**
- * How far back the catch-up panel computes coverage — the same safety bound
+ * How far back the catch-up panel and the streak look — the same safety bound
  * missing-days.ts walked. Long enough to still find MAX_BACKFILL_DAYS owed
  * days on the far side of a long absence, short enough that the window is a
  * fixed cost however long somebody has been here.
  */
-const CATCH_UP_WINDOW_DAYS = 120
+const LOOKBACK_WINDOW_DAYS = 120
+
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/
 
 /**
- * "What did I do today, and how much of what I planned did I get through?"
+ * "What did I do each day, and how much of what I planned did I get through?"
+ *
+ * CALENDAR-FIRST since 2026-08-20 (see the UI-intelligence redesign spec):
+ * the month is the page's heart — every day painted with the shared
+ * day-state vocabulary — and clicking any own past day opens that day's form
+ * beside it. That closes the oldest gap this page had: a logged earlier day
+ * (typo, wrong percent) had NO edit path anywhere in the app, even though
+ * `upsertDailyWorklog` accepted the correction all along.
  *
  * One entry per person per day. The percentage is self-scored against the
  * person's own plan rather than derived from closed tickets, so a day of
  * meetings, review or debugging is not silently reported as zero — see
  * dailyWorklogs in src/db/schema.ts for why this is not sprintCheckins.
+ * DAYS, NEVER HOURS, everywhere on this page: percent-of-plan multiplied
+ * into hours would be a fabricated timesheet.
  *
- * Admins additionally see the whole team's last week, which is the point of
- * keeping a log at all: the gaps and the trend are the signal, not any one
- * day's number.
+ * The month and the selected day live in the URL (?month=YYYY-MM&day=…), so
+ * any view of this page is linkable and the calendar needs no client state.
+ *
+ * Every zone below fetches for itself inside its own try/catch: one failed
+ * Neon read costs its card, not the page. The route-level error.tsx is the
+ * backstop, not the plan.
  */
-export default async function WorklogPage() {
-  const session = await getSession()
+export default async function WorklogPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const [session, raw] = await Promise.all([getSession(), props.searchParams])
   if (!session?.user) return null
 
   const today = resolveWorkDay(new Date())
   const isAdmin = isAdminRole(session.user.role)
 
+  // Hand-edited params degrade to the defaults, never to an error page.
+  const rawDay = firstParam(raw.day)
+  const rawMonth = firstParam(raw.month)
+  const selectedDay =
+    rawDay && WORK_DAY_PATTERN.test(rawDay) && isRealDay(rawDay) && rawDay <= today
+      ? rawDay
+      : today
+  const month = rawMonth && MONTH_PATTERN.test(rawMonth) ? rawMonth : selectedDay.slice(0, 7)
+  const retryHref = `/worklog?month=${month}&day=${selectedDay}`
+
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-bold tracking-tight">Work log</h1>
-        <p className="text-sm text-muted-foreground">
-          {format(new Date(`${today}T12:00:00`), 'EEEE, MMMM d')} — one line about your day, and how
-          far you got.
-        </p>
-        {/* The rules live here, not only inside the catch-up panel: that panel
-            renders only for somebody already behind, so a person who has never
-            missed a day would never be told how the days are counted. */}
-        <p className="text-2xs text-muted-foreground">
-          Gazetted public holidays and company holidays never count. Otherwise Monday to Friday are
-          whole days and Saturday is a half day, unless your own work schedule says different. Days
-          you missed wait above today&rsquo;s box, up to {MAX_BACKFILL_DAYS} at once; approved leave
-          is not one of them. What you save appears in your own list below, and in the team view
-          that admins see. Only you can write your entries — nobody else can log a day for you.
-        </p>
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6">
+      <div className="flex flex-col gap-2">
+        <PageHeader
+          title="Work log"
+          description={`${format(new Date(`${today}T12:00:00`), 'EEEE, MMMM d')} — one line about your day, and how far you got.`}
+        />
+        {/* The counting rules, foldable instead of the old six-line wall of
+            11px text. Always present — the catch-up panel renders only for
+            somebody already behind, so a person who has never missed a day
+            would otherwise never be told how the days are counted. */}
+        <HelpDetail summary="How days are counted">
+          <p>
+            Gazetted public holidays and company holidays never count. Otherwise Monday to Friday
+            are whole days and Saturday is a half day, unless your own work schedule says
+            different.
+          </p>
+          <p>
+            Days you missed wait in the catch-up list below the calendar, up to {MAX_BACKFILL_DAYS}{' '}
+            at once; approved leave is not one of them. What you save appears in your own calendar,
+            and in the team view that admins see.
+          </p>
+          <p>Only you can write your entries — nobody else can log a day for you.</p>
+        </HelpDetail>
       </div>
 
-      {/* Only the data waits. The heading is on screen immediately, and the
-          form arrives with today's entry already in it rather than flashing
-          an empty box that then fills. */}
-      {/* Earlier days come FIRST, above today's box. They are the ones a
-          person has to decide about — fill in or leave blank — and burying
-          them under today's entry is how a list nobody reads is made. */}
-      <Suspense fallback={null}>
-        <CatchUp userId={session.user.id} today={today} />
+      <Suspense fallback={<SummarySkeleton />}>
+        <SummaryZone userId={session.user.id} month={month} today={today} retryHref={retryHref} />
       </Suspense>
 
-      <Suspense fallback={<FormSkeleton />}>
-        <TodayEntry userId={session.user.id} today={today} />
+      <Suspense fallback={<CalendarSkeleton />}>
+        <CalendarZone
+          userId={session.user.id}
+          month={month}
+          selectedDay={selectedDay}
+          today={today}
+          retryHref={retryHref}
+        />
       </Suspense>
 
-      <Suspense fallback={<ListSkeleton rows={5} />}>
-        <MyHistory userId={session.user.id} today={today} />
+      {/* The catch-up panel sits BELOW the calendar: the owed days are
+          already visible up there as rings, and a panel that streams in
+          later no longer shoves the page's heart around (the old
+          fallback={null} defect). The skeleton reserves its slot. */}
+      <Suspense fallback={<CatchUpSkeleton />}>
+        <CatchUpZone userId={session.user.id} today={today} retryHref={retryHref} />
       </Suspense>
 
       {isAdmin ? (
-        <Suspense fallback={<ListSkeleton rows={4} />}>
-          <TeamHistory today={today} />
+        <Suspense fallback={<TeamSkeleton />}>
+          <TeamZone today={today} retryHref={retryHref} />
         </Suspense>
       ) : null}
     </div>
   )
 }
 
-/**
- * Earlier days with no entry, and what the person has already said about them.
- *
- * TWO groups, because "I have not dealt with this day" and "I have dealt with
- * it and somebody else has not" are different states, and only the first is a
- * to-do list:
- *
- *   owed, nothing filed        a box to log it in
- *   filed, awaiting approval   named below, with its kind and its dates
- *   approved                   gone from the panel — the day is not owed
- *
- * Which days are owed now comes from `computeCoverage` rather than
- * `missingWorkDays`. Not because the older one broke — it still answers the
- * question it was asked — but because coverage answers more: approved leave,
- * company holidays and a person's own work schedule, each as a status per
- * day. That is what lets ONE filter (`status === 'missing'`) drop exempt, off
- * and not-yet-due days at once, today's own day included, by rule rather than
- * by a special case for today.
- *
- * Renders nothing when both groups are empty — a permanently-present panel
- * showing zero is noise that teaches people to ignore the area where the real
- * prompt appears. Deliberately not styled as a warning: people take leave and
- * spend days on other work, and a blank day is not a fault.
- */
-async function CatchUp({ userId, today }: { userId: string; today: string }) {
-  // Half-open [from, to), and `to` is tomorrow so today sits INSIDE the window
-  // and falls out of the gap list as `not-yet-due` — the same rule that drops
-  // a Sunday, rather than a special case that has to be remembered.
-  const from = shiftDay(today, -CATCH_UP_WINDOW_DAYS)
-  const to = shiftDay(today, 1)
+// ---------------------------------------------------------------------------
+// Shared day plumbing
+// ---------------------------------------------------------------------------
 
-  const [actor, joinedOn, loggedDays, pending, approved, schedule, companyHolidays, aiPrefs] =
-    await Promise.all([
-      loadActor(),
-      getUserJoinDay(userId),
-      getMyWorklogDays(userId, from, today),
-      getMyPendingAbsences(userId),
-      getMyApprovedAbsences(userId, from, today),
-      getMyWorkSchedule(userId),
-      getOrgHolidayDays(from, today),
-      getAiPrefs(userId),
-    ])
-  if (!joinedOn) return null
+function firstParam(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
 
-  const orgHolidays = new Set(companyHolidays)
-  const coverage = computeCoverage({
-    from,
-    to,
-    loggedDays: new Set(loggedDays),
-    // APPROVED ONLY, deliberately. A pending absence exempts nothing, so
-    // nobody can lower their own denominator by typing.
-    exemptDays: absenceDays(approved, from, to),
-    // `isMercantileHoliday` is the rule working-days.ts defaults to — the
-    // gazette lists that actually close the office, not every gazetted day —
-    // and company holidays compose on top of it through the same callback, so
-    // a studio shutdown needs no deploy and no second definition of "holiday".
-    // A membership test against LK_HOLIDAYS here used to be exactly that
-    // second definition, and it excused the bank closing days.
-    isHoliday: (iso) => isMercantileHoliday(iso) || orgHolidays.has(iso),
-    patternFor: (iso) => patternForDay(schedule, iso),
-    joinedOn,
-    today,
-  })
-
-  // A day covered by a pending absence has been dealt with, so it leaves the
-  // gap list — but coverage still counts it missing, which is exactly why the
-  // second group below says so out loud instead of letting it disappear.
-  const filedDays = absenceDays(pending, from, to)
-  const gaps = coverage.days
-    .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
-    // The most recent MAX_BACKFILL_DAYS, oldest first — the same cap
-    // missing-days.ts applied, for the same reason: an unclearable backlog is
-    // indistinguishable from disengagement.
-    .slice(-MAX_BACKFILL_DAYS)
-
-  if (gaps.length === 0 && pending.length === 0) return null
-
-  // The same check createAbsence makes, so the control appears exactly when
-  // the action would accept it — a stakeholder or auditor is not offered a
-  // button whose only possible answer is "Not allowed".
-  const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
-  // What a new absence could clash with. The server checks this again against
-  // every row; this set is only what the panel loaded, and exists so the
-  // common clash can be named before the roundtrip.
-  const filed: FiledAbsence[] = [
-    ...pending.map((row) => ({
-      startDate: row.startDate,
-      endDate: row.endDate,
-      kind: row.kind,
-      status: 'pending' as const,
-    })),
-    ...approved.map((row) => ({
-      startDate: row.startDate,
-      endDate: row.endDate,
-      kind: row.kind,
-      status: 'approved' as const,
-    })),
-  ]
-  // Every day in the window that is a working day for this person, whatever
-  // its status — today's included, so declaring leave for today is not
-  // mistaken for a no-op. A range containing none of them exempts nothing.
-  const owedDays = coverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
-
-  return (
-    <section className="flex flex-col gap-4 rounded-xl border bg-muted/40 p-4">
-      {gaps.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-0.5">
-            <h2 className="font-heading text-sm font-semibold">
-              {gaps.length === 1
-                ? '1 earlier day has no entry'
-                : `${gaps.length} earlier days have no entry`}
-            </h2>
-            {/* How the days are counted is stated under the page header, so it
-                is not repeated here. */}
-            <p className="text-2xs text-muted-foreground">
-              Fill in the ones you worked.
-              {canDeclare ? (
-                <>
-                  {' '}
-                  If you were not working — leave, sick, training, a day on another project —
-                  say so with{' '}
-                  <span className="font-medium text-foreground">Not a working day</span> rather
-                  than writing an entry for work that did not happen.
-                </>
-              ) : null}
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            {gaps.map(({ day, fraction }) => (
-              <div key={day} className="flex flex-col gap-1.5">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h3 className="flex items-baseline gap-2 font-mono text-xs tabular-nums text-muted-foreground">
-                    {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
-                    {/* The fraction coverage already worked out for this
-                        person, not the studio default: the percentage means
-                        "of what I planned", so a half day has to be named or
-                        a full Saturday reads as an under-delivered weekday. */}
-                    {fraction === 0.5 ? (
-                      <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
-                        Half day
-                      </span>
-                    ) : null}
-                  </h3>
-                  {canDeclare ? (
-                    <DeclareAbsenceDialog
-                      day={day}
-                      filed={filed}
-                      owedDays={owedDays}
-                      knownFrom={from}
-                      knownTo={to}
-                    />
-                  ) : null}
-                </div>
-                {/* Draft with AI reads that day's own activity, so a forgotten
-                    Tuesday is still recoverable from what LogPup saw. */}
-                <WorklogForm day={day} initial={null} aiDraftEnabled={aiPrefs['worklog-draft'].enabled} />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {pending.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-0.5">
-            <h2 className="font-heading text-sm font-semibold">Filed, waiting on approval</h2>
-            <p className="text-2xs text-muted-foreground">
-              Waiting on approval — a day still counts as unlogged until it&rsquo;s approved. It
-              left the list above because you have dealt with it, not because it has stopped
-              counting.
-            </p>
-          </div>
-          <PendingAbsenceList absences={pending} />
-        </div>
-      ) : null}
-    </section>
-  )
+/** '2026-02-31' matches the day pattern and is not a day. */
+function isRealDay(iso: string): boolean {
+  const date = new Date(`${iso}T12:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === iso
 }
 
 /**
@@ -310,7 +201,11 @@ function shiftDay(iso: string, days: number): string {
  * stated in words — so the two conventions are clipped against each other in
  * exactly one place rather than wherever a day could be gained or lost.
  */
-function absenceDays(ranges: readonly MyAbsence[], from: string, to: string): Set<string> {
+function absenceDays(
+  ranges: readonly { startDate: string; endDate: string }[],
+  from: string,
+  to: string,
+): Set<string> {
   const days = new Set<string>()
   for (const range of ranges) {
     let day = range.startDate < from ? from : range.startDate
@@ -319,213 +214,774 @@ function absenceDays(ranges: readonly MyAbsence[], from: string, to: string): Se
   return days
 }
 
-async function TodayEntry({ userId, today }: { userId: string; today: string }) {
-  const [rows, aiPrefs] = await Promise.all([getMyWorklogs(userId, 1), getAiPrefs(userId)])
-  const todayRow = rows.find((row) => row.day === today) ?? null
+/**
+ * ISO day → holiday name for every day in `[from, to]` the studio is
+ * actually shut: gazetted mercantile days plus in-force company rows, both
+ * through `closesTheStudio` — THE composition the spec names, and the same
+ * question coverage asks, so the calendar cannot paint a day the denominator
+ * still counts. Notably NOT `getOrgHolidayDays`, which would count a revoked
+ * company row as closed.
+ */
+function closedStudioDays(orgRows: OrgHolidayRow[], from: string, to: string): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const row of buildHolidayCalendar(orgRows)) {
+    if (row.day < from || row.day > to) continue
+    if (!closesTheStudio(row)) continue
+    if (!map.has(row.day)) map.set(row.day, row.name)
+  }
+  return map
+}
+
+const minIso = (a: string, b: string) => (a < b ? a : b)
+const maxIso = (a: string, b: string) => (a > b ? a : b)
+
+// ---------------------------------------------------------------------------
+// Summary zone — the month in four numbers
+// ---------------------------------------------------------------------------
+
+async function SummaryZone({
+  userId,
+  month,
+  today,
+  retryHref,
+}: {
+  userId: string
+  month: string
+  today: string
+  retryHref: string
+}) {
+  const monthStart = `${month}-01`
+  const nextMonthStart = `${shiftMonth(month, 1)}-01`
+  const monthEnd = shiftDay(nextMonthStart, -1)
+  const streakFrom = shiftDay(today, -LOOKBACK_WINDOW_DAYS)
+  const streakTo = shiftDay(today, 1)
+  // One window covering both the viewed month and the streak's lookback.
+  const from = minIso(monthStart, streakFrom)
+  const to = maxIso(monthEnd, today)
+  const toExclusive = maxIso(nextMonthStart, streakTo)
+
+  /* All fetching and derivation lives in here so ONE try/catch covers it —
+     and no JSX does: the render below happens after the catch has already
+     decided between data and the error card (same shape as admin/bugs). */
+  const load = async () => {
+    const [joinedOn, everLogged, rows, approved, schedule, orgRows] = await Promise.all([
+      getUserJoinDay(userId),
+      countMyWorklogDays(userId),
+      getMyWorklogsInRange(userId, from, to),
+      getMyApprovedAbsences(userId, from, to),
+      getMyWorkSchedule(userId),
+      listOrgHolidays(),
+    ])
+    if (!joinedOn || everLogged === 0) {
+      return { joinedOn, everLogged, summary: null }
+    }
+
+    const closed = closedStudioDays(orgRows, from, to)
+    const isHoliday = (iso: string) => closed.has(iso)
+    const loggedDays = new Set(rows.map((row) => row.day))
+    const exemptDays = absenceDays(approved, from, toExclusive)
+    const patternFor = (iso: string) => patternForDay(schedule, iso)
+
+    /* The whole month's expectation, whatever today is: computeCoverage with
+       a synthetic `today` past the month's end makes every day due, so
+       `expected` sums the month's owed fractions — working days minus
+       studio-closing holidays minus approved leave, halves kept as halves.
+       Not a private re-derivation: same function, same inputs, one opinion. */
+    const wholeMonth = computeCoverage({
+      from: monthStart,
+      to: nextMonthStart,
+      loggedDays,
+      exemptDays,
+      isHoliday,
+      patternFor,
+      joinedOn,
+      today: nextMonthStart,
+    })
+
+    /* The same window against the REAL today: days ahead fall out as
+       not-yet-due, so this is "of what was due so far, how much is filed". */
+    const soFar = computeCoverage({
+      from: monthStart,
+      to: nextMonthStart,
+      loggedDays,
+      exemptDays,
+      isHoliday,
+      patternFor,
+      joinedOn,
+      today,
+    })
+    const coveragePct =
+      soFar.expected > 0 ? Math.round((soFar.logged / soFar.expected) * 100) : null
+
+    /* Streak: consecutive owed days answered, walking back from today.
+       Non-owed days — weekends, holidays, approved leave — are stepped over
+       rather than breaking the run, and today breaks nothing while it is
+       still in progress. Capped by the lookback window, which at 120 days is
+       a boast, not a limit. */
+    const streakCoverage = computeCoverage({
+      from: streakFrom,
+      to: streakTo,
+      loggedDays,
+      exemptDays,
+      isHoliday,
+      patternFor,
+      joinedOn,
+      today,
+    })
+    let streak = 0
+    for (let i = streakCoverage.days.length - 1; i >= 0; i -= 1) {
+      const day = streakCoverage.days[i]
+      if (day.status === 'logged') {
+        streak += 1
+        continue
+      }
+      if (day.status === 'missing') break
+      // off / exempt / not-yet-due / not-required: skip without breaking.
+    }
+
+    const loggedCount = rows.filter((row) => row.day >= monthStart && row.day <= monthEnd).length
+
+    return {
+      joinedOn,
+      everLogged,
+      summary: {
+        expected: wholeMonth.expected,
+        loggedCount,
+        coveragePct,
+        coverageDetail: formatCoverage(soFar),
+        streak,
+      },
+    }
+  }
+
+  let data: Awaited<ReturnType<typeof load>> | null = null
+  try {
+    data = await load()
+  } catch (cause) {
+    console.error('[worklog] month summary failed', cause)
+  }
+  if (!data) return <ZoneError title="The month summary could not be read." retryHref={retryHref} />
+  if (!data.joinedOn) return null
+
+  // First run: teach the page instead of showing four zeroes.
+  if (data.everLogged === 0 || !data.summary) {
+    return (
+      <EmptyState
+        icon={PawPrint}
+        title="Log your first day — it takes 20 seconds"
+        description="Score how much of what you planned you got through, write one line about the day (or let AI draft it from your own activity), and save. The calendar fills in as you go."
+        action={<Button render={<a href="#day-panel" />}>Log today</Button>}
+        className="rounded-xl border border-dashed"
+      />
+    )
+  }
+
   return (
-    <WorklogForm
-      day={today}
-      initial={todayRow ? { percent: todayRow.percent, note: todayRow.note } : null}
-      aiDraftEnabled={aiPrefs['worklog-draft'].enabled}
+    <MonthSummary
+      monthLabel={format(new Date(`${monthStart}T12:00:00`), 'MMMM')}
+      expected={data.summary.expected}
+      loggedCount={data.summary.loggedCount}
+      coveragePct={data.summary.coveragePct}
+      coverageDetail={data.summary.coverageDetail}
+      streak={data.summary.streak}
     />
   )
 }
 
-/**
- * What each coverage status says on a row.
- *
- * `missing` is the ONLY one that gets to say "Not logged". That phrase used to
- * be printed against every dayless row in the window, so a fortnight read as
- * thirteen failures including both Saturdays and both Sundays — the page
- * accusing someone of missing days nobody expected them to work. The
- * distinctions come from coverage.ts, which already draws them for the panel
- * directly above this list; the two used to disagree about the same Sunday
- * twelve inches apart.
- */
-const DAY_STATE: Record<CoverageStatus, { label: string; tone: string } | null> = {
-  logged: null, // renders its percentage and note instead
-  missing: { label: 'Not logged', tone: 'text-muted-foreground' },
-  exempt: { label: 'Approved leave', tone: 'text-muted-foreground/70' },
-  off: { label: 'Not a working day', tone: 'text-muted-foreground/70' },
-  'not-yet-due': { label: 'Today — not due yet', tone: 'text-muted-foreground/70' },
-  'not-required': { label: 'Not required for your seat', tone: 'text-muted-foreground/70' },
-}
+// ---------------------------------------------------------------------------
+// Calendar zone — the month grid and the selected day's panel
+// ---------------------------------------------------------------------------
 
-async function MyHistory({ userId, today }: { userId: string; today: string }) {
-  const days = worklogDaysBack(MY_DAYS, new Date(`${today}T12:00:00Z`))
-  const from = days[days.length - 1]
+async function CalendarZone({
+  userId,
+  month,
+  selectedDay,
+  today,
+  retryHref,
+}: {
+  userId: string
+  month: string
+  selectedDay: string
+  today: string
+  retryHref: string
+}) {
+  const monthStart = `${month}-01`
+  const nextMonthStart = `${shiftMonth(month, 1)}-01`
+  const monthEnd = shiftDay(nextMonthStart, -1)
+  // The selected day can sit outside the viewed month (paging away keeps the
+  // panel open); the fetch window covers both.
+  const from = minIso(monthStart, selectedDay)
+  const to = maxIso(monthEnd, selectedDay)
 
-  /* The same five inputs the catch-up panel above uses, fetched again here
-     because each panel is its own Suspense boundary — but computed through the
-     SAME function, which is the part that matters: two panels on one screen
-     must not hold two opinions about whether a Sunday was owed. */
-  const [rows, schedule, approved, orgHolidayDays, joinedOn] = await Promise.all([
-    getMyWorklogs(userId, MY_DAYS),
-    getMyWorkSchedule(userId),
-    getMyApprovedAbsences(userId, from, today),
-    getOrgHolidayDays(from, today),
-    getUserJoinDay(userId),
-  ])
+  /* Fetching and derivation only — the JSX below renders after the catch has
+     already decided between data and the error card. */
+  const load = async () => {
+    const [actor, joinedOn, rows, approved, pending, schedule, orgRows, aiPrefs] =
+      await Promise.all([
+        loadActor(),
+        getUserJoinDay(userId),
+        getMyWorklogsInRange(userId, from, to),
+        getMyApprovedAbsences(userId, from, to),
+        getMyPendingAbsences(userId),
+        getMyWorkSchedule(userId),
+        listOrgHolidays(),
+        getAiPrefs(userId),
+      ])
 
-  const byDay = new Map(rows.map((row) => [row.day, row]))
-  const orgHolidays = new Set(orgHolidayDays)
+    const closed = closedStudioDays(orgRows, from, to)
+    const absent = absenceDays(approved, from, shiftDay(to, 1))
+    const facts: CalendarDayFacts = {
+      loggedPercent: Object.fromEntries(
+        rows
+          .filter((row) => row.day >= monthStart && row.day <= monthEnd)
+          .map((row) => [row.day, row.percent]),
+      ),
+      absentDays: absent,
+      closedDays: Object.fromEntries(closed),
+    }
 
-  const coverage = computeCoverage({
-    from,
-    to: today,
-    loggedDays: new Set(rows.map((row) => row.day)),
-    // Approved only — a pending absence exempts nothing, the same rule the
-    // catch-up panel states out loud.
-    exemptDays: absenceDays(approved, from, today),
-    isHoliday: (iso) => isMercantileHoliday(iso) || orgHolidays.has(iso),
-    patternFor: (iso) => patternForDay(schedule, iso),
-    joinedOn: joinedOn ?? from,
-    today,
-  })
-  const statusByDay = new Map(coverage.days.map((day) => [day.day, day]))
+    // The selected day's own facts, for the panel's heading and form.
+    const selectedRow = rows.find((row) => row.day === selectedDay) ?? null
+    const selectedState = classifyDay({
+      iso: selectedDay,
+      percent: selectedRow?.percent,
+      absent: absent.has(selectedDay),
+      holiday: closed.has(selectedDay),
+      today,
+      joinDay: joinedOn,
+    })
+    const selectedHalf = isHalfDay(selectedDay, closed.has(selectedDay))
+    const selectedHolidayName = closed.get(selectedDay) ?? null
 
-  /* Owed day-fractions, not a count of rows. Saturday is half a day, so
-     counting logged rows over a flat fourteen both inflated the denominator
-     with days nobody owed and treated a Saturday as a whole one. `expected`
-     already excludes weekends, holidays, approved leave and days before you
-     joined, and the invariant expected === logged + missing is what makes the
-     figure below mean anything at all. */
-  const { expected, logged: loggedFraction } = coverage
-  const coveragePct = expected > 0 ? Math.round((loggedFraction / expected) * 100) : null
+    // The same check createAbsence makes, so the control appears exactly when
+    // the action would accept it. loadActor is null for a deactivated
+    // account — the page still shows their own record, minus the button.
+    const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
+    const filed: FiledAbsence[] = [
+      ...pending.map((row) => ({
+        startDate: row.startDate,
+        endDate: row.endDate,
+        kind: row.kind,
+        status: 'pending' as const,
+      })),
+      ...approved.map((row) => ({
+        startDate: row.startDate,
+        endDate: row.endDate,
+        kind: row.kind,
+        status: 'approved' as const,
+      })),
+    ]
+    /* Days in the viewed month the studio expected work on — fraction > 0,
+       schedule-aware via coverage, whatever each day's status. The dialog
+       uses these to refuse a filing that would exempt nothing. */
+    const monthCoverage = computeCoverage({
+      from: monthStart,
+      to: nextMonthStart,
+      loggedDays: new Set(rows.map((row) => row.day)),
+      exemptDays: absent,
+      isHoliday: (iso) => closed.has(iso),
+      patternFor: (iso) => patternForDay(schedule, iso),
+      joinedOn: joinedOn ?? monthStart,
+      today: nextMonthStart,
+    })
+    const owedDays = monthCoverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
+
+    return {
+      joinedOn,
+      facts,
+      selectedRow,
+      selectedState,
+      selectedHalf,
+      selectedHolidayName,
+      canDeclare,
+      filed,
+      owedDays,
+      aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
+    }
+  }
+
+  let data: Awaited<ReturnType<typeof load>> | null = null
+  try {
+    data = await load()
+  } catch (cause) {
+    console.error('[worklog] calendar failed', cause)
+  }
+  if (!data) return <ZoneError title="The calendar could not be read." retryHref={retryHref} />
+
+  const {
+    joinedOn,
+    facts,
+    selectedRow,
+    selectedState,
+    selectedHalf,
+    selectedHolidayName,
+    canDeclare,
+    filed,
+    owedDays,
+    aiDraftEnabled,
+  } = data
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-heading text-sm font-semibold">Your last {MY_DAYS} days</h2>
-        {/* Days you owed, and how many of them you filed — not "averaging N%
-            on the days you logged", which computed a mean over whatever
-            happened to be there. One entry made that read "averaging 50%",
-            a statistic from a sample of one. */}
-        <p className="text-2xs text-muted-foreground">
-          {expected === 0 ? (
-            'No days owed in this window'
-          ) : (
-            <>
-              <span className="font-mono tabular-nums text-foreground">{coveragePct}%</span>
-              {' of the days you owed'}
-            </>
-          )}
-        </p>
-      </div>
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
+      <WorklogCalendar
+        month={month}
+        today={today}
+        joinDay={joinedOn}
+        selectedDay={selectedDay}
+        facts={facts}
+      />
 
-      <ul className="flex flex-col divide-y rounded-xl border bg-card">
-        {days.map((day) => {
-          const row = byDay.get(day)
-          const status = statusByDay.get(day)?.status ?? 'missing'
-          const state = DAY_STATE[status]
-          /* A Saturday is half a day and says so. Without it the row reads as
-             a full working day somebody only half-filled. */
-          const half = statusByDay.get(day)?.fraction === 0.5
-          return (
-            <li key={day} className="flex items-baseline gap-3 px-3 py-2">
-              <span className="w-24 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-                {format(new Date(`${day}T12:00:00`), 'EEE d MMM')}
+      <section
+        id="day-panel"
+        aria-label={`Selected day, ${format(new Date(`${selectedDay}T12:00:00`), 'EEEE, MMMM d, yyyy')}`}
+        className="flex min-w-0 flex-col gap-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
+            {format(new Date(`${selectedDay}T12:00:00`), 'EEEE, MMMM d')}
+            {selectedHalf ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-foreground">
+                Half day
               </span>
-              {row ? (
-                <>
-                  <span className="w-12 shrink-0 font-mono text-sm font-semibold tabular-nums">
-                    {row.percent}%
-                  </span>
-                  <span className={cn(bilingualText, 'min-w-0 flex-1 text-sm')}>
-                    {row.note ?? <span className="text-muted-foreground">No note</span>}
-                  </span>
-                </>
-              ) : (
-                <span className={cn('min-w-0 flex-1 text-sm', state?.tone)}>{state?.label}</span>
-              )}
-              {half ? (
-                <span className="shrink-0 font-mono text-2xs text-muted-foreground/70 uppercase">
-                  Half day
-                </span>
-              ) : null}
-            </li>
-          )
-        })}
-      </ul>
+            ) : null}
+            {selectedState === 'holiday' || selectedState === 'absence' || selectedState === 'off' ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 font-sans text-2xs font-medium text-muted-foreground">
+                {selectedState === 'holiday'
+                  ? (selectedHolidayName ?? DAY_STATE_LABEL.holiday)
+                  : DAY_STATE_LABEL[selectedState]}
+              </span>
+            ) : null}
+          </h2>
+          {canDeclare && selectedState === 'owed' ? (
+            <DeclareAbsenceDialog
+              day={selectedDay}
+              filed={filed}
+              owedDays={owedDays}
+              knownFrom={monthStart}
+              knownTo={nextMonthStart}
+            />
+          ) : null}
+        </div>
+
+        {selectedState === 'holiday' || selectedState === 'off' || selectedState === 'absence' ? (
+          <HelpNote>
+            Nobody expected work from you this day — log it only if you actually worked. It
+            counts as extra, never against you.
+          </HelpNote>
+        ) : null}
+
+        <WorklogForm
+          // Keyed by day so paging to another day starts from THAT day's
+          // saved state instead of carrying the previous day's edits over.
+          key={selectedDay}
+          day={selectedDay}
+          initial={selectedRow ? { percent: selectedRow.percent, note: selectedRow.note } : null}
+          aiDraftEnabled={aiDraftEnabled}
+        />
+      </section>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Catch-up zone — owed days, and filings waiting on approval
+// ---------------------------------------------------------------------------
+
+/**
+ * Earlier days with no entry, and what the person has already said about them.
+ *
+ * TWO groups, because "I have not dealt with this day" and "I have dealt with
+ * it and somebody else has not" are different states, and only the first is a
+ * to-do list:
+ *
+ *   owed, nothing filed        a box to log it in
+ *   filed, awaiting approval   named below, with its kind and its dates
+ *   approved                   gone from the panel — the day is not owed
+ *
+ * Which days are owed comes from `computeCoverage`: approved leave, company
+ * holidays and a person's own work schedule, each as a status per day, so ONE
+ * filter (`status === 'missing'`) drops exempt, off and not-yet-due days at
+ * once, today's own day included, by rule rather than by a special case.
+ *
+ * Renders nothing when both groups are empty — a permanently-present panel
+ * showing zero is noise that teaches people to ignore the area where the real
+ * prompt appears. Deliberately not styled as a warning: people take leave and
+ * spend days on other work, and a blank day is not a fault.
+ */
+async function CatchUpZone({
+  userId,
+  today,
+  retryHref,
+}: {
+  userId: string
+  today: string
+  retryHref: string
+}) {
+  // Half-open [from, to), and `to` is tomorrow so today sits INSIDE the window
+  // and falls out of the gap list as `not-yet-due` — the same rule that drops
+  // a Sunday, rather than a special case that has to be remembered.
+  const from = shiftDay(today, -LOOKBACK_WINDOW_DAYS)
+  const to = shiftDay(today, 1)
+
+  const load = async () => {
+    const [actor, joinedOn, rows, pending, approved, schedule, orgRows, aiPrefs] =
+      await Promise.all([
+        loadActor(),
+        getUserJoinDay(userId),
+        getMyWorklogsInRange(userId, from, today),
+        getMyPendingAbsences(userId),
+        getMyApprovedAbsences(userId, from, today),
+        getMyWorkSchedule(userId),
+        listOrgHolidays(),
+        getAiPrefs(userId),
+      ])
+    if (!joinedOn) return null
+
+    const closed = closedStudioDays(orgRows, from, today)
+    const coverage = computeCoverage({
+      from,
+      to,
+      loggedDays: new Set(rows.map((row) => row.day)),
+      // APPROVED ONLY, deliberately. A pending absence exempts nothing, so
+      // nobody can lower their own denominator by typing.
+      exemptDays: absenceDays(approved, from, to),
+      isHoliday: (iso) => closed.has(iso),
+      patternFor: (iso) => patternForDay(schedule, iso),
+      joinedOn,
+      today,
+    })
+
+    // A day covered by a pending absence has been dealt with, so it leaves
+    // the gap list — but coverage still counts it missing, which is exactly
+    // why the second group below says so out loud instead of letting it
+    // disappear.
+    const filedDays = absenceDays(pending, from, to)
+    const gaps: CatchUpGap[] = coverage.days
+      .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
+      // The most recent MAX_BACKFILL_DAYS, oldest first — an unclearable
+      // backlog is indistinguishable from disengagement.
+      .slice(-MAX_BACKFILL_DAYS)
+      .map(({ day, fraction }) => ({ day, fraction }))
+
+    const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
+    const filed: FiledAbsence[] = [
+      ...pending.map((row) => ({
+        startDate: row.startDate,
+        endDate: row.endDate,
+        kind: row.kind,
+        status: 'pending' as const,
+      })),
+      ...approved.map((row) => ({
+        startDate: row.startDate,
+        endDate: row.endDate,
+        kind: row.kind,
+        status: 'approved' as const,
+      })),
+    ]
+    // Every day in the window that is a working day for this person, whatever
+    // its status — today's included, so declaring leave for today is not
+    // mistaken for a no-op. A range containing none of them exempts nothing.
+    const owedDays = coverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
+
+    return {
+      gaps,
+      pending,
+      canDeclare,
+      filed,
+      owedDays,
+      aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
+    }
+  }
+
+  let data: Awaited<ReturnType<typeof load>> | undefined
+  try {
+    data = await load()
+  } catch (cause) {
+    console.error('[worklog] catch-up failed', cause)
+  }
+  if (data === undefined)
+    return <ZoneError title="The catch-up list could not be read." retryHref={retryHref} />
+  if (data === null) return null
+
+  const { gaps, pending, canDeclare, filed, owedDays, aiDraftEnabled } = data
+  if (gaps.length === 0 && pending.length === 0) return null
+
+  return (
+    <section className="flex flex-col gap-4 rounded-xl border bg-muted/40 p-4">
+      {gaps.length > 0 ? (
+        <CatchUpPanel
+          gaps={gaps}
+          filed={filed}
+          owedDays={owedDays}
+          knownFrom={from}
+          knownTo={to}
+          canDeclare={canDeclare}
+          aiDraftEnabled={aiDraftEnabled}
+        />
+      ) : null}
+
+      {pending.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="font-heading text-sm font-semibold">Filed, waiting on approval</h2>
+            <p className="text-2xs text-muted-foreground">
+              A day still counts as unlogged until it&rsquo;s approved. It left the list above
+              because you have dealt with it, not because it has stopped counting.
+            </p>
+          </div>
+          <PendingAbsenceList absences={pending} />
+        </div>
+      ) : null}
     </section>
   )
 }
 
-async function TeamHistory({ today }: { today: string }) {
+// ---------------------------------------------------------------------------
+// Team zone — admins only
+// ---------------------------------------------------------------------------
+
+async function TeamZone({ today, retryHref }: { today: string; retryHref: string }) {
   const days = worklogDaysBack(TEAM_DAYS, new Date(`${today}T12:00:00Z`))
   const from = days[days.length - 1]
-  const rows = await getTeamWorklogs(from, today)
+  const strip = [...days].reverse() // chronological, oldest → today
 
-  const byDay = new Map<string, typeof rows>()
-  for (const row of rows) {
-    const list = byDay.get(row.day) ?? []
-    list.push(row)
-    byDay.set(row.day, list)
+  type Person = {
+    userId: string
+    name: string
+    entries: Map<string, { percent: number; note: string | null }>
   }
 
-  return (
-    <section className="flex flex-col gap-3">
-      <div className="flex flex-col gap-0.5">
-        <h2 className="font-heading text-sm font-semibold">The team, last {TEAM_DAYS} days</h2>
-        <p className="text-2xs text-muted-foreground">
-          Each person&rsquo;s own account of their day. The percentages are self-scored against what
-          each of them planned, so they read as a trend per person rather than a league table.
-        </p>
-      </div>
+  const load = async () => {
+    const [rows, teamAbsences, orgRows] = await Promise.all([
+      getTeamWorklogs(from, today),
+      getTeamApprovedAbsences(from, today),
+      listOrgHolidays(),
+    ])
 
-      {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-          Nobody has logged a day yet this week.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {days
-            .filter((day) => byDay.has(day))
-            .map((day) => (
-              <div key={day} className="flex flex-col gap-1.5">
-                <h3 className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}
-                </h3>
-                <ul className="flex flex-col divide-y rounded-xl border bg-card">
-                  {(byDay.get(day) ?? []).map((row) => (
-                    <li
-                      key={`${row.userId}-${row.day}`}
-                      className="flex items-baseline gap-3 px-3 py-2"
-                    >
-                      <span className="w-40 shrink-0 truncate text-sm font-medium">
-                        {row.userName}
-                      </span>
-                      <span className="w-12 shrink-0 font-mono text-sm font-semibold tabular-nums">
-                        {row.percent}%
-                      </span>
-                      <span className={cn(bilingualText, 'min-w-0 flex-1 text-sm')}>
-                        {row.note ?? <span className="text-muted-foreground">No note</span>}
-                      </span>
-                    </li>
-                  ))}
+    const closed = closedStudioDays(orgRows, from, today)
+
+    const byUser = new Map<string, Person>()
+    for (const row of rows) {
+      const person = byUser.get(row.userId) ?? {
+        userId: row.userId,
+        name: row.userName,
+        entries: new Map(),
+      }
+      person.entries.set(row.day, { percent: row.percent, note: row.note })
+      byUser.set(row.userId, person)
+    }
+    const people = [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name))
+
+    const absentByUser = new Map<string, Set<string>>()
+    for (const range of teamAbsences) {
+      const set = absentByUser.get(range.userId) ?? new Set<string>()
+      for (const day of absenceDays([range], from, shiftDay(today, 1))) set.add(day)
+      absentByUser.set(range.userId, set)
+    }
+
+    return { people, absentByUser, closed }
+  }
+
+  let data: Awaited<ReturnType<typeof load>> | null = null
+  try {
+    data = await load()
+  } catch (cause) {
+    console.error('[worklog] team view failed', cause)
+  }
+  if (!data) return <ZoneError title="The team view could not be read." retryHref={retryHref} />
+
+  const { people, absentByUser, closed } = data
+
+  return (
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="font-heading text-sm font-semibold">The team, last {TEAM_DAYS} days</h2>
+          <p className="text-2xs text-muted-foreground">
+            Each person&rsquo;s own account of their day. The percentages are self-scored against
+            what each of them planned, so they read as a trend per person rather than a league
+            table.
+          </p>
+        </div>
+
+        {people.length === 0 ? (
+          <EmptyState
+            title="Nobody has logged a day yet this week"
+            description="Entries appear here as people file them — each person writes their own."
+            className="rounded-xl border border-dashed"
+          />
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {people.map((person) => (
+              <div
+                key={person.userId}
+                className="flex min-w-0 flex-col gap-2 rounded-xl border bg-card p-3"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <Link
+                    href={`/people/${person.userId}`}
+                    className="min-w-0 truncate rounded-sm text-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {person.name}
+                  </Link>
+                  <span className="shrink-0 text-2xs text-muted-foreground">
+                    <span className="font-mono tabular-nums">{person.entries.size}</span>
+                    {person.entries.size === 1 ? ' day logged' : ' days logged'}
+                  </span>
+                </div>
+
+                {/* The 7-day strip speaks the calendar's own language — same
+                    classifier, same classes — so "what kind of day was that"
+                    has one answer on this page. */}
+                <ul className="flex gap-1">
+                  {strip.map((iso) => {
+                    const entry = person.entries.get(iso)
+                    const input = {
+                      iso,
+                      percent: entry?.percent,
+                      absent: absentByUser.get(person.userId)?.has(iso) ?? false,
+                      holiday: closed.has(iso),
+                      today,
+                    }
+                    const state = classifyDay(input)
+                    const half = isHalfDay(iso, closed.has(iso))
+                    return (
+                      <li key={iso} className="relative size-8 overflow-hidden rounded-sm">
+                        <span
+                          aria-hidden
+                          className={cn(
+                            'absolute inset-0 flex items-center justify-center rounded-[inherit]',
+                            DAY_STATE_CLASS[state],
+                            state === 'logged' &&
+                              entry !== undefined &&
+                              loggedTone(entry.percent),
+                            half && 'top-1/2 rounded-t-none',
+                          )}
+                        >
+                          <span className="font-mono text-2xs tabular-nums">
+                            {Number(iso.slice(8, 10))}
+                          </span>
+                        </span>
+                        <span className="sr-only">{dayStateText(input)}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+
+                <ul className="flex flex-col gap-1.5">
+                  {[...person.entries.entries()]
+                    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+                    .map(([iso, entry]) => (
+                      <li key={iso} className="flex flex-col gap-0.5 text-sm sm:flex-row sm:gap-3">
+                        <span className="flex shrink-0 items-baseline gap-2 sm:w-28">
+                          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+                            {format(new Date(`${iso}T12:00:00`), 'EEE d')}
+                          </span>
+                          <span className="font-mono text-sm font-semibold tabular-nums">
+                            {entry.percent}%
+                          </span>
+                        </span>
+                        <span className={cn(bilingualText, 'min-w-0 flex-1')}>
+                          {entry.note ?? <span className="text-muted-foreground">No note</span>}
+                        </span>
+                      </li>
+                    ))}
                 </ul>
               </div>
             ))}
-        </div>
-      )}
-    </section>
+          </div>
+        )}
+      </section>
   )
 }
 
-const shimmer = 'animate-pulse rounded-md bg-muted motion-reduce:animate-none'
+// ---------------------------------------------------------------------------
+// Zone states
+// ---------------------------------------------------------------------------
 
-function FormSkeleton() {
-  return <div className={`${shimmer} h-64 rounded-xl`} />
+/**
+ * One zone's failure, contained: an inline card with a retry, following the
+ * admin/bugs pattern (role=alert, worded, no stack trace). A plain anchor
+ * rather than a Link so retrying re-runs the server render even when the
+ * router would have served the same URL from cache.
+ */
+function ZoneError({ title, retryHref }: { title: string; retryHref: string }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4"
+    >
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
+        {title}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Usually the database being briefly unreachable. The rest of the page still works.
+      </p>
+      <Button variant="outline" size="sm" render={<a href={retryHref} />}>
+        Try again
+      </Button>
+    </div>
+  )
 }
 
-function ListSkeleton({ rows }: { rows: number }) {
+function SummarySkeleton() {
   return (
-    <div className="flex flex-col gap-2">
-      <div className={`${shimmer} h-4 w-40`} />
-      <div className="flex flex-col gap-1.5 rounded-xl border p-3">
-        {Array.from({ length: rows }, (_, i) => (
-          <div key={i} className={`${shimmer} h-5 w-full`} />
-        ))}
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <span className="sr-only" role="status">
+        Loading the month summary…
+      </span>
+      {Array.from({ length: 4 }, (_, i) => (
+        <Skeleton key={i} className="h-[74px] rounded-lg" />
+      ))}
+    </div>
+  )
+}
+
+function CalendarSkeleton() {
+  return (
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
+      <span className="sr-only" role="status">
+        Loading the calendar…
+      </span>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-6 w-36" />
+          <Skeleton className="h-7 w-28" />
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {Array.from({ length: 35 }, (_, i) => (
+            <Skeleton key={i} className="min-h-10 rounded-md sm:min-h-12" />
+          ))}
+        </div>
+        <Skeleton className="h-4 w-3/4" />
+      </div>
+      <Skeleton className="h-72 rounded-xl" />
+    </div>
+  )
+}
+
+function CatchUpSkeleton() {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border bg-muted/40 p-4">
+      <span className="sr-only" role="status">
+        Loading the catch-up list…
+      </span>
+      <Skeleton className="h-4 w-52" />
+      <Skeleton className="h-16 rounded-lg" />
+    </div>
+  )
+}
+
+function TeamSkeleton() {
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="sr-only" role="status">
+        Loading the team view…
+      </span>
+      <Skeleton className="h-4 w-44" />
+      <div className="grid gap-3 md:grid-cols-2">
+        <Skeleton className="h-36 rounded-xl" />
+        <Skeleton className="h-36 rounded-xl" />
       </div>
     </div>
   )

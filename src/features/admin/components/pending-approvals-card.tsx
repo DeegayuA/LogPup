@@ -7,6 +7,7 @@ import { CheckCheck, UserRoundCheck, UserRoundX } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   Card,
   CardContent,
@@ -38,23 +39,42 @@ import type { UserRole } from '@/features/auth/capabilities'
 
 function PendingRow({
   user,
-  isPending,
-  onApprove,
-  onReject,
+  onRemoveOptimistically,
 }: {
   user: PendingUser
-  isPending: boolean
-  onApprove: (user: PendingUser, role: UserRole) => void
-  onReject: (user: PendingUser) => void
+  /** The parent's useOptimistic updater — called INSIDE this row's transition
+   *  so the overlay lives exactly as long as this row's own wait. */
+  onRemoveOptimistically: (id: string) => void
 }) {
   const [role, setRole] = useState<UserRole>('member')
+  // PER-ROW transition, deliberately. One shared isPending used to disable
+  // the Approve/Reject/role controls on every other signup while any one was
+  // being decided — serializing a queue whose rows are optimistic and
+  // independent.
+  const [isPending, startTransition] = useTransition()
+
+  function decide(run: () => Promise<{ ok: boolean; error?: string }>, done: string) {
+    startTransition(async () => {
+      onRemoveOptimistically(user.id)
+      try {
+        const res = await run()
+        if (!res.ok) {
+          toast.error(res.error ?? 'Something went wrong — try again')
+          return
+        }
+        toast.success(done)
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
 
   function handleApprove() {
-    onApprove(user, role)
+    decide(() => approveUser(user.id, role), `${user.name} approved as ${role}`)
   }
 
   function handleReject() {
-    onReject(user)
+    decide(() => rejectUser(user.id), `${user.name} rejected`)
   }
 
   return (
@@ -156,40 +176,15 @@ function PendingRow({
  *   reappears under the error toast, which is exactly the truth.
  */
 export function PendingApprovalsCard({ users }: { users: PendingUser[] }) {
-  const [isPending, startTransition] = useTransition()
   const [visibleUsers, removeOptimistically] = useOptimistic(
     users,
     (current: PendingUser[], removedId: string) => current.filter((u) => u.id !== removedId),
   )
 
-  function decide(user: PendingUser, run: () => Promise<{ ok: boolean; error?: string }>, done: string) {
-    startTransition(async () => {
-      removeOptimistically(user.id)
-      try {
-        const res = await run()
-        if (!res.ok) {
-          toast.error(res.error ?? 'Something went wrong — try again')
-          return
-        }
-        toast.success(done)
-      } catch {
-        toast.error('Something went wrong — try again')
-      }
-    })
-  }
-
-  function handleApprove(user: PendingUser, role: UserRole) {
-    decide(user, () => approveUser(user.id, role), `${user.name} approved as ${role}`)
-  }
-
-  function handleReject(user: PendingUser) {
-    decide(user, () => rejectUser(user.id), `${user.name} rejected`)
-  }
-
   return (
     <Card className={visibleUsers.length > 0 ? 'ring-primary/30' : undefined}>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+        <CardTitle as="h2" className="flex items-center gap-2">
           Pending approvals
           {visibleUsers.length > 0 ? (
             <Badge variant="default">{visibleUsers.length}</Badge>
@@ -202,22 +197,19 @@ export function PendingApprovalsCard({ users }: { users: PendingUser[] }) {
       </CardHeader>
       <CardContent>
         {visibleUsers.length === 0 ? (
-          <div className="flex flex-col items-center gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
-            <CheckCheck className="size-5 text-muted-foreground/60" aria-hidden />
-            <p className="text-sm font-medium">Nothing waiting on you.</p>
-            <p className="text-xs text-muted-foreground">
-              New self-signups will show up here for approval.
-            </p>
-          </div>
+          <EmptyState
+            icon={CheckCheck}
+            title="Nothing waiting on you."
+            description="New self-signups will show up here for approval."
+            className="rounded-xl border border-dashed border-border"
+          />
         ) : (
           <ul className="flex flex-col gap-2">
             {visibleUsers.map((user) => (
               <PendingRow
                 key={user.id}
                 user={user}
-                isPending={isPending}
-                onApprove={handleApprove}
-                onReject={handleReject}
+                onRemoveOptimistically={removeOptimistically}
               />
             ))}
           </ul>

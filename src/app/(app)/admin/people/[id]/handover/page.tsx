@@ -55,7 +55,7 @@ export default async function HandoverPage({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">What stays with them</CardTitle>
+          <CardTitle as="h2" className="text-base">What stays with them</CardTitle>
           <CardDescription>
             These are not transferable, and the reason matters more than the rule.
           </CardDescription>

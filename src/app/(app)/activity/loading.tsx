@@ -22,7 +22,7 @@ export default function LoadingActivity() {
   return (
     <div className="flex flex-1 flex-col gap-5 p-6">
       <header className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-bold tracking-tight">Activity</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Activity</h1>
         <div className="h-5 w-80 max-w-full animate-pulse rounded bg-muted motion-reduce:animate-none" />
       </header>
       <ActivityControlsSkeleton />

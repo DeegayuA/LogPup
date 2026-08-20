@@ -43,9 +43,12 @@ export function SetPasswordForm() {
   }, [state])
 
   return (
-    <Card>
+    // id + scroll-mt: the first-login banner on /profile deep-links here
+    // (#password), and without the margin the card top lands under the
+    // sticky h-14 header. tabIndex so the jump also moves keyboard focus.
+    <Card id="password" tabIndex={-1} className="scroll-mt-20 outline-none">
       <CardHeader>
-        <CardTitle>Password</CardTitle>
+        <CardTitle as="h2">Password</CardTitle>
         <CardDescription>
           Set a password to sign in with your email, alongside Google sign-in.
         </CardDescription>

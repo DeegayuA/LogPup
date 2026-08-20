@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import { CardContent } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 
 /**
- * The one empty state every card on the person page uses.
+ * The one empty state every card on the person page uses — now a thin
+ * card-shaped wrapper around the shared <EmptyState> primitive, so the
+ * people surface renders the same emptiness the rest of the product does.
  *
  * It exists because the previous page had five hand-rolled ones that had
  * already drifted — different paddings, some centred and some not, some with an
@@ -28,14 +31,14 @@ import { CardContent } from '@/components/ui/card'
  * can actually take. If the card does not already know their role, it does not
  * know that, and prose is the honest answer.
  *
- * Height is fixed at `min-h-32` on purpose. A card that swaps between empty and
- * populated at the same size is what keeps the two-column grid from re-flowing
- * as data arrives — the same reason the skeleton models these exact blocks. An
- * action grows the block past that floor, which is why it is worth one only at
- * the sites above.
+ * Height is floored at `min-h-32` on purpose. A card that swaps between empty
+ * and populated at the same size is what keeps the two-column grid from
+ * re-flowing as data arrives — the same reason the skeleton models these exact
+ * blocks. An action grows the block past that floor, which is why it is worth
+ * one only at the sites above.
  */
 export function SectionEmpty({
-  icon: Icon,
+  icon,
   title,
   hint,
   action,
@@ -46,11 +49,8 @@ export function SectionEmpty({
   action?: ReactNode
 }) {
   return (
-    <CardContent className="flex min-h-32 flex-col items-center justify-center gap-1.5 py-6 text-center">
-      <Icon className="size-5 text-muted-foreground/50" aria-hidden />
-      <p className="text-sm font-medium">{title}</p>
-      <p className="max-w-xs text-xs text-muted-foreground">{hint}</p>
-      {action ? <div className="pt-1">{action}</div> : null}
+    <CardContent className="flex min-h-32 flex-col items-stretch justify-center">
+      <EmptyState icon={icon} title={title} description={hint} action={action} className="py-4" />
     </CardContent>
   )
 }

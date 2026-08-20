@@ -1,8 +1,9 @@
 import Link from 'next/link'
-import { format } from 'date-fns'
 import { Landmark } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SectionEmpty } from '@/features/people/components/section-empty'
+import { formatBusinessDate } from '@/features/people/format-instant'
 import { cn } from '@/lib/utils'
 import type { AppRoleKind } from '@/features/apps/role-history'
 import type { PersonAppRoleEntry } from '@/features/people/queries'
@@ -27,7 +28,7 @@ export function PersonAppRoleHistoryCard({ history }: { history: PersonAppRoleEn
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Project roles</CardTitle>
+        <CardTitle as="h2">Project roles</CardTitle>
         {history.length > 0 ? (
           <CardAction>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -37,13 +38,13 @@ export function PersonAppRoleHistoryCard({ history }: { history: PersonAppRoleEn
         ) : null}
       </CardHeader>
       {history.length === 0 ? (
-        <CardContent className="flex flex-col items-center gap-1.5 py-4 text-center">
-          <Landmark className="size-5 text-muted-foreground/60" aria-hidden />
-          <p className="text-sm font-medium">No PM or lead roles recorded.</p>
-          <p className="text-xs text-muted-foreground">
-            Apps they manage or lead will show up here with when it started.
-          </p>
-        </CardContent>
+        // The shared card empty state, not a hand-rolled block — same fix as
+        // AllocationHistoryCard, and for the same drift reason.
+        <SectionEmpty
+          icon={Landmark}
+          title="No PM or lead roles recorded."
+          hint="Apps they manage or lead will show up here with when it started."
+        />
       ) : (
         <CardContent>
           <ol className="flex flex-col divide-y divide-border">
@@ -58,23 +59,26 @@ export function PersonAppRoleHistoryCard({ history }: { history: PersonAppRoleEn
                     <Link href={`/apps/${entry.slug}`} className={cn('truncate text-sm font-medium', linkClass)}>
                       {entry.appName}
                     </Link>
-                    <Badge variant="secondary" className="text-[10px]">
+                    <Badge variant="secondary" className="text-2xs">
                       {ROLE_LABEL[entry.role]}
                     </Badge>
                     {entry.effectiveTo === null ? (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-2xs">
                         Current
                       </Badge>
                     ) : null}
                   </div>
+                  {/* Business timezone (see format-instant.ts): date-fns
+                      format() in a server component prints the SERVER's zone,
+                      which shifts a Colombo date by a day around midnight. */}
                   <p className="font-mono text-xs tabular-nums text-muted-foreground">
                     <time dateTime={entry.effectiveFrom.toISOString()}>
-                      {format(entry.effectiveFrom, 'MMM d, yyyy')}
+                      {formatBusinessDate(entry.effectiveFrom)}
                     </time>
                     {' – '}
                     {entry.effectiveTo ? (
                       <time dateTime={entry.effectiveTo.toISOString()}>
-                        {format(entry.effectiveTo, 'MMM d, yyyy')}
+                        {formatBusinessDate(entry.effectiveTo)}
                       </time>
                     ) : (
                       'now'

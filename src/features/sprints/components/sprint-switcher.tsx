@@ -80,7 +80,12 @@ export function SprintSwitcher({
 
   return (
     <Select value={value} onValueChange={handleChange}>
-      <SelectTrigger className="h-8 w-64" aria-label="Select sprint or backlog">
+      <SelectTrigger
+        // max-w-full, not a bare fixed width: at 320px inside the page's p-6
+        // a hard 256px forced the adjacent Backlog control onto its own line.
+        className="h-8 w-64 max-w-full"
+        aria-label="Select sprint or backlog"
+      >
         {/* Explicit label mapping — the raw id is the Select's `value`, so
             without this the trigger falls back to rendering that id (a UUID)
             instead of the sprint's name. */}

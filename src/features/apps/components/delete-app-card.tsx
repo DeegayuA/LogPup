@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Loader2Icon, TriangleAlert } from 'lucide-react'
@@ -22,6 +22,12 @@ import { deleteApp } from '@/features/apps/actions'
  * one-line confirmations, and everything below — what survives, what does
  * not, and where to get it back — has to be readable WHILE typing the
  * confirmation, not on a layer that replaced it.
+ *
+ * FOCUS FOLLOWS THE ARM, the same grammar as DeleteBugButton: opening the
+ * confirm step replaces the trigger, so focus moves to the confirmation
+ * field, Esc (or Cancel) disarms and hands focus back to the trigger, and a
+ * persistent live region — rendered unconditionally, never remounted, per
+ * capacity-heat-editable — announces the step.
  */
 export function DeleteAppCard({
   appId,
@@ -35,9 +41,36 @@ export function DeleteAppCard({
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState('')
+  const [status, setStatus] = useState('')
   const [pending, startDeleting] = useTransition()
+  const armButtonRef = useRef<HTMLButtonElement>(null)
+  const confirmInputRef = useRef<HTMLInputElement>(null)
+  // Only hand focus back when coming FROM the confirm step — without the
+  // flag, the mount effect would steal focus on first render.
+  const returnFocus = useRef(false)
 
   const matches = confirm.trim() === slug
+
+  useEffect(() => {
+    if (open) {
+      confirmInputRef.current?.focus()
+    } else if (returnFocus.current) {
+      returnFocus.current = false
+      armButtonRef.current?.focus()
+    }
+  }, [open])
+
+  function arm() {
+    setOpen(true)
+    setStatus(`Confirm deleting ${appName} — type the app's address to enable Delete, Escape cancels.`)
+  }
+
+  function disarm() {
+    returnFocus.current = true
+    setOpen(false)
+    setConfirm('')
+    setStatus('Delete cancelled.')
+  }
 
   function handleDelete() {
     if (!matches) return
@@ -73,14 +106,27 @@ export function DeleteAppCard({
         and it comes back exactly as it left, archived or not.
       </p>
 
+      <span role="status" aria-live="polite" className="sr-only">
+        {status}
+      </span>
+
       {open ? (
-        <div className="flex flex-col gap-2 pt-1">
+        <div
+          className="flex flex-col gap-2 pt-1"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && !pending) {
+              event.stopPropagation()
+              disarm()
+            }
+          }}
+        >
           <label className="text-2xs text-muted-foreground" htmlFor="delete-app-confirm">
             Type <span className="font-mono text-foreground">{slug}</span> to confirm.
           </label>
           <div className="flex flex-wrap items-center gap-2">
             <Input
               id="delete-app-confirm"
+              ref={confirmInputRef}
               value={confirm}
               onChange={(event) => setConfirm(event.target.value)}
               placeholder={slug}
@@ -96,22 +142,14 @@ export function DeleteAppCard({
               {pending ? <Loader2Icon className="animate-spin" aria-hidden /> : null}
               Delete app
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => {
-                setOpen(false)
-                setConfirm('')
-              }}
-            >
+            <Button type="button" variant="ghost" disabled={pending} onClick={disarm}>
               Cancel
             </Button>
           </div>
         </div>
       ) : (
         <div className="pt-1">
-          <Button variant="destructive" onClick={() => setOpen(true)}>
+          <Button ref={armButtonRef} variant="destructive" onClick={arm}>
             Delete app…
           </Button>
         </div>

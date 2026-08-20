@@ -4,6 +4,8 @@ import { notFound } from 'next/navigation'
 import { loadActor } from '@/features/auth/actor'
 import { can, type Actor } from '@/features/auth/capabilities'
 import { listActiveUsers } from '@/features/people/queries'
+import { OPEN_BUG_STATUSES } from '@/features/bugs/bug-display'
+import { parseBugFilters, type BugFilters } from '@/features/bugs/report-input'
 import { BugList, BugListSkeleton } from '@/features/bugs/components/bug-list'
 import { getOpenBugCounts, listTriageQueue, TRIAGE_QUEUE_LIMIT } from '@/features/bugs/queries'
 
@@ -20,10 +22,21 @@ import { getOpenBugCounts, listTriageQueue, TRIAGE_QUEUE_LIMIT } from '@/feature
  * The queue itself streams behind a <Suspense> boundary so the heading and
  * the guard land immediately and the three queries do not hold the page. The
  * skeleton is the list's own, so the wait is shaped like what is coming.
+ *
+ * Filters live in the URL (`bugStatus` / `bugSeverity`, the same params the
+ * app tab uses) and narrow IN MEMORY over the fetched page: the queue query
+ * is capped at TRIAGE_QUEUE_LIMIT rows, so filtering what was fetched changes
+ * nothing about which rows exist to filter — SQL-level narrowing only starts
+ * mattering alongside pagination past the cap, and both need the same query
+ * change.
  */
-export default async function AdminBugsPage() {
-  const actor = await loadActor()
+export default async function AdminBugsPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const [actor, search] = await Promise.all([loadActor(), props.searchParams])
   if (!actor || !can(actor, 'bug.view')) notFound()
+
+  const filters = parseBugFilters({ bugStatus: search.bugStatus, bugSeverity: search.bugSeverity })
 
   return (
     <section className="flex flex-col gap-4">
@@ -35,14 +48,36 @@ export default async function AdminBugsPage() {
           untriaged queue sorted by it would be sorted by the column default.
         </p>
       </div>
-      <Suspense fallback={<BugListSkeleton rows={4} />}>
-        <TriageQueue actor={actor} />
+      <Suspense
+        // Keyed on the filters so switching one re-suspends into the skeleton
+        // instead of holding yesterday's rows under a chip that says otherwise.
+        key={`${filters.status ?? 'all'}-${filters.severity ?? 'all'}`}
+        fallback={<BugListSkeleton rows={4} />}
+      >
+        <TriageQueue actor={actor} filters={filters} />
       </Suspense>
     </section>
   )
 }
 
-async function TriageQueue({ actor }: { actor: Actor }) {
+/**
+ * The queue's URL with one filter changed. `bugFilterHref` in report-input.ts
+ * writes the app tab's address; this writes the admin one — same params, so a
+ * link that narrows either surface reads the same way.
+ */
+function queueFilterHref(
+  current: BugFilters,
+  patch: { status?: BugFilters['status']; severity?: BugFilters['severity'] },
+): string {
+  const params = new URLSearchParams()
+  const next = { ...current, ...patch }
+  if (next.status) params.set('bugStatus', next.status)
+  if (next.severity) params.set('bugSeverity', next.severity)
+  const query = params.toString()
+  return query ? `/admin/bugs?${query}` : '/admin/bugs'
+}
+
+async function TriageQueue({ actor, filters }: { actor: Actor; filters: BugFilters }) {
   let bugs: Awaited<ReturnType<typeof listTriageQueue>> = []
   let counts: Awaited<ReturnType<typeof getOpenBugCounts>> = []
   let assignableUsers: { id: string; name: string }[] = []
@@ -64,6 +99,15 @@ async function TriageQueue({ actor }: { actor: Actor }) {
 
   const total = counts.reduce((sum, row) => sum + row.open, 0)
 
+  // Narrowed over the fetched page — see the page comment for why this is in
+  // memory rather than in SQL for now.
+  const visible = bugs.filter(
+    (bug) =>
+      (!filters.status || bug.status === filters.status) &&
+      (!filters.severity || bug.severity === filters.severity),
+  )
+  const filtered = Boolean(filters.status || filters.severity)
+
   return (
     <div className="flex flex-col gap-4">
       {!error && counts.length > 0 ? (
@@ -73,8 +117,10 @@ async function TriageQueue({ actor }: { actor: Actor }) {
         // row one hundred and one.
         <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
           <p className="text-sm">
-            <span className="font-medium">{total}</span> open across{' '}
-            <span className="font-medium">{counts.length}</span>{' '}
+            {/* Mono/tabular like the per-project counts below — one treatment
+                for the same kind of number in the same card. */}
+            <span className="font-mono font-medium tabular-nums">{total}</span> open across{' '}
+            <span className="font-mono font-medium tabular-nums">{counts.length}</span>{' '}
             {counts.length === 1 ? 'project' : 'projects'}
             {bugs.length >= TRIAGE_QUEUE_LIMIT ? `, showing the newest ${TRIAGE_QUEUE_LIMIT}` : ''}.
           </p>
@@ -95,9 +141,19 @@ async function TriageQueue({ actor }: { actor: Actor }) {
       ) : null}
 
       <BugList
-        bugs={bugs}
+        bugs={visible}
         error={error}
-        emptyHint="Nothing is open across the whole workspace. Either it is a good week or nobody is filing — the Bugs tab on any project is where reports start."
+        filters={filters}
+        filterHrefFor={(patch) => queueFilterHref(filters, patch)}
+        // The queue only ever holds open rows, so only the open statuses get
+        // chips — a Resolved chip here would be a filter that always answers
+        // with nothing.
+        statusChoices={OPEN_BUG_STATUSES}
+        emptyHint={
+          filtered
+            ? 'No open bug in the newest page of the queue matches that filter. Clear it to see the rest.'
+            : 'Nothing is open across the whole workspace. Either it is a good week or nobody is filing — the Bugs tab on any project is where reports start.'
+        }
         showApp
         assignableUsers={assignableUsers}
         // Both scoped: a manager triages and deletes on the projects they run

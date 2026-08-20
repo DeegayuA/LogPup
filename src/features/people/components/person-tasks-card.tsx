@@ -103,7 +103,7 @@ export function PersonTasksCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Tasks</CardTitle>
+        <CardTitle as="h2">Tasks</CardTitle>
         <CardAction>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
             {openTasks.length} open · {doneCount} done of {totalCount}

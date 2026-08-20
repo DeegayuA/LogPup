@@ -42,9 +42,9 @@ export function AppearanceCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+        <CardTitle as="h2" className="flex items-center gap-2">
           <Palette className="size-4 shrink-0" aria-hidden />
-          <h2>Appearance</h2>
+          Appearance
         </CardTitle>
         <CardDescription>
           Saved in this browser, not on your account — every device you sign in

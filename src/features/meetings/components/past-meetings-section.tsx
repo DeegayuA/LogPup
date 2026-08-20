@@ -38,7 +38,13 @@ export function PastMeetingsSection({
   selectedDay?: Date
   onClearDay?: () => void
 }) {
-  const [open, setOpen] = useState(false)
+  // Starts open when a deep link (?open=) already names one of OUR meetings:
+  // the render-time syncs below only react to CHANGES, so an id present from
+  // the very first render would otherwise leave the section collapsed over
+  // the exact meeting the link promised.
+  const [open, setOpen] = useState(() =>
+    Boolean(openMeetingId && meetings.some((meeting) => meeting.id === openMeetingId)),
+  )
   const listId = useId()
 
   // Expand when a day filter arrives that this section can actually answer.

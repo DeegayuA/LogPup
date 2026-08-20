@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation'
+import { CalendarCheck, CheckCheck, FileCheck } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import { PendingApprovalsCard } from '@/features/admin/components/pending-approvals-card'
 import { listPendingUsers } from '@/features/admin/queries'
 import { ApprovalActions } from '@/features/admin/components/approval-actions'
@@ -35,7 +37,7 @@ export default async function AdminApprovalsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Change requests</CardTitle>
+          <CardTitle as="h2">Change requests</CardTitle>
           <CardDescription>
             Edits and deletes proposed by someone who could not make them directly.
             Approving applies the change and records your signature against it;
@@ -44,7 +46,11 @@ export default async function AdminApprovalsPage() {
         </CardHeader>
         <CardContent>
           {requests.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No change requests waiting on you.</p>
+            <EmptyState
+              icon={FileCheck}
+              title="No change requests waiting on you."
+              description="When somebody proposes an edit or delete they cannot make directly, it lands here for a signature."
+            />
           ) : (
             <ul className="flex flex-col divide-y divide-border">
               {requests.map((r) => (
@@ -74,7 +80,7 @@ export default async function AdminApprovalsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Leave requests</CardTitle>
+          <CardTitle as="h2">Leave requests</CardTitle>
           <CardDescription>
             Approving a request marks those days exempt, so they stop counting against
             the person&apos;s coverage. Until then the days still read as unlogged.
@@ -82,9 +88,11 @@ export default async function AdminApprovalsPage() {
         </CardHeader>
         <CardContent>
           {pendingAbsences.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No leave waiting on you.
-            </p>
+            <EmptyState
+              icon={CalendarCheck}
+              title="No leave waiting on you."
+              description="People file absences from their work log; pending ones appear here for a decision."
+            />
           ) : (
             <ul className="flex flex-col gap-3">
               {pendingAbsences.map((a) => (
@@ -106,7 +114,7 @@ export default async function AdminApprovalsPage() {
       {mine.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Your requests</CardTitle>
+            <CardTitle as="h2">Your requests</CardTitle>
             <CardDescription>
               What you have proposed, and where it stands. A pending request changes
               nothing until somebody approves it.
@@ -130,9 +138,11 @@ export default async function AdminApprovalsPage() {
       )}
 
       {nothingWaiting && (
-        <p className="text-sm text-muted-foreground">
-          Nothing is waiting on you right now.
-        </p>
+        <EmptyState
+          icon={CheckCheck}
+          title="Nothing is waiting on you right now."
+          description="Signups, change requests and leave all land in this queue the moment they are filed."
+        />
       )}
     </div>
   )

@@ -35,12 +35,20 @@ export function PlanReadStrip({
   /**
    * `href: null` means "state this, do not pretend it is a drill-down".
    *
-   * The board can filter to unassigned work (`who=unassigned`) and nothing
-   * else here — it has no "no due date" filter and no notion of check-ins.
-   * Linking those two anywhere would produce a control that navigates to the
-   * page you are already on, which is worse than plain text: it teaches
-   * people that the chips do not work.
+   * The board can filter to unassigned work (`who=unassigned`) but has no
+   * "no due date" filter, so the undated chip stays plain text — linking it
+   * anywhere would produce a control that navigates to the page you are
+   * already on, which is worse than no link: it teaches people that the
+   * chips do not work.
+   *
+   * The check-ins chip is different: the board has no notion of check-ins,
+   * but the OVERVIEW tab does — the editor strip renders there with
+   * id="checkins". `boardHrefFor` links to this same board, so its pathname
+   * (before the query) is exactly the app's Overview URL, and the fragment
+   * lands the reader on the strip the chip is talking about. One click
+   * instead of switch-tab-and-scroll.
    */
+  const overviewHref = `${boardHrefFor({}).split('?')[0]}#checkins`
   const chips: { key: string; label: string; href: string | null; tone: 'warn' | 'neutral' }[] = []
 
   if (gaps.unassigned > 0) {
@@ -66,7 +74,7 @@ export function PlanReadStrip({
         checkinGapCount === 1
           ? '1 check-in disagrees with the board'
           : `${checkinGapCount} check-ins disagree with the board`,
-      href: null,
+      href: overviewHref,
       tone: 'warn',
     })
   }

@@ -26,6 +26,10 @@ type Tile = {
   href?: string
   hint?: string
   alert?: boolean
+  /** What activating the tile's link DOES, for the accessible name — the
+   *  number lives in the <dd>, outside the link, so without this the name
+   *  would be the two-word label and nothing else. */
+  srAction?: string
 }
 
 export function PortfolioSummaryStrip({
@@ -40,7 +44,16 @@ export function PortfolioSummaryStrip({
     { label: 'Open tasks', value: summary.openTasks },
     { label: 'Overdue', value: summary.overdueTasks, alert: summary.overdueTasks > 0 },
     { label: 'Active sprints', value: summary.activeSprints },
-    { label: 'Meetings this week', value: summary.meetingsThisWeek },
+    {
+      label: 'Meetings this week',
+      value: summary.meetingsThisWeek,
+      // The one tile with an obvious destination that never had one — At risk
+      // got the stretched link, this didn't. /meetings is the house target for
+      // anything meeting-shaped (there is no /meetings/[id]).
+      href: '/meetings',
+      hint: 'Open meetings →',
+      srAction: 'open the meetings page',
+    },
     {
       label: 'At risk',
       value: summary.atRisk,
@@ -50,6 +63,7 @@ export function PortfolioSummaryStrip({
       // states what the click DOES. "Sort by risk →" was the old hint on a
       // link that resolved to the current URL — an affordance that lied.
       hint: summary.atRisk > 0 ? 'Show only these →' : undefined,
+      srAction: 'show only these apps',
     },
   ]
 
@@ -81,7 +95,7 @@ export function PortfolioSummaryStrip({
                     no idea what happens on activation. Both belong in the
                     name; the visible text stays two words. */}
                 <span className="sr-only">
-                  : {tile.value} — show only these apps
+                  : {tile.value}{tile.srAction ? ` — ${tile.srAction}` : ''}
                 </span>
               </Link>
             ) : (

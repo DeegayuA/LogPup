@@ -93,7 +93,11 @@ export function MeetingRsvp({
               disabled={pending}
               onClick={() => respond(o.id)}
               className={cn(
-                'flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60',
+                // Same focus treatment as every Button around it — these are
+                // raw <button>s, and without it they fell back to the browser
+                // default ring while every neighbouring control used the
+                // app's focus-visible ring convention.
+                'flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium outline-none transition-colors duration-150 focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-60 motion-reduce:transition-none',
                 active ? o.active : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -107,13 +111,17 @@ export function MeetingRsvp({
 
       {canEditLink ? (
         editing ? (
-          <div className="flex items-center gap-1.5">
+          /* flex-wrap + a shrinkable input: the fixed w-56 field plus two
+             buttons is ~350px of intrinsic width, which overflowed the card
+             on 320–375px viewports. max-w-full lets the field give way first;
+             the buttons wrap under it when even that is not enough. */
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <Input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="https://meet.google.com/…"
               autoComplete="off"
-              className="h-8 w-56"
+              className="h-8 w-56 max-w-full"
             />
             <Button size="sm" onClick={saveLink} disabled={pending}>Save</Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>

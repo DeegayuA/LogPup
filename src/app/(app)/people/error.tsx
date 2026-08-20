@@ -6,8 +6,10 @@ import { TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 /**
- * Covers the People directory and the capacity-history view; the person detail
- * page has its own tighter boundary one segment down.
+ * Covers the People directory and its cohort views only — the person detail
+ * page and /people/history each have their own tighter boundary one segment
+ * down, so a history failure is never mislabeled with directory copy (and
+ * never loses the date/window in its URL).
  *
  * Rule 6 asks every surface for three states. People had two — an empty state
  * and a skeleton — so a failed capacity query dropped the user on the

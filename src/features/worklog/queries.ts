@@ -73,6 +73,35 @@ export async function getMyWorklogs(userId: string, days: number): Promise<Workl
 }
 
 /**
+ * One person's entries inside `[fromIso, toIso]`, both ends inclusive —
+ * the month calendar's single read. Bounded by DATE, not by row count:
+ * `getMyWorklogs(userId, 31)` answers "the last 31 entries", which stops
+ * being "August" the first time someone logs an extra weekend day.
+ */
+export async function getMyWorklogsInRange(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<WorklogRow[]> {
+  return db
+    .select({
+      day: dailyWorklogs.day,
+      percent: dailyWorklogs.percent,
+      note: dailyWorklogs.note,
+      updatedAt: dailyWorklogs.updatedAt,
+    })
+    .from(dailyWorklogs)
+    .where(
+      and(
+        eq(dailyWorklogs.userId, userId),
+        gte(dailyWorklogs.day, fromIso),
+        lte(dailyWorklogs.day, toIso),
+      ),
+    )
+    .orderBy(desc(dailyWorklogs.day))
+}
+
+/**
  * Every person's entries across a day range — the team view's single read.
  * Bounded by date on both sides so this cannot become a full-table scan as
  * the log grows; `daily_worklogs_day_idx` is the access path.
@@ -180,6 +209,43 @@ export async function getMyApprovedAbsences(
     .where(
       and(
         eq(absences.userId, userId),
+        eq(absences.status, 'approved'),
+        lte(absences.startDate, toIso),
+        gte(absences.endDate, fromIso),
+      ),
+    )
+    .orderBy(absences.startDate)
+}
+
+/** One approved absence range with its owner — the team view's exemption read. */
+export type TeamAbsenceRange = {
+  userId: string
+  /** INCLUSIVE, and so is `endDate` — see the `absences` table comment. */
+  startDate: string
+  endDate: string
+}
+
+/**
+ * Every APPROVED absence overlapping `[fromIso, toIso]`, across the whole
+ * team. Exists so the admin strip can paint a person's leave day as leave
+ * rather than as "Not logged yet" — the same honesty rule the personal
+ * calendar follows, read once for everyone instead of once per person.
+ * Approved only, for the same reason as `getMyApprovedAbsences`: a pending
+ * absence exempts nothing.
+ */
+export async function getTeamApprovedAbsences(
+  fromIso: string,
+  toIso: string,
+): Promise<TeamAbsenceRange[]> {
+  return db
+    .select({
+      userId: absences.userId,
+      startDate: absences.startDate,
+      endDate: absences.endDate,
+    })
+    .from(absences)
+    .where(
+      and(
         eq(absences.status, 'approved'),
         lte(absences.startDate, toIso),
         gte(absences.endDate, fromIso),

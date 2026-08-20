@@ -70,11 +70,11 @@ export function PrintSpeakerNames({
 
   return (
     <section
-      className="mx-auto mb-4 w-[210mm] max-w-full rounded-lg border border-zinc-200 bg-white p-4 shadow-sm print:hidden"
+      className="mx-auto mb-4 w-[210mm] max-w-full rounded-lg border border-[color:var(--doc-rule)] bg-[var(--doc-paper)] p-4 shadow-sm print:hidden"
       aria-label="Name the speakers"
     >
-      <h2 className="text-sm font-semibold text-zinc-900">Who was speaking?</h2>
-      <p className="mt-0.5 text-xs text-zinc-500">
+      <h2 className="text-sm font-semibold text-[var(--doc-ink)]">Who was speaking?</h2>
+      <p className="mt-0.5 text-xs text-[var(--doc-ink-soft)]">
         Naming a voice here rewrites it everywhere — this export and the meeting&rsquo;s own notes.
       </p>
       <ul className="mt-3 flex flex-wrap gap-3">
@@ -89,7 +89,7 @@ export function PrintSpeakerNames({
           const isOutsider = value === NOT_ATTENDEE
           return (
             <li key={label} className="flex items-center gap-1.5">
-              <span className="text-xs text-zinc-500">{label}</span>
+              <span className="text-xs text-[var(--doc-ink-soft)]">{label}</span>
               {/* A native select: this route loads none of the app's UI kit,
                   and the platform control is already keyboard- and
                   screen-reader complete. */}
@@ -98,7 +98,7 @@ export function PrintSpeakerNames({
                 disabled={busy}
                 aria-label={`Who is ${label}?`}
                 onChange={(event) => assign(label, event.target.value)}
-                className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:opacity-60"
+                className="rounded-md border border-[color:var(--doc-rule-strong)] bg-[var(--doc-paper)] px-2 py-1 text-sm text-[var(--doc-ink)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--doc-brand)] disabled:opacity-60"
               >
                 <option value="" disabled>
                   Name this voice…
@@ -134,7 +134,7 @@ export function PrintSpeakerNames({
                       event.currentTarget.blur()
                     }
                   }}
-                  className="w-36 rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 disabled:opacity-60"
+                  className="w-36 rounded-md border border-[color:var(--doc-rule-strong)] bg-[var(--doc-paper)] px-2 py-1 text-sm text-[var(--doc-ink)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--doc-brand)] disabled:opacity-60"
                 />
               ) : null}
             </li>

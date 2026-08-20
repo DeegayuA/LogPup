@@ -409,7 +409,13 @@ export function AppFormDialog({
           sm:max-w-sm (384px), which is a sensible floor for a confirm box but
           far too narrow for this form — the repo row alone is an input plus a
           Generate button, and the README paste box holds 8,000 characters. */}
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        // Internal scroll, because this form can outgrow a short viewport:
+        // with the README paste box open the ~9 fields plus an h-40 textarea
+        // used to carry the footer buttons off the bottom of the screen —
+        // DialogContent sets no max height of its own.
+        className="max-h-[calc(100dvh-3rem)] overflow-y-auto sm:max-w-lg"
+      >
         <DialogHeader>
           <DialogTitle>{isEdit ? 'Edit app' : 'New app'}</DialogTitle>
           <DialogDescription>

@@ -436,9 +436,18 @@ export function MeetingsCalendar({
           </div>
           <p className="text-xs text-muted-foreground">
             All 24 hours are shown; 08:00–18:00 is emphasised. Select a meeting to read its notes —
-            editing, attendees and rescheduling are one click further in. Hold Alt (<span className="font-mono">⌥</span>) while scrolling to
-            zoom, or use the hour-height buttons above — Ctrl and{' '}
-            <span className="font-mono">⌘</span> are left to the browser&rsquo;s own page zoom.
+            editing, attendees and rescheduling are one click further in. Use the hour-height
+            buttons above to zoom
+            {/* Alt-scroll and the Ctrl/⌘ caveat are pointer-and-keyboard
+                instructions: on a touch device neither the modifier key nor
+                the scroll wheel exists, so the sentence taught a gesture the
+                reader could not perform. pointer-fine gates it to devices
+                that have one. */}
+            <span className="hidden pointer-fine:inline">
+              , or hold Alt (<span className="font-mono">⌥</span>) while scrolling — Ctrl and{' '}
+              <span className="font-mono">⌘</span> are left to the browser&rsquo;s own page zoom
+            </span>
+            .
           </p>
         </>
       )}

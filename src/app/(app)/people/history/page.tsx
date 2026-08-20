@@ -3,6 +3,7 @@ import { format } from 'date-fns'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/ui/page-header'
 import { getCapacityHistoryOverview } from '@/features/people/queries'
 import { AsOfPicker } from '@/features/people/components/as-of-picker'
 import { AllocationTrend } from '@/features/people/components/allocation-trend'
@@ -70,19 +71,19 @@ export default async function TeamCapacityHistoryPage(props: {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
       <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <h1 className="font-heading text-2xl font-bold tracking-tight">Capacity history</h1>
-            <p className="text-sm text-muted-foreground">
-              {asOf.isToday
-                ? `Where the team stands today, and how it moved over the last ${params.window} days.`
-                : `How the team was loaded on ${stamp}, against ${fromIso}.`}
-            </p>
-          </div>
-          <Button variant="outline" size="sm" render={<Link href="/people" />}>
-            <ArrowLeft aria-hidden /> People
-          </Button>
-        </div>
+        <PageHeader
+          title="Capacity history"
+          description={
+            asOf.isToday
+              ? `Where the team stands today, and how it moved over the last ${params.window} days.`
+              : `How the team was loaded on ${stamp}, against ${fromIso}.`
+          }
+          actions={
+            <Button variant="outline" size="sm" render={<Link href="/people" />}>
+              <ArrowLeft aria-hidden /> People
+            </Button>
+          }
+        />
 
         {asOf.invalid ? (
           <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -189,7 +190,7 @@ async function HistoryData({
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card>
           <CardHeader>
-            <CardTitle>Total team allocation</CardTitle>
+            <CardTitle as="h2">Total team allocation</CardTitle>
             <CardDescription>
               Every allocation across the team, summed, at each point it changed in this window. The
               dashed line is one person&rsquo;s full capacity.

@@ -103,7 +103,17 @@ export type UserCapacity = {
   breakdown: CapacityBreakdownEntry[]
 }
 
-export type ActiveUser = { id: string; name: string }
+export type ActiveUser = {
+  id: string
+  name: string
+  /**
+   * Their live total allocation, summed across apps. Optional so literal
+   * `{ id, name }` constructions elsewhere (meeting attendee grids) stay
+   * valid; `listActiveUsers` always fills it, which is what lets AssignDialog
+   * say "at 80%, 20% free" BEFORE a save instead of warning after one.
+   */
+  totalPct?: number
+}
 
 /** An app the dashboard's inline "Assign to app" control can target. */
 export type AssignableApp = { id: string; name: string; slug: string }
@@ -689,10 +699,20 @@ export async function getPersonActivity(userId: string): Promise<PersonActivity>
  */
 export async function listActiveUsers(): Promise<ActiveUser[]> {
   return db
-    .select({ id: users.id, name: users.name })
+    .select({
+      id: users.id,
+      name: users.name,
+      // Summed here, not in a second query per pick: the assignment dialog
+      // shows current load/headroom the moment a member is chosen, and the
+      // aggregate costs one LEFT JOIN on a table that is small by definition
+      // (a few rows per person).
+      totalPct: sql<number>`coalesce(sum(${assignments.allocationPct}), 0)`.mapWith(Number),
+    })
     .from(users)
+    .leftJoin(assignments, eq(assignments.userId, users.id))
     // See the docblock above, and src/features/people/removal-queries.ts.
     .where(canHoldWork())
+    .groupBy(users.id, users.name)
     .orderBy(asc(users.name))
 }
 

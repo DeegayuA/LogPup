@@ -337,6 +337,15 @@ export default async function MeetingPrintPage(props: {
   // complete timeline and transcript can be hundreds of KB.
   const timeline = full ? await getMeetingNoteTimeline(id) : null
   const segments: NoteSegmentView[] = timeline?.ok ? timeline.data.segments : []
+
+  // A FAILED fetch is not an empty meeting, and the two must not print the
+  // same. The in-app panel fixed exactly this (meeting-intel.tsx, loadError);
+  // this page kept dressing a load failure as "Not analyzed yet" / a full
+  // record silently missing its timeline — on the one surface people hand to
+  // other people. Each flag drives a screen banner below AND distinct wording
+  // in the document, so even a copy printed anyway states the truth.
+  const intelFailed = !intel.ok
+  const timelineFailed = timeline !== null && !timeline.ok
   // Label -> person, however that person was identified: a mapped account, or
   // a name typed for somebody who has none. Both the naming control and the
   // printed transcript read from this one list.
@@ -476,7 +485,7 @@ export default async function MeetingPrintPage(props: {
   ]
 
   return (
-    <div className="doc-root min-h-screen bg-zinc-100 text-[var(--doc-ink)] print:min-h-0 print:bg-white">
+    <div className="doc-root min-h-screen bg-[var(--doc-backdrop)] text-[var(--doc-ink)] print:min-h-0 print:bg-[var(--doc-paper)]">
       {/* A4 geometry + print behaviour. Scoped globals: this route renders no
           app chrome, so the selectors below can't leak anywhere else. */}
       <style>{`
@@ -531,6 +540,12 @@ export default async function MeetingPrintPage(props: {
           --doc-brand: oklch(0.44 0.09 165);
           --doc-brand-deep: oklch(0.32 0.07 165);
           --doc-brand-wash: oklch(0.96 0.02 165);
+          /* The paper itself, and the screen backdrop it floats on. Named so
+             the sheet, the toolbar and the edit controls all pull white and
+             its surround from ONE place — the screen chrome used to hard-code
+             zinc/white literals per component. */
+          --doc-paper: oklch(1 0 0);
+          --doc-backdrop: oklch(0.96 0.003 155);
         }
 
         /* The Alta Vision mark ships one flat artwork drawn for light
@@ -557,7 +572,7 @@ export default async function MeetingPrintPage(props: {
           color: var(--doc-brand-deep);
         }
         .doc-pill-proposed {
-          background: #fff;
+          background: var(--doc-paper);
           border-color: var(--doc-rule-strong);
           border-style: dashed;
           color: var(--doc-ink-soft);
@@ -578,11 +593,14 @@ export default async function MeetingPrintPage(props: {
           border: 1px solid var(--doc-rule-strong);
           border-radius: 4px;
           padding: 0.1rem 0.5rem;
-          font-size: 8pt;
+          /* 9pt = 12px, the repo's legibility floor for interactive text
+             (meetings-month-calendar.tsx documents the rule) — these are
+             clickable screen controls, not print typography. */
+          font-size: 9pt;
           font-weight: 600;
           line-height: 1.6;
           color: var(--doc-ink-soft);
-          background: #fff;
+          background: var(--doc-paper);
         }
         .doc-chip:hover { background: var(--doc-wash); color: var(--doc-ink); }
         .doc-chip:focus-visible {
@@ -595,14 +613,14 @@ export default async function MeetingPrintPage(props: {
         .doc-chip-go {
           background: var(--doc-brand);
           border-color: var(--doc-brand);
-          color: #fff;
+          color: var(--doc-paper);
         }
-        .doc-chip-go:hover { background: var(--doc-brand-deep); color: #fff; }
+        .doc-chip-go:hover { background: var(--doc-brand-deep); color: var(--doc-paper); }
 
         .doc-input {
           border: 1px solid var(--doc-rule-strong);
           border-radius: 4px;
-          background: #fff;
+          background: var(--doc-paper);
           padding: 0.2rem 0.45rem;
           font: inherit;
           font-size: 9.5pt;
@@ -621,7 +639,7 @@ export default async function MeetingPrintPage(props: {
           gap: 0.25rem;
           border: 1px solid var(--doc-rule-strong);
           border-radius: 999px;
-          background: #fff;
+          background: var(--doc-paper);
           padding: 0.05rem 0.2rem 0.05rem 0.5rem;
           font-size: 9pt;
           color: var(--doc-ink);
@@ -713,6 +731,42 @@ export default async function MeetingPrintPage(props: {
         showAllHref={docHref({ hide: [] })}
       />
 
+      {/* Load failures, said before anyone scrolls into a document that is
+          missing things — with the way to try again. A plain <a>, not a
+          client Link: what "try again" means here is a fresh server render
+          of this same URL. Screen-only; the document body carries its own
+          truthful wording for anything printed regardless. */}
+      {intelFailed || timelineFailed ? (
+        <div
+          role="alert"
+          className="mx-auto mt-4 w-[210mm] max-w-full rounded-lg border border-[color:var(--doc-rule-strong)] bg-[var(--doc-wash)] p-4 print:hidden"
+        >
+          <p className="text-sm font-semibold text-[var(--doc-ink)]">
+            Part of this document failed to load.
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-sm text-[var(--doc-ink-soft)]">
+            {intelFailed ? (
+              <li>
+                The AI write-up did not load — the Summary, Action items and related sections
+                cannot be shown.
+              </li>
+            ) : null}
+            {timelineFailed ? (
+              <li>
+                The record timeline did not load — the Record timeline and Full transcript
+                sections are missing from this full record.
+              </li>
+            ) : null}
+          </ul>
+          <a
+            href={docHref({})}
+            className="mt-2 inline-block rounded-md border border-[color:var(--doc-rule-strong)] bg-[var(--doc-paper)] px-3 py-1.5 text-sm font-medium text-[var(--doc-ink-soft)] hover:bg-[var(--doc-wash)] hover:text-[var(--doc-ink)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--doc-brand)]"
+          >
+            Try again
+          </a>
+        </div>
+      ) : null}
+
       {/* Naming the voices is an EXPORT-TIME job: nobody stops mid-meeting to
           do it, and this is the moment somebody is about to hand the document
           to other people. Only offered on the full record, which is the level
@@ -728,7 +782,7 @@ export default async function MeetingPrintPage(props: {
         </div>
       ) : null}
 
-      <main className="doc-sheet mx-auto my-8 w-[210mm] max-w-full bg-white px-[18mm] py-[16mm] text-[10pt] leading-[1.5] text-[var(--doc-ink)] shadow-[0_1px_3px_rgba(0,0,0,0.12),0_8px_24px_rgba(0,0,0,0.08)] print:my-0 print:w-auto print:shadow-none">
+      <main className="doc-sheet mx-auto my-8 w-[210mm] max-w-full bg-[var(--doc-paper)] px-[18mm] py-[16mm] text-[10pt] leading-[1.5] text-[var(--doc-ink)] shadow-[0_1px_3px_rgba(0,0,0,0.12),0_8px_24px_rgba(0,0,0,0.08)] print:my-0 print:w-auto print:shadow-none">
         {/* The whole document is ONE table so the browser can repeat a header
             and footer on every printed page. thead/tfoot are the only
             mechanism that both repeats AND reserves its own space; the
@@ -786,7 +840,7 @@ export default async function MeetingPrintPage(props: {
             <div className="flex items-center gap-2.5">
               <span
                 aria-hidden
-                className="flex size-8 shrink-0 items-center justify-center rounded-[6px] bg-[var(--doc-brand)] text-white"
+                className="flex size-8 shrink-0 items-center justify-center rounded-[6px] bg-[var(--doc-brand)] text-[var(--doc-paper)]"
               >
                 <PawPrint className="size-[17px]" />
               </span>
@@ -891,7 +945,9 @@ export default async function MeetingPrintPage(props: {
                   </span>
                 </>
               ) : (
-                <span className="text-[var(--doc-ink-soft)]">Not analyzed yet</span>
+                <span className="text-[var(--doc-ink-soft)]">
+                  {intelFailed ? 'Unavailable — the write-up failed to load' : 'Not analyzed yet'}
+                </span>
               )}
             </dd>
             <dt
@@ -938,7 +994,11 @@ export default async function MeetingPrintPage(props: {
             </div>
           ) : (
             <p className="text-[var(--doc-ink-soft)]">
-              No AI write-up yet — record or analyze this meeting first, then export again.
+              {intelFailed
+                ? // A failure, named as one — "No AI write-up yet" here would
+                  // print a load error as a fact about the meeting.
+                  'The write-up could not be loaded for this export — reload the page and export again.'
+                : 'No AI write-up yet — record or analyze this meeting first, then export again.'}
             </p>
           )}
         </DocSection>

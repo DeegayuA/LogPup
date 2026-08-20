@@ -1,4 +1,6 @@
 import { PawPrint } from 'lucide-react'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
 import { getSession } from '@/lib/session'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { listActiveUsers } from '@/features/people/queries'
@@ -46,33 +48,34 @@ export default async function AppsPage(props: {
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-bold tracking-tight">Apps</h1>
-          <p className="text-sm text-muted-foreground">
-            Every product the team is building — what is moving, and what is not.
-          </p>
-        </div>
-        {isAdmin ? (
-          <AppFormDialog
-            defaultOpen={rawParams.new === '1'}
-            workspaceTechTags={workspaceTechTags}
-            activeUsers={activeUsers}
-            aiGenerateEnabled={appMetadataEnabled}
-          />
-        ) : null}
-      </header>
+      {/* PageHeader (shared primitive): one h1 treatment across every (app)
+          page instead of a per-page hand-rolled header row. */}
+      <PageHeader
+        title="Apps"
+        description="Every product the team is building — what is moving, and what is not."
+        actions={
+          isAdmin ? (
+            <AppFormDialog
+              defaultOpen={rawParams.new === '1'}
+              workspaceTechTags={workspaceTechTags}
+              activeUsers={activeUsers}
+              aiGenerateEnabled={appMetadataEnabled}
+            />
+          ) : undefined
+        }
+      />
 
       {apps.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border p-12 text-center">
-          <PawPrint aria-hidden className="size-8 text-muted-foreground/60" />
-          <p className="font-heading font-semibold">No apps in the kennel yet.</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            {isAdmin
+        <EmptyState
+          icon={PawPrint}
+          title="No apps in the kennel yet."
+          description={
+            isAdmin
               ? 'Hit New app above to give LogPup something to watch. Once an app has a sprint and a team, this page turns into your portfolio view.'
-              : 'An admin can add the first app for the pack.'}
-          </p>
-        </div>
+              : 'An admin can add the first app for the pack.'
+          }
+          className="flex-1 rounded-xl border border-dashed border-border p-12"
+        />
       ) : (
         <>
           <PortfolioSummaryStrip

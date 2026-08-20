@@ -1,6 +1,8 @@
+import Link from 'next/link'
 import { format, formatDistanceToNowStrict } from 'date-fns'
 import { CalendarDays, ListChecks, MessageSquare, UserRoundCog } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { EmptyState } from '@/components/ui/empty-state'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { parseCalendarDate } from '@/features/apps/app-health'
 import {
@@ -57,10 +59,12 @@ export function AppActivity({
 }) {
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-12 text-center">
-        <p className="font-heading font-semibold">Nothing has happened here yet.</p>
-        <p className="max-w-sm text-sm text-muted-foreground">{emptyHint}</p>
-      </div>
+      <EmptyState
+        icon={ListChecks}
+        title="Nothing has happened here yet."
+        description={emptyHint}
+        className="rounded-xl border border-dashed border-border py-12"
+      />
     )
   }
 
@@ -70,9 +74,11 @@ export function AppActivity({
     <div className="flex flex-col gap-6">
       {groups.map((group) => (
         <section key={group.day} className="flex flex-col gap-2">
-          <h3 className="text-xs font-medium text-muted-foreground">
+          {/* h2: this feed renders directly under the page h1 on the Activity
+              tab, so h3 here was a skipped heading level. */}
+          <h2 className="text-xs font-medium text-muted-foreground">
             {dayLabel(group.day, today)}
-          </h3>
+          </h2>
           <ul className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
             {group.items.map((item) => {
               const Icon = KIND_ICON[item.kind]
@@ -95,7 +101,21 @@ export function AppActivity({
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <p className="text-sm">
                       <span className="sr-only">{KIND_LABEL[item.kind]}: </span>
-                      {item.title}
+                      {/* The title is the link, not the whole row — the row
+                          also carries a timestamp tooltip, and a full-row link
+                          would swallow text selection. Rows without a
+                          destination stay plain text rather than linking to
+                          the page you are already on. */}
+                      {item.href ? (
+                        <Link
+                          href={item.href}
+                          className="rounded-sm underline-offset-2 outline-none transition-colors duration-150 hover:underline focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+                        >
+                          {item.title}
+                        </Link>
+                      ) : (
+                        item.title
+                      )}
                     </p>
                     {item.detail ? (
                       <p className="truncate text-xs text-muted-foreground">{item.detail}</p>

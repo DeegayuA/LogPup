@@ -40,17 +40,28 @@ export function TeamPanel({
 
   function handleRemove(assignmentId: string) {
     startTransition(async () => {
-      const res = await removeAssignment(assignmentId)
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      try {
+        const res = await removeAssignment(assignmentId)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Member removed')
+      } catch {
+        // A thrown error (e.g. DB outage) is not `{ ok: false }` — without
+        // this catch it's an unhandled rejection and Remove silently does
+        // nothing. Same fix AssignDialog.handleSubmit documents.
+        toast.error('Something went wrong — try again')
       }
-      toast.success('Member removed')
     })
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    // id="team": the person page's app chips and workload rows deep-link to
+    // /apps/[slug]#team, so acting on an allocation seen there lands on this
+    // panel instead of the top of the app page. scroll-mt clears the sticky
+    // app header.
+    <div id="team" className="flex scroll-mt-24 flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-baseline gap-2">
           <h2 className="font-heading text-base font-medium">Team</h2>

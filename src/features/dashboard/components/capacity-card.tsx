@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import { capacityBand } from '@/features/people/components/capacity-bar'
 import type { UserCapacity } from '@/features/people/queries'
 import { cn } from '@/lib/utils'
@@ -40,7 +41,7 @@ export function CapacityCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle as="h3">{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : null}
         {/* The unit, said once where the first percentage is met. It lives in
             the shared chrome rather than in CapacityHeat because the admin's
@@ -79,13 +80,14 @@ export function CapacityCard({
   )
 }
 
+/**
+ * The shared EmptyState shape, kept behind this thin alias so both capacity
+ * lists keep their existing title/hint call signature. No action slot: the
+ * next step (assigning people to apps) is admin-only and this chrome cannot
+ * know the viewer's role — the hint text names it instead.
+ */
 export function CapacityEmpty({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div className="flex flex-col gap-1 py-4 text-center">
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground">{hint}</p>
-    </div>
-  )
+  return <EmptyState title={title} description={hint} className="py-4" />
 }
 
 /**

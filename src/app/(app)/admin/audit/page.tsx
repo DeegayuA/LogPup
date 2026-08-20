@@ -54,7 +54,7 @@ export default async function AdminAuditPage(props: {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Audit trail</CardTitle>
+        <CardTitle as="h2">Audit trail</CardTitle>
         <CardDescription>
           Every recorded change, with who made it and when. Self-approvals are marked — a
           request signed by the person who filed it is legitimate for a superadmin and

@@ -3,10 +3,20 @@
 import Link from 'next/link'
 import { useMemo, useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { ChevronDown, Download, Pencil, ShieldCheck, UserRoundCog, UserRoundX } from 'lucide-react'
+import {
+  ChevronDown,
+  Download,
+  Pencil,
+  Search,
+  ShieldCheck,
+  UserRoundCog,
+  UserRoundX,
+  UsersRound,
+} from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Switch } from '@/components/ui/switch'
 import {
   Popover,
@@ -27,6 +37,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -257,8 +274,11 @@ function OrgTagsCell({ user, suggestions }: { user: AdminUser; suggestions: stri
           render={
             <Button
               variant="ghost"
-              size="icon-xs"
+              size="icon-sm"
               aria-label={`Edit organizations for ${user.name}`}
+              // The visible button stays small; the pseudo-element halo is
+              // what a fingertip actually has to land on.
+              className="relative after:absolute after:-inset-2 after:content-['']"
             />
           }
         >
@@ -282,6 +302,147 @@ function OrgTagsCell({ user, suggestions }: { user: AdminUser; suggestions: stri
   )
 }
 
+/**
+ * PER-ROW TRANSITIONS, deliberately. These three cells used to share the
+ * table's one useTransition, so changing one person's seat disabled every
+ * select and switch in the table until the write settled — working through
+ * several people serialized on each other for no reason. Each cell now owns
+ * its wait; `bulkPending` still freezes them all during a batch, which really
+ * does touch many rows at once.
+ */
+function SeatCell({
+  user,
+  isSelf,
+  bulkPending,
+}: {
+  user: AdminUser
+  isSelf: boolean
+  bulkPending: boolean
+}) {
+  const [isPending, startTransition] = useTransition()
+
+  function handleRoleChange(role: UserRole) {
+    startTransition(async () => {
+      try {
+        const res = await setUserRole(user.id, role)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Role updated')
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
+  return (
+    <div title={isSelf ? SELF_TITLE : undefined} className="min-w-0">
+      <SeatSelect
+        value={user.role}
+        disabled={isSelf || isPending || bulkPending}
+        ariaLabel={isSelf ? `Seat for ${user.name} (your own account — locked)` : `Seat for ${user.name}`}
+        onChange={handleRoleChange}
+        className="w-full"
+      />
+    </div>
+  )
+}
+
+function EmploymentCell({
+  user,
+  isSelf,
+  bulkPending,
+}: {
+  user: AdminUser
+  isSelf: boolean
+  bulkPending: boolean
+}) {
+  const [isPending, startTransition] = useTransition()
+
+  function handleEmploymentChange(employmentType: EmploymentType) {
+    startTransition(async () => {
+      try {
+        const res = await setUserEmploymentType({
+          userId: user.id,
+          employmentType,
+          supervisorId: user.supervisorId,
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success('Employment updated')
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div title={isSelf ? SELF_TITLE : undefined} className="min-w-0">
+        <EmploymentSelect
+          value={user.employmentType}
+          disabled={isSelf || isPending || bulkPending}
+          ariaLabel={
+            isSelf
+              ? `Employment for ${user.name} (your own account — locked)`
+              : `Employment for ${user.name}`
+          }
+          onChange={handleEmploymentChange}
+          className="w-full"
+        />
+      </div>
+      {/* Explained where the control is missing, rather than leaving an
+          admin wondering why a manager has no approve button. */}
+      <CapNotice employmentType={user.employmentType} role={user.role} />
+    </div>
+  )
+}
+
+function ActiveCell({
+  user,
+  isSelf,
+  bulkPending,
+}: {
+  user: AdminUser
+  isSelf: boolean
+  bulkPending: boolean
+}) {
+  const [isPending, startTransition] = useTransition()
+
+  function handleActiveChange(active: boolean) {
+    startTransition(async () => {
+      try {
+        const res = await setUserActive(user.id, active)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(active ? 'User activated' : 'User deactivated')
+      } catch {
+        toast.error('Something went wrong. Please try again.')
+      }
+    })
+  }
+
+  return (
+    <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
+      <Switch
+        checked={user.active}
+        disabled={isSelf || isPending || bulkPending}
+        aria-label={
+          isSelf
+            ? `Active status for ${user.name} (your own account — locked)`
+            : `Active status for ${user.name}`
+        }
+        onCheckedChange={handleActiveChange}
+      />
+    </div>
+  )
+}
+
 const CSV_HEADERS = [
   'Name',
   'Email',
@@ -293,6 +454,26 @@ const CSV_HEADERS = [
   'Organizations',
   'Active',
 ] as const
+
+type StatusFilter = 'all' | 'active' | 'inactive'
+
+const STATUS_ITEMS: { value: StatusFilter; label: string }[] = [
+  { value: 'all', label: 'Any status' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
+]
+
+const SEAT_ALL = '__all__'
+
+/** Case-insensitive match over the fields an admin actually hunts by. */
+function matchesQuery(user: AdminUser, q: string): boolean {
+  const needle = q.trim().toLowerCase()
+  if (!needle) return true
+  return [user.name, user.email, user.personalEmail ?? '', user.title ?? '', user.phone ?? '', ...user.orgTags]
+    .join(' ')
+    .toLowerCase()
+    .includes(needle)
+}
 
 export function UserTable({
   users,
@@ -316,11 +497,36 @@ export function UserTable({
   const [draftEmployment, setDraftEmployment] = useState<EmploymentType>('permanent')
   const [ackUntransferred, setAckUntransferred] = useState(false)
 
-  const ids = useMemo(() => users.map((user) => user.id), [users])
+  // FIND before scan: the most frequent admin task is changing one field on
+  // one person, and at 30+ users a visual scan was the whole cost. The search
+  // covers the disclosure-hidden fields too (job role, phone, personal email,
+  // org tags), so "who has the QA tag" is typeable. Status + seat narrow to a
+  // working set — filter to Inactive, select all, bulk-activate is now three
+  // interactions.
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [seatFilter, setSeatFilter] = useState<string>(SEAT_ALL)
+
+  const allIds = useMemo(() => users.map((user) => user.id), [users])
+
+  const visible = useMemo(
+    () =>
+      users.filter(
+        (user) =>
+          matchesQuery(user, query) &&
+          (statusFilter === 'all' || (statusFilter === 'active') === user.active) &&
+          (seatFilter === SEAT_ALL || user.role === seatFilter),
+      ),
+    [users, query, statusFilter, seatFilter],
+  )
+  const visibleIds = useMemo(() => visible.map((user) => user.id), [visible])
+  const anyFilter = query.trim() !== '' || statusFilter !== 'all' || seatFilter !== SEAT_ALL
 
   // Derived rather than stored, so a revalidation that drops a row can never
-  // leave the bar counting somebody who is no longer in the table.
-  const selected = useMemo(() => pruneSelection(picked, ids), [picked, ids])
+  // leave the bar counting somebody who is no longer in the table. Pruned
+  // against ALL ids, not the visible ones — clearing a filter must not eat a
+  // selection made under it.
+  const selected = useMemo(() => pruneSelection(picked, allIds), [picked, allIds])
   const selectedSet = useMemo(() => new Set(selected), [selected])
 
   // Every tag already on any user, offered as one-click suggestions when
@@ -331,43 +537,24 @@ export function UserTable({
     [users],
   )
 
+  const seatItems = useMemo(
+    () => [
+      { value: SEAT_ALL, label: 'Any seat' },
+      ...(Object.entries(ROLE_LABELS) as [UserRole, string][]).map(([value, label]) => ({
+        value: value as string,
+        label,
+      })),
+    ],
+    [],
+  )
+
   function toggleRow(id: string, range: boolean) {
     setPicked((current) =>
       range && anchorId
-        ? selectRange(pruneSelection(current, ids), ids, anchorId, id)
-        : toggleSelected(pruneSelection(current, ids), id),
+        ? selectRange(pruneSelection(current, allIds), visibleIds, anchorId, id)
+        : toggleSelected(pruneSelection(current, allIds), id),
     )
     setAnchorId(id)
-  }
-
-  function handleRoleChange(userId: string, role: UserRole) {
-    startTransition(async () => {
-      try {
-        const res = await setUserRole(userId, role)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Role updated')
-      } catch {
-        toast.error('Something went wrong. Please try again.')
-      }
-    })
-  }
-
-  function handleActiveChange(userId: string, active: boolean) {
-    startTransition(async () => {
-      try {
-        const res = await setUserActive(userId, active)
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success(active ? 'User activated' : 'User deactivated')
-      } catch {
-        toast.error('Something went wrong. Please try again.')
-      }
-    })
   }
 
   function runBulk(
@@ -408,74 +595,7 @@ export function UserTable({
     downloadCsv('people', CSV_HEADERS, rows)
   }
 
-  // One row's controls, rendered by BOTH layouts so the two can never drift
-  // apart into two different sets of affordances.
-  function seatControl(user: AdminUser, isSelf: boolean) {
-    return (
-      <div title={isSelf ? SELF_TITLE : undefined} className="min-w-0">
-        <SeatSelect
-          value={user.role}
-          disabled={isSelf || isPending}
-          ariaLabel={`Seat for ${user.name}`}
-          onChange={(role) => handleRoleChange(user.id, role)}
-          className="w-full"
-        />
-      </div>
-    )
-  }
-
-  function handleEmploymentChange(user: AdminUser, employmentType: EmploymentType) {
-    startTransition(async () => {
-      try {
-        const res = await setUserEmploymentType({
-          userId: user.id,
-          employmentType,
-          supervisorId: user.supervisorId,
-        })
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        toast.success('Employment updated')
-      } catch {
-        toast.error('Something went wrong. Please try again.')
-      }
-    })
-  }
-
-  function employmentControl(user: AdminUser, isSelf: boolean) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1">
-        <div title={isSelf ? SELF_TITLE : undefined} className="min-w-0">
-          <EmploymentSelect
-            value={user.employmentType}
-            disabled={isSelf || isPending}
-            ariaLabel={`Employment for ${user.name}`}
-            onChange={(type) => handleEmploymentChange(user, type)}
-            className="w-full"
-          />
-        </div>
-        {/* Explained where the control is missing, rather than leaving an
-            admin wondering why a manager has no approve button. */}
-        <CapNotice employmentType={user.employmentType} role={user.role} />
-      </div>
-    )
-  }
-
-  function activeControl(user: AdminUser, isSelf: boolean) {
-    return (
-      <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
-        <Switch
-          checked={user.active}
-          disabled={isSelf || isPending}
-          aria-label={`Active status for ${user.name}`}
-          onCheckedChange={(checked) => handleActiveChange(user.id, checked)}
-        />
-      </div>
-    )
-  }
-
-  function identity(user: AdminUser) {
+  function identity(user: AdminUser, isSelf: boolean) {
     return (
       <div className="flex min-w-0 items-center gap-2">
         <Avatar size="sm">
@@ -485,6 +605,10 @@ export function UserTable({
         <div className="flex min-w-0 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 font-medium">
             <span className="truncate">{user.name}</span>
+            {/* The visible WHY behind this row's disabled controls — a title
+                attribute alone is invisible to touch and unreliable for screen
+                readers. */}
+            {isSelf ? <Badge variant="outline">you</Badge> : null}
             {user.mustChangePassword ? (
               <Badge
                 variant="outline"
@@ -519,7 +643,9 @@ export function UserTable({
               here rather than nowhere. */}
           <div className="flex flex-col gap-1.5 lg:hidden">
             <dt className="text-xs font-medium text-muted-foreground">Employment</dt>
-            <dd className="min-w-0 max-w-sm">{employmentControl(user, isSelf)}</dd>
+            <dd className="min-w-0 max-w-sm">
+              <EmploymentCell user={user} isSelf={isSelf} bulkPending={isPending} />
+            </dd>
           </div>
           <Field label="Job role">
             <JobRoleCell user={user} />
@@ -567,260 +693,354 @@ export function UserTable({
 
   if (users.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Nobody here yet. Add a teammate by email to get started.
-      </p>
+      <EmptyState
+        icon={UsersRound}
+        title="Nobody here yet."
+        description="Approved teammates appear in this table. Add one by email with the button above — they get a starter password to change on first sign-in."
+      />
     )
   }
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <BulkBar count={selected.length} noun={PEOPLE} onClear={() => setPicked([])}>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={isPending}
-          onClick={() => runBulk(() => bulkSetUserActive({ ids: selected, active: true }), 'activated')}
+    <div className="flex min-w-0 flex-col gap-3">
+      {/* The find row. Client state, not URL — an admin table's working set is
+          a moment's question, not evidence anyone pastes into a review. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative min-w-0 flex-1 sm:max-w-64">
+          <Search
+            aria-hidden
+            className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search name, email, role, tag…"
+            aria-label="Search people"
+            className="h-8 w-full pl-7 text-xs"
+          />
+        </div>
+        <Select
+          value={statusFilter}
+          items={STATUS_ITEMS}
+          onValueChange={(value) => setStatusFilter((value as StatusFilter) || 'all')}
         >
-          Activate
-        </Button>
+          <SelectTrigger size="sm" className="w-full sm:w-32" aria-label="Filter by status">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={seatFilter}
+          items={seatItems}
+          onValueChange={(value) => setSeatFilter(String(value ?? SEAT_ALL))}
+        >
+          <SelectTrigger size="sm" className="w-full sm:w-36" aria-label="Filter by seat">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {seatItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p role="status" className="font-mono text-2xs tabular-nums text-muted-foreground sm:ml-auto">
+          {anyFilter ? `${visible.length} of ${users.length}` : `${users.length} ${users.length === 1 ? 'person' : 'people'}`}
+        </p>
+      </div>
 
-        <AlertDialog>
-          <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
-            Deactivate
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Deactivate {selected.length} people?</AlertDialogTitle>
-              <AlertDialogDescription>
-                They lose access immediately. Your own account, and the last superadmin, are
-                skipped — and so is anyone still holding open work, unless you say otherwise
-                below.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <label className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
-              <input
-                type="checkbox"
-                checked={ackUntransferred}
-                onChange={(event) => setAckUntransferred(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+      <div className="flex min-w-0 flex-col">
+        <BulkBar count={selected.length} noun={PEOPLE} onClear={() => setPicked([])}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isPending}
+            onClick={() => runBulk(() => bulkSetUserActive({ ids: selected, active: true }), 'activated')}
+          >
+            Activate
+          </Button>
+
+          <AlertDialog
+            onOpenChange={(open) => {
+              // The "deactivate even with open work" acknowledgment is consent
+              // for ONE run. Without this reset, reopening the dialog showed
+              // the destructive override pre-ticked from last time.
+              if (!open) setAckUntransferred(false)
+            }}
+          >
+            <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
+              Deactivate
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Deactivate {selected.length} people?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  They lose access immediately. Your own account, and the last superadmin, are
+                  skipped — and so is anyone still holding open work, unless you say otherwise
+                  below.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <label className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={ackUntransferred}
+                  onChange={(event) => setAckUntransferred(event.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 cursor-pointer accent-primary"
+                />
+                <span>
+                  Deactivate even if they still hold open work. Their projects, roles and open
+                  tasks stay pinned to an account nobody can sign into.
+                </span>
+              </label>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  disabled={isPending}
+                  onClick={() =>
+                    runBulk(
+                      () =>
+                        bulkSetUserActive({
+                          ids: selected,
+                          active: false,
+                          acknowledgeUntransferred: ackUntransferred,
+                        }),
+                      'deactivated',
+                    )
+                  }
+                >
+                  Deactivate
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <Popover open={seatOpen} onOpenChange={setSeatOpen}>
+            <PopoverTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
+              <ShieldCheck aria-hidden className="size-3.5" />
+              Seat
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-80">
+              <PopoverHeader>
+                <PopoverTitle>Change seat</PopoverTitle>
+                <PopoverDescription>
+                  Applies to all {selected.length} selected. Your own account and the last
+                  superadmin are skipped.
+                </PopoverDescription>
+              </PopoverHeader>
+              <SeatSelect
+                value={draftSeat}
+                ariaLabel="New seat for the selected people"
+                onChange={setDraftSeat}
+                className="w-full"
               />
-              <span>
-                Deactivate even if they still hold open work. Their projects, roles and open
-                tasks stay pinned to an account nobody can sign into.
-              </span>
-            </label>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
+              <Button
+                size="sm"
                 disabled={isPending}
-                onClick={() =>
+                onClick={() => {
+                  setSeatOpen(false)
+                  runBulk(() => bulkSetUserRole({ ids: selected, role: draftSeat }), 'moved')
+                }}
+              >
+                Apply
+              </Button>
+            </PopoverContent>
+          </Popover>
+
+          <Popover open={employmentOpen} onOpenChange={setEmploymentOpen}>
+            <PopoverTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
+              <UserRoundCog aria-hidden className="size-3.5" />
+              Employment
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-80">
+              <PopoverHeader>
+                <PopoverTitle>Change employment</PopoverTitle>
+                <PopoverDescription>
+                  Existing supervisors are kept. A trainee or intern with nobody named is
+                  skipped rather than left unsupervised.
+                </PopoverDescription>
+              </PopoverHeader>
+              <EmploymentSelect
+                value={draftEmployment}
+                ariaLabel="New employment type for the selected people"
+                onChange={setDraftEmployment}
+                className="w-full"
+              />
+              <Button
+                size="sm"
+                disabled={isPending}
+                onClick={() => {
+                  setEmploymentOpen(false)
                   runBulk(
                     () =>
-                      bulkSetUserActive({
+                      bulkSetUserEmploymentType({
                         ids: selected,
-                        active: false,
-                        acknowledgeUntransferred: ackUntransferred,
+                        employmentType: draftEmployment,
                       }),
-                    'deactivated',
+                    'updated',
                   )
-                }
+                }}
               >
-                Deactivate
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+                Apply
+              </Button>
+            </PopoverContent>
+          </Popover>
 
-        <Popover open={seatOpen} onOpenChange={setSeatOpen}>
-          <PopoverTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
-            <ShieldCheck aria-hidden className="size-3.5" />
-            Seat
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-80">
-            <PopoverHeader>
-              <PopoverTitle>Change seat</PopoverTitle>
-              <PopoverDescription>
-                Applies to all {selected.length} selected. Your own account and the last
-                superadmin are skipped.
-              </PopoverDescription>
-            </PopoverHeader>
-            <SeatSelect
-              value={draftSeat}
-              ariaLabel="New seat for the selected people"
-              onChange={setDraftSeat}
-              className="w-full"
-            />
-            <Button
-              size="sm"
-              disabled={isPending}
-              onClick={() => {
-                setSeatOpen(false)
-                runBulk(() => bulkSetUserRole({ ids: selected, role: draftSeat }), 'moved')
-              }}
-            >
-              Apply
-            </Button>
-          </PopoverContent>
-        </Popover>
+          <Button variant="outline" size="sm" disabled={isPending} onClick={exportSelected}>
+            <Download aria-hidden className="size-3.5" />
+            CSV
+          </Button>
+        </BulkBar>
 
-        <Popover open={employmentOpen} onOpenChange={setEmploymentOpen}>
-          <PopoverTrigger render={<Button variant="outline" size="sm" disabled={isPending} />}>
-            <UserRoundCog aria-hidden className="size-3.5" />
-            Employment
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-80">
-            <PopoverHeader>
-              <PopoverTitle>Change employment</PopoverTitle>
-              <PopoverDescription>
-                Existing supervisors are kept. A trainee or intern with nobody named is
-                skipped rather than left unsupervised.
-              </PopoverDescription>
-            </PopoverHeader>
-            <EmploymentSelect
-              value={draftEmployment}
-              ariaLabel="New employment type for the selected people"
-              onChange={setDraftEmployment}
-              className="w-full"
-            />
-            <Button
-              size="sm"
-              disabled={isPending}
-              onClick={() => {
-                setEmploymentOpen(false)
-                runBulk(
-                  () =>
-                    bulkSetUserEmploymentType({
-                      ids: selected,
-                      employmentType: draftEmployment,
-                    }),
-                  'updated',
-                )
-              }}
-            >
-              Apply
-            </Button>
-          </PopoverContent>
-        </Popover>
-
-        <Button variant="outline" size="sm" disabled={isPending} onClick={exportSelected}>
-          <Download aria-hidden className="size-3.5" />
-          CSV
-        </Button>
-      </BulkBar>
-
-      {/* PHONE: one card per person. Nine fields in a row on a phone is a
-          horizontal scroll nobody discovers, so they stack instead of
-          shrinking to unreadable. */}
-      <ul className="flex flex-col gap-3 md:hidden">
-        {users.map((user) => {
-          const isSelf = user.id === currentUserId
-          return (
-            <li key={user.id} className="flex flex-col gap-3 rounded-xl border border-border p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-start gap-2">
-                  <RowCheckbox
-                    checked={selectedSet.has(user.id)}
-                    label={`Select ${user.name}`}
-                    onToggle={(range) => toggleRow(user.id, range)}
-                    className="mt-2"
-                  />
-                  {identity(user)}
-                </div>
-                {activeControl(user, isSelf)}
-              </div>
-              <div className="flex flex-col gap-1">
-                <span className="text-2xs text-muted-foreground">Seat</span>
-                {seatControl(user, isSelf)}
-              </div>
-              {detailFields(user, isSelf)}
-            </li>
-          )
-        })}
-      </ul>
-
-      {/* TABLET AND UP: `table-fixed` is the structural fix for the sideways
-          scroll — a column no longer widens to fit a long name, so nothing can
-          push the table past the viewport. The four occasional fields moved
-          into the per-row disclosure below, which is what made a fixed layout
-          possible without clipping anything. */}
-      <div className="hidden min-w-0 md:block">
-        <Table className="table-fixed">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-9">
-                <HeaderCheckbox
-                  state={headerSelectionState(selected, ids)}
-                  label="Select all people"
-                  onToggle={() => setPicked((current) => toggleAllSelected(current, ids))}
-                />
-              </TableHead>
-              <TableHead>Person</TableHead>
-              <TableHead className="w-[11rem]">Seat</TableHead>
-              <TableHead className="hidden w-[10rem] lg:table-cell">Employment</TableHead>
-              <TableHead className="w-[4.5rem] text-right">Active</TableHead>
-              <TableHead className="w-10" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {users.map((user) => {
-              const isSelf = user.id === currentUserId
-              const isOpen = expanded === user.id
-              return [
-                <TableRow
-                  key={user.id}
-                  data-state={selectedSet.has(user.id) ? 'selected' : undefined}
-                >
-                  <TableCell className="align-top">
-                    <RowCheckbox
-                      checked={selectedSet.has(user.id)}
-                      label={`Select ${user.name}`}
-                      onToggle={(range) => toggleRow(user.id, range)}
-                      className="mt-2"
-                    />
-                  </TableCell>
-                  <TableCell className="align-top">{identity(user)}</TableCell>
-                  <TableCell className="align-top">{seatControl(user, isSelf)}</TableCell>
-                  <TableCell className="hidden align-top lg:table-cell">
-                    {employmentControl(user, isSelf)}
-                  </TableCell>
-                  <TableCell className="align-top text-right">
-                    {activeControl(user, isSelf)}
-                  </TableCell>
-                  <TableCell className="align-top text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-expanded={isOpen}
-                      aria-controls={`person-detail-${user.id}`}
-                      aria-label={`${isOpen ? 'Hide' : 'Show'} details for ${user.name}`}
-                      onClick={() =>
-                        setExpanded((current) => (current === user.id ? null : user.id))
-                      }
-                    >
-                      <ChevronDown
-                        aria-hidden
-                        className={`size-4 transition-transform duration-150 ${
-                          isOpen ? 'rotate-180' : ''
-                        }`}
-                      />
-                    </Button>
-                  </TableCell>
-                </TableRow>,
-                isOpen ? (
-                  <TableRow key={`${user.id}-detail`} className="hover:bg-transparent">
-                    <TableCell colSpan={6} className="whitespace-normal">
-                      <div id={`person-detail-${user.id}`} className="px-1 pb-2">
-                        {detailFields(user, isSelf)}
+        {visible.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="Nobody matches these filters."
+            description="No approved teammate answers the search and filters at once."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setQuery('')
+                  setStatusFilter('all')
+                  setSeatFilter(SEAT_ALL)
+                }}
+              >
+                Clear filters
+              </Button>
+            }
+          />
+        ) : (
+          <>
+            {/* PHONE: one card per person. Nine fields in a row on a phone is a
+                horizontal scroll nobody discovers, so they stack instead of
+                shrinking to unreadable. */}
+            <ul className="flex flex-col gap-3 md:hidden">
+              {visible.map((user) => {
+                const isSelf = user.id === currentUserId
+                return (
+                  <li key={user.id} className="flex flex-col gap-3 rounded-xl border border-border p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-2">
+                        <RowCheckbox
+                          checked={selectedSet.has(user.id)}
+                          label={`Select ${user.name}`}
+                          onToggle={(range) => toggleRow(user.id, range)}
+                          className="mt-2"
+                        />
+                        {identity(user, isSelf)}
                       </div>
-                    </TableCell>
+                      <ActiveCell user={user} isSelf={isSelf} bulkPending={isPending} />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-2xs text-muted-foreground">Seat</span>
+                      <SeatCell user={user} isSelf={isSelf} bulkPending={isPending} />
+                    </div>
+                    {detailFields(user, isSelf)}
+                  </li>
+                )
+              })}
+            </ul>
+
+            {/* TABLET AND UP: `table-fixed` is the structural fix for the sideways
+                scroll — a column no longer widens to fit a long name, so nothing can
+                push the table past the viewport. The four occasional fields moved
+                into the per-row disclosure below, which is what made a fixed layout
+                possible without clipping anything. */}
+            <div className="hidden min-w-0 md:block">
+              <Table className="table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-9">
+                      <HeaderCheckbox
+                        state={headerSelectionState(selected, visibleIds)}
+                        label="Select all people shown"
+                        onToggle={() =>
+                          setPicked((current) =>
+                            toggleAllSelected(pruneSelection(current, allIds), visibleIds),
+                          )
+                        }
+                      />
+                    </TableHead>
+                    <TableHead>Person</TableHead>
+                    <TableHead className="w-[11rem]">Seat</TableHead>
+                    <TableHead className="hidden w-[10rem] lg:table-cell">Employment</TableHead>
+                    <TableHead className="w-[4.5rem] text-right">Active</TableHead>
+                    <TableHead className="w-10" />
                   </TableRow>
-                ) : null,
-              ]
-            })}
-          </TableBody>
-        </Table>
+                </TableHeader>
+                <TableBody>
+                  {visible.map((user) => {
+                    const isSelf = user.id === currentUserId
+                    const isOpen = expanded === user.id
+                    return [
+                      <TableRow
+                        key={user.id}
+                        data-state={selectedSet.has(user.id) ? 'selected' : undefined}
+                      >
+                        <TableCell className="align-top">
+                          <RowCheckbox
+                            checked={selectedSet.has(user.id)}
+                            label={`Select ${user.name}`}
+                            onToggle={(range) => toggleRow(user.id, range)}
+                            className="mt-2"
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">{identity(user, isSelf)}</TableCell>
+                        <TableCell className="align-top">
+                          <SeatCell user={user} isSelf={isSelf} bulkPending={isPending} />
+                        </TableCell>
+                        <TableCell className="hidden align-top lg:table-cell">
+                          <EmploymentCell user={user} isSelf={isSelf} bulkPending={isPending} />
+                        </TableCell>
+                        <TableCell className="align-top text-right">
+                          <ActiveCell user={user} isSelf={isSelf} bulkPending={isPending} />
+                        </TableCell>
+                        <TableCell className="align-top text-right">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-expanded={isOpen}
+                            aria-controls={`person-detail-${user.id}`}
+                            aria-label={`${isOpen ? 'Hide' : 'Show'} details for ${user.name}`}
+                            onClick={() =>
+                              setExpanded((current) => (current === user.id ? null : user.id))
+                            }
+                          >
+                            <ChevronDown
+                              aria-hidden
+                              className={`size-4 transition-transform duration-150 ${
+                                isOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </Button>
+                        </TableCell>
+                      </TableRow>,
+                      isOpen ? (
+                        <TableRow key={`${user.id}-detail`} className="hover:bg-transparent">
+                          <TableCell colSpan={6} className="whitespace-normal">
+                            <div id={`person-detail-${user.id}`} className="px-1 pb-2">
+                              {detailFields(user, isSelf)}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : null,
+                    ]
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

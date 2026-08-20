@@ -103,10 +103,14 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
             <ul className="flex flex-wrap items-center gap-1.5">
               {assignments.map((entry) => (
                 <li key={entry.appId}>
+                  {/* #team, not the page top: the one thing a reader does
+                      from this chip is act on the allocation it shows, and
+                      that control lives in the app's Team panel — linking to
+                      the top added a scroll-and-hunt step. */}
                   <Badge
                     variant="secondary"
                     className="font-normal"
-                    render={<Link href={`/apps/${entry.slug}`} />}
+                    render={<Link href={`/apps/${entry.slug}#team`} />}
                   >
                     {/* The app's event hue — the same dot its meetings wear
                         on the calendar and its chip wears in the directory. */}
@@ -166,7 +170,7 @@ export function PersonHeader({ overview }: { overview: PersonOverview }) {
           dashboard. */}
       <p className="text-xs text-muted-foreground">
         A read-only record of {user.name}&apos;s work — allocations are set from an app&rsquo;s
-        Team panel, tasks from its board.
+        Team panel (the app chips above land there), tasks from its board.
       </p>
     </header>
   )

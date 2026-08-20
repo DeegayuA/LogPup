@@ -56,11 +56,19 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
   const slugToLabel = new Map(
     AI_FEATURES.flatMap((f) => f.slugs.map((s) => [s as string, f.label] as const)),
   )
-  const byPerson = new Map<string, { name: string; features: Set<string>; calls: number }>()
+  const byPerson = new Map<
+    string,
+    { id: string; name: string; features: Set<string>; calls: number }
+  >()
   for (const row of perUser) {
     const label = slugToLabel.get(row.feature)
     if (!label) continue
-    const entry = byPerson.get(row.userId) ?? { name: row.userName, features: new Set(), calls: 0 }
+    const entry = byPerson.get(row.userId) ?? {
+      id: row.userId,
+      name: row.userName,
+      features: new Set<string>(),
+      calls: 0,
+    }
     entry.features.add(label)
     entry.calls += row.calls
     byPerson.set(row.userId, entry)
@@ -70,7 +78,7 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 font-heading">
+        <CardTitle as="h2" className="flex items-center gap-2 font-heading">
           <ChartNoAxesColumn className="size-4" aria-hidden /> AI feature adoption
         </CardTitle>
         <CardDescription>
@@ -83,15 +91,19 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
       <CardContent className="flex flex-col gap-4">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[36rem] text-sm">
+            <caption className="sr-only">
+              AI feature adoption over the last 30 days: people using each feature, share
+              of active people, calls made, failed calls, last use, and state
+            </caption>
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 font-normal">Feature</th>
-                <th className="py-2 font-normal">People</th>
-                <th className="py-2 font-normal">Share</th>
-                <th className="py-2 font-normal">Calls</th>
-                <th className="py-2 font-normal">Failed</th>
-                <th className="py-2 font-normal">Last used</th>
-                <th className="py-2 font-normal">State</th>
+                <th scope="col" className="py-2 font-normal">Feature</th>
+                <th scope="col" className="py-2 font-normal">People</th>
+                <th scope="col" className="py-2 font-normal">Share</th>
+                <th scope="col" className="py-2 font-normal">Calls</th>
+                <th scope="col" className="py-2 font-normal">Failed</th>
+                <th scope="col" className="py-2 font-normal">Last used</th>
+                <th scope="col" className="py-2 font-normal">State</th>
               </tr>
             </thead>
             <tbody>
@@ -149,7 +161,8 @@ export async function AiAdoptionCard({ activeUserCount }: AiAdoptionCardProps) {
           ) : (
             <ul className="flex flex-col divide-y">
               {people.map((p) => (
-                <li key={p.name} className="flex flex-wrap items-baseline gap-2 py-2 text-sm">
+                // Keyed by user id, not name — two people can share a name.
+                <li key={p.id} className="flex flex-wrap items-baseline gap-2 py-2 text-sm">
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
                   <span className="font-mono tabular-nums text-xs text-muted-foreground">
                     {p.calls} calls

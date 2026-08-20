@@ -1,8 +1,14 @@
 'use client'
 
-import { useState, type KeyboardEvent } from 'react'
+import { useCallback, useState, type KeyboardEvent } from 'react'
 import { differenceInCalendarDays, isSameDay } from 'date-fns'
-import { CalendarDaysIcon, X } from 'lucide-react'
+import {
+  CalendarDaysIcon,
+  MessageCircleQuestionIcon,
+  TriangleAlertIcon,
+  UserCheckIcon,
+  X,
+} from 'lucide-react'
 import {
   MiniCalendar,
   MiniCalendarDay,
@@ -13,10 +19,54 @@ import {
 import { Button } from '@/components/ui/button'
 import { MeetingList } from '@/features/meetings/components/meeting-list'
 import type { MentionUser } from '@/components/mention-textarea'
+import type { MeetingGlance } from '@/features/meetings/components/meeting-notes-model'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
 /** Days rendered in the strip at once. */
 const STRIP_DAYS = 30
+
+/**
+ * QUICK FILTERS — the per-row chips, lifted to list level.
+ *
+ * Every fact here is already on screen: "No replies yet" and the follow-up /
+ * overdue counts render as chips on each row (meeting-list.tsx OutcomeChips),
+ * computed from data the rows fetch anyway. What was missing was the lift —
+ * finding the three meetings waiting on you meant reading thirty rows. No new
+ * fetches and no model calls; this is the same data made scannable.
+ *
+ * "Waiting on you" counts synchronously from the RSVP data the page loaded.
+ * The two glance-backed filters fill in as each row's intel answers (the rows
+ * fetch it eagerly on mount), so their chips appear within a moment of the
+ * list painting — a chip only renders once it has something to show, which is
+ * also why a zero-count chip is absent rather than disabled.
+ */
+type QuickFilterId = 'waiting' | 'followups' | 'overdue'
+
+const QUICK_FILTERS: {
+  id: QuickFilterId
+  label: string
+  icon: typeof UserCheckIcon
+}[] = [
+  { id: 'waiting', label: 'Waiting on you', icon: UserCheckIcon },
+  { id: 'followups', label: 'Open follow-ups', icon: MessageCircleQuestionIcon },
+  { id: 'overdue', label: 'Overdue actions', icon: TriangleAlertIcon },
+]
+
+function matchesQuickFilter(
+  filter: QuickFilterId,
+  meeting: MeetingSummary,
+  currentUserId: string,
+  glances: Record<string, MeetingGlance | null>,
+): boolean {
+  if (filter === 'waiting') {
+    return meeting.attendees.some(
+      (attendee) => attendee.id === currentUserId && attendee.response === 'pending',
+    )
+  }
+  const glance = glances[meeting.id]
+  if (!glance) return false
+  return filter === 'followups' ? glance.openFollowups > 0 : glance.overdueActions > 0
+}
 
 /** Upcoming meetings with a Kibo mini-calendar day strip as a quick filter. */
 export function UpcomingMeetingsFiltered({
@@ -48,9 +98,44 @@ export function UpcomingMeetingsFiltered({
     onSelectedDayChange?.(date)
   }
 
-  const filtered = selected
+  // Glances reported up by each row as its intel loads (see MeetingList's
+  // onGlance), keyed by meeting id — what the two glance-backed quick filters
+  // count. Single-select: these answer "show me just these", and two at once
+  // ("waiting AND overdue") is a question nobody arrives with.
+  const [glances, setGlances] = useState<Record<string, MeetingGlance | null>>({})
+  const [quickFilter, setQuickFilter] = useState<QuickFilterId | null>(null)
+  const handleGlance = useCallback((meetingId: string, glance: MeetingGlance | null) => {
+    setGlances((prev) => ({ ...prev, [meetingId]: glance }))
+  }, [])
+
+  // Counted over the WHOLE upcoming list, not the day-filtered slice, so the
+  // numbers do not reshuffle when a day is picked — the two filters compose
+  // on the rows below instead.
+  const quickCounts: Record<QuickFilterId, number> = {
+    waiting: 0,
+    followups: 0,
+    overdue: 0,
+  }
+  for (const meeting of meetings) {
+    for (const { id } of QUICK_FILTERS) {
+      if (matchesQuickFilter(id, meeting, currentUserId, glances)) quickCounts[id] += 1
+    }
+  }
+
+  const dayFiltered = selected
     ? meetings.filter((meeting) => isSameDay(meeting.startsAt, selected))
     : meetings
+  const filtered = quickFilter
+    ? dayFiltered.filter((meeting) =>
+        matchesQuickFilter(quickFilter, meeting, currentUserId, glances),
+      )
+    : dayFiltered
+
+  // A chip earns its place by having rows to show; the active one stays even
+  // at zero so it can be un-pressed rather than vanishing mid-use.
+  const visibleQuickFilters = QUICK_FILTERS.filter(
+    ({ id }) => quickCounts[id] > 0 || quickFilter === id,
+  )
 
   // The strip's window is held here so the roving tab stop always lands on a
   // day that is actually rendered — after paging, neither the selection nor
@@ -119,18 +204,58 @@ export function UpcomingMeetingsFiltered({
           </Button>
         ) : null}
       </div>
-      {selected && filtered.length === 0 ? (
+
+      {visibleQuickFilters.length > 0 ? (
+        <div role="group" aria-label="Quick filters" className="flex flex-wrap items-center gap-1.5">
+          {visibleQuickFilters.map(({ id, label, icon: Icon }) => {
+            const active = quickFilter === id
+            return (
+              <Button
+                key={id}
+                type="button"
+                variant={active ? 'default' : 'outline'}
+                size="sm"
+                aria-pressed={active}
+                className="h-7"
+                onClick={() => setQuickFilter(active ? null : id)}
+              >
+                <Icon aria-hidden />
+                {label}
+                <span className="font-mono tabular-nums">{quickCounts[id]}</span>
+              </Button>
+            )
+          })}
+        </div>
+      ) : null}
+
+      {(selected || quickFilter) && filtered.length === 0 ? (
         <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed px-6 py-10 text-center">
           <CalendarDaysIcon className="size-8 text-muted-foreground" aria-hidden />
           <div className="flex flex-col gap-1">
-            {/* "Upcoming", not just "No meetings that day": the same day filter
-                now also narrows the Past section below, which may well have
+            {/* "Upcoming", not just "No meetings": the same day filter now
+                also narrows the Past section below, which may well have
                 meetings on that day. */}
-            <p className="font-heading font-semibold">No upcoming meetings that day.</p>
-            <p className="text-sm text-muted-foreground">Pick another day or clear the filter.</p>
+            <p className="font-heading font-semibold">
+              {selected ? 'No upcoming meetings that day.' : 'No upcoming meetings match.'}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {selected && quickFilter
+                ? 'Pick another day or clear the filters.'
+                : selected
+                  ? 'Pick another day or clear the filter.'
+                  : 'Clear the filter to see every upcoming meeting.'}
+            </p>
           </div>
-          <Button variant="outline" size="sm" type="button" onClick={() => setSelected(undefined)}>
-            Show all days
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => {
+              setSelected(undefined)
+              setQuickFilter(null)
+            }}
+          >
+            {selected && quickFilter ? 'Clear filters' : selected ? 'Show all days' : 'Show all'}
           </Button>
         </div>
       ) : (
@@ -143,6 +268,7 @@ export function UpcomingMeetingsFiltered({
           offerCreate
 
           openMeetingId={openMeetingId}
+          onGlance={handleGlance}
         />
       )}
     </div>

@@ -64,7 +64,14 @@ export function MeetingShareDialog({
 function ShareContent({ meetingId, onClose }: { meetingId: string; onClose: () => void }) {
   const [info, setInfo] = useState<MeetingShareInfo | null>(null)
   const [loading, setLoading] = useState(true)
+  // Rendered INSIDE the dialog with a Retry, never only toasted: a toast
+  // leaves an open dialog holding nothing but its header, with no sign of
+  // what went wrong or a way to try again (meeting-notes-dialog.tsx is the
+  // pattern this matches).
+  const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  // Bumped by Retry — the effect re-runs and asks the server again.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -72,7 +79,12 @@ function ShareContent({ meetingId, onClose }: { meetingId: string; onClose: () =
       .then((res) => {
         if (cancelled) return
         if (res.ok) setInfo(res.data)
-        else toast.error(res.error)
+        else setError(res.error)
+      })
+      .catch(() => {
+        // The ActionResult contract means the action never throws — this is
+        // the transport (offline, dialog closed mid-flight), which can.
+        if (!cancelled) setError('Could not reach the server.')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -80,7 +92,13 @@ function ShareContent({ meetingId, onClose }: { meetingId: string; onClose: () =
     return () => {
       cancelled = true
     }
-  }, [meetingId])
+  }, [meetingId, attempt])
+
+  function retry() {
+    setError(null)
+    setLoading(true)
+    setAttempt((n) => n + 1)
+  }
 
   const message = info
     ? buildMeetingShareMessage({
@@ -106,6 +124,18 @@ function ShareContent({ meetingId, onClose }: { meetingId: string; onClose: () =
           <div className="flex items-center justify-center py-8">
             <Loader2 aria-hidden className="size-5 animate-spin motion-reduce:animate-none" />
             <span className="sr-only">Loading attendees…</span>
+          </div>
+        ) : error ? (
+          <div
+            role="alert"
+            className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border px-4 py-6 text-center"
+          >
+            <p className="text-sm text-muted-foreground">
+              {error} The meeting was created — only this share sheet failed to load.
+            </p>
+            <Button variant="outline" size="sm" type="button" onClick={retry}>
+              Try again
+            </Button>
           </div>
         ) : info ? (
           <div className="flex flex-col gap-4">
