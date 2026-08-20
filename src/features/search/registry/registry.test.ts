@@ -45,7 +45,6 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   admin: 'every action needs a target row, and the purges need a typed confirmation',
   calendar: 'an internal Google Calendar wrapper, no user-facing action',
   dashboard: 'no actions; its page is a nav row',
-  gemini: 'key management is per-key and lives on /profile',
   notion: 'its one action needs a sprintId',
   onboarding: 'renders only on /pending, where the palette does not exist',
   pwa: 'its affordances are components wired to browser events, not callables',
@@ -430,6 +429,21 @@ describe('paletteCommands', () => {
     expect(hrefs).not.toContain('/apps?new=1')
   })
 
+  /**
+   * ALSO GUARDS AGAINST A DUPLICATE DESTINATION, which is how it earns its
+   * keep beyond the switch it names.
+   *
+   * The lookup below is `.find(command => command.href === '/worklog')`, and
+   * feature commands sort before navigate rows. So a feature command pointing
+   * at a destination the nav registry already reaches SHADOWS that nav row,
+   * and this assertion fails with a missing chip. A "Log today's work" row
+   * did exactly that and was deleted rather than worked around.
+   *
+   * The reason it needs saying: the failure presents as a broken keyboard
+   * shortcut, not as a duplicate row, so nobody traces it back to the command
+   * they just added. If this fails after you added a command, check whether
+   * its href duplicates a nav destination before you touch the chip logic.
+   */
   it('prints a jump chip only while the jumps are switched on', () => {
     const on = paletteCommands({ ...ctx(), goShortcutsOn: true })
     const off = paletteCommands({ ...ctx(), goShortcutsOn: false })
