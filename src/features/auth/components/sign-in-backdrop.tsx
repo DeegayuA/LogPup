@@ -47,6 +47,13 @@ export function SignInBackdrop() {
                   {
                     '--ring-duration': ring.duration,
                     '--ring-delay': ring.delay,
+                    /* Passed through as a custom property because the
+                       keyframes animate opacity, and a CSS opacity OVERRIDES
+                       the SVG presentation attribute outright. Without each
+                       ring's own value reaching the animation, all fifteen
+                       would breathe between the same two opacities and the
+                       cluster would lose the depth that the varied
+                       `ring.opacity` gives it. */
                     '--ring-opacity': String(ring.opacity),
                   } as RingVars
                 }
@@ -54,6 +61,12 @@ export function SignInBackdrop() {
                 ry={ring.ry}
                 stroke="currentColor"
                 strokeWidth={1.5}
+                /* Without this the stroke scales with the ring: 1.5px at
+                   scale(1.11) paints at 1.67px, so every contour visibly
+                   THICKENS as it swells and thins as it settles — which reads
+                   as an image being zoomed rather than light moving over
+                   terrain. Inert while the animation is opacity-only; the two
+                   belong to one design and were restored together. */
                 vectorEffect="non-scaling-stroke"
                 opacity={ring.opacity}
               />

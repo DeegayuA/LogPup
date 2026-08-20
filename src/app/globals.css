@@ -379,14 +379,56 @@
 
    Kept here rather than as an inline `style` animation so the reduced-motion
    opt-out is enforced in one place; an inline shorthand cannot be overridden
-   by a media query without !important. Transform only — no opacity flicker,
-   no filter, nothing that would force a repaint of the whole panel. */
+   by a media query without !important.
+
+   Transform AND opacity, both compositor-friendly, and no filter. The opacity
+   is a slow paired dim — one traversal per ~13s — not the flicker an earlier
+   version of this note warned against; that warning was about a swing deep
+   enough to make a 0.16-opacity ring blink, which is why the dim stops at
+   0.72 rather than 0.55.
+
+   This paragraph once said "transform only" while the keyframes below had been
+   replaced with an opacity-only pulse — asserting the opposite of the code, so
+   the next reader would have taken fifteen animated ellipses for cheap
+   transform work and never looked for the repaint. Restored together on
+   purpose: the comment, the keyframes, `transform-box`/`transform-origin`
+   below, and `vector-effect="non-scaling-stroke"` in sign-in-backdrop.tsx are
+   one design and are wrong apart. */
 @keyframes logpup-ring-breathe {
-  0%, 100% {
-    opacity: var(--ring-opacity, 0.6);
+  0% {
+    transform: scale(1);
+    opacity: var(--ring-opacity, 1);
+    /* ASYMMETRY IS THE POINT of these two curves. One ease-in-out across a
+       symmetric out-and-back has no accent: the ring spends equal time
+       expanding and contracting at mirrored speeds, which reads as a metronome
+       throb rather than as something moving. This is the swell — it leaves
+       quickly then glides, the way a wave loses energy travelling outward. */
+    animation-timing-function: cubic-bezier(0.16, 0.7, 0.3, 1);
   }
-  50% {
-    opacity: calc(var(--ring-opacity, 0.6) * 0.75);
+  62% {
+    /* 1.045 was imperceptible — a 4.5% change over 14s falls below the
+       threshold at which motion is noticed at all, so the backdrop read as
+       static. 11% is legible as a swell without pulling the eye off the
+       sign-in form.
+
+       62% rather than 50% is what makes the return quiet: the ring takes
+       nearly two thirds of the cycle to reach its peak and the remaining third
+       to fall back, so the recovery never announces itself as a second,
+       opposite movement. */
+    transform: scale(1.11);
+    /* A gentle dim as it expands, so the staggered cluster reads as a ripple
+       travelling OUTWARD rather than every ring inflating in place. 0.72, not
+       0.55: the outer rings rest at 0.16 opacity, and taking those to 0.09 and
+       back made them read as flicker — a faint line blinking, which is the
+       cheapest-looking motion there is. A ring should dim, not disappear. */
+    opacity: calc(var(--ring-opacity, 1) * 0.72);
+    /* The settle: slower out of the peak than into it, so the ring relaxes
+       rather than snapping back. */
+    animation-timing-function: cubic-bezier(0.5, 0, 0.72, 0.42);
+  }
+  100% {
+    transform: scale(1);
+    opacity: var(--ring-opacity, 1);
   }
 }
 
