@@ -132,6 +132,20 @@ export const ROLE_GRANTS = {
   'task.move':                  { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: N },
   'task.delete':                { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   'sprint.manage':              { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
+  // Deadlines, as THREE questions rather than one, because they are three
+  // different acts. Setting a working date is doing the work. Turning one into
+  // a promise, and moving a promise other people have planned around, are
+  // statements made on the organisation's behalf.
+  //
+  // `deadline.set` at 'own' resolves ownerId against tasks.assigneeId — the
+  // person the work belongs to, not whoever filed it. Stated here rather than
+  // left to inference: `can` fails closed on 'own' with no resource, and
+  // canMoveTask already passes assigneeId as ownerId, so a caller that picks a
+  // different owner source silently produces a permission bug on its first
+  // ambiguous row.
+  'deadline.set':               { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: N },
+  'deadline.commit':            { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
+  'deadline.move.committed':    { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   'checkin.delete':             { superadmin: A, admin: A, manager: S, editor: O, member: O, stakeholder: N, auditor: N },
   // Meetings
   'meeting.manage':             { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: N },
@@ -233,6 +247,14 @@ const APPROVAL_ACTIONS = [
   // studio's salaries — and an employment stage is the only lever that can say
   // so without inventing a second seat.
   'finance.view',
+  // Committing a deadline, and moving one already committed. Both are promises
+  // made on the studio's behalf to somebody planning around them, which is the
+  // definition this list uses — not "destructive", which neither is.
+  //
+  // `deadline.set` is deliberately ABSENT: choosing a working date for your own
+  // task is doing the work, not deciding on the organisation's behalf, and
+  // capping it would leave a trainee unable to reschedule their own task.
+  'deadline.commit', 'deadline.move.committed',
 ] as const
 // NOT trash.restore. Restoring is recovering something somebody deleted by
 // mistake, and it is reversible — you can trash it again. A trainee who spots

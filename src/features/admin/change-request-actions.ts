@@ -125,7 +125,9 @@ export async function approveChangeRequest(
     const selfApproved = request.requesterId === actor.id
 
     await db.batch([
-      buildApplyStatement(entityType, request.entityId, after),
+            // `current` threaded through so a task's deadline fields route via
+      // applyDueDate rather than the generic spread — see taskSet's comment.
+      buildApplyStatement(entityType, request.entityId, after, current),
       db
         .update(changeRequests)
         .set({
