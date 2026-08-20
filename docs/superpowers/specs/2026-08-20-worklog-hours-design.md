@@ -79,7 +79,7 @@ Non-working days, approved absences and holidays must render as themselves, not 
 ## AI: draft on request, review on save
 
 **Evidence both use — and the limits on it:**
-- **Meetings attended, with real start and end times.** The strongest signal, because it is recorded rather than remembered.
+- **Meetings attended, with real start and end times.** The strongest signal, because it is recorded rather than remembered. **Do not assume a meeting has a project.** There are now two ways it may not: `0040` made the relationship many-to-many via `meeting_apps` (a meeting can serve several projects, or none), and `purgeApp` hard-deletes an app while `meetings.app_id` is `ON DELETE SET NULL`, so meetings SURVIVE a purge, unlinked. A meeting with no project is still time the person spent and must still count toward their day — any grouping by project must treat it as a real case, not a data error.
 - **Activity log** rows for that person that day — tasks moved, comments, check-ins — each with a timestamp and an entity.
 - **Tasks assigned and in progress** in their sprints.
 - **Deliberately NOT used: meeting transcripts and screen keyframes.** Those exist to write up meetings. Mining them to audit how someone spent their hours turns a work tool into a surveillance tool, and this design refuses that even though the data is right there.
