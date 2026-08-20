@@ -3,10 +3,12 @@
  *
  * PURE AND SYNCHRONOUS, the same contract as coverage.ts and worklog/entries.ts:
  * every input arrives as data, so the whole module is testable without a
- * database, without a clock and without a model. There is deliberately no
- * query, no action and no loader in this folder yet — see the note on
- * person_rates below for why that is a decision rather than an omission.
+ * database, without a clock and without a model. `queries.ts` (reads) and
+ * `rate-actions.ts` (writes) are the two callers that touch a database; this
+ * module stays free of both, the same split coverage.ts/coverage-queries.ts
+ * already established for worklog.
  *
+
  * THE ONE RULE EVERYTHING HERE OBEYS: null means "cannot say"; zero means
  * "we can say, and it is nothing". They are different facts and they stay
  * different all the way out to the caller. A cost of 0 tells a reader the work
@@ -73,8 +75,13 @@ export type ResolvedRate = {
  * put that on a report as a fact; a negative hourly rate is corruption, not a
  * discount. A genuine 0 IS kept — an unpaid intern's hour really does cost
  * nothing, and that is a statement somebody made.
+ *
+ * EXPORTED so `queries.ts` parses `project_value.contract_value` and
+ * `.subscription_monthly` through this same boundary rather than a second,
+ * looser `Number()` — the numeric-arrives-as-a-string rule applies to every
+ * money column, not only rates.
  */
-function toAmount(value: string | number | null | undefined): number | null {
+export function toAmount(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined) return null
   if (typeof value === 'string' && value.trim() === '') return null
   const amount = typeof value === 'number' ? value : Number(value)
@@ -240,6 +247,89 @@ export function costForEntries<E extends CostableEntry>(
     unpricedMinutes,
     fullyPriced: unpricedMinutes === 0,
     mixedCurrency: false,
+  }
+}
+
+/**
+ * The floor a cost aggregate's distinct-contributor count must clear before
+ * the figure is released, however it got there — one project, a narrow date
+ * range, a filter, anything that can narrow a query.
+ *
+ * THE RECONSTRUCTION ATTACK THIS BLOCKS: a cost total is Σ(hours × rate).
+ * When exactly one person contributed the hours behind it, `total / hours`
+ * IS that person's hourly rate — the capability gate on `rate_cards` and
+ * `person_rates` means nothing if the same number can be read back out of an
+ * aggregate nobody thought to gate the same way. Two contributors is the
+ * minimum that breaks the division: with two people and two unknown rates,
+ * one total and one hour figure can no longer be solved for either rate.
+ *
+ * Zero contributors carries no such risk — there is no rate to reconstruct
+ * because nobody logged anything — but is folded under the same guard anyway:
+ * there is no honest non-suppressed figure to show either way, and a caller
+ * checking `state === 'ok'` should not have to tell "no data yet" apart from
+ * "withheld to protect someone's pay" before it can safely skip rendering.
+ * `contributorCount` still travels with the suppressed result so a caller
+ * that DOES want to tell those two apart (an empty-state message versus a
+ * privacy notice) can, without this module deciding it for them.
+ */
+export const MIN_COST_CONTRIBUTORS = 2
+
+/** What `costForProject` needs beyond `costForEntries`: whose hour it was. */
+export type CostableAttributedEntry = CostableEntry & { userId: string }
+
+/** A cost aggregate safe to render — the contributor floor was cleared. */
+export type ProjectCostFigure = {
+  state: 'ok'
+  /** Distinct people behind `cost`. Never fewer than `MIN_COST_CONTRIBUTORS`. */
+  contributorCount: number
+  /** Σ minutes ÷ 60 across every entry, priced or not — a fact independent of money. */
+  hours: number
+  cost: CostBreakdown
+  /** Entries `rateResolver` could not price — a COUNT, distinct from `cost.unpricedMinutes`. */
+  unpricedEntryCount: number
+}
+
+/**
+ * The figure withheld. NO money field anywhere on this shape — not `amount`,
+ * not `hours` — so a caller cannot forward a suppressed result to a renderer
+ * that only checks `.amount` and prints `undefined` where a redaction should
+ * have stopped it cold. `state` must be narrowed to `'ok'` before any other
+ * field on `ProjectCostResult` even type-checks.
+ */
+export type SuppressedCostFigure = {
+  state: 'suppressed'
+  contributorCount: number
+}
+
+export type ProjectCostResult = ProjectCostFigure | SuppressedCostFigure
+
+/**
+ * `costForEntries`, plus the contributor-count gate that makes it safe to
+ * call on anything narrower than a whole workspace.
+ *
+ * This is the ONLY entry point `queries.ts` uses to turn worklog rows into a
+ * cost figure — never `costForEntries` directly — so the gate cannot be
+ * forgotten at a second call site the way a hand-rolled `if (n < 2)` could be.
+ */
+export function costForProject<E extends CostableAttributedEntry>(
+  entries: readonly E[],
+  rateResolver: (entry: E) => ResolvedRate | null,
+): ProjectCostResult {
+  const contributorCount = new Set(entries.map((entry) => entry.userId)).size
+  if (contributorCount < MIN_COST_CONTRIBUTORS) {
+    return { state: 'suppressed', contributorCount }
+  }
+
+  const cost = costForEntries(entries, rateResolver)
+  const unpricedEntryCount = entries.filter((entry) => rateResolver(entry) === null).length
+  const totalMinutes = entries.reduce((sum, entry) => sum + entry.minutes, 0)
+
+  return {
+    state: 'ok',
+    contributorCount,
+    hours: Math.round((totalMinutes / 60) * 100) / 100,
+    cost,
+    unpricedEntryCount,
   }
 }
 

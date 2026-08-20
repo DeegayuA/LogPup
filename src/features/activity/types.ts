@@ -31,6 +31,12 @@ export const ACTIVITY_ENTITY_TYPES = [
   'org_holiday',
   'app_grant',
   'handover',
+  // Money: a role rate, a person rate override, and what a project is worth.
+  // Added in the same change that writes the first logActivity call for each
+  // — see src/features/finance/rate-actions.ts.
+  'rate_card',
+  'person_rate',
+  'project_value',
 ] as const
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number]
