@@ -80,6 +80,14 @@ export const ROLE_GRANTS = {
   'user.create':                { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.approve':               { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.deactivate':            { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
+  // Removing somebody from the workspace entirely — they can no longer sign
+  // in and stop appearing anywhere work is handed out. Strictly heavier than
+  // user.deactivate, which leaves the account able to sign in and be told it
+  // is deactivated, so it does NOT inherit deactivate's scoped arm: a manager
+  // may stand their own team down, but deciding somebody is no longer part of
+  // the studio is not project work. Reversible from admin Trash, so it is
+  // absent from IRREVERSIBLE_ACTIONS.
+  'user.remove':                { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.profile.edit':          { superadmin: A, admin: A, manager: S, editor: O, member: O, stakeholder: O, auditor: N },
   'user.role.grant':            { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.role.grant.superadmin': { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },

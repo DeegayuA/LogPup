@@ -28,6 +28,7 @@ import type { ActionResult } from '@/lib/action-result'
 import type { TrashKind } from '@/features/admin/trash-grouping'
 import {
   purgeApp,
+  purgeBug,
   purgeKeyframe,
   purgeMeeting,
   purgeSegment,
@@ -35,8 +36,10 @@ import {
   purgeTask,
   restoreApp,
   restoreAssignment,
+  restoreBug,
   restoreKeyframe,
   restoreMeeting,
+  restorePerson,
   restoreSegment,
   restoreSprint,
   restoreTask,
@@ -53,6 +56,8 @@ async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<un
   switch (kind) {
     case 'app':
       return restoreApp(id)
+    case 'bug':
+      return restoreBug(id)
     case 'meeting':
       return restoreMeeting(id)
     case 'task':
@@ -65,6 +70,11 @@ async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<un
       return restoreKeyframe(id)
     case 'assignment':
       return restoreAssignment(id)
+    case 'person':
+      // `id` here is the user_deletions row, not the user — a person can be
+      // removed and restored more than once, and it is the interval that
+      // closes. See restorePerson in trash-actions.ts.
+      return restorePerson(id)
   }
 }
 
@@ -74,9 +84,18 @@ async function callRestore(kind: TrashKind, id: string): Promise<ActionResult<un
  * assignments are hard-deleted by design already, so there is no separate
  * row left to purge; the only lifecycle move available is restoring it.
  * Deliberately absent from this map, not an oversight.
+ *
+ * Neither do people, and for a harder reason. There IS a row a purge could
+ * delete — the users row — and deleting it is precisely what must never
+ * happen: user_deletions cascades from users, and so does everything else a
+ * person ever wrote. "Delete forever" on a person would not tidy a bin, it
+ * would take their comments, work logs and meeting attendance with them and
+ * leave the rest of the trail pointing at nothing. Removal is a tombstone
+ * exactly so that never becomes a button.
  */
 const PURGE_BY_KIND: Partial<Record<TrashKind, (id: string, confirm: string) => Promise<ActionResult>>> = {
   app: purgeApp,
+  bug: purgeBug,
   meeting: purgeMeeting,
   task: purgeTask,
   sprint: purgeSprint,

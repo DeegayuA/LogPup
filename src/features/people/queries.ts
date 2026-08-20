@@ -50,6 +50,7 @@ import {
   type ActivityDay,
 } from '@/features/people/activity-levels'
 import { splitPersonFollowups, type PersonFollowups } from '@/features/people/followup-split'
+import { notRemoved } from '@/features/people/removal-queries'
 import { isoDayAdd, isoDayOf, isoWeekStart } from '@/features/people/iso-day'
 import { splitPersonMeetings, type PersonMeetings } from '@/features/people/meeting-window'
 import {
@@ -183,6 +184,11 @@ export const getUserCapacities = cache(async function getUserCapacities(q?: stri
         eq(users.active, true),
         // Excludes self-signed-up users still awaiting admin approval.
         eq(users.status, 'approved'),
+        // The directory answers "who is here", so somebody with an open
+        // removal is not. Their past work is untouched and still attributed
+        // to them everywhere else — this is the one read that stops naming
+        // them, not a filter applied to the record of what they did.
+        notRemoved(users.id),
         // Escape LIKE metacharacters so "%"/"_" in the search box match literally.
         q ? ilike(users.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`) : undefined,
       ),
@@ -667,12 +673,28 @@ export async function getPersonActivity(userId: string): Promise<PersonActivity>
   return { days, total: activityTotal(days), peak: activityPeak(days), fromIso, toIso }
 }
 
+/**
+ * The roster every picker is built from — meeting attendees, task assignees,
+ * app lead/PM, assignment targets, handover successors. Its whole contract is
+ * "somebody you can hand work to right now", which is why the removal filter
+ * belongs here and nowhere near the joins that resolve who ALREADY holds
+ * something: a removed person keeps their name on the meeting they attended
+ * and the task they closed, they just stop being offered for the next one.
+ */
 export async function listActiveUsers(): Promise<ActiveUser[]> {
   return db
     .select({ id: users.id, name: users.name })
     .from(users)
-    // Excludes self-signed-up users still awaiting admin approval.
-    .where(and(eq(users.active, true), eq(users.status, 'approved')))
+    .where(
+      and(
+        eq(users.active, true),
+        // Excludes self-signed-up users still awaiting admin approval.
+        eq(users.status, 'approved'),
+        // Removed from the workspace — see the docblock above, and
+        // src/features/people/removal-queries.ts.
+        notRemoved(users.id),
+      ),
+    )
     .orderBy(asc(users.name))
 }
 

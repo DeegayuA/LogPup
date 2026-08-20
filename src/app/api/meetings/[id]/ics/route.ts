@@ -43,7 +43,12 @@ function sequenceFor(createdAt: Date, now: Date): number {
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth()
   if (!session?.user) return new Response('Unauthorized', { status: 401 })
-  if (!canAccessApp(session.user.status ?? 'pending', true)) {
+  // `active` passed, not hardcoded: this route is excluded from the proxy
+  // matcher (it must answer a file request with a status code, not a redirect
+  // to HTML), so the deactivation gate that pins every page to /deactivated
+  // never runs for it. Without this a deactivated account could still pull
+  // invites for meetings it can no longer open.
+  if (!canAccessApp(session.user.status ?? 'pending', session.user.active)) {
     return new Response('Not found', { status: 404 })
   }
 

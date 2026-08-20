@@ -65,6 +65,7 @@ import { getOpenBugCountForApp, listBugsForApp } from '@/features/bugs/queries'
 import { bugFilterHref, parseBugFilters } from '@/features/bugs/report-input'
 import { BugList } from '@/features/bugs/components/bug-list'
 import { ReportBugDialog } from '@/features/bugs/components/report-bug-dialog'
+import { BugCsvImportDialog } from '@/features/bugs/components/bug-csv-import-dialog'
 
 const SPRINT_STATUS_LABEL: Record<'planned' | 'active' | 'done', string> = {
   planned: 'Planned',
@@ -699,12 +700,17 @@ export default async function AppDetailPage(props: {
 
       {tab === 'bugs' ? (
         <div className="flex flex-col gap-4">
-          <p className="max-w-prose text-sm text-muted-foreground">
-            What is broken in {app.name}, and who has it. Reports arrive from wherever
-            somebody hit the problem — the page they were on comes with them, which is
-            why <span className="font-medium text-foreground">Report a bug</span> lives in
-            the header above and not down here.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="max-w-prose text-sm text-muted-foreground">
+              What is broken in {app.name}, and who has it. Reports arrive from wherever
+              somebody hit the problem — the page they were on comes with them.
+            </p>
+            {/* Import sits beside the list rather than in the header: filing one
+                bug is something anyone does from wherever they hit it, but
+                importing a file of them is a triage act, done here, looking at
+                the queue they land in. */}
+            <BugCsvImportDialog appId={app.id} appName={app.name} canImport={canTriageBugs} />
+          </div>
           <BugList
             bugs={bugs}
             filters={bugFilters}

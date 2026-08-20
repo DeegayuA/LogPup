@@ -59,6 +59,32 @@ export const bugReportInput = z.object({
 export type BugReportInput = z.infer<typeof bugReportInput>
 
 /**
+ * Correcting what a report SAYS, after it was filed.
+ *
+ * The bounds are lifted from `bugReportInput.shape` rather than restated,
+ * because two copies of "a title is 4 to 140 characters" is how an edit form
+ * starts accepting a title the original form would have refused.
+ *
+ * Both fields optional, neither defaulted — the same rule as bugTriageInput:
+ * fixing a title must not blank a description that was not sent.
+ *
+ * Deliberately NOT here: status, severity and assignee (bugTriageInput owns
+ * those), and `pagePath`, which is a fact about where the bug was hit rather
+ * than a sentence somebody wrote — editing it would rewrite evidence.
+ */
+export const bugContentInput = z
+  .object({
+    bugId: z.uuid(),
+    title: bugReportInput.shape.title.optional(),
+    description: bugReportInput.shape.description.optional(),
+  })
+  .refine((value) => value.title !== undefined || value.description !== undefined, {
+    message: 'Nothing to change',
+  })
+
+export type BugContentInput = z.infer<typeof bugContentInput>
+
+/**
  * Triaging one.
  *
  * Every field optional and NONE defaulted, mirroring apps/update-input.ts: a

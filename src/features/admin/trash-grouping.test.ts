@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 import {
   buildAssignmentTrashRow,
+  buildPersonTrashRow,
   buildKeyframeTrashRow,
   buildMeetingTrashRow,
   buildSegmentTrashRow,
@@ -167,6 +168,61 @@ describe('assignment trash row', () => {
       deletedByAvatarUrl: null,
     })
     expect(row.label).toBe('Unknown user')
+  })
+})
+
+describe('person trash row', () => {
+  it("labels with the removed person and puts the admin's reason in context", () => {
+    const row = buildPersonTrashRow({
+      id: 'ud1',
+      personName: 'Sam',
+      reason: 'Contract ended',
+      deletedAt: DELETED_AT,
+      deletedByName: 'Admin Alex',
+      deletedByAvatarUrl: null,
+    })
+    expect(row.label).toBe('Sam')
+    expect(row.context).toBe('Contract ended')
+    expect(row.parentTrashed).toBe(false)
+  })
+
+  // Unlike a note segment, whose label must NEVER be its content: the reason
+  // is the removing admin's own note, written for this exact audience, and it
+  // is what a second admin needs before deciding to put somebody back.
+  it('still states what kind of row it is when no reason was given', () => {
+    const row = buildPersonTrashRow({
+      id: 'ud2',
+      personName: 'Sam',
+      reason: null,
+      deletedAt: DELETED_AT,
+      deletedByName: null,
+      deletedByAvatarUrl: null,
+    })
+    expect(row.context).toBe('Removed from the workspace')
+  })
+
+  it('falls back to a placeholder label when the person is unresolvable', () => {
+    const row = buildPersonTrashRow({
+      id: 'ud3',
+      personName: null,
+      reason: null,
+      deletedAt: DELETED_AT,
+      deletedByName: null,
+      deletedByAvatarUrl: null,
+    })
+    expect(row.label).toBe('Unknown user')
+  })
+
+  it('keys the row by the removal interval, so a re-removal is its own row', () => {
+    const first = buildPersonTrashRow({
+      id: 'ud1', personName: 'Sam', reason: null,
+      deletedAt: DELETED_AT, deletedByName: null, deletedByAvatarUrl: null,
+    })
+    const second = buildPersonTrashRow({
+      id: 'ud2', personName: 'Sam', reason: null,
+      deletedAt: DELETED_AT, deletedByName: null, deletedByAvatarUrl: null,
+    })
+    expect(first.id).not.toBe(second.id)
   })
 })
 

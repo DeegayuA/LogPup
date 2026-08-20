@@ -22,16 +22,24 @@ export const TRASH_GROUP_ORDER: readonly TrashKind[] = [
   'segment',
   'keyframe',
   'assignment',
+  // Last, matching TRASH_KINDS: everything above is something somebody made
+  // and deleted; a person is somebody who left. See the comment on
+  // TRASH_KINDS in trash-grouping.ts.
+  'person',
 ]
 
 export const TRASH_GROUP_TITLES: Record<TrashKind, string> = {
   app: 'Projects',
   meeting: 'Meetings',
+  bug: 'Bug reports',
   task: 'Tasks',
   sprint: 'Sprints',
   segment: 'Note segments',
   keyframe: 'Keyframes',
   assignment: 'Assignments',
+  // "People", not "Removed people" — every group under this card is already
+  // the removed/deleted form of its kind, and no other title restates that.
+  person: 'People',
 }
 
 /**

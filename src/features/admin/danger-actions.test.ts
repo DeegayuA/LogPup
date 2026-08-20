@@ -84,6 +84,7 @@ const {
     deleteMeetingMock: vi.fn(),
     purgeSpies: {
       purgeApp: purgeResult(),
+      purgeBug: purgeResult(),
       purgeKeyframe: purgeResult(),
       purgeMeeting: purgeResult(),
       purgeSegment: purgeResult(),

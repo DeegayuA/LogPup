@@ -25,7 +25,15 @@ import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings
 // others: a deleted app takes its whole board and calendar out of every view
 // with it, so an admin scanning the trash for "what went missing today"
 // should meet the project before its parts.
-export const TRASH_KINDS = ['app', 'meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'] as const
+// 'bug' sits with the other app children (task, sprint) rather than at the
+// end: bug_reports.app_id is NOT NULL and ON DELETE CASCADE (schema.ts), so a
+// bug belongs to a project the same way a task does and goes with it on purge.
+// 'person' sits LAST, and not because it matters least: it is the only kind
+// here that is not work at all. Everything above it is something somebody
+// made and then deleted; a person is somebody who left. Reading the bin as
+// "what went missing from the projects, and separately, who went missing"
+// keeps those two questions from being scanned as one list.
+export const TRASH_KINDS = ['app', 'meeting', 'task', 'sprint', 'bug', 'segment', 'keyframe', 'assignment', 'person'] as const
 export type TrashKind = (typeof TRASH_KINDS)[number]
 
 export type TrashRow = {
@@ -61,6 +69,15 @@ export type RawAppTrashRow = {
    *  is then deleted must come back archived, and the trash row says so
    *  rather than implying every restore lands back on the active list. */
   status: string
+  deletedAt: Date
+  deletedByName: string | null
+  deletedByAvatarUrl: string | null
+}
+
+export type RawBugTrashRow = {
+  id: string
+  title: string
+  appName: string | null
   deletedAt: Date
   deletedByName: string | null
   deletedByAvatarUrl: string | null
@@ -119,6 +136,25 @@ export type RawAssignmentTrashRow = {
   deletedByAvatarUrl: string | null
 }
 
+/**
+ * An OPEN row in user_deletions — the same tombstone shape as the assignment
+ * kind above, not a deletedAt row. `users` has no deletedAt column and must
+ * not grow one (the long comment on userDeletions in db/schema.ts says why),
+ * so what stands in for "deleted" here is the removal interval's start.
+ */
+export type RawPersonTrashRow = {
+  /** user_deletions.id — the interval, not the person. It is the interval a
+   *  restore closes, and a person may have more than one over time. */
+  id: string
+  personName: string | null
+  /** Free text the remover typed: "contract ended", "duplicate account". */
+  reason: string | null
+  /** user_deletions.removedAt — when the interval opened. */
+  deletedAt: Date
+  deletedByName: string | null
+  deletedByAvatarUrl: string | null
+}
+
 // --- Builders ----------------------------------------------------------
 
 export function buildAppTrashRow(row: RawAppTrashRow): TrashRow {
@@ -137,6 +173,25 @@ export function buildAppTrashRow(row: RawAppTrashRow): TrashRow {
     // tasks and meetings are live iff the app is (the liveApps joins in
     // src/db/live.ts), so they are NOT separately trashed and must not be
     // separately listed here.
+    parentTrashed: false,
+  }
+}
+
+export function buildBugTrashRow(row: RawBugTrashRow): TrashRow {
+  return {
+    id: row.id,
+    // The bug's own title, unlike a note segment's — a bug report is a
+    // description of a fault somebody chose to publish to the team, not
+    // private content that deleting retracts.
+    label: row.title,
+    context: row.appName,
+    deletedByName: row.deletedByName,
+    deletedByAvatarUrl: row.deletedByAvatarUrl,
+    deletedAt: row.deletedAt,
+    // A bug's app may itself be trashed, but that does not block restoring the
+    // bug: bug_reports.app_id survives an app's soft delete untouched, so the
+    // report simply reappears with its project when the project comes back —
+    // the same reasoning as a task under a trashed sprint.
     parentTrashed: false,
   }
 }
@@ -219,6 +274,27 @@ export function buildAssignmentTrashRow(row: RawAssignmentTrashRow): TrashRow {
     deletedByName: row.deletedByName,
     deletedByAvatarUrl: row.deletedByAvatarUrl,
     deletedAt: row.deletedAt,
+    parentTrashed: false,
+  }
+}
+
+export function buildPersonTrashRow(row: RawPersonTrashRow): TrashRow {
+  return {
+    id: row.id,
+    label: row.personName ?? 'Unknown user',
+    // The reason IS shown, unlike a segment's content. It is not the removed
+    // person's own words being re-broadcast after they retracted them — it is
+    // the admin's note about why they removed somebody, written for exactly
+    // this audience, and it is the one fact a second admin needs before
+    // deciding whether to put them back. The fallback still states the kind
+    // of row this is, the way an app row's context does.
+    context: row.reason ?? 'Removed from the workspace',
+    deletedByName: row.deletedByName,
+    deletedByAvatarUrl: row.deletedByAvatarUrl,
+    deletedAt: row.deletedAt,
+    // Nothing contains a person. Their work is not nested under them either:
+    // it stayed live and attributed the whole time they were removed, so
+    // there is no parent to restore first.
     parentTrashed: false,
   }
 }

@@ -21,6 +21,7 @@ import { db } from '@/db'
 import { users, webauthnCredentials, webauthnLoginTokens } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { ACCOUNT_REMOVED_MESSAGE, isRemoved } from '@/features/people/removal-queries'
 
 /**
  * Passkeys — biometric sign-in for the PWA. First sign-in stays Google or
@@ -221,6 +222,12 @@ export async function completePasskeyLogin(
   // for sixty seconds.
   const [user] = await db.select().from(users).where(eq(users.id, credential.userId))
   if (!user || !user.active || user.status === 'rejected') return err('This account is not active')
+  // REMOVED from the workspace — a different state from the deactivation
+  // above (see the comment on userDeletions in src/db/schema.ts). Refused
+  // here as well as in the 'passkey' provider's authorize() because this is
+  // the only half of the passkey flow that can return a MESSAGE: the button
+  // toasts whatever this err() says, while the provider can only return null.
+  if (await isRemoved(user.id)) return err(ACCOUNT_REMOVED_MESSAGE)
 
   const { rpID, origin } = await relyingParty()
   let verified = false

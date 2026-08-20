@@ -1,16 +1,21 @@
 /**
- * One chronological list of every day the workspace does not work, from both
- * sources at once.
+ * One chronological list of every gazetted and company holiday, from both
+ * sources at once, saying for each whether the studio actually closes.
  *
  * WHY THIS EXISTS. The admin page used to list only `org_holidays` and told
  * the reader, in its empty state, that "gazetted Sri Lankan public holidays
  * already apply automatically and are not listed here". Both halves of that
  * sentence were true and together they were a trap: the gazetted calendar is
- * what actually exempts most days of the year (`isLkHoliday`, read at
+ * what actually exempts most days of the year (`isMercantileHoliday`, read at
  * coverage time), so the one page an admin opens to answer "is the 27th a
  * working day?" was the one page that could not answer it. Worse, the
  * add-form's own duplicate warning pointed at a list the duplicate would not
  * appear in.
+ *
+ * NOT EVERY ROW IS A DAY OFF. Gazetted and "day the studio closes" are two
+ * different facts — a bank closing day is gazetted and worked — so every row
+ * carries `closesTheStudio` and the page states the answer rather than
+ * leaving the reader to infer it from a row of category badges.
  *
  * The two sources stay SEPARATE ROWS on a shared date rather than merging
  * into one. A company holiday added on top of a gazetted one is a real,
@@ -23,7 +28,8 @@
  * testable here with two plain arrays and no mocking.
  */
 
-import { LK_HOLIDAYS, type HolidayCategory, type LkHoliday } from '@/lib/lk-holidays'
+import { excusesWork, LK_HOLIDAYS, type HolidayCategory, type LkHoliday } from '@/lib/lk-holidays'
+import { isOrgHolidayInForce } from '@/features/worklog/org-holidays'
 import type { OrgHolidayRow } from '@/features/worklog/org-holiday-queries'
 
 export type HolidaySource = 'gazette' | 'company'
@@ -103,6 +109,24 @@ export function splitByDay(
     // Newest first: the day that just went by is the one somebody is asking about.
     past: rows.filter((r) => r.day < todayIso).reverse(),
   }
+}
+
+/**
+ * Whether this row is a day the studio is actually shut.
+ *
+ * THE SAME QUESTION COVERAGE ASKS, so the page cannot say one thing while the
+ * denominator says another: a gazetted row closes the studio only if the
+ * Mercantile list covers it (`excusesWork`), and a company row only while it
+ * is in force (`isOrgHolidayInForce` — a cancellation never reaches back over
+ * a day that has already passed).
+ *
+ * A false here is not a defect in the row. Poya, Public and Bank days that
+ * the mercantile gazette leaves out are real gazetted days that this office
+ * works through, and listing them is how an admin can see that.
+ */
+export function closesTheStudio(row: HolidayCalendarRow): boolean {
+  if (row.source === 'gazette') return excusesWork(row.categories)
+  return isOrgHolidayInForce({ day: row.day, revokedFrom: row.revokedFrom })
 }
 
 /** Badge text for a gazetted day's categories. */

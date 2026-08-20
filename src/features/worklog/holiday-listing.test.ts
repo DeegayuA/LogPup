@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHolidayCalendar, splitByDay } from '@/features/worklog/holiday-listing'
+import { buildHolidayCalendar, closesTheStudio, splitByDay } from '@/features/worklog/holiday-listing'
 import { LK_HOLIDAYS } from '@/lib/lk-holidays'
 import type { OrgHolidayRow } from '@/features/worklog/org-holiday-queries'
 
@@ -92,5 +92,46 @@ describe('splitByDay', () => {
       '2026-04-20',
       '2026-04-14',
     ])
+  })
+})
+
+describe('closesTheStudio', () => {
+  // A day that is gazetted and worked. Listing it is the point; calling it a
+  // holiday without saying so would tell an admin the office is shut when it
+  // is not.
+  const bankOnly = { '2026-06-30': { name: 'Bank Half-Year Closing', categories: ['bank'] as const } }
+
+  it('is false for a gazetted day the mercantile list leaves out', () => {
+    const [row] = buildHolidayCalendar([], bankOnly as never)
+    expect(row.day).toBe('2026-06-30')
+    expect(closesTheStudio(row)).toBe(false)
+  })
+
+  it('is true for a mercantile day', () => {
+    const rows = buildHolidayCalendar([], gazette as never)
+    expect(rows.every(closesTheStudio)).toBe(true)
+  })
+
+  it('is true for a company holiday that was never cancelled', () => {
+    const [, company] = buildHolidayCalendar(
+      [orgRow({ id: 'a', day: '2026-04-20', name: 'Studio shutdown' })],
+      gazette as never,
+    )
+    expect(company.source).toBe('company')
+    expect(closesTheStudio(company)).toBe(true)
+  })
+
+  it('follows the revocation rule rather than restating it', () => {
+    // orgHolidaySet's `day < revokedFrom`: a cancellation reaches forwards
+    // only. The row cancelled from 2026-05-20 still closed 2026-05-19.
+    const rows = buildHolidayCalendar(
+      [
+        orgRow({ id: 'a', day: '2026-06-02', name: 'Cancelled shutdown', revokedFrom: '2026-05-20' }),
+        orgRow({ id: 'b', day: '2026-05-19', name: 'Shutdown already taken', revokedFrom: '2026-05-20' }),
+      ],
+      gazette as never,
+    )
+    expect(closesTheStudio(rows.find((r) => r.orgId === 'a')!)).toBe(false)
+    expect(closesTheStudio(rows.find((r) => r.orgId === 'b')!)).toBe(true)
   })
 })

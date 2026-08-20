@@ -513,7 +513,14 @@ export function AppsTable({
                 />
               </TableHead>
               <TableHead>App</TableHead>
-              <TableHead className="w-[17rem]">Lead and PM</TableHead>
+              {/* Lead and PM as their own columns, not a stacked pair inside
+                  one. Stacked, each row carried two labels and two full-width
+                  selects — about 230px of row for two facts — so six apps
+                  filled the viewport and the table read as a form per project
+                  rather than a list of projects. As columns the labels are
+                  written once, in the header, where a table's labels belong. */}
+              <TableHead className="w-[12.5rem]">Lead</TableHead>
+              <TableHead className="w-[12.5rem]">PM</TableHead>
               <TableHead className="w-[5.5rem] text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -531,41 +538,40 @@ export function AppsTable({
                     onToggle={(range) => toggleRow(app.id, range)}
                   />
                 </TableCell>
-                <TableCell className="align-top whitespace-normal">
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <span className="font-medium break-words">{app.name}</span>
-                    <Badge variant={STATUS_VARIANT[app.status]} className="self-start">
+                <TableCell className="align-middle whitespace-normal">
+                  {/* Status beside the name rather than under it: a badge on
+                      its own line doubles every row's height to carry one
+                      word. `min-w-0` + `break-words` keep a long project name
+                      wrapping inside the cell, which is what stops the page
+                      scrolling sideways. */}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 font-medium break-words">{app.name}</span>
+                    <Badge variant={STATUS_VARIANT[app.status]} className="shrink-0">
                       {STATUS_LABEL[app.status]}
                     </Badge>
                   </div>
                 </TableCell>
-                <TableCell className="align-top">
-                  <div className="flex flex-col gap-1.5">
-                    <Labelled label="Lead">
-                      <LeadSelect
-                        value={app.leadId}
-                        users={activeUsers}
-                        disabled={isPending}
-                        ariaLabel={`Lead for ${app.name}`}
-                        onChange={(leadId) =>
-                          runRow('Lead updated', () => updateApp(app.id, { leadId }))
-                        }
-                      />
-                    </Labelled>
-                    <Labelled label="PM">
-                      <PmSelect
-                        value={app.pmId}
-                        users={activeUsers}
-                        disabled={isPending}
-                        ariaLabel={`PM for ${app.name}`}
-                        onChange={(pmId) =>
-                          runRow('PM updated', () => updateApp(app.id, { pmId }))
-                        }
-                      />
-                    </Labelled>
-                  </div>
+                <TableCell className="align-middle">
+                  <LeadSelect
+                    value={app.leadId}
+                    users={activeUsers}
+                    disabled={isPending}
+                    ariaLabel={`Lead for ${app.name}`}
+                    onChange={(leadId) =>
+                      runRow('Lead updated', () => updateApp(app.id, { leadId }))
+                    }
+                  />
                 </TableCell>
-                <TableCell className="align-top text-right">
+                <TableCell className="align-middle">
+                  <PmSelect
+                    value={app.pmId}
+                    users={activeUsers}
+                    disabled={isPending}
+                    ariaLabel={`PM for ${app.name}`}
+                    onChange={(pmId) => runRow('PM updated', () => updateApp(app.id, { pmId }))}
+                  />
+                </TableCell>
+                <TableCell className="align-middle text-right">
                   <div className="flex justify-end">{rowActions(app)}</div>
                 </TableCell>
               </TableRow>

@@ -17,6 +17,12 @@ export default async function AppLayout({
   // necessarily excludes static-asset paths, so no authed page should rely on
   // it alone.
   if (!session?.user) redirect('/sign-in')
+  // Before getOwnTitle, before the shell, before any child page's queries
+  // run: a deactivated account must not read a row it happens to still be
+  // permitted to read. The proxy gate is the primary one (src/proxy.ts) —
+  // this is the same defense-in-depth the sign-in check above exists for,
+  // and it is what makes "sees nothing" true rather than merely likely.
+  if (!session.user.active) redirect('/deactivated')
   const isAdmin = isAdminRole(session.user.role)
   // Job role (users.title) isn't on the session/JWT (setUserTitle in
   // features/admin/actions.ts never re-mints the token) — read it here,

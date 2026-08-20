@@ -34,8 +34,12 @@ export async function universalSearch(q: string): Promise<SearchGroup[]> {
    * session" check therefore let an unapproved account enumerate every app,
    * person, task, sprint and meeting in the workspace, one query at a time.
    * Every provider inherits this gate; none re-checks it.
+   *
+   * `active` is passed for the same reason and not hardcoded: a deactivated
+   * account also holds a real session now (src/lib/auth.ts), and the palette
+   * is the one surface that reads across the whole workspace at once.
    */
-  if (!canAccessApp(session.user.status, true)) return []
+  if (!canAccessApp(session.user.status, session.user.active)) return []
 
   return runProviders(q, { user: session.user })
 }

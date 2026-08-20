@@ -12,7 +12,9 @@ import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
 import {
   bugReportInput,
+  bugContentInput,
   bugTriageInput,
+  type BugContentInput,
   type BugReportInput,
   type BugTriageInput,
 } from '@/features/bugs/report-input'
@@ -184,6 +186,76 @@ export async function triageBug(input: BugTriageInput): Promise<ActionResult> {
     return ok(undefined)
   } catch (error) {
     return unexpected('triageBug failed:', error)
+  }
+}
+
+/**
+ * Fixing what a report says — its title, its description, or both.
+ *
+ * SEPARATE FROM triageBug on purpose. Triage decides how bad a bug is and who
+ * has it; this rewrites the reporter's own words, which is a different act
+ * with a different failure mode: a wrong severity is corrected by the next
+ * person who looks, while a title nobody can parse is the reason nobody looks.
+ *
+ * GATED ON bug.triage, NOT on being the reporter, and allowed at ANY status.
+ * The title is the queue's index — what a triager scans forty rows by — so it
+ * matters most precisely when a bug is old and half-worked, which is exactly
+ * when a reporter-only or pre-assignment-only rule would lock it. The activity
+ * row below is what keeps that honest: every rewrite is attributed, so "who
+ * changed this, and from what" survives the edit.
+ */
+export async function updateBugContent(input: BugContentInput): Promise<ActionResult> {
+  const parsed = bugContentInput.safeParse(input)
+  if (!parsed.success) return err(parsed.error.issues[0]?.message ?? 'Nothing to change')
+  const { bugId, title, description } = parsed.data
+
+  const scope = await getBugScope(bugId)
+  if (!scope) return err('Bug not found')
+
+  const actor = await requireCapability('bug.triage', { appId: scope.appId })
+  if (!actor) return err('Admins only')
+
+  try {
+    const set: Partial<typeof bugReports.$inferInsert> = { updatedAt: new Date() }
+    if (title !== undefined) set.title = title
+    if (description !== undefined) set.description = description
+
+    const [updated] = await db
+      .update(bugReports)
+      // The same `isNull(deletedAt)` guard triageBug carries: editing a trashed
+      // bug changes a row nobody can see, and the edit would then appear out of
+      // nowhere if it were ever restored.
+      .set(set)
+      .where(and(eq(bugReports.id, bugId), isNull(bugReports.deletedAt)))
+      .returning({ id: bugReports.id })
+    if (!updated) return err('Bug not found')
+
+    const changes = [
+      title !== undefined ? 'title' : null,
+      description !== undefined ? 'description' : null,
+    ].filter((part): part is string => part !== null)
+
+    await logActivity({
+      actorId: actor.id,
+      verb: 'updated',
+      entityType: 'bug',
+      entityId: bugId,
+      // The OLD title: the feed line stays findable by the name the bug had
+      // while people were talking about it, and the new one is on screen.
+      entityLabel: scope.title,
+      appId: scope.appId,
+      appName: scope.appName,
+      pagePath: `/apps/${scope.appSlug}?tab=bugs`,
+      detail: `edited the ${changes.join(' and ')}`,
+      // The new title goes in metadata, and the description never appears here
+      // at all — a feed that quotes a 4,000-character report is a feed nobody
+      // scrolls past.
+      metadata: { ...(title !== undefined ? { title: { from: scope.title, to: title } } : {}) },
+    })
+    revalidateBug(scope.appSlug)
+    return ok(undefined)
+  } catch (error) {
+    return unexpected('updateBugContent failed:', error)
   }
 }
 

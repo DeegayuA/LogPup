@@ -2,7 +2,7 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { db } from '@/db'
 import {
   users, apps, assignments, sprints, tasks, meetings, meetingApps, meetingAttendees, meetingAiNotes,
-  meetingAttendeeRecommendations,
+  meetingAttendeeRecommendations, bugReports,
 } from '@/db/schema'
 
 // A backup contains password hashes and Google refresh tokens, so the JSON is
@@ -34,7 +34,7 @@ const backupUserColumns = {
 export async function buildSnapshot() {
   const [
     usersRows, appsRows, assignmentsRows, sprintsRows, tasksRows, meetingsRows, meetingAppsRows,
-    attendeesRows, aiNotesRows, attendeeRecommendationsRows,
+    attendeesRows, aiNotesRows, attendeeRecommendationsRows, bugReportsRows,
   ] = await Promise.all([
     db.select(backupUserColumns).from(users),
     db.select().from(apps),
@@ -57,6 +57,13 @@ export async function buildSnapshot() {
     // but the reason ledger and any AI-override/dismissed state are not —
     // backing it up avoids re-litigating a dismissed suggestion after a restore.
     db.select().from(meetingAttendeeRecommendations),
+    // Bug reports are first-hand accounts of a defect, written once by whoever
+    // hit it — nothing else in the export can reconstruct them. Read raw (this
+    // file is allowlisted in src/db/live.test.ts) so already-trashed reports
+    // come along too: a backup that dropped them would make a restore quietly
+    // narrower than the database it came from, and it is exactly the trashed
+    // rows a restore is most often reaching for.
+    db.select().from(bugReports),
   ])
   return {
     version: 1,
@@ -72,6 +79,7 @@ export async function buildSnapshot() {
       meetingAttendees: attendeesRows,
       meetingAiNotes: aiNotesRows,
       meetingAttendeeRecommendations: attendeeRecommendationsRows,
+      bugReports: bugReportsRows,
     },
   }
 }

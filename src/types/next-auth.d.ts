@@ -15,6 +15,12 @@ declare module 'next-auth' {
       // callback returns null for them — so in practice this is 'pending' or
       // 'approved', but the type stays honest about the full column domain.
       status: 'pending' | 'approved' | 'rejected'
+      // users.active. A deactivated person holds a real session on purpose —
+      // it is the only way to show them why they cannot use the app and let
+      // them sign out (see the jwt callback in src/lib/auth.ts). Non-optional
+      // because the session callback normalizes it, so every reader can just
+      // ask.
+      active: boolean
       mustChangePassword: boolean
       email: string
       name?: string | null
@@ -27,6 +33,7 @@ declare module 'next-auth/jwt' {
     userId?: string
     role?: UserRole
     status?: 'pending' | 'approved' | 'rejected'
+    active?: boolean
     mustChangePassword?: boolean
   }
 }

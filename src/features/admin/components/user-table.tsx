@@ -142,7 +142,10 @@ function PhoneCell({ user }: { user: AdminUser }) {
         if (event.key === 'Escape') setDraft(user.phone ?? '')
       }}
       disabled={isPending}
-      placeholder="—"
+      // A placeholder that says what the field takes, not an em dash. "—"
+      // reads as a value the field already holds, so an unset phone looked
+      // filled in with nothing rather than simply not set yet.
+      placeholder="Add a phone number"
       maxLength={30}
       aria-label={`Phone number for ${user.name}`}
       className="h-8 w-full font-mono text-xs"
@@ -193,7 +196,7 @@ function PersonalEmailCell({ user }: { user: AdminUser }) {
         if (event.key === 'Escape') setDraft(user.personalEmail ?? '')
       }}
       disabled={isPending}
-      placeholder="—"
+      placeholder="Add a personal email"
       maxLength={PERSONAL_EMAIL_MAX_LENGTH}
       aria-label={`Personal email for ${user.name}`}
       className="h-8 w-full text-xs"
@@ -299,7 +302,12 @@ export function UserTable({
   const [isPending, startTransition] = useTransition()
   const [picked, setPicked] = useState<string[]>([])
   const [anchorId, setAnchorId] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<string[]>([])
+  // ONE row open at a time, not a set. Every open row adds a six-field form to
+  // the page, so leaving several open turned the directory into a column of
+  // forms with the person's name lost somewhere above each one — you could no
+  // longer see who you were editing. An accordion also keeps the row you just
+  // opened on screen.
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [seatOpen, setSeatOpen] = useState(false)
   const [draftSeat, setDraftSeat] = useState<UserRole>('member')
   const [employmentOpen, setEmploymentOpen] = useState(false)
@@ -452,18 +460,6 @@ export function UserTable({
     )
   }
 
-  function handoverLink(user: AdminUser, isSelf: boolean) {
-    if (isSelf) return null
-    return (
-      <Link
-        href={`/admin/people/${user.id}/handover`}
-        className="text-2xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        Hand over work
-      </Link>
-    )
-  }
-
   function activeControl(user: AdminUser, isSelf: boolean) {
     return (
       <div title={isSelf ? SELF_TITLE : undefined} className="inline-block">
@@ -510,31 +506,53 @@ export function UserTable({
    */
   function detailFields(user: AdminUser, isSelf: boolean) {
     return (
-      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {/* Employment has its own column from lg up; below that it belongs
-            here rather than nowhere. */}
-        <div className="flex flex-col gap-1 lg:hidden">
-          <dt className="text-2xs text-muted-foreground">Employment</dt>
-          <dd className="min-w-0">{employmentControl(user, isSelf)}</dd>
-        </div>
-        <Field label="Job role">
-          <JobRoleCell user={user} />
-        </Field>
-        <Field label="Phone">
-          <PhoneCell user={user} />
-        </Field>
-        <Field label="Personal email">
-          <PersonalEmailCell user={user} />
-        </Field>
-        <Field label="Organizations" wide>
-          <OrgTagsCell user={user} suggestions={allOrgTags} />
-        </Field>
-        <Field label="Offboarding" wide>
-          {handoverLink(user, isSelf) ?? (
-            <span className="text-xs text-muted-foreground">Not available for your own account</span>
+      /* Contained and inset rather than free-floating in the row. Open, this
+         panel is taller than the row that owns it, and with no border of its
+         own it read as a form belonging to whichever name happened to be
+         above it. The left rule ties it to the person; `bg-muted/30` says
+         "detail about the row" rather than "another row". */
+      <div className="rounded-lg border border-border border-l-2 border-l-primary/40 bg-muted/30 p-4">
+        <dl className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+          {/* Employment has its own column from lg up; below that it belongs
+              here rather than nowhere. */}
+          <div className="flex flex-col gap-1.5 lg:hidden">
+            <dt className="text-xs font-medium text-muted-foreground">Employment</dt>
+            <dd className="min-w-0 max-w-sm">{employmentControl(user, isSelf)}</dd>
+          </div>
+          <Field label="Job role">
+            <JobRoleCell user={user} />
+          </Field>
+          <Field label="Phone">
+            <PhoneCell user={user} />
+          </Field>
+          <Field label="Personal email">
+            <PersonalEmailCell user={user} />
+          </Field>
+          <Field label="Organizations">
+            <OrgTagsCell user={user} suggestions={allOrgTags} />
+          </Field>
+        </dl>
+
+        {/* Offboarding is separated by a rule and rendered as a control, not a
+            sentence. Under the editable fields it read as a sixth field with a
+            missing input; it is the one thing here that leaves this page. */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+          <div className="flex flex-col">
+            <span className="text-xs font-medium">Offboarding</span>
+            <span className="text-2xs text-muted-foreground">
+              Reassign this person&apos;s open work before they leave.
+            </span>
+          </div>
+          {isSelf ? (
+            <span className="text-2xs text-muted-foreground">Not available for your own account</span>
+          ) : (
+            <Button variant="outline" size="sm" render={<Link href={`/admin/people/${user.id}/handover`} />}>
+              <UserRoundCog aria-hidden className="size-3.5" />
+              Hand over work
+            </Button>
           )}
-        </Field>
-      </dl>
+        </div>
+      </div>
     )
   }
 
@@ -739,7 +757,7 @@ export function UserTable({
           <TableBody>
             {users.map((user) => {
               const isSelf = user.id === currentUserId
-              const isOpen = expanded.includes(user.id)
+              const isOpen = expanded === user.id
               return [
                 <TableRow
                   key={user.id}
@@ -769,11 +787,7 @@ export function UserTable({
                       aria-controls={`person-detail-${user.id}`}
                       aria-label={`${isOpen ? 'Hide' : 'Show'} details for ${user.name}`}
                       onClick={() =>
-                        setExpanded((current) =>
-                          current.includes(user.id)
-                            ? current.filter((id) => id !== user.id)
-                            : [...current, user.id],
-                        )
+                        setExpanded((current) => (current === user.id ? null : user.id))
                       }
                     >
                       <ChevronDown
@@ -803,19 +817,21 @@ export function UserTable({
   )
 }
 
-function Field({
-  label,
-  children,
-  wide,
-}: {
-  label: string
-  children: React.ReactNode
-  wide?: boolean
-}) {
+/**
+ * One labelled field in the person detail panel.
+ *
+ * `max-w-sm` on the value is the point: an input stretched to the full width
+ * of a two-column grid reads as a text area for a phone number, and the panel
+ * looked like a form with no alignment because each control sized itself to
+ * whatever cell it landed in. Labels are `text-xs`, not `text-2xs` — at 10px
+ * and muted they fell under 4.5:1 in dark mode, which is where this page is
+ * actually read.
+ */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className={wide ? 'flex flex-col gap-1 sm:col-span-2' : 'flex flex-col gap-1'}>
-      <dt className="text-2xs text-muted-foreground">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
+    <div className="flex flex-col gap-1.5">
+      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 max-w-sm">{children}</dd>
     </div>
   )
 }

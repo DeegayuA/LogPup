@@ -28,6 +28,19 @@ describe('isRequiredWorkDay', () => {
     const holiday = (iso: string) => iso === '2026-08-13'
     expect(isRequiredWorkDay('2026-08-13', holiday)).toBe(false)
   })
+
+  it('does not require a mercantile holiday even with no callback passed', () => {
+    // The default is the mercantile rule, so a caller that passes nothing
+    // still gets the days the office is actually shut. 2026-05-01 is Vesak.
+    expect(isRequiredWorkDay('2026-05-01')).toBe(false)
+  })
+
+  it('DOES require the bank closing days — gazetted is not the same as off', () => {
+    // Both are in LK_HOLIDAYS and neither is on the mercantile list; the banks
+    // shut, this studio does not. Asking for the log is correct.
+    expect(isRequiredWorkDay('2026-06-30')).toBe(true)
+    expect(isRequiredWorkDay('2026-12-31')).toBe(true)
+  })
 })
 
 describe('missingWorkDays', () => {

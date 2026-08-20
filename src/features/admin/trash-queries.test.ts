@@ -6,6 +6,7 @@ import {
   meetings,
   sprints,
   tasks,
+  userDeletions,
 } from '@/db/schema'
 
 // getTrash() fires one bounded row-SELECT + one COUNT per source, all inside
@@ -57,14 +58,16 @@ beforeEach(() => {
 })
 
 describe('getTrash', () => {
-  it('returns all seven groups, in kind order, even when every source is empty', async () => {
+  it('returns all nine groups, in kind order, even when every source is empty', async () => {
     const groups = await getTrash()
     // 'app' leads deliberately, not alphabetically: a deleted project is the
     // only kind that can explain the others (its meetings and sprints leave
     // every view with it), so it is read first. Same order as TRASH_KINDS and
     // TRASH_GROUP_ORDER — all three move together, or the card renders one
     // order while the data layer returns another.
-    expect(groups.map((g) => g.kind)).toEqual(['app', 'meeting', 'task', 'sprint', 'segment', 'keyframe', 'assignment'])
+    expect(groups.map((g) => g.kind)).toEqual([
+      'app', 'meeting', 'task', 'sprint', 'bug', 'segment', 'keyframe', 'assignment', 'person',
+    ])
     for (const g of groups) {
       expect(g.rows).toEqual([])
       expect(g.totalCount).toBe(0)
@@ -151,6 +154,38 @@ describe('getTrash', () => {
     const groups = await getTrash()
     expect(groups.find((g) => g.kind === 'task')!.rows[0].label).toBe('Fix flaky test')
     expect(groups.find((g) => g.kind === 'sprint')!.rows[0].label).toBe('Sprint 9')
+  })
+
+  it('an open user_deletions row becomes the person group, keyed by the interval', async () => {
+    qFor(userDeletions).rows = [
+      [
+        {
+          // The user_deletions row, NOT the user — a person can be removed
+          // and restored more than once, and restorePerson closes ONE
+          // interval, so the interval is what the row has to be keyed by.
+          id: 'ud1',
+          personName: 'Sam',
+          reason: 'Contract ended',
+          deletedAt: new Date('2026-08-01T00:00:00Z'),
+          deletedByName: 'Admin Alex',
+          deletedByAvatarUrl: null,
+        },
+      ],
+    ]
+    qFor(userDeletions).count = [[{ total: 3 }]]
+
+    const groups = await getTrash()
+    const personGroup = groups.find((g) => g.kind === 'person')!
+
+    expect(personGroup.rows[0]).toMatchObject({
+      id: 'ud1',
+      label: 'Sam',
+      context: 'Contract ended',
+      // Nothing contains a person, and their work never went anywhere — so
+      // there is never a parent to restore first.
+      parentTrashed: false,
+    })
+    expect(personGroup.totalCount).toBe(3)
   })
 
   it('shapes a trashed keyframe with the neutral label and never a blob URL', async () => {

@@ -2,7 +2,7 @@ import { Suspense } from 'react'
 import { format } from 'date-fns'
 import { getSession } from '@/lib/session'
 import { cn } from '@/lib/utils'
-import { LK_HOLIDAYS } from '@/lib/lk-holidays'
+import { isMercantileHoliday } from '@/lib/lk-holidays'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { loadActor } from '@/features/auth/actor'
 import { can, isAdminRole } from '@/features/auth/capabilities'
@@ -161,10 +161,13 @@ async function CatchUp({ userId, today }: { userId: string; today: string }) {
     // APPROVED ONLY, deliberately. A pending absence exempts nothing, so
     // nobody can lower their own denominator by typing.
     exemptDays: absenceDays(approved, from, to),
-    // LK_HOLIDAYS is the gazetted map working-days.ts reads; company holidays
-    // compose on top of it through the same callback, so a studio shutdown
-    // needs no deploy and no second definition of "holiday".
-    isHoliday: (iso) => iso in LK_HOLIDAYS || orgHolidays.has(iso),
+    // `isMercantileHoliday` is the rule working-days.ts defaults to — the
+    // gazette lists that actually close the office, not every gazetted day —
+    // and company holidays compose on top of it through the same callback, so
+    // a studio shutdown needs no deploy and no second definition of "holiday".
+    // A membership test against LK_HOLIDAYS here used to be exactly that
+    // second definition, and it excused the bank closing days.
+    isHoliday: (iso) => isMercantileHoliday(iso) || orgHolidays.has(iso),
     patternFor: (iso) => patternForDay(schedule, iso),
     joinedOn,
     today,

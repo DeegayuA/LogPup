@@ -33,6 +33,7 @@ import { buildSnapshot, encryptSnapshot } from '@/features/admin/backup'
 import { getTrash } from '@/features/admin/trash-queries'
 import {
   purgeApp,
+  purgeBug,
   purgeKeyframe,
   purgeMeeting,
   purgeSegment,
@@ -396,13 +397,18 @@ export async function wipeMeetingRecordings(confirm: string): Promise<ActionResu
 // ===========================================================================
 
 const PURGE_BY_KIND: Record<
-  Exclude<TrashKind, 'assignment'>,
+  // 'person' is excluded for the same reason 'assignment' is: both are
+  // tombstones rather than deleted rows, and purging one would mean hard
+  // deleting the user and cascading their work away. Removal is undone by
+  // restoring, never by emptying the bin.
+  Exclude<TrashKind, 'assignment' | 'person'>,
   (id: string, confirm: string) => Promise<ActionResult>
 > = {
   segment: purgeSegment,
   keyframe: purgeKeyframe,
   task: purgeTask,
   sprint: purgeSprint,
+  bug: purgeBug,
   meeting: purgeMeeting,
   app: purgeApp,
 }
@@ -440,7 +446,14 @@ export async function emptyTrash(confirm: string): Promise<ActionResult<PurgePro
 
   const progress = await runPurgeBatch(
     batch.map((job) => ({
-      run: () => PURGE_BY_KIND[job.kind as Exclude<TrashKind, 'assignment'>](job.id, PURGE_CONFIRM_PHRASE),
+      // The cast tracks PURGEABLE_TRASH_KINDS, which lists neither tombstone
+      // kind: 'assignment' has no purge action, and 'person' must never have
+      // one (purging a removal would mean hard-deleting the user).
+      run: () =>
+        PURGE_BY_KIND[job.kind as Exclude<TrashKind, 'assignment' | 'person'>](
+          job.id,
+          PURGE_CONFIRM_PHRASE,
+        ),
     })),
     remaining,
   )

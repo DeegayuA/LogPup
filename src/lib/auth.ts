@@ -7,10 +7,28 @@ import { and, isNull, gt, eq, type SQL } from 'drizzle-orm'
 import { db } from '@/db'
 import { webauthnLoginTokens, users } from '@/db/schema'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
+import { mayHoldSession } from '@/lib/access-gate'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { verifyPassword } from '@/lib/password'
 import { verifyGoogleIdToken } from '@/features/auth/google-one-tap'
 import { loginRateLimiter, RateLimitError, LOCKOUT_MESSAGE } from '@/lib/rate-limit'
+import {
+  ACCOUNT_REMOVED_MESSAGE,
+  ACCOUNT_REMOVED_REDIRECT,
+  AccountRemovedError,
+  isRemoved,
+} from '@/features/people/removal-queries'
+
+// REMOVAL IS NOT DEACTIVATION, and every refusal below now carries one of
+// each. They answer to different admin actions and are written as separate
+// statements everywhere so they stay independently editable:
+//   users.active === false  — DEACTIVATED. The account still signs in and is
+//   shown /deactivated; `mayHoldSession` deliberately does not consult it.
+//   an OPEN user_deletions row — REMOVED. Somebody who is no longer part of
+//   the workspace: no session at all, from any provider, until an admin
+//   restores them from admin Trash (restorePerson).
+// The removal checks are the isRemoved() ones. Never fold either into the
+// other, and never into mayHoldSession — that predicate is about `status`.
 
 const MAX_PASSWORD_LENGTH = 200
 
@@ -133,11 +151,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const [existing] = await selectUsers(eq(users.email, identity.email))
         if (existing) {
-          // The same two refusals the Google branch of the signIn callback
-          // makes. 'pending' still signs in on purpose: they need a session to
-          // reach /pending at all.
-          if (!existing.active || existing.status === 'rejected') {
-            console.warn(`[auth] one-tap denied: ${identity.email} is deactivated or rejected`)
+          // The same refusal the Google branch of the signIn callback makes.
+          // 'pending' still signs in on purpose: they need a session to reach
+          // /pending at all. So does a deactivated account (active=false) —
+          // see the jwt callback for why being told you are deactivated
+          // requires holding a session first.
+          if (existing.status === 'rejected') {
+            console.warn(`[auth] one-tap denied: ${identity.email} was rejected by an admin`)
+            return null
+          }
+          // REMOVED — separate from the rejection above, and unlike
+          // deactivation it gets no session to be told anything with. A
+          // credentials authorize() cannot carry a message back (null
+          // collapses to CredentialsSignin), so the one-tap component's
+          // generic "that account cannot sign in" stands and this console
+          // line is what an admin reads.
+          if (await isRemoved(existing.id)) {
+            console.warn(`[auth] one-tap denied: ${identity.email} was removed from the workspace`)
             return null
           }
           // Never clobber an uploaded avatar (those are /api/avatar/ URLs) —
@@ -178,7 +208,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!email || !password || !emailAllowed(email)) return null
         if (loginRateLimiter.isBlocked(email)) throw new RateLimitError(LOCKOUT_MESSAGE)
         const [u] = await selectUsers(eq(users.email, email))
-        if (!u || !u.active || !u.passwordHash) {
+        // `active` is deliberately NOT consulted: a deactivated person signs
+        // in with their real password and is then shown /deactivated. Getting
+        // the password wrong and being deactivated must stay two different
+        // outcomes — refusing here would report a deactivation as "wrong
+        // password" and burn a rate-limit attempt for it.
+        if (!u || !u.passwordHash) {
           loginRateLimiter.recordFailure(email)
           return null
         }
@@ -186,7 +221,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           loginRateLimiter.recordFailure(email)
           return null
         }
+        // REMOVED — checked only AFTER the password verifies, deliberately.
+        // Refusing earlier would answer "does this person still work here?"
+        // to anyone typing a guess, turning the message into an enumeration
+        // oracle. It is also not a rate-limiter failure: the credential was
+        // correct, and locking the account would outlast a restore.
         loginRateLimiter.reset(email)
+        if (await isRemoved(u.id)) throw new AccountRemovedError(ACCOUNT_REMOVED_MESSAGE)
         return { id: u.id, email: u.email, name: u.name }
       },
     }),
@@ -217,9 +258,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           .returning({ userId: webauthnLoginTokens.userId })
         if (!row) return null
         const [u] = await selectUsers(eq(users.id, row.userId))
-        // Same refusals as the jwt callback — a deactivated or rejected
-        // account's token redeems to nothing.
-        if (!u || !u.active || u.status === 'rejected') return null
+        // Same refusal as the jwt callback — a rejected account's token
+        // redeems to nothing. A deactivated one does redeem: their passkey is
+        // still theirs, and the session it mints only reaches /deactivated.
+        if (!u || u.status === 'rejected') return null
+        // REMOVED. completePasskeyLogin refuses this with the real message
+        // before a token is ever minted; this is the backstop for a token
+        // minted in the sixty seconds before the removal landed.
+        if (await isRemoved(u.id)) return null
         return { id: u.id, email: u.email, name: u.name }
       },
     }),
@@ -243,7 +289,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             const email = String(creds?.email ?? '').trim().toLowerCase()
             if (!emailAllowed(email)) return null
             const [u] = await selectUsers(eq(users.email, email))
-            if (u) return u.active ? { id: u.id, email: u.email, name: u.name } : null
+            // Deactivated included, so an E2E run can actually reach the
+            // /deactivated screen instead of only ever seeing the refusal.
+            // REMOVED is not: this door is refused too, so an E2E run that
+            // removes somebody and tries to sign in as them observes the real
+            // behaviour rather than a hole this provider opened.
+            if (u) return (await isRemoved(u.id)) ? null : { id: u.id, email: u.email, name: u.name }
             // Only the configured dev-login identity may be auto-provisioned;
             // every other address must already exist (unchanged prior behavior).
             const devEmail = process.env.DEV_LOGIN_EMAIL?.trim().toLowerCase()
@@ -310,20 +361,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       const [existing] = await selectUsers(eq(users.email, email))
 
-      // Notion: never auto-provision. Only an existing, active, non-rejected
-      // allowed user may log in.
+      // Notion: never auto-provision. Only an existing, non-rejected allowed
+      // user may log in — deactivation is no longer a refusal here, on the
+      // same rule every other provider now follows (see the jwt callback).
       if (provider === 'notion') {
         if (!existing) {
           console.warn(`[auth] denied: Notion account ${email} has no matching user`)
           return false
         }
-        if (!existing.active) {
-          console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
-          return false
-        }
         if (existing.status === 'rejected') {
           console.warn(`[auth] denied: ${email} was rejected by an admin (status=rejected)`)
           return false
+        }
+        // REMOVED. A URL rather than `false`: `false` collapses to Auth.js's
+        // generic AccessDenied, and an OAuth redirect is the one sign-in path
+        // with nowhere else to put a message.
+        if (await isRemoved(existing.id)) {
+          console.warn(`[auth] denied: ${email} was removed from the workspace`)
+          return ACCOUNT_REMOVED_REDIRECT
         }
         return true
       }
@@ -333,15 +388,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // next, not this callback. A 'pending' user still returns true here:
       // they need a session to reach /pending and finish onboarding (see the
       // jwt callback and src/proxy.ts), they just can't reach anything else
-      // yet.
+      // yet. Nor does a deactivated one: same reasoning, different
+      // destination (/deactivated).
       if (existing) {
-        if (!existing.active) {
-          console.warn(`[auth] denied: ${email} is deactivated (active=false)`)
-          return false
-        }
         if (existing.status === 'rejected') {
           console.warn(`[auth] denied: ${email} was rejected by an admin (status=rejected)`)
           return false
+        }
+        // REMOVED — refused BEFORE the token/avatar refresh below, or a
+        // removed person's account would keep silently re-storing a working
+        // Google refresh token on every attempt.
+        if (await isRemoved(existing.id)) {
+          console.warn(`[auth] denied: ${email} was removed from the workspace`)
+          return ACCOUNT_REMOVED_REDIRECT
         }
 
         const updates: { googleRefreshToken?: string; avatarUrl?: string } = {}
@@ -389,17 +448,37 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // email casing (observed from some OAuth IdPs) still matches the row.
       const email = token.email.toLowerCase()
       const [u] = await selectUsers(eq(users.email, email))
-      // Inactive or rejected: no session, full stop — unchanged from before,
-      // now also covering the 'rejected' outcome of admin review. A
-      // 'pending' user, in contrast, MUST get a token: they need a session to
-      // reach /pending and submit onboarding info. src/proxy.ts is what
-      // actually keeps them off every other route while pending — this
-      // callback only kills sessions for outcomes that should never see the
-      // app at all.
-      if (!u || !u.active || u.status === 'rejected') return null
+      // Rejected: no session, full stop. That is the one outcome of admin
+      // review that should never see anything.
+      //
+      // DEACTIVATION IS NOT THAT, and used to be treated as if it were.
+      // Killing the token here meant a deactivated person bounced off
+      // /sign-in with an "Access denied" they could neither read an
+      // explanation for nor act on — they could not even sign out, because
+      // there was nothing to sign out of. A deactivated account now MUST get
+      // a token, for the same reason 'pending' always has: being told what
+      // happened to your account requires being signed in to be told. What
+      // stops them going anywhere else is `token.active`, which the proxy,
+      // the (app) layout and every capability check read (see src/proxy.ts,
+      // src/app/(app)/layout.tsx, src/features/auth/actor.ts).
+      if (!u || !mayHoldSession(u.status)) return null
+      // REMOVED: no session, which is the whole difference from deactivation
+      // three lines up. Here rather than only at the provider doors because
+      // this callback runs on every session read — so an admin removing
+      // somebody mid-session ends that session on their next navigation,
+      // instead of leaving them signed in until the token expires.
+      //
+      // One extra indexed single-row lookup per request, accepted for the
+      // same reason loadActor pays for one: a permission input that only
+      // takes effect at re-login is not a permission input.
+      if (await isRemoved(u.id)) return null
       token.userId = u.id
       token.role = u.role
       token.status = u.status
+      // Re-read per request like everything else here, which is what makes
+      // deactivation take effect on the next navigation of an already-open
+      // tab — and reactivation likewise, with no re-login.
+      token.active = u.active
       // This callback hits the DB on every session read (not just at sign-in),
       // so the flag refreshes per request: the moment setOwnPassword clears it
       // on the users row, the very next request unsticks — no re-login needed.
@@ -412,6 +491,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.id = token.userId as string
       session.user.role = token.role as 'admin' | 'member'
       session.user.status = token.status as 'pending' | 'approved' | 'rejected'
+      // Normalized to a real boolean HERE and nowhere else, so no reader
+      // downstream has to decide what a missing claim means. Absent only on a
+      // token the jwt callback returned early for (no email on it), which
+      // carries no userId either and so fails every id-based check anyway.
+      session.user.active = token.active !== false
       session.user.mustChangePassword = token.mustChangePassword === true
       return session
     },

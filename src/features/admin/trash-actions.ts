@@ -15,11 +15,13 @@ import {
   apps,
   assignmentHistory,
   assignments,
+  bugReports,
   meetingNoteSegments,
   meetingScreenshots,
   meetings,
   sprints,
   tasks,
+  userDeletions,
   users,
 } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
@@ -106,6 +108,20 @@ async function revalidateAppEntityTrashPaths(appId: string) {
   revalidateTrashPaths()
 }
 
+/**
+ * A person coming back changes every surface that hands out work — the
+ * directory, their own page, and the pickers rendered inside the app shell —
+ * so this revalidates the layout rather than a page list. Their past work
+ * needs nothing revalidated: attribution joins never filtered them out in
+ * the first place, so nothing rendered from those is stale.
+ */
+function revalidatePersonTrashPaths(userId: string) {
+  revalidatePath('/people')
+  revalidatePath('/people/' + userId)
+  revalidatePath('/profile')
+  revalidateTrashPaths()
+}
+
 function revalidateAssignmentTrashPaths(slug: string | null, userId: string) {
   if (slug) revalidatePath('/apps/' + slug)
   revalidatePath('/people')
@@ -164,6 +180,34 @@ export async function restoreApp(appId: string): Promise<ActionResult> {
   revalidatePath('/apps/' + row.slug)
   revalidatePath('/meetings')
   revalidateTrashPaths()
+  return ok(undefined)
+}
+
+export async function restoreBug(bugId: string): Promise<ActionResult> {
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
+  const parsedId = uuidInput.safeParse(bugId)
+  if (!parsedId.success) return err('Invalid bug report')
+
+  const restored = await db
+    .update(bugReports)
+    .set({ deletedAt: null, deletedBy: null })
+    .where(and(eq(bugReports.id, parsedId.data), isNotNull(bugReports.deletedAt)))
+    .returning({ id: bugReports.id, title: bugReports.title, appId: bugReports.appId })
+  if (restored.length === 0) return err('Not found, or it was already restored')
+  const [row] = restored
+
+  const slug = await slugForApp(row.appId)
+  await logActivity({
+    actorId: actor.id,
+    verb: 'restored',
+    entityType: 'bug',
+    entityId: row.id,
+    entityLabel: row.title,
+    appId: row.appId,
+    pagePath: slug ? '/apps/' + slug + '?tab=bugs' : null,
+  })
+  await revalidateAppEntityTrashPaths(row.appId)
   return ok(undefined)
 }
 
@@ -466,6 +510,51 @@ export async function restoreAssignment(historyId: string): Promise<ActionResult
   return ok(undefined)
 }
 
+/**
+ * Closes an open removal interval — the person is part of the workspace
+ * again: they can sign in, and they reappear in the directory and every
+ * picker.
+ *
+ * Nothing else has to be undone, which is the point of the tombstone shape:
+ * removeUser (src/features/admin/actions.ts) never touched users.active,
+ * users.role, their assignments or anything they wrote, so there is no
+ * cascade to replay and no "what state were they in before" to guess at.
+ * Contrast restoreApp, which had to reason about children it deliberately
+ * did NOT mark.
+ *
+ * The guarded UPDATE is the whole race story: restoredAt must still be null,
+ * so two admins clicking Restore at once close the interval once and the
+ * loser is told it was already restored. It also means this can never close
+ * an interval that a later removal reopened — that is a different row.
+ */
+export async function restorePerson(removalId: string): Promise<ActionResult> {
+  const actor = await requireCapability('trash.restore')
+  if (!actor) return err('Admins only')
+  const parsedId = uuidInput.safeParse(removalId)
+  if (!parsedId.success) return err('Invalid removal')
+
+  const restored = await db
+    .update(userDeletions)
+    .set({ restoredAt: new Date(), restoredBy: actor.id })
+    .where(and(eq(userDeletions.id, parsedId.data), isNull(userDeletions.restoredAt)))
+    .returning({ userId: userDeletions.userId })
+  if (restored.length === 0) return err('Not found, or they were already restored')
+  const [row] = restored
+
+  const personName = await nameForUser(row.userId)
+  await logActivity({
+    actorId: actor.id,
+    verb: 'restored',
+    entityType: 'user',
+    entityId: row.userId,
+    entityLabel: personName ?? 'Unknown user',
+    pagePath: '/people/' + row.userId,
+    detail: 'back in the workspace',
+  })
+  revalidatePersonTrashPaths(row.userId)
+  return ok(undefined)
+}
+
 // ===========================================================================
 // PURGES
 //
@@ -528,6 +617,39 @@ export async function purgeApp(appId: string, confirm: string): Promise<ActionRe
   revalidatePath('/apps')
   revalidatePath('/meetings')
   revalidateTrashPaths()
+  return ok(undefined)
+}
+
+export async function purgeBug(bugId: string, confirm: string): Promise<ActionResult> {
+  const actor = await requireCapability('trash.purge')
+  if (!actor) return err('Admins only')
+  const parsedId = uuidInput.safeParse(bugId)
+  if (!parsedId.success) return err('Invalid bug report')
+  const confirmError = checkConfirm(confirm)
+  if (confirmError) return confirmError
+
+  // Nothing hangs off a bug report. linked_task_id points OUTWARD at the task
+  // opened to fix it, and that task is a row of its own that must survive the
+  // report being purged — which the FK already guarantees, since the reference
+  // runs from this table to tasks and not the other way.
+  const deleted = await db
+    .delete(bugReports)
+    .where(and(eq(bugReports.id, parsedId.data), isNotNull(bugReports.deletedAt)))
+    .returning({ id: bugReports.id, title: bugReports.title, appId: bugReports.appId })
+  if (deleted.length === 0) return err('Not found, or it was restored — nothing purged')
+  const [row] = deleted
+
+  const slug = await slugForApp(row.appId)
+  await logActivity({
+    actorId: actor.id,
+    verb: 'purged',
+    entityType: 'bug',
+    entityId: row.id,
+    entityLabel: row.title,
+    appId: row.appId,
+    pagePath: slug ? '/apps/' + slug + '?tab=bugs' : null,
+  })
+  await revalidateAppEntityTrashPaths(row.appId)
   return ok(undefined)
 }
 

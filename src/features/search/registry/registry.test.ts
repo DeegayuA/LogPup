@@ -90,6 +90,10 @@ function ctx(role: PaletteContext['user']['role'] = 'member'): PaletteContext {
       id: 'u1',
       role,
       status: 'approved',
+      // A deactivated account never reaches the palette at all — the proxy
+      // pins it to /deactivated — so every row here is resolved for an
+      // active one.
+      active: true,
       mustChangePassword: false,
       email: 'someone@example.com',
       name: 'Someone',

@@ -23,6 +23,19 @@ const EMPTY_SCOPE: ReadonlySet<string> = new Set()
  * ONE query per request. Every `can()` call afterwards is a pure lookup
  * against the set this returns — which is why `can` stays synchronous and can
  * be imported by client components.
+ *
+ * DEACTIVATION IS CHECKED HERE, at construction, and again in
+ * `requireCapability` below — the only two places an `Actor` is ever made.
+ * A deactivated person holds a real session on purpose (src/lib/auth.ts: it
+ * is the only way to tell them why, and to let them sign out), so "signed in"
+ * stopped implying "may act" the moment that changed. No Actor means every
+ * `can()` in the app answers no, without any of the ~90 server actions having
+ * to remember the rule. Putting it in the actions instead would mean the next
+ * action somebody writes is one deactivation forgot about.
+ *
+ * `user.active` is not a stale copy of the column: the jwt callback re-reads
+ * users.active on every request, so this is per-request truth and costs no
+ * query of its own.
  */
 export const loadActor = cache(async function loadActor(): Promise<Actor | null> {
   // Deduplicated per request, for the same reason getSession exists: auth()'s
@@ -33,6 +46,10 @@ export const loadActor = cache(async function loadActor(): Promise<Actor | null>
   const session = await getSession()
   const user = session?.user
   if (!user?.id) return null
+  // `=== false` for the reason spelled out on requireCapability below: the
+  // session callback normalises this to a boolean with `token.active !==
+  // false`, so absent means "no claim", not "deactivated".
+  if (user.active === false) return null
 
   const role = user.role as UserRole
   // Not on the session: employment type changes rarely but must take effect on
@@ -88,6 +105,14 @@ export async function requireCapability(
   const session = await getSession()
   const user = session?.user
   if (!user?.id) return null
+  // Before the matrix is consulted at all: deactivation is not a narrower
+  // seat, it is the absence of one. See the note on loadActor above.
+  //
+  // `=== false`, not `!active`: the session callback in src/lib/auth.ts writes
+  // `active = token.active !== false`, so an explicit false is the only signal
+  // meaning deactivated. Treating absent-or-undefined as deactivated would
+  // read a token minted before the field existed as a locked-out account.
+  if (user.active === false) return null
   const role = user.role as UserRole
 
   // Resolve the scope set ONLY when the grant actually depends on it. A

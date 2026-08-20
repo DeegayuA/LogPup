@@ -1,7 +1,8 @@
 import { cache } from 'react'
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
+import { notRemoved, openRemovals } from '@/features/people/removal-queries'
 import type { EmploymentType, UserRole } from '@/features/auth/capabilities'
 
 export type AdminUser = {
@@ -18,6 +19,12 @@ export type AdminUser = {
   phone: string | null
   personalEmail: string | null
   mustChangePassword: boolean
+  /**
+   * When this account was removed from the workspace, or null while they are
+   * still part of it. Only ever non-null on a listAllUsers({ includeRemoved:
+   * true }) read — the default view has no removed rows to describe.
+   */
+  removedAt: Date | null
 }
 
 // Unlike listActiveUsers (people/queries.ts), this includes inactive users —
@@ -27,8 +34,21 @@ export type AdminUser = {
 // the "Pending approvals" card (see listPendingUsers below) instead of being
 // mixed silently into this table, and a rejected account has nothing an
 // admin can still do to it here.
-export async function listAllUsers(): Promise<AdminUser[]> {
-  return db
+//
+// REMOVED people are the one exception to "the admin table shows everything",
+// and deliberately so rather than for symmetry with the directory: a removed
+// account is not reactivated from this table at all. It comes back through
+// admin Trash (restorePerson), the same place every other reversible delete
+// is undone, so leaving them in the default view would offer a row of
+// controls — role, employment type, deactivate — that all act on somebody who
+// cannot sign in, with no control here that changes that. `includeRemoved`
+// exists for a caller that wants the full roster anyway; it costs one extra
+// query and annotates each row with removedAt so removed people can be told
+// apart from present ones.
+export async function listAllUsers(
+  options?: { includeRemoved?: boolean },
+): Promise<AdminUser[]> {
+  const rows = await db
     .select({
       id: users.id,
       name: users.name,
@@ -45,8 +65,20 @@ export async function listAllUsers(): Promise<AdminUser[]> {
       mustChangePassword: users.mustChangePassword,
     })
     .from(users)
-    .where(eq(users.status, 'approved'))
+    .where(
+      and(
+        eq(users.status, 'approved'),
+        options?.includeRemoved ? undefined : notRemoved(users.id),
+      ),
+    )
     .orderBy(asc(users.name))
+
+  if (!options?.includeRemoved) {
+    return rows.map((row) => ({ ...row, removedAt: null }))
+  }
+  // One batched read for the whole table rather than isRemoved() per row.
+  const removals = await openRemovals()
+  return rows.map((row) => ({ ...row, removedAt: removals.get(row.id)?.removedAt ?? null }))
 }
 
 export type PendingUser = {

@@ -8,6 +8,7 @@ import {
   meetings,
   sprints,
   tasks,
+  userDeletions,
   users,
 } from '@/db/schema'
 import { liveScreenshots } from '@/db/live'
@@ -145,6 +146,7 @@ const {
   restoreSegment,
   restoreKeyframe,
   restoreAssignment,
+  restorePerson,
   purgeMeeting,
   purgeTask,
   purgeSprint,
@@ -172,6 +174,85 @@ beforeEach(() => {
   resetTableState()
 })
 
+describe('restorePerson: closing an open removal interval', () => {
+  it('closes the interval, naming who reinstated them', async () => {
+    asAdmin()
+    stateFor(userDeletions).updateReturning = [[{ userId: USER_ID }]]
+    stateFor(users).select = [[{ name: 'Sam' }]]
+
+    const res = await restorePerson(ID)
+
+    expect(res.ok).toBe(true)
+    const [table, values] = writeSpy.mock.calls[0]
+    expect(table).toBe(userDeletions)
+    expect(values.restoredBy).toBe(ADMIN_ID)
+    expect(values.restoredAt).toBeInstanceOf(Date)
+  })
+
+  // The entire point of the tombstone shape: removal never touched the users
+  // row, their assignments, or anything they wrote, so a restore has nothing
+  // to put back. If this ever starts writing to `users`, removal has stopped
+  // being reversible-by-construction and started guessing at prior state.
+  it('writes to user_deletions and NOTHING else — no users row is touched', async () => {
+    asAdmin()
+    stateFor(userDeletions).updateReturning = [[{ userId: USER_ID }]]
+    stateFor(users).select = [[{ name: 'Sam' }]]
+
+    await restorePerson(ID)
+
+    expect(writeSpy).toHaveBeenCalledTimes(1)
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  // The guarded UPDATE (restoredAt IS NULL) is the whole race story: two
+  // admins clicking Restore close the interval once, and the loser is told so
+  // rather than silently succeeding on zero rows.
+  it('reports an already-closed interval instead of claiming a restore', async () => {
+    asAdmin()
+    stateFor(userDeletions).updateReturning = [[]]
+    const res = await restorePerson(ID)
+    expect(res).toEqual({ ok: false, error: 'Not found, or they were already restored' })
+  })
+
+  it('refuses an id that is not a uuid before touching the database', async () => {
+    asAdmin()
+    const res = await restorePerson('not-a-uuid')
+    expect(res).toEqual({ ok: false, error: 'Invalid removal' })
+    expect(writeSpy).not.toHaveBeenCalled()
+  })
+
+  it('logs against the PERSON, not the removal row — the trail is about them', async () => {
+    asAdmin()
+    stateFor(userDeletions).updateReturning = [[{ userId: USER_ID }]]
+    stateFor(users).select = [[{ name: 'Sam' }]]
+
+    await restorePerson(ID)
+
+    expect(logActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        verb: 'restored',
+        entityType: 'user',
+        entityId: USER_ID,
+        entityLabel: 'Sam',
+      }),
+    )
+  })
+
+  it('still logs a restore when the name no longer resolves', async () => {
+    asAdmin()
+    stateFor(userDeletions).updateReturning = [[{ userId: USER_ID }]]
+    stateFor(users).select = [[]]
+
+    const res = await restorePerson(ID)
+
+    expect(res.ok).toBe(true)
+    expect(logActivityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ entityLabel: 'Unknown user' }),
+    )
+  })
+})
+
 describe('non-admin callers: every restore and purge action refuses and writes nothing', () => {
   const cases: [string, () => Promise<{ ok: boolean }>][] = [
     ['restoreMeeting', () => restoreMeeting(ID)],
@@ -180,6 +261,7 @@ describe('non-admin callers: every restore and purge action refuses and writes n
     ['restoreSegment', () => restoreSegment(ID)],
     ['restoreKeyframe', () => restoreKeyframe(ID)],
     ['restoreAssignment', () => restoreAssignment(ID)],
+    ['restorePerson', () => restorePerson(ID)],
     ['purgeMeeting', () => purgeMeeting(ID, 'delete forever')],
     ['purgeTask', () => purgeTask(ID, 'delete forever')],
     ['purgeSprint', () => purgeSprint(ID, 'delete forever')],

@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, lt } from 'drizzle-orm'
 import { db } from '@/db'
 import { dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
-import { isGazettedHoliday } from '@/lib/working-days'
+import { isMercantileHoliday } from '@/lib/lk-holidays'
 import { can, type Actor } from '@/features/auth/capabilities'
 import { approvedAbsenceDays } from '@/features/worklog/absence-queries'
 import { computeCoverage, type CoverageSummary } from '@/features/worklog/coverage'
@@ -65,10 +65,12 @@ export async function getCoverage(
     to,
     loggedDays: new Set(logged.map((l) => l.day)),
     exemptDays,
-    // Company shutdowns compose on TOP of the gazetted calendar through the
-    // same callback working-days.ts already takes — a company holiday no
-    // longer needs a deploy.
-    isHoliday: (iso) => isGazettedHoliday(iso) || companyHolidays.has(iso),
+    // Company shutdowns compose on TOP of the days that actually excuse work,
+    // through the same callback working-days.ts already takes — a company
+    // holiday no longer needs a deploy. `isMercantileHoliday`, never "is it in
+    // the gazette": a bank closing day is a working day here, and a studio
+    // that wants it off adds it as a company holiday like any other.
+    isHoliday: (iso) => isMercantileHoliday(iso) || companyHolidays.has(iso),
     patternFor: (iso) => (rows.length === 0 ? STUDIO_DEFAULT_PATTERN : patternForDay(rows, iso)),
     joinedOn: person.createdAt.toISOString().slice(0, 10),
     today,

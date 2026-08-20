@@ -7,7 +7,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import {
   apps, assignments, sprints, tasks, meetings, meetingAttendees, meetingAttendeeRecommendations,
-  dailyWorklogs, users,
+  dailyWorklogs, userDeletions, users,
 } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
 import { countTransferableWork } from '@/features/people/handover-queries'
@@ -127,6 +127,114 @@ async function otherActiveSuperadminCount(excludeUserId: string): Promise<number
       ),
     )
   return row?.count ?? 0
+}
+
+/**
+ * Walks an error's `.cause` chain looking for a Postgres unique-violation.
+ * Third copy of these ten lines (see src/features/people/actions.ts and
+ * src/features/admin/trash-actions.ts) for the reason those two give: the
+ * cause-chain walk is small, and reaching into another feature's private
+ * helper to share it would couple three modules for nothing.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    const e = current as { code?: unknown; message?: unknown; cause?: unknown }
+    if (e.code === '23505') return true
+    if (typeof e.message === 'string' && e.message.includes('duplicate key')) return true
+    current = e.cause
+  }
+  return false
+}
+
+const removalReasonInput = z
+  .string()
+  .trim()
+  .max(200, 'Keep the reason to 200 characters or fewer')
+  .optional()
+
+/**
+ * Removes somebody from the workspace: they can no longer sign in by any
+ * method, and they stop appearing anywhere work is handed out.
+ *
+ * WHAT THIS DOES NOT TOUCH, and the whole design rests on it: users.active,
+ * users.role, and every row they ever wrote. Removal opens an interval in
+ * user_deletions and nothing else. Their name still renders on their past
+ * comments, work logs and meetings, because those joins read `users`
+ * directly and never consult this table (see the schema.ts comment on
+ * userDeletions, and src/features/people/removal-queries.ts).
+ *
+ * NOT setUserActive. Deactivation leaves the account able to sign in and be
+ * told it is deactivated; removal is the heavier state with no session at
+ * all, which is why it has its own capability rather than riding on
+ * user.deactivate's scoped arm — a manager may stand their own team down,
+ * but deciding somebody is no longer part of the studio is not project work.
+ *
+ * Reversible from admin Trash (restorePerson in trash-actions.ts), and
+ * deliberately never purgeable: purging would mean hard-deleting the users
+ * row, which cascades away the work the tombstone shape exists to preserve.
+ */
+export async function removeUser(userId: string, reason?: string): Promise<ActionResult> {
+  const actor = await requireCapability('user.remove')
+  if (!actor) return err('Admins only')
+  // Same self-guard as setUserRole/setUserActive, and it matters more here:
+  // an admin who removes themselves loses the session that would let them
+  // undo it on the very next request.
+  if (!canEditUser(actor.id, userId)) return err('Cannot remove your own account')
+
+  const parsedId = z.uuid().safeParse(userId)
+  if (!parsedId.success) return err('Invalid user')
+
+  const parsedReason = removalReasonInput.safeParse(reason)
+  if (!parsedReason.success) return err(parsedReason.error.issues[0].message)
+
+  const [target] = await db
+    .select({ name: users.name, role: users.role })
+    .from(users)
+    .where(eq(users.id, parsedId.data))
+  if (!target) return err('That person no longer exists')
+
+  // The same last-superadmin guard the role and active changes already use,
+  // with the same check-then-write tradeoff (see setUserRole's comment).
+  // Specifically superadmin, not the admin family: superadmin is the only
+  // seat that can grant superadmin, so a workspace with none has no route
+  // back. Checked against the TARGET's current role, not the actor's.
+  if (target.role === 'superadmin') {
+    const others = await otherActiveSuperadminCount(parsedId.data)
+    if (wouldLeaveNoSuperadmins(others)) return err('Cannot remove the last superadmin')
+  }
+
+  // No read-then-insert: user_deletions_one_open_idx already allows at most
+  // one open interval per person, so the insert IS the check — and unlike a
+  // preceding SELECT it cannot lose a race with a second admin clicking
+  // Remove at the same moment.
+  try {
+    await db.insert(userDeletions).values({
+      userId: parsedId.data,
+      removedBy: actor.id,
+      reason: parsedReason.data || null,
+    })
+  } catch (error) {
+    if (isUniqueViolation(error)) return err('They have already been removed')
+    throw error
+  }
+
+  await logActivity({
+    actorId: actor.id,
+    verb: 'deleted',
+    entityType: 'user',
+    entityId: parsedId.data,
+    entityLabel: target.name,
+    pagePath: `/people/${parsedId.data}`,
+    detail: parsedReason.data
+      ? `removed from the workspace — ${parsedReason.data}`
+      : 'removed from the workspace',
+    metadata: { removal: { reason: parsedReason.data || null } },
+  })
+  revalidateUserDetailPaths()
+  return ok(undefined)
 }
 
 export async function setUserRole(userId: string, role: UserRole): Promise<ActionResult> {

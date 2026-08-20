@@ -21,18 +21,22 @@ import { db } from '@/db'
 import {
   apps,
   assignmentHistory,
+  bugReports,
   meetingNoteSegments,
   meetingScreenshots,
   meetings,
   sprints,
   tasks,
+  userDeletions,
   users,
 } from '@/db/schema'
 import {
   buildAppTrashRow,
   buildAssignmentTrashRow,
+  buildBugTrashRow,
   buildKeyframeTrashRow,
   buildMeetingTrashRow,
+  buildPersonTrashRow,
   buildSegmentTrashRow,
   buildSprintTrashRow,
   buildTaskTrashRow,
@@ -53,12 +57,16 @@ export async function getTrash(): Promise<TrashGroup[]> {
     [taskTotal],
     sprintRows,
     [sprintTotal],
+    bugRows,
+    [bugTotal],
     segmentRows,
     [segmentTotal],
     keyframeRows,
     [keyframeTotal],
     assignmentRows,
     [assignmentTotal],
+    personRows,
+    [personTotal],
   ] = await Promise.all([
     // Apps first, matching TRASH_KINDS: a deleted project explains why a pile
     // of its meetings and sprints stopped appearing, and reading that
@@ -129,6 +137,27 @@ export async function getTrash(): Promise<TrashGroup[]> {
       .orderBy(desc(sprints.deletedAt))
       .limit(PER_SOURCE_LIMIT),
     db.select({ total: count() }).from(sprints).where(isNotNull(sprints.deletedAt)),
+
+    // Bugs join the bin like everything else. The app is a LEFT join and read
+    // raw for the same reason every other row here is: a bug whose project was
+    // deleted must still be listed and restorable, and liveApps would filter
+    // its name away.
+    db
+      .select({
+        id: bugReports.id,
+        title: bugReports.title,
+        appName: apps.name,
+        deletedAt: bugReports.deletedAt,
+        deletedByName: users.name,
+        deletedByAvatarUrl: users.avatarUrl,
+      })
+      .from(bugReports)
+      .leftJoin(apps, eq(bugReports.appId, apps.id))
+      .leftJoin(users, eq(bugReports.deletedBy, users.id))
+      .where(isNotNull(bugReports.deletedAt))
+      .orderBy(desc(bugReports.deletedAt))
+      .limit(PER_SOURCE_LIMIT),
+    db.select({ total: count() }).from(bugReports).where(isNotNull(bugReports.deletedAt)),
 
     // Segments/keyframes have no appId of their own — joined through their
     // (raw, possibly-also-trashed) parent meeting for both the app-name
@@ -208,6 +237,37 @@ export async function getTrash(): Promise<TrashGroup[]> {
       .select({ total: count() })
       .from(assignmentHistory)
       .where(and(eq(assignmentHistory.changeKind, 'removed'), isNull(assignmentHistory.effectiveTo))),
+
+    // People, and the same tombstone reasoning as assignments above: `users`
+    // has no deletedAt to read, so what is listed is the still-OPEN removal
+    // interval (restored_at IS NULL), which user_deletions_one_open_idx
+    // allows at most one of per person.
+    //
+    // BOTH user joins are on the RAW users table, and neither is filtered by
+    // an open removal — that is the point of the whole design. The removed
+    // person must resolve to a name here (they are the row's subject), and
+    // the admin who removed them must resolve too, even if that admin has
+    // since been removed themselves.
+    (() => {
+      const person = alias(users, 'trash_removal_person')
+      const remover = alias(users, 'trash_removal_actor')
+      return db
+        .select({
+          id: userDeletions.id,
+          personName: person.name,
+          reason: userDeletions.reason,
+          deletedAt: userDeletions.removedAt,
+          deletedByName: remover.name,
+          deletedByAvatarUrl: remover.avatarUrl,
+        })
+        .from(userDeletions)
+        .innerJoin(person, eq(userDeletions.userId, person.id))
+        .leftJoin(remover, eq(userDeletions.removedBy, remover.id))
+        .where(isNull(userDeletions.restoredAt))
+        .orderBy(desc(userDeletions.removedAt))
+        .limit(PER_SOURCE_LIMIT)
+    })(),
+    db.select({ total: count() }).from(userDeletions).where(isNull(userDeletions.restoredAt)),
   ])
 
   return [
@@ -239,6 +299,12 @@ export async function getTrash(): Promise<TrashGroup[]> {
       buildSprintTrashRow,
     ),
     toTrashGroup(
+      'bug',
+      bugRows.map((r) => ({ ...r, deletedAt: r.deletedAt! })),
+      bugTotal?.total ?? 0,
+      buildBugTrashRow,
+    ),
+    toTrashGroup(
       'segment',
       segmentRows.map((r) => ({ ...r, deletedAt: r.deletedAt! })),
       segmentTotal?.total ?? 0,
@@ -251,5 +317,6 @@ export async function getTrash(): Promise<TrashGroup[]> {
       buildKeyframeTrashRow,
     ),
     toTrashGroup('assignment', assignmentRows, assignmentTotal?.total ?? 0, buildAssignmentTrashRow),
+    toTrashGroup('person', personRows, personTotal?.total ?? 0, buildPersonTrashRow),
   ]
 }

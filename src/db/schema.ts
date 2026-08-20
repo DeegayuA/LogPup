@@ -1315,3 +1315,48 @@ export const bugReports = pgTable('bug_reports', {
   index('bug_reports_reporter_idx').on(t.reportedBy).where(sql`${t.deletedAt} is null`),
   index('bug_reports_status_idx').on(t.status, t.createdAt).where(sql`${t.deletedAt} is null`),
 ])
+
+// Removing a person from the workspace — a TOMBSTONE TABLE, deliberately not
+// a `deleted_at` column on `users`.
+//
+// WHY NOT THE USUAL SOFT-DELETE SHAPE. Every other soft-deleted table here
+// carries deletedAt and is read through a `live*` subquery (src/db/live.ts),
+// and src/db/live.test.ts enforces that: a table with deletedAt MUST be
+// registered, and every read then filters deleted rows out. That rule is
+// right for apps, tasks and meetings — and wrong for people. `users` is
+// joined by roughly a hundred reads whose whole job is ATTRIBUTION: who wrote
+// this comment, who logged this day, who was in this meeting, who deleted
+// this row. Filtering a removed person out of those joins would not hide
+// them, it would blank the record of what they did — every past comment
+// suddenly by nobody. A person leaving does not un-write their work.
+//
+// So removal is recorded BESIDE the user instead. Directories, member
+// pickers, assignment targets and sign-in ask this table and exclude anyone
+// with an open row; attribution joins never consult it and keep resolving the
+// name. Same shape as app_role_history and assignment_history: an interval,
+// closed by restoring rather than deleted.
+//
+// NOT deactivation. A deactivated account still signs in and is told it is
+// deactivated (users.active). A removed one cannot sign in at all, and stops
+// appearing anywhere work is handed out.
+export const userDeletions = pgTable('user_deletions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  removedAt: timestamp('removed_at', { withTimezone: true }).notNull().defaultNow(),
+  // Nullable and ON DELETE no action: losing the remover's own account must
+  // not rewrite the record of who removed whom.
+  removedBy: uuid('removed_by').references(() => users.id),
+  /** Why they were removed — left, contract ended, duplicate account. */
+  reason: text('reason'),
+  restoredAt: timestamp('restored_at', { withTimezone: true }),
+  restoredBy: uuid('restored_by').references(() => users.id),
+}, (t) => [
+  // AT MOST ONE open removal per person. Without it, removing an
+  // already-removed account opens a second interval and the restore that
+  // follows closes only one of them — leaving somebody removed with no row
+  // left saying why, and the directory still hiding them.
+  uniqueIndex('user_deletions_one_open_idx')
+    .on(t.userId)
+    .where(sql`${t.restoredAt} is null`),
+  index('user_deletions_removed_at_idx').on(t.removedAt),
+])

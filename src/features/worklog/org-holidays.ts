@@ -17,11 +17,19 @@ export type OrgHolidayRow = {
  * `day < revokedFrom` — strict, and deliberately so. Cancelling a shutdown on
  * the morning of the shutdown calls off that day too, which is what an
  * operator means when they cancel something today.
+ *
+ * Exported one row at a time as well as as a set, because the holidays page
+ * has to tell a reader whether each row still closes the studio and must not
+ * answer that with its own copy of this comparison.
  */
+export function isOrgHolidayInForce(row: OrgHolidayRow): boolean {
+  return row.revokedFrom === null || row.day < row.revokedFrom
+}
+
 export function orgHolidaySet(rows: readonly OrgHolidayRow[]): Set<string> {
   const days = new Set<string>()
   for (const row of rows) {
-    if (row.revokedFrom === null || row.day < row.revokedFrom) days.add(row.day)
+    if (isOrgHolidayInForce(row)) days.add(row.day)
   }
   return days
 }

@@ -1,4 +1,4 @@
-import { LK_HOLIDAYS } from '@/lib/lk-holidays'
+import { isMercantileHoliday } from '@/lib/lk-holidays'
 
 /**
  * What counts as a working day at this studio, in one place.
@@ -22,30 +22,27 @@ import { LK_HOLIDAYS } from '@/lib/lk-holidays'
 /** Saturday is a half day here; Sunday is off. */
 export type WorkingDayFraction = 0 | 0.5 | 1
 
-/** ISO `yyyy-mm-dd` → is it a gazetted Sri Lankan holiday? */
-/**
- * Exported so callers that COMPOSE holidays (org_holidays on top of the
- * gazetted calendar) can build one `isHoliday` predicate from the same source
- * this module defaults to, rather than writing a second gazetted lookup.
- */
-export function isGazettedHoliday(iso: string): boolean {
-  return iso in LK_HOLIDAYS
-}
-
 /**
  * How much of a working day `iso` is.
  *
  *   1    Monday to Friday
  *   0.5  Saturday — a half day at this studio
- *   0    Sunday, and any gazetted holiday
+ *   0    Sunday, and any holiday that excuses work
  *
- * A holiday always wins over Saturday: a Saturday Poya day is a holiday,
- * not a half day, and treating it as half would leave an entry in everyone's
- * backfill list that they were never expected to work.
+ * "Excuses work" is `isMercantileHoliday`, NOT "appears in the gazette": only
+ * the Mercantile list closes shops and offices, so the bank closing days are
+ * full working days here and always were — the studio just used to be told
+ * otherwise. Callers that COMPOSE holidays (org_holidays stacked on the
+ * gazette) build their predicate from that same function, so there is one
+ * answer to "is this a day off" rather than one per feature.
+ *
+ * A holiday always wins over Saturday: a Saturday mercantile holiday is a
+ * holiday, not a half day, and treating it as half would leave an entry in
+ * everyone's backfill list that they were never expected to work.
  */
 export function workingDayFraction(
   iso: string,
-  isHoliday: (iso: string) => boolean = isGazettedHoliday,
+  isHoliday: (iso: string) => boolean = isMercantileHoliday,
 ): WorkingDayFraction {
   if (isHoliday(iso)) return 0
   // Midday UTC: far enough from either boundary that the ±05:30 Colombo
@@ -59,7 +56,7 @@ export function workingDayFraction(
 /** Whether any work is expected on `iso` at all — a half day still counts. */
 export function isWorkingDay(
   iso: string,
-  isHoliday: (iso: string) => boolean = isGazettedHoliday,
+  isHoliday: (iso: string) => boolean = isMercantileHoliday,
 ): boolean {
   return workingDayFraction(iso, isHoliday) > 0
 }
@@ -67,7 +64,7 @@ export function isWorkingDay(
 /** Whether `iso` is one of the half days, for UI that should say so. */
 export function isHalfWorkingDay(
   iso: string,
-  isHoliday: (iso: string) => boolean = isGazettedHoliday,
+  isHoliday: (iso: string) => boolean = isMercantileHoliday,
 ): boolean {
   return workingDayFraction(iso, isHoliday) === 0.5
 }

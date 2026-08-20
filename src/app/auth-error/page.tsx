@@ -18,8 +18,12 @@ export const metadata = { title: 'Sign-in error' }
 const ERROR_COPY: Record<string, { title: string; detail: string }> = {
   AccessDenied: {
     title: 'Access denied',
+    // Deliberately no longer mentions deactivation: a deactivated account
+    // signs in and lands on /deactivated now (see the jwt callback in
+    // src/lib/auth.ts), so listing it here would send someone hunting for the
+    // wrong explanation.
     detail:
-      "That sign-in was rejected. Most often this means the account is deactivated, was declined by an admin, or the email Google returned isn't verified. If you were expecting access, check with your workspace admin.",
+      "That sign-in was rejected. Most often this means an admin declined the account, or the email Google returned isn't verified. If you were expecting access, check with your workspace admin.",
   },
   Verification: {
     title: 'Link expired',
@@ -32,6 +36,16 @@ const ERROR_COPY: Record<string, { title: string; detail: string }> = {
   CredentialsSignin: {
     title: "That didn't work",
     detail: 'Double-check your email and password and try again.',
+  },
+  // Not one of Auth.js's own codes — the signIn callback in src/lib/auth.ts
+  // hands back this page's URL directly for a removed account, because an
+  // OAuth redirect has nowhere else to carry a message and `false` would
+  // land it on the AccessDenied copy above, which lists three other causes
+  // and would send the person looking for the wrong problem.
+  AccountRemoved: {
+    title: 'This account is no longer active',
+    detail:
+      "You've been removed from this workspace, so there's nothing to sign in to. Everything you worked on is still there and still credited to you. If this is a mistake, ask a workspace admin — they can put the account back.",
   },
 }
 

@@ -19,14 +19,30 @@ export default auth((req) => {
   }
   const { pathname } = req.nextUrl
 
+  // Deactivation gate, FIRST of the three: a deactivated account now holds a
+  // real session (see the jwt callback in src/lib/auth.ts) and is pinned to
+  // /deactivated, which explains what happened and offers sign-out and
+  // nothing else. It runs ahead of the other two because being switched off
+  // outranks both of the things they are about — a deactivated account that
+  // is also awaiting approval, or still on its starter password, has no
+  // approval to wait for and no password worth setting, and sending it to
+  // either page would answer a question it is not asking.
+  if (
+    req.auth.user?.active === false &&
+    !pathname.startsWith('/deactivated') &&
+    !pathname.startsWith('/api')
+  ) {
+    return NextResponse.redirect(new URL('/deactivated', req.nextUrl))
+  }
+
   // Pending-approval gate: a self-signed-up user awaiting admin review (see
   // src/lib/auth.ts signIn callback + src/db/schema.ts `user_status`) is
   // pinned to /pending until an admin approves them — same shape as the
-  // mustChangePassword gate below. `active` is hardcoded true here because a
-  // session only exists at all when the jwt callback's own active/rejected
-  // check already passed (see src/lib/auth.ts); by construction it can't be
-  // false by the time we get here. /api stays reachable so auth + server
-  // actions (including sign-out, and the onboarding submit action) work.
+  // mustChangePassword gate below. `active` is hardcoded true here because
+  // the gate above already returned for every deactivated session, so by the
+  // time we reach this line it cannot be false. /api stays reachable so auth
+  // + server actions (including sign-out, and the onboarding submit action)
+  // work.
   if (
     !canAccessApp(req.auth.user?.status ?? 'pending', true) &&
     !pathname.startsWith('/pending') &&

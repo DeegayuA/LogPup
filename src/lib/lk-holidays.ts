@@ -14,6 +14,19 @@
  * all be re-verified — and this file extended with new `yyyy-mm-dd` entries
  * — each year the next gazette is published. No other code needs to change,
  * since every lookup below is keyed by ISO date.
+ *
+ * ONLY 'mercantile' MEANS A DAY OFF. The Mercantile list (Shop and Office
+ * Employees Act) is the one that shuts this studio; a bank-only closing day
+ * is an ordinary working day for everybody here, and a Poya day the
+ * mercantile gazette leaves out is one too. Two questions therefore live in
+ * this file and must never be swapped:
+ *
+ *   LEGAL EFFECT — does this day excuse work? `isMercantileHoliday(iso)`,
+ *                  or `excusesWork(categories)` when the record is in hand.
+ *                  This is what coverage and the backfill prompt ask.
+ *   CALENDAR FACT — is anything gazetted this day? `getLkHoliday(date)` /
+ *                  `getLkHolidayName(date)`. This is what a calendar asks, so
+ *                  it still marks Poya on a day the office is open.
  */
 
 /** A single holiday can be observed under more than one of these at once —
@@ -41,10 +54,18 @@ export type LkHoliday = {
  * some poya days. Treat any 'Mercantile holiday' label the UI shows for a
  * public holiday as unverified until someone checks the gazette.
  *
+ * THAT APPROXIMATION IS NOW LOAD-BEARING: `'mercantile'` is the single
+ * category that excuses work, so every date it over-claims is a date the
+ * studio hands out as a day off that the law does not.
+ *
  * To correct a date once the gazette is known: replace `[...PUBLIC]` /
  * `[...PUBLIC_POYA]` on that entry with an explicit array that simply omits
  * `'mercantile'` (e.g. `['public', 'bank', 'poya']`). Nothing else changes —
- * `getHolidayIconKind` already distinguishes mercantile from bank-only days.
+ * `getHolidayIconKind` already distinguishes mercantile from bank-only days,
+ * and `isMercantileHoliday` reads the array rather than the key, so the
+ * correction is a DATA edit. It is not free, though: coverage recomputes at
+ * read time, so a day that loses `'mercantile'` becomes a day people
+ * retroactively owed work for. See the note on `isMercantileHoliday`.
  */
 const PUBLIC: readonly HolidayCategory[] = ['public', 'bank', 'mercantile']
 /** ...and a Full Moon Poya Day carries 'poya' on top of that. */
@@ -81,6 +102,11 @@ export const LK_HOLIDAYS: Record<string, LkHoliday> = {
 
   // Bank/mercantile-only closing days below: well-established Sri Lankan
   // practice, but NOT in the public-holiday gazette list — verify annually.
+  //
+  // The two bank closings are gazetted days that are ORDINARY WORKING DAYS
+  // here: they shut the banks, not the office. They stay in the map so the
+  // calendar can still show them; `isMercantileHoliday` is what keeps them
+  // out of everyone's coverage.
   '2026-01-01': { name: "New Year's Day", categories: ['bank', 'mercantile'] },
   '2026-06-30': { name: 'Bank Half-Year Closing', categories: ['bank'] },
   '2026-12-31': { name: 'Bank Annual Closing', categories: ['bank'] },
@@ -146,13 +172,54 @@ export function getLkHoliday(date: Date, tz: string = LK_TIMEZONE): LkHoliday | 
 }
 
 /**
- * Returns the holiday name if `date` falls on a Sri Lankan holiday. Back-
- * compat wrapper around `getLkHoliday` for callers that only need the name
- * — callers that also need the category (public/bank/mercantile/poya)
- * should use `getLkHoliday` instead.
+ * CALENDAR FACT: the name of whatever is gazetted on `date`, or undefined.
+ *
+ * Named for what it returns rather than as a question, because the question
+ * it used to be spelled as — `isLkHoliday` — reads exactly like "is this day
+ * off", which it never answered: a bank-only closing day is gazetted and
+ * still a working day. Ask `isMercantileHoliday` for that.
  */
-export function isLkHoliday(date: Date, tz: string = LK_TIMEZONE): string | undefined {
+export function getLkHolidayName(date: Date, tz: string = LK_TIMEZONE): string | undefined {
   return getLkHoliday(date, tz)?.name
+}
+
+/**
+ * LEGAL EFFECT: does a gazetted day with these categories excuse work?
+ *
+ * Only the Mercantile list (Shop and Office Employees Act) closes shops and
+ * offices, so only `'mercantile'` answers yes. Public and Poya are how a day
+ * is announced, not who gets it off — and both are already implied by
+ * mercantile where the gazette grants it. A bank closing day is a normal
+ * working day at a software studio.
+ *
+ * Takes the categories rather than a date so the UI can ask the SAME question
+ * of a row it already has, and can therefore never label a day differently
+ * from the way coverage counts it.
+ */
+export function excusesWork(categories: readonly HolidayCategory[] | undefined): boolean {
+  return categories?.includes('mercantile') ?? false
+}
+
+/**
+ * LEGAL EFFECT, keyed by ISO day: is `iso` a day nobody owes work for?
+ *
+ * THE ONE FUNCTION THAT DECIDES. `working-days.ts` defaults to it and every
+ * caller that composes company holidays on top starts from it, so "which
+ * gazette list means a day off" is answered here and nowhere else. Do not
+ * substitute `iso in LK_HOLIDAYS`: that is the calendar fact, and it hands
+ * out the bank closings as leave.
+ *
+ * RETROACTIVE BY CONSTRUCTION. Coverage recomputes from this at read time, so
+ * a date that gains or loses `'mercantile'` changes what people owed in the
+ * past as well as the future. Unlike `org_holidays` — where a cancelled row
+ * keeps `revoked_from` precisely so a day already taken cannot be un-held
+ * (drizzle/0042) — the gazette is a constant with no effective dates. If the
+ * studio genuinely closed on a day this now counts as worked, record it as a
+ * company holiday; that is a real row with an author and a note, which is the
+ * only way the exemption survives being explained.
+ */
+export function isMercantileHoliday(iso: string): boolean {
+  return excusesWork(LK_HOLIDAYS[iso]?.categories)
 }
 
 /** True when `date` falls on a Sunday, evaluated in `tz` (default Asia/Colombo). */

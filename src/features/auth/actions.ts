@@ -8,6 +8,7 @@ import { users } from '@/db/schema'
 import { auth, signIn } from '@/lib/auth'
 import { hashPassword } from '@/lib/password'
 import { RateLimitError } from '@/lib/rate-limit'
+import { AccountRemovedError } from '@/features/people/removal-queries'
 import { normalizePhone } from '@/lib/phone'
 import { revalidatePath } from 'next/cache'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -30,6 +31,10 @@ export async function loginWithPassword(
     if (e instanceof AuthError) {
       const cause = (e.cause as { err?: unknown } | undefined)?.err
       if (cause instanceof RateLimitError) return err(cause.message)
+      // The password was RIGHT and the account is gone — the one refusal
+      // that must not read as "invalid email or password", or the person
+      // spends the afternoon retyping a password that works.
+      if (cause instanceof AccountRemovedError) return err(cause.message)
       return err('Invalid email or password')
     }
     throw e
