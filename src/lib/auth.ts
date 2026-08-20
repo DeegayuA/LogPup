@@ -3,7 +3,7 @@ import Google from 'next-auth/providers/google'
 import Notion from 'next-auth/providers/notion'
 import { createHash } from 'node:crypto'
 import Credentials from 'next-auth/providers/credentials'
-import { and, isNull, gt, eq } from 'drizzle-orm'
+import { and, isNull, gt, eq, type SQL } from 'drizzle-orm'
 import { db } from '@/db'
 import { webauthnLoginTokens, users } from '@/db/schema'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
@@ -43,6 +43,60 @@ const testLoginEnabled =
   process.env.NODE_ENV !== 'production' &&
   (process.env.E2E_TEST_MODE === '1' || !!process.env.DEV_LOGIN_EMAIL)
 
+// Defensive: checks `.code` narrowly and walks `.cause` in case the driver's
+// error arrives wrapped (e.g. by a pooling/proxy layer) — never assumes the
+// shape, so anything else just falls through to `false`. Mirrors the
+// `.cause`-walking helpers in trash-actions.ts / task-actions.ts.
+function isMissingColumnError(error: unknown): boolean {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current)
+    const e = current as { code?: unknown; cause?: unknown }
+    if (e.code === '42703') return true
+    current = e.cause
+  }
+  return false
+}
+
+// Every provider below and both callbacks look up `users` through this one
+// function — not because the query differs, but so there is exactly one
+// place to catch the failure mode that cost this repo roughly twenty
+// minutes tonight: schema.ts had declared users.employment_type and
+// users.supervisor_id without their migration applied. Drizzle names every
+// declared column in its SELECT, so that single unmigrated column failed
+// EVERY read of `users`, for every provider, with Postgres 42703
+// (undefined_column) — and Auth.js cannot distinguish a thrown lookup from a
+// rejected user, so it reported `[auth][error] AccessDenied`, which points
+// at permissions and says nothing about the real cause.
+//
+// DIAGNOSTIC ONLY — this changes no authentication behaviour. On success it
+// returns exactly what the inline query would have returned. On any error
+// other than 42703 it rethrows immediately, unlogged, same as before this
+// existed. On 42703 specifically it logs one loud, actionable line first —
+// then rethrows the *original*, unmodified error, so the failure still
+// fails exactly as it always did: nothing here swallows the error or lets a
+// failed lookup fall through to a successful sign-in. Only the column-
+// bearing driver message is logged — never a row, credential, password
+// hash, token, or connection string.
+async function selectUsers(condition: SQL) {
+  try {
+    return await db.select().from(users).where(condition)
+  } catch (error) {
+    if (isMissingColumnError(error)) {
+      const driverMessage = error instanceof Error ? error.message : String(error)
+      console.error(
+        '[auth] sign-in lookup on `users` failed with Postgres 42703 (undefined_column): ' +
+          'the database is missing a column that src/db/schema.ts declares — schema.ts is ' +
+          'ahead of the database. Run `npm run db:migrate` to apply the pending migration, or ' +
+          '`npm run db:drift` to see exactly which column(s) are missing. ' +
+          `Driver message: ${driverMessage}`,
+      )
+    }
+    throw error
+  }
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Google({
@@ -77,7 +131,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const identity = await verifyGoogleIdToken(String(creds?.credential ?? ''))
         if (!identity) return null
 
-        const [existing] = await db.select().from(users).where(eq(users.email, identity.email))
+        const [existing] = await selectUsers(eq(users.email, identity.email))
         if (existing) {
           // The same two refusals the Google branch of the signIn callback
           // makes. 'pending' still signs in on purpose: they need a session to
@@ -123,7 +177,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const password = String(creds?.password ?? '').slice(0, MAX_PASSWORD_LENGTH)
         if (!email || !password || !emailAllowed(email)) return null
         if (loginRateLimiter.isBlocked(email)) throw new RateLimitError(LOCKOUT_MESSAGE)
-        const [u] = await db.select().from(users).where(eq(users.email, email))
+        const [u] = await selectUsers(eq(users.email, email))
         if (!u || !u.active || !u.passwordHash) {
           loginRateLimiter.recordFailure(email)
           return null
@@ -162,7 +216,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           )
           .returning({ userId: webauthnLoginTokens.userId })
         if (!row) return null
-        const [u] = await db.select().from(users).where(eq(users.id, row.userId))
+        const [u] = await selectUsers(eq(users.id, row.userId))
         // Same refusals as the jwt callback — a deactivated or rejected
         // account's token redeems to nothing.
         if (!u || !u.active || u.status === 'rejected') return null
@@ -188,7 +242,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           async authorize(creds) {
             const email = String(creds?.email ?? '').trim().toLowerCase()
             if (!emailAllowed(email)) return null
-            const [u] = await db.select().from(users).where(eq(users.email, email))
+            const [u] = await selectUsers(eq(users.email, email))
             if (u) return u.active ? { id: u.id, email: u.email, name: u.name } : null
             // Only the configured dev-login identity may be auto-provisioned;
             // every other address must already exist (unchanged prior behavior).
@@ -254,7 +308,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return false
       }
 
-      const [existing] = await db.select().from(users).where(eq(users.email, email))
+      const [existing] = await selectUsers(eq(users.email, email))
 
       // Notion: never auto-provision. Only an existing, active, non-rejected
       // allowed user may log in.
@@ -334,7 +388,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // above); normalize here too so a provider that hands back mixed-case
       // email casing (observed from some OAuth IdPs) still matches the row.
       const email = token.email.toLowerCase()
-      const [u] = await db.select().from(users).where(eq(users.email, email))
+      const [u] = await selectUsers(eq(users.email, email))
       // Inactive or rejected: no session, full stop — unchanged from before,
       // now also covering the 'rejected' outcome of admin review. A
       // 'pending' user, in contrast, MUST get a token: they need a session to
