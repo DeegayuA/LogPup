@@ -4,7 +4,7 @@ import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from '@/components/shell/theme-provider'
 import { toast } from 'sonner'
-import { CalendarDays, Check, CloudOff, Keyboard, Loader2, PawPrint, Plus, Search } from 'lucide-react'
+import { CalendarDays, Check, CloudOff, Keyboard, Loader2, PawPrint, Plus, Search, Sparkles } from 'lucide-react'
 import {
   CommandDialog,
   Command,
@@ -23,6 +23,7 @@ import { navItems } from '@/components/shell/nav-items'
 import { ShortcutsOverlay } from '@/components/shell/shortcuts-overlay'
 import { cn } from '@/lib/utils'
 import { createDeduper } from '@/lib/dedupe'
+import { askAvailable } from '@/features/intel/actions'
 import { usePrefetchIntent } from '@/hooks/use-prefetch-intent'
 import {
   universalSearch,
@@ -194,6 +195,28 @@ export function CommandCenterProvider({
    */
   const { intentProps } = usePrefetchIntent()
   const [open, setOpen] = React.useState(false)
+  /* Whether to offer the "Ask LogPup" fallback at all. Resolved once per open
+     rather than per keystroke: it reads prefs and key presence, and the answer
+     cannot change while the palette is on screen. ONE predicate, not two —
+     askAvailable() owns routed-ness, the feature pref and key presence
+     together, so this row cannot advertise a dead end that the action would
+     then refuse. Defaults to false, which is the safe direction: a missing
+     answer hides the row rather than promising an answer nobody can get. */
+  const [canAsk, setCanAsk] = React.useState(false)
+  React.useEffect(() => {
+    if (!open) return
+    let live = true
+    void askAvailable()
+      .then((ok) => {
+        if (live) setCanAsk(ok)
+      })
+      .catch(() => {
+        if (live) setCanAsk(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [open])
   const [query, setQuery] = React.useState('')
   const [results, setResults] = React.useState<SearchGroup[]>(EMPTY_RESULTS)
   const [searching, setSearching] = React.useState(false)
@@ -585,12 +608,45 @@ export function CommandCenterProvider({
               </div>
             ) : null}
             {nothingAtAll ? (
-              <CommandEmpty>
-                <span className="inline-flex items-center gap-2 text-muted-foreground">
-                  <PawPrint className="size-4" aria-hidden />
-                  Nothing to fetch for “{query.trim()}”.
-                </span>
-              </CommandEmpty>
+              canAsk ? (
+                /* Nothing matched by NAME — which is not the same as nothing to
+                   say. A question the search index cannot answer ("who is
+                   blocked on Kestrel") is exactly the one worth handing to a
+                   grounded answer, so the dead end becomes the entry point.
+                   Only rendered when askAvailable() says the feature is routed,
+                   enabled and keyed: a row that offered this and then failed
+                   would be a worse dead end than the plain empty state. */
+                <CommandGroup heading="Ask">
+                  <CommandItem
+                    value="intel-ask-fallback"
+                    onSelect={() => {
+                      const question = query.trim()
+                      setOpen(false)
+                      /* Prefills, never auto-submits — /intel owns that
+                         contract. A palette row that spent someone's Gemini
+                         quota on navigation would charge them for a keystroke
+                         they were still typing. */
+                      router.push(`/intel?ask=${encodeURIComponent(question)}#ask`)
+                    }}
+                  >
+                    <Sparkles />
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="truncate">Ask about “{query.trim()}”</span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        Nothing is named that — ask LogPup instead, with links to
+                        the rows it used
+                      </span>
+                    </div>
+                  </CommandItem>
+                </CommandGroup>
+              ) : (
+                <CommandEmpty>
+                  <span className="inline-flex items-center gap-2 text-muted-foreground">
+                    <PawPrint className="size-4" aria-hidden />
+                    Nothing to fetch for “{query.trim()}”.
+                  </span>
+                </CommandEmpty>
+              )
             ) : null}
 
             {intent ? (
