@@ -61,6 +61,11 @@ export function CatchUpPanel({
     if (running) return
     setRunning(true)
     try {
+      // Counted, not assumed. Both failure paths below `break`, so claiming
+      // `gaps.length` at the end announced "Drafted notes for 5 days!"
+      // directly beneath the error toast explaining it had stopped at day
+      // two — the run telling the truth and then contradicting it.
+      let drafted = 0
       for (const gap of gaps) {
         setDraftingDay(gap.day)
         try {
@@ -72,6 +77,7 @@ export function CatchUpPanel({
           seqRef.current += 1
           const seq = seqRef.current
           setDrafts((prev) => ({ ...prev, [gap.day]: { data: res.data, seq } }))
+          drafted += 1
         } catch {
           toast.error(
             `Could not draft ${format(new Date(`${gap.day}T12:00:00`), 'EEEE, MMMM d')} — the days before it kept their drafts`,
@@ -79,7 +85,15 @@ export function CatchUpPanel({
           break
         }
       }
-      toast.success(`Drafted notes for ${gaps.length} days!`)
+      // Silent when nothing landed: the error toast already said what happened,
+      // and "Drafted 0 days" is a second notification carrying no news.
+      if (drafted > 0) {
+        toast.success(
+          drafted === gaps.length
+            ? `Drafted ${drafted === 1 ? 'a note' : `notes for ${drafted} days`} — review each before saving.`
+            : `Drafted ${drafted} of ${gaps.length} days before stopping — review each before saving.`,
+        )
+      }
     } finally {
       setDraftingDay(null)
       setRunning(false)
