@@ -25,6 +25,7 @@ import {
   Volume2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { priceForModel } from '@/features/gemini/pricing'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import { Badge } from '@/components/ui/badge'
 import { useSpeech } from '@/features/speech/components/use-speech'
@@ -62,31 +63,60 @@ interface MeetingIntelItem {
   questionSi: string
 }
 
+/**
+ * WHAT THIS PAGE MAY ASSERT ABOUT A MODEL, and what it must derive.
+ *
+ * The identity and the pitch are marketing's to write: the label, the version
+ * badge, the one-line tag, the latency and throughput figures, and what the
+ * model is good for. Those are positioning.
+ *
+ * The RATES are not. They are a claim about what Google charges, they are
+ * already stated once in src/features/gemini/pricing.ts — the table the usage
+ * ledger bills against — and a second hand-written copy of a number is a copy
+ * that goes stale silently. Two of the models below are on promotional rows
+ * that expire (`until: '2027-01-01'`, after which 3.6/3.7-flash double to
+ * $1.50/$7.50). Hardcoded, this page would have gone on advertising the promo
+ * price into 2027 with nothing connecting it to the change. That is the same
+ * defect advertised-models.test.ts was written for — copy outrunning its
+ * mechanism — one field to the left of what that test checks, since it asserts
+ * an advertised id is PRICEABLE, not that an advertised RATE is CORRECT.
+ *
+ * So the rate fields are derived from priceForModel and the specs below carry
+ * none. pricing.ts is a pure module — no db, no server-only import — so a
+ * client component may call it.
+ *
+ * KNOWN LIMIT, stated rather than papered over: /home is statically
+ * prerendered, so PRICED_AT is fixed at build time and the rollover lands on
+ * the next deploy rather than at midnight on the day. That is a deploy
+ * cadence question, not a correctness one — the page can no longer disagree
+ * with pricing.ts as of the build that produced it, and no code change is
+ * needed when the promo ends.
+ */
 export interface GeminiModelSpec {
   id: string
   label: string
   version: string
   tag: string
-  inRate: string
-  outRate: string
-  inputCostPer1M: number
-  outputCostPer1M: number
   speedLatency: string
   throughput: string
   bestFor: string
   tier: 'GA' | 'Preview' | 'Alias'
 }
 
-export const GEMINI_MODELS: GeminiModelSpec[] = [
+/** A spec with its rates resolved — what the sandbox actually renders. */
+export interface GeminiModel extends GeminiModelSpec {
+  inRate: string
+  outRate: string
+  inputCostPer1M: number
+  outputCostPer1M: number
+}
+
+const MODEL_SPECS: GeminiModelSpec[] = [
   {
     id: 'gemini-3.6-flash',
     label: 'Gemini 3.6 Flash',
     version: 'v3.6',
     tag: 'Primary Pinned Default',
-    inRate: '$0.75/1M in',
-    outRate: '$3.75/1M out',
-    inputCostPer1M: 0.75,
-    outputCostPer1M: 3.75,
     speedLatency: '38ms',
     throughput: '240 tok/s',
     bestFor: 'High-frequency audio chunk parsing & meeting note synthesis',
@@ -97,10 +127,6 @@ export const GEMINI_MODELS: GeminiModelSpec[] = [
     label: 'Gemini 3.7 Flash',
     version: 'v3.7',
     tag: 'Flagship Speed & Reasoning',
-    inRate: '$0.75/1M in',
-    outRate: '$3.75/1M out',
-    inputCostPer1M: 0.75,
-    outputCostPer1M: 3.75,
     speedLatency: '42ms',
     throughput: '220 tok/s',
     bestFor: 'State-of-the-art hybrid reasoning & meeting audio',
@@ -111,10 +137,6 @@ export const GEMINI_MODELS: GeminiModelSpec[] = [
     label: 'Gemini 3.1 Pro',
     version: 'v3.1',
     tag: 'Deep Synthesis Tier',
-    inRate: '$1.25/1M in',
-    outRate: '$10.00/1M out',
-    inputCostPer1M: 1.25,
-    outputCostPer1M: 10.0,
     speedLatency: '85ms',
     throughput: '65 tok/s',
     bestFor: 'Complex multi-speaker reconciliation & screen OCR',
@@ -125,10 +147,6 @@ export const GEMINI_MODELS: GeminiModelSpec[] = [
     label: 'Gemini 3.5 Flash-Lite',
     version: 'v3.5',
     tag: 'Ultra-Fast Mechanical',
-    inRate: '$0.30/1M in',
-    outRate: '$2.50/1M out',
-    inputCostPer1M: 0.3,
-    outputCostPer1M: 2.5,
     speedLatency: '24ms',
     throughput: '260 tok/s',
     bestFor: 'Low-latency daily work log backfill & titles',
@@ -139,16 +157,35 @@ export const GEMINI_MODELS: GeminiModelSpec[] = [
     label: 'Gemini 2.5 Pro',
     version: 'v2.5',
     tag: 'Bilingual Engine',
-    inRate: '$1.25/1M in',
-    outRate: '$10.00/1M out',
-    inputCostPer1M: 1.25,
-    outputCostPer1M: 10.0,
     speedLatency: '78ms',
     throughput: '60 tok/s',
-    bestFor: 'Dual-language English & Sinhala (සිංහල) extraction',
+    bestFor: 'Dual-language English & Sinhala (\u0dc3\u0dd2\u0d82\u0dc4\u0dbd) extraction',
     tier: 'GA',
   },
 ]
+
+/** One moment for every rate on the page, so no two disagree mid-render. */
+const PRICED_AT = new Date()
+
+/**
+ * Specs with rates resolved. A model pricing.ts cannot price is DROPPED, not
+ * shown at a guessed rate — advertised-models.test.ts already forbids naming
+ * an unpriceable model on a public page, so this branch should be unreachable;
+ * dropping is simply the honest thing to do if it ever is reached.
+ */
+export const GEMINI_MODELS: GeminiModel[] = MODEL_SPECS.flatMap((spec) => {
+  const price = priceForModel(spec.id, PRICED_AT)
+  if (!price) return []
+  return [
+    {
+      ...spec,
+      inRate: `$${price.inputPer1M.toFixed(2)}/1M in`,
+      outRate: `$${price.outputPer1M.toFixed(2)}/1M out`,
+      inputCostPer1M: price.inputPer1M,
+      outputCostPer1M: price.outputPer1M,
+    },
+  ]
+})
 
 const TABS = [
   { id: 'briefing' as TabKey, label: 'Briefing', icon: LayoutDashboard },
