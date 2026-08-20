@@ -889,6 +889,11 @@ export const getPersonFollowups = cache(async function getPersonFollowups(userId
       meetingStartsAt: liveMeetings.startsAt,
       responseNote: meetingFollowups.responseNote,
       deferReason: meetingFollowups.deferReason,
+      // The task this follow-up already became, and null when that task has
+      // been trashed — liveTasks, not tasks. See hasBecomeATask in
+      // followup-split.ts: a trashed task has to hand the follow-up back, or
+      // deleting a task erases a commitment from both lists at once.
+      resolvedByLiveTaskId: liveTasks.id,
     })
     .from(meetingFollowups)
     // meetingFollowups has no deletedAt of its own — live iff its source
@@ -900,6 +905,11 @@ export const getPersonFollowups = cache(async function getPersonFollowups(userId
     // AI-derived row. Inner joins here would drop precisely those items.
     .leftJoin(owner, eq(meetingFollowups.userId, owner.id))
     .leftJoin(creator, eq(meetingFollowups.createdBy, creator.id))
+    // LEFT, and filtered in the pure layer rather than here: an inner join or
+    // a NOT EXISTS would make the exclusion invisible to followup-split's
+    // tests, and this rule earned a test the hard way — it shipped as live
+    // double-counting on the most-visited page in the app.
+    .leftJoin(liveTasks, eq(meetingFollowups.resolvedByTaskId, liveTasks.id))
     .where(
       and(
         eq(meetingFollowups.status, 'open'),

@@ -50,6 +50,15 @@ export type PersonFollowupRow = {
   responseNote: string | null
   /** Why it isn't done yet. */
   deferReason: string | null
+  /**
+   * The LIVE task this follow-up was already turned into, if any.
+   *
+   * Null covers three different situations that all mean "still show it": it
+   * was never matched to a task, or the task it was matched to has been
+   * trashed, or the task was hard-deleted. Only a task that still exists
+   * suppresses the row — see hasBecomeATask.
+   */
+  resolvedByLiveTaskId?: string | null
 }
 
 export type PersonFollowupItem = PersonFollowupRow & {
@@ -79,6 +88,26 @@ export type PersonFollowups = {
  */
 export const FOLLOWUP_STALE_DAYS = 14
 
+/**
+ * Has this follow-up already been turned into a task the person can see?
+ *
+ * suggestTasksFromFollowups (meetings/ai-actions.ts) sets `resolvedByTaskId`
+ * and DELIBERATELY leaves `status` at 'open' — the follow-up is not resolved,
+ * it has been handed to the board. But every reader of this list filtered on
+ * status alone, so the same commitment rendered twice on the dashboard: once
+ * in the tasks card and once in the follow-ups card, with different orderings
+ * and no hint they were the same thing. Closing the task then silently
+ * resolved a row the person was still looking at.
+ *
+ * Suppressing on the LIVE task rather than on the id is the load-bearing part.
+ * If the task is trashed the follow-up must come back, or deleting a task
+ * makes a commitment vanish from both lists at once — the debt would be gone
+ * from the product while still owed to a person.
+ */
+function hasBecomeATask(row: PersonFollowupRow): boolean {
+  return row.resolvedByLiveTaskId != null
+}
+
 function withAge(row: PersonFollowupRow, todayIso: string): PersonFollowupItem {
   // A meeting scheduled in the future can carry a manually-added follow-up, so
   // clamp at 0 rather than rendering "open for -3 days".
@@ -95,7 +124,7 @@ export function splitPersonFollowups(
   userId: string,
   todayIso: string,
 ): PersonFollowups {
-  const items = rows.map((row) => withAge(row, todayIso))
+  const items = rows.filter((row) => !hasBecomeATask(row)).map((row) => withAge(row, todayIso))
   const owed = items.filter((item) => item.ownerUserId === userId).sort(oldestFirst)
   return {
     owed,

@@ -23,6 +23,64 @@ function followup(over: Partial<PersonFollowupRow> = {}): PersonFollowupRow {
   }
 }
 
+describe('a follow-up that already became a task', () => {
+  // suggestTasksFromFollowups sets resolvedByTaskId and leaves status 'open' on
+  // purpose — the commitment is not resolved, it moved to the board. Every
+  // reader filtered on status alone, so the same commitment rendered twice on
+  // the dashboard: once as a task, once as a follow-up, different orderings,
+  // no hint they were one thing. Closing the task then silently resolved a row
+  // the person was still looking at.
+  it('is not listed again as a follow-up', () => {
+    const result = splitPersonFollowups(
+      [followup({ resolvedByLiveTaskId: 'task-1' })],
+      ME,
+      TODAY,
+    )
+    expect(result.owed).toEqual([])
+    expect(result.oldestOwedDays).toBeNull()
+  })
+
+  it('is hidden on the awaiting side too, not just the owed side', () => {
+    const result = splitPersonFollowups(
+      [followup({ id: 'f2', ownerUserId: OTHER, createdById: ME, resolvedByLiveTaskId: 't2' })],
+      ME,
+      TODAY,
+    )
+    expect(result.awaiting).toEqual([])
+  })
+
+  it('COMES BACK when that task is trashed, so deleting a task cannot erase a debt', () => {
+    // The query left-joins liveTasks, so a trashed task yields null here. If
+    // this suppressed on the raw id instead, deleting the task would remove the
+    // commitment from BOTH lists and the person would simply stop being asked.
+    const result = splitPersonFollowups(
+      [followup({ resolvedByLiveTaskId: null })],
+      ME,
+      TODAY,
+    )
+    expect(result.owed.map((i) => i.id)).toEqual(['f1'])
+  })
+
+  it('leaves an unmatched follow-up alone when the field is absent entirely', () => {
+    // Older callers build rows without the field. Absent must read as "never
+    // matched", never as "already handled" — the failure direction that hides
+    // work is the one worth pinning.
+    const { resolvedByLiveTaskId: _omitted, ...withoutField } = followup()
+    void _omitted
+    const result = splitPersonFollowups([withoutField as PersonFollowupRow], ME, TODAY)
+    expect(result.owed.map((i) => i.id)).toEqual(['f1'])
+  })
+
+  it('does not drop the OTHER follow-ups in the same list', () => {
+    const result = splitPersonFollowups(
+      [followup({ id: 'f1', resolvedByLiveTaskId: 'task-1' }), followup({ id: 'f3' })],
+      ME,
+      TODAY,
+    )
+    expect(result.owed.map((i) => i.id)).toEqual(['f3'])
+  })
+})
+
 describe('splitPersonFollowups', () => {
   it('puts items assigned to the person in owed', () => {
     const result = splitPersonFollowups([followup({ ownerUserId: ME })], ME, TODAY)
