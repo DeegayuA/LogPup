@@ -589,6 +589,9 @@ export const userAiPrefs = pgTable('user_ai_prefs', {
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   feature: text('feature').notNull(),
   enabled: boolean('enabled').notNull(),
+  // Chosen model for this feature; NULL means "use the feature's default
+  // chain" (same absent-means-default convention as `enabled`).
+  model: text('model'),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (t) => [
   primaryKey({ name: 'user_ai_prefs_pk', columns: [t.userId, t.feature] }),

@@ -302,6 +302,13 @@
       "when": 1787155900000,
       "tag": "0043_app_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1787156000000,
+      "tag": "0044_ai_pref_model",
+      "breakpoints": true
     }
   ]
 }
