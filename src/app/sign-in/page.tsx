@@ -17,6 +17,7 @@ import { GoogleOneTap } from '@/features/auth/components/google-one-tap'
 import { PasskeyLoginButton } from '@/features/auth/components/passkey-login-button'
 import { PasswordAuth } from '@/features/auth/components/password-auth'
 import { SignInBackdrop } from '@/features/auth/components/sign-in-backdrop'
+import { ThemeToggle } from '@/components/shell/theme-toggle'
 import { ClearCachedShell } from '@/features/pwa/clear-cached-shell'
 
 export const metadata = { title: 'Sign in' }
@@ -110,7 +111,15 @@ export default function SignInPage() {
         </div>
       </aside>
 
-      <div className="flex flex-col items-center justify-center gap-6 p-4 py-10 lg:p-10">
+      <div className="relative flex flex-col items-center justify-center gap-6 p-4 py-10 lg:p-10">
+        {/* On the form column, not over the brand panel: that panel is
+            `hidden lg:flex`, so a control placed there would disappear on
+            exactly the phones where someone is most likely to want the dark
+            theme. Absolutely positioned so it does not join the centred stack
+            and push the card off vertical centre. */}
+        <div className="absolute top-3 right-3 lg:top-6 lg:right-6">
+          <ThemeToggle />
+        </div>
         <div className="flex items-center gap-2.5 lg:hidden">
           <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <PawPrint className="size-4" aria-hidden />

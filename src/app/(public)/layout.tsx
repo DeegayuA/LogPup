@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { ArrowUpRight } from 'lucide-react'
 import { BrandMark } from '@/components/shell/brand-mark'
+import { ThemeToggle } from '@/components/shell/theme-toggle'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 
 /**
@@ -39,6 +40,11 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             <Link href="/sign-in" className="font-medium text-primary hover:underline">
               Sign in
             </Link>
+            {/* Last in the row, after the destinations: this is a preference,
+                not a place to go. Lives in the shared header rather than on
+                /home so /privacy and /terms — the two other pages a signed-out
+                reader can reach — get it from the same declaration. */}
+            <ThemeToggle />
           </nav>
         </div>
       </header>
@@ -60,7 +66,13 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             {/* h-4 rather than h-5. At the footer's 12px body size a 20px mark
                 is the loudest thing on the closing line, which puts the
                 operator's logo above the operator's sentence in emphasis. */}
-            <AltaVisionLogo className="h-4 w-auto" />
+            {/* `self-start` is load-bearing, not spacing. This sits in a
+                `flex flex-col`, whose default `align-items: stretch` overrides
+                `w-auto` and pulls the image to the column's full width while
+                `h-4` holds the height — so the wordmark rendered horizontally
+                stretched. Sizing the item to its content restores the 3774x607
+                aspect. */}
+            <AltaVisionLogo className="h-4 w-auto self-start" />
             <p className="max-w-[46ch] text-xs leading-relaxed text-muted-foreground">
               LogPup is built and operated by Alta Vision (Pvt) Ltd, Sri Lanka.
             </p>
