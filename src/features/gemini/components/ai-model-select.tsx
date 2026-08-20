@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { Sparkles, TriangleAlert } from 'lucide-react'
+import { Sparkles, TriangleAlert, Zap } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -39,12 +39,6 @@ export type ModelSuggestion = {
  * MODEL_CHOICES[kind] — the curated list valid for this feature's endpoint —
  * plus a "Default (recommended)" entry mapping to `null`, which leaves the
  * feature on its own fallback chain (see resolveChain).
- *
- * The closed trigger needs an explicit label lookup: Base UI's Select.Value
- * renders `String(value)` unless given a function child or an `items` map,
- * so a raw id like "gemini-2.5-flash-lite" would otherwise show verbatim
- * instead of "Gemini 2.5 Flash-Lite" — this has bitten the app before (see
- * the job-role and employment selects for the same fix).
  */
 export function AiModelSelect({
   feature,
@@ -71,14 +65,6 @@ export function AiModelSelect({
   for (const c of choices) labels[c.id] = c.label
 
   const selected = choices.find((c) => c.id === value)
-  // A key with no paid tier answers 401/403 to a paid-only model on every
-  // call, forever. That does NOT refuse the call: client.ts treats an auth
-  // failure as "advance to the next model on this key", so the request falls
-  // through to the default model and the feature works normally. What the
-  // user loses is the choice itself — silently — plus one wasted request per
-  // call. Nothing downstream can report that (they see an ordinary result),
-  // so it has to be said here, at the point of choice, and said accurately:
-  // promising refusal would send someone to add billing they don't need.
   const needsPaidWarning = !!selected && !selected.freeTier && !hasPaidKey
   const showSuggestion = !!suggestion && enabled && suggestion.id !== value
 
@@ -105,26 +91,58 @@ export function AiModelSelect({
   return (
     <div className="flex w-full flex-col gap-1">
       <Select value={value} onValueChange={handleChange} disabled={!enabled || isPending}>
-        {/* Full-width below sm: a fixed w-56 inside the row's wrap barely fit
-            a 320px card and broke the select + switch onto ragged lines. */}
-        <SelectTrigger size="sm" aria-label={`${label} model`} className="w-full sm:w-56">
+        <SelectTrigger size="sm" aria-label={`${label} model`} className="w-full sm:w-64 border-border/70 bg-card/60">
+          {/* The function child is NOT decoration. Base UI's Select.Value
+              renders String(value) unless given a function child or an items
+              map, so a raw id like "gemini-2.5-flash-lite" would show
+              verbatim here instead of "Gemini 2.5 Flash-Lite" — and only in
+              the CLOSED state, which is why it survives a glance at the open
+              menu. This repo has already hit it twice (the job-role and
+              employment selects carry the same fix). Simplifying this to
+              <SelectValue /> compiles, renders, and is wrong. */}
           <SelectValue>{(v: string) => labels[v] ?? v}</SelectValue>
         </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={DEFAULT_VALUE}>Default (recommended)</SelectItem>
+        <SelectContent className="max-h-80 border-border/80 bg-card/95 backdrop-blur-xl shadow-2xl">
+          <SelectItem value={DEFAULT_VALUE}>
+            <div className="flex flex-col gap-0.5 py-0.5">
+              <span className="font-medium text-foreground flex items-center gap-1.5">
+                <Zap className="size-3 text-primary" /> Default (recommended)
+              </span>
+              <span className="font-mono text-2xs text-muted-foreground">
+                Managed studio fallback chain
+              </span>
+            </div>
+          </SelectItem>
           {choices.map((c) => (
             <SelectItem key={c.id} value={c.id}>
-              <span className="flex flex-col gap-0.5">
-                <span>
-                  {c.label}
-                  {c.stability !== 'stable' ? ` · ${c.stability}` : ''}
-                  {!c.freeTier ? ' · paid keys only' : ''}
-                  {suggestion?.id === c.id ? ' · suggested for you' : ''}
-                </span>
-                <span className="font-mono text-2xs tabular-nums text-muted-foreground">
-                  {priceLabel(c.id)}
-                </span>
-              </span>
+              <div className="flex flex-col gap-1 py-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-medium text-foreground">{c.label}</span>
+                  {c.stability === 'preview' && (
+                    <span className="rounded bg-chart-1/10 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-chart-1">
+                      preview
+                    </span>
+                  )}
+                  {c.stability === 'alias' && (
+                    <span className="rounded bg-primary/10 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-primary">
+                      alias
+                    </span>
+                  )}
+                  {!c.freeTier && (
+                    <span className="rounded bg-destructive/10 px-1.5 py-0.2 font-mono text-[9px] font-semibold text-destructive">
+                      paid keys only
+                    </span>
+                  )}
+                  {suggestion?.id === c.id && (
+                    <span className="rounded bg-primary/10 px-1.5 py-0.2 font-mono text-[9px] font-bold text-primary flex items-center gap-0.5">
+                      <Sparkles className="size-2.5" /> suggested
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center justify-between font-mono text-2xs text-muted-foreground">
+                  <span className="text-foreground/80">{priceLabel(c.id)}</span>
+                </div>
+              </div>
             </SelectItem>
           ))}
         </SelectContent>
@@ -143,10 +161,6 @@ export function AiModelSelect({
         </button>
       ) : null}
       {needsPaidWarning ? (
-        // Body copy in the default foreground at text-xs: the old
-        // text-warning-on-warning/5 at 11px sat at the AA contrast line; the
-        // warning hue now lives in the border and icon, which only reinforce
-        // the words (WCAG 1.4.1 / 1.4.3).
         <p
           role="alert"
           className="flex w-full items-start gap-1.5 rounded-lg border border-warning/35 bg-warning/5 px-2 py-1.5 text-xs sm:max-w-96"
