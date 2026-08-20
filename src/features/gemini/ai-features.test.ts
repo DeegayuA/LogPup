@@ -105,9 +105,9 @@ describe('estimatePerUseCostUsd', () => {
   })
 
   it('returns null rather than a partial sum when the chosen model has no price', () => {
-    // gemini-omni-flash is deliberately unpriced (pricing.ts) — half of a
+    // gemini-3.1-flash-lite is deliberately unpriced (pricing.ts) — half of a
     // blended figure would read as a real, cheap number.
-    expect(estimatePerUseCostUsd(estimateFor('meeting-intel'), 'gemini-omni-flash', AT)).toBeNull()
+    expect(estimatePerUseCostUsd(estimateFor('meeting-intel'), 'gemini-3.1-flash-lite', AT)).toBeNull()
   })
 
   it('never lets a sub-shape exceed the shape it is carved out of', () => {
@@ -167,8 +167,6 @@ describe('MODEL_CHOICES', () => {
   // whitelisting it here is a failing test, not a silent gap.
   const DELIBERATELY_UNPRICED = new Set([
     'gemini-3.1-flash-lite',
-    'gemini-3-flash-preview',
-    'gemini-omni-flash',
     'gemini-2.5-pro-preview-tts',
     'gemini-3.5-live-translate-preview',
   ])

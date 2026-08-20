@@ -261,6 +261,23 @@ export type ModelChoice = {
  * gemini-3-pro-preview, gemini-2.0-flash, gemini-2.0-flash-lite) are
  * deliberately absent: offering one would offer a guaranteed, undiagnosable
  * permanent failure. Do not add them back.
+ *
+ * Also absent from `text`, on purpose: gemini-omni-flash and
+ * gemini-3-flash-preview. resolveChain (model-choice.ts) prepends a user's
+ * pinned model in front of the default chain so a model that later
+ * disappears (404) quietly falls through — but that guarantee does NOT
+ * cover HTTP 400, which client.ts classifies as `kind: 'bad'` and aborts
+ * the whole call with no fallback. Both ids are undocumented enough that no
+ * published price could be found for either (pricing.ts), and three `text`
+ * features (app.metadata, sprint.draft, meeting.synthesis) send
+ * responseMimeType: 'application/json' — if either model rejects JSON mode,
+ * it does so with a 400, not a 404, turning that feature into a permanent
+ * raw error for anyone who pinned it. A model we can neither price nor
+ * guarantee a fallback for isn't a choice worth offering. This is unlike
+ * the three other deliberately-unpriced models kept below
+ * (gemini-3.1-flash-lite, gemini-2.5-pro-preview-tts,
+ * gemini-3.5-live-translate-preview): those are documented models whose
+ * failure modes are known — only the price is missing.
  */
 export const MODEL_CHOICES: Record<FeatureKind, readonly ModelChoice[]> = {
   text: [
@@ -270,8 +287,6 @@ export const MODEL_CHOICES: Record<FeatureKind, readonly ModelChoice[]> = {
     { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', stability: 'stable', freeTier: true },
     { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', stability: 'stable', freeTier: true },
     { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', stability: 'preview', freeTier: true },
-    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash', stability: 'preview', freeTier: true },
-    { id: 'gemini-omni-flash', label: 'Gemini Omni Flash', stability: 'preview', freeTier: true },
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', stability: 'stable', freeTier: true },
     { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', stability: 'stable', freeTier: true },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', stability: 'stable', freeTier: true },
