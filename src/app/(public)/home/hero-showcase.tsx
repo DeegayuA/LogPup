@@ -86,11 +86,17 @@ interface MeetingIntelItem {
  * client component may call it.
  *
  * KNOWN LIMIT, stated rather than papered over: /home is statically
- * prerendered, so PRICED_AT is fixed at build time and the rollover lands on
- * the next deploy rather than at midnight on the day. That is a deploy
- * cadence question, not a correctness one — the page can no longer disagree
- * with pricing.ts as of the build that produced it, and no code change is
- * needed when the promo ends.
+ * prerendered, so the instant these rates are resolved against is fixed at
+ * build time and a promotional rollover lands on the next deploy rather than
+ * at midnight on the day. That is a deploy-cadence question, not a correctness
+ * one — the page cannot disagree with pricing.ts as of the build that produced
+ * it, and no code change is needed when a promo ends.
+ *
+ * (This paragraph named a `PRICED_AT` constant that no longer exists, which is
+ * the documentation form of the hardcoded rate below it: true when written,
+ * with nothing connecting it to the code. The next reader would have grepped
+ * for the symbol, found nothing, and had to work out which half of the file to
+ * trust. See the prop note further down for how the instant actually arrives.)
  */
 export interface GeminiModelSpec {
   id: string
