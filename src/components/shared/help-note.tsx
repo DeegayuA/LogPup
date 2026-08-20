@@ -57,8 +57,15 @@ export function HelpNote({
 }
 
 /**
- * A styled disclosure container for policies and guidelines.
- * Server-component safe, with animated chevron and clean card presentation.
+ * A plain `<details>`, which is why it is server-component safe: no state, no
+ * effect, no client boundary, and it opens with JavaScript disabled. The
+ * chevron is a CSS rotation on `group-open`, not a React-held flag — that is
+ * what keeps this usable from a server component beside the data it explains,
+ * where a client-side disclosure would drag the whole card across the
+ * boundary with it.
+ *
+ * Distinct from `HelpNote` above: that is the rule you cannot guess and must
+ * always see; this is the longer derivation you only want when you ask.
  */
 export function HelpDetail({
   summary,

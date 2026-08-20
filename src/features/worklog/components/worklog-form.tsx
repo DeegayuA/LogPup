@@ -68,11 +68,14 @@ export function WorklogForm({
   const dirty = percent !== (saved?.percent ?? null) || note.trim() !== (saved?.note ?? '')
   const canSave = percent !== null && dirty
 
-  // Detect which projects are referenced/filled in the current note
+  // Whether this project is already tagged in the note. The TAG form only:
+  // also matching the bare name meant an app called "API" or "Ops" counted as
+  // tagged the moment either word appeared in ordinary prose, so its chip read
+  // as filled and "split across unfilled projects" silently skipped it. The
+  // tag is what the reader and the splitter both write, so it is the only
+  // thing that should count as one.
   const getAppFillStatus = (appName: string) => {
-    const lowerNote = note.toLowerCase()
-    const lowerName = appName.toLowerCase()
-    return lowerNote.includes(`[${lowerName}]`) || lowerNote.includes(lowerName)
+    return note.toLowerCase().includes(`[${appName.toLowerCase()}]`)
   }
 
   // Insert or toggle a project tag into the note textarea

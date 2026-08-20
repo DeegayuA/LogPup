@@ -212,7 +212,6 @@ async function CohortData({ params }: { params: CohortParams }) {
       <SharedPeopleList
         rows={buildSharedPeople(people, { rankBySplit: true })}
         params={params}
-        rankBySplit
       />
     )
   }

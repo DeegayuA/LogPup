@@ -123,11 +123,12 @@ const NO_ANCHOR_MIN_PROJECTS = 3
  * Everyone on two or more projects.
  *
  * `rankBySplit` decides the order, and it exists because the order has to be
- * describable to whoever is reading it. With the allocation numbers visible the
- * list is ranked by how evenly someone is split (most even = most pulled about);
- * without them the only honest ranking is by how many projects they are on, and
- * the heading above the list says so. Ranking by a number the reader cannot see
- * would be a sort order nobody could check.
+ * describable to whoever is reading it: with the allocation numbers on screen
+ * the list is ranked by how evenly someone is split (most even = most pulled
+ * about), and the heading says exactly that. Ranking by a number the reader
+ * cannot see would be a sort order nobody could check — which is why the one
+ * caller passes `true` and the card no longer offers a second description for
+ * a state it cannot be in.
  */
 export function buildSharedPeople(
   people: readonly UserCapacity[],

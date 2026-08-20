@@ -299,12 +299,10 @@ export function ProjectCohortList({
 export function SharedPeopleList({
   rows,
   params,
-  rankBySplit,
 }: {
   rows: SharedPerson[]
   params: CohortParams
   /** True when every number behind the ranking is on screen — see cohorts.ts. */
-  rankBySplit: boolean
 }) {
   if (rows.length === 0) {
     return (
@@ -333,9 +331,8 @@ export function SharedPeopleList({
         <CardHeader>
           <CardTitle as="h2">Shared across projects</CardTitle>
           <CardDescription>
-            {rankBySplit
-              ? 'Most evenly split first — the people with no single project holding most of their time.'
-              : 'Most projects first. Ranking by how evenly the time is split needs the allocation percentages, which are not shown here.'}
+            Most evenly split first — the people with no single project holding
+            most of their time.
           </CardDescription>
           <CardAction>
             <span className={cn(PCT_CLASS, 'text-xs text-muted-foreground')}>

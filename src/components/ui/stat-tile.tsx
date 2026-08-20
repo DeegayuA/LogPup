@@ -2,8 +2,16 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 
 /**
- * A stat that goes somewhere. Numbers are mono/tabular (they align in a row of tiles);
- * the label carries the meaning in WORDS — tone tints the value but never replaces the label.
+ * A stat that goes somewhere.
+ *
+ * Data values are mono and tabular so a column of them lines up on the
+ * decimal, and sized by the type scale rather than by emphasis: a number is
+ * not more important for being bigger, and a row of tiles shouting at one
+ * another has no hierarchy at all. Weight and colour carry rank; size stays
+ * put.
+ *
+ * The label carries the meaning in WORDS — tone tints the value but never
+ * replaces the label, so nothing is lost to a colourblind reader.
  */
 type StatTone = "default" | "attention" | "positive" | "destructive"
 
@@ -41,7 +49,7 @@ function StatTile({
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd
         className={cn(
-          "font-mono text-xl font-bold tabular-nums leading-tight tracking-tight",
+          "font-mono text-lg font-semibold tabular-nums leading-tight",
           TONE_TEXT[tone]
         )}
       >
