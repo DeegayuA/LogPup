@@ -23,10 +23,10 @@ import {
   getUserJoinDay,
   type MyAbsence,
 } from '@/features/worklog/queries'
-import { computeCoverage } from '@/features/worklog/coverage'
+import { computeCoverage, type CoverageStatus } from '@/features/worklog/coverage'
 import { patternForDay } from '@/features/worklog/schedules'
 import { MAX_BACKFILL_DAYS } from '@/features/worklog/missing-days'
-import { resolveWorkDay, summarizeWorklogs, worklogDaysBack } from '@/features/worklog/worklog-day'
+import { resolveWorkDay, worklogDaysBack } from '@/features/worklog/worklog-day'
 import { getAiPrefs } from '@/features/gemini/prefs'
 
 export const metadata = { title: 'Work log' }
@@ -331,33 +331,96 @@ async function TodayEntry({ userId, today }: { userId: string; today: string }) 
   )
 }
 
+/**
+ * What each coverage status says on a row.
+ *
+ * `missing` is the ONLY one that gets to say "Not logged". That phrase used to
+ * be printed against every dayless row in the window, so a fortnight read as
+ * thirteen failures including both Saturdays and both Sundays — the page
+ * accusing someone of missing days nobody expected them to work. The
+ * distinctions come from coverage.ts, which already draws them for the panel
+ * directly above this list; the two used to disagree about the same Sunday
+ * twelve inches apart.
+ */
+const DAY_STATE: Record<CoverageStatus, { label: string; tone: string } | null> = {
+  logged: null, // renders its percentage and note instead
+  missing: { label: 'Not logged', tone: 'text-muted-foreground' },
+  exempt: { label: 'Approved leave', tone: 'text-muted-foreground/70' },
+  off: { label: 'Not a working day', tone: 'text-muted-foreground/70' },
+  'not-yet-due': { label: 'Today — not due yet', tone: 'text-muted-foreground/70' },
+  'not-required': { label: 'Not required for your seat', tone: 'text-muted-foreground/70' },
+}
+
 async function MyHistory({ userId, today }: { userId: string; today: string }) {
-  const rows = await getMyWorklogs(userId, MY_DAYS)
-  const byDay = new Map(rows.map((row) => [row.day, row]))
-  // Every day in the window, logged or not: an unlogged day has to be
-  // visible as a gap, otherwise the list quietly reads as a full record.
   const days = worklogDaysBack(MY_DAYS, new Date(`${today}T12:00:00Z`))
-  const { logged, averagePercent } = summarizeWorklogs(rows)
+  const from = days[days.length - 1]
+
+  /* The same five inputs the catch-up panel above uses, fetched again here
+     because each panel is its own Suspense boundary — but computed through the
+     SAME function, which is the part that matters: two panels on one screen
+     must not hold two opinions about whether a Sunday was owed. */
+  const [rows, schedule, approved, orgHolidayDays, joinedOn] = await Promise.all([
+    getMyWorklogs(userId, MY_DAYS),
+    getMyWorkSchedule(userId),
+    getMyApprovedAbsences(userId, from, today),
+    getOrgHolidayDays(from, today),
+    getUserJoinDay(userId),
+  ])
+
+  const byDay = new Map(rows.map((row) => [row.day, row]))
+  const orgHolidays = new Set(orgHolidayDays)
+
+  const coverage = computeCoverage({
+    from,
+    to: today,
+    loggedDays: new Set(rows.map((row) => row.day)),
+    // Approved only — a pending absence exempts nothing, the same rule the
+    // catch-up panel states out loud.
+    exemptDays: absenceDays(approved, from, today),
+    isHoliday: (iso) => isMercantileHoliday(iso) || orgHolidays.has(iso),
+    patternFor: (iso) => patternForDay(schedule, iso),
+    joinedOn: joinedOn ?? from,
+    today,
+  })
+  const statusByDay = new Map(coverage.days.map((day) => [day.day, day]))
+
+  /* Owed day-fractions, not a count of rows. Saturday is half a day, so
+     counting logged rows over a flat fourteen both inflated the denominator
+     with days nobody owed and treated a Saturday as a whole one. `expected`
+     already excludes weekends, holidays, approved leave and days before you
+     joined, and the invariant expected === logged + missing is what makes the
+     figure below mean anything at all. */
+  const { expected, logged: loggedFraction } = coverage
+  const coveragePct = expected > 0 ? Math.round((loggedFraction / expected) * 100) : null
 
   return (
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="font-heading text-sm font-semibold">Your last {MY_DAYS} days</h2>
+        {/* Days you owed, and how many of them you filed — not "averaging N%
+            on the days you logged", which computed a mean over whatever
+            happened to be there. One entry made that read "averaging 50%",
+            a statistic from a sample of one. */}
         <p className="text-2xs text-muted-foreground">
-          {logged} logged
-          {averagePercent !== null ? (
+          {expected === 0 ? (
+            'No days owed in this window'
+          ) : (
             <>
-              {' · averaging '}
-              <span className="font-mono tabular-nums text-foreground">{averagePercent}%</span>
-              {' on the days you logged'}
+              <span className="font-mono tabular-nums text-foreground">{coveragePct}%</span>
+              {' of the days you owed'}
             </>
-          ) : null}
+          )}
         </p>
       </div>
 
       <ul className="flex flex-col divide-y rounded-xl border bg-card">
         {days.map((day) => {
           const row = byDay.get(day)
+          const status = statusByDay.get(day)?.status ?? 'missing'
+          const state = DAY_STATE[status]
+          /* A Saturday is half a day and says so. Without it the row reads as
+             a full working day somebody only half-filled. */
+          const half = statusByDay.get(day)?.fraction === 0.5
           return (
             <li key={day} className="flex items-baseline gap-3 px-3 py-2">
               <span className="w-24 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
@@ -373,8 +436,13 @@ async function MyHistory({ userId, today }: { userId: string; today: string }) {
                   </span>
                 </>
               ) : (
-                <span className="text-sm text-muted-foreground">Not logged</span>
+                <span className={cn('min-w-0 flex-1 text-sm', state?.tone)}>{state?.label}</span>
               )}
+              {half ? (
+                <span className="shrink-0 font-mono text-2xs text-muted-foreground/70 uppercase">
+                  Half day
+                </span>
+              ) : null}
             </li>
           )
         })}
