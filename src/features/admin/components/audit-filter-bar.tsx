@@ -20,6 +20,7 @@ import {
   type AuditParamState,
 } from '@/features/admin/audit-filters'
 import type { AuditFacets } from '@/features/admin/audit-queries'
+import { AuditAsk } from '@/features/admin/components/audit-ask'
 
 /**
  * One date bound, typed locally and committed on blur or Enter.
@@ -179,6 +180,15 @@ export function AuditFilterBar({
        At 320px the old fixed widths (w-56/w-40/w-36) wrapped into a ragged
        four-to-five-row pile that filled half the first viewport. */
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      {/* `w-full` so it takes its own line above the controls rather than
+          sitting among them: it SETS these filters, and reading downward
+          should go question, then the filters it produced, then the rows.
+          Inline it would have looked like a seventh filter competing with the
+          other six. */}
+      <div className="w-full">
+        <AuditAsk current={current} />
+      </div>
+
       <SearchFilter key={`q-${current.q}`} value={current.q} onCommit={(q) => apply({ q })} />
 
       <Select
