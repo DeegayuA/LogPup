@@ -10,6 +10,7 @@ import {
   type FeatureUsageSummary,
 } from '@/features/gemini/usage-summary'
 import { AiFeatureToggle } from '@/features/gemini/components/ai-feature-toggle'
+import { AiModelSelect } from '@/features/gemini/components/ai-model-select'
 
 const WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
@@ -56,6 +57,10 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
   const totals = totalsFor(summaries)
   const bySummary = new Map(summaries.map((s) => [s.featureId, s]))
   const sharedByMe = keys.filter((k) => k.shared).length
+  // Whether this user could actually serve a call to a paid-only model
+  // (gemini-2.5-pro-preview-tts) right now — the picker warns inline rather
+  // than let the choice fail as an undiagnosable 401/403 later.
+  const hasPaidKey = keys.some((k) => k.tier === 'paid')
   const liveUsage = bySummary.get(ESTIMATED_USAGE_FEATURE_ID)
   const totalsIncludeEstimate = !!liveUsage && liveUsage.calls > 0
 
@@ -127,7 +132,13 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
         <ul className="flex flex-col divide-y">
           {AI_FEATURES.map((f) => {
             const used = bySummary.get(f.id)
-            const perUse = estimateCostUsd({ ...f.estimate.tokens, at: now })
+            const chosenModel = prefs[f.id].model
+            // The token SHAPE (a representative call for this feature) stays
+            // fixed from the registry; only the MODEL priced against it
+            // swaps to whatever the user chose, so the card never quotes one
+            // model's rate beside another model's token counts.
+            const perUseModel = chosenModel ?? f.estimate.tokens.model
+            const perUse = estimateCostUsd({ ...f.estimate.tokens, model: perUseModel, at: now })
             const isEstimatedFeature = f.id === ESTIMATED_USAGE_FEATURE_ID
             return (
               <li key={f.id} className="flex flex-wrap items-center gap-3 py-2.5">
@@ -135,7 +146,7 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                   <span className="text-sm font-medium">{f.label}</span>
                   <span className="text-xs text-muted-foreground">{f.description}</span>
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                    {f.chain} · {f.estimate.tokens.model} ·{' '}
+                    {f.chain} · {perUseModel} ·{' '}
                     {f.estimate.tokens.inputTokens.toLocaleString('en-US')} in /{' '}
                     {f.estimate.tokens.outputTokens.toLocaleString('en-US')} out ·{' '}
                     {perUse !== null
@@ -145,7 +156,22 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
                     {describeUsage(used, isEstimatedFeature)}
                   </span>
+                  {f.id === 'meeting-intel' ? (
+                    <span className="text-xs text-muted-foreground">
+                      Model choice applies to the whole-meeting write-up only — per-segment
+                      transcription and follow-up resolution always run on the default flash
+                      chain, so an hour of segment calls isn&rsquo;t repriced along with it.
+                    </span>
+                  ) : null}
                 </div>
+                <AiModelSelect
+                  feature={f.id}
+                  label={f.label}
+                  kind={f.kind}
+                  model={chosenModel}
+                  enabled={prefs[f.id].enabled}
+                  hasPaidKey={hasPaidKey}
+                />
                 <AiFeatureToggle feature={f.id} label={f.label} enabled={prefs[f.id].enabled} />
               </li>
             )
