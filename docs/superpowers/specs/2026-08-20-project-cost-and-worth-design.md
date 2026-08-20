@@ -49,6 +49,7 @@ Same shape, keyed to `user_id`. Present only for people whose rate genuinely dif
 - Gated by its own capability. The capability matrix is another session's — **ask for one, do not invent one**.
 - **Never rendered in any per-person view.** Not the person page, not the directory, not a tooltip.
 - **No cost-per-person chart, ever.** A bar chart of cost by person is a salary chart with extra steps. Cost aggregates to project, team, role, or time — never to an individual.
+- **The capability must gate the AGGREGATE reads too, not just the rate field.** Suppressing the per-person chart is not sufficient. Anyone who can filter a cost total can narrow it to a single contributor — a project with one person on it, or a date range in which only one person logged — and read their rate off the result by dividing by their hours. **A rate hidden behind a capability but reconstructible from an unguarded total is not hidden.** So the gate belongs on every query that returns money, and a cost figure must refuse to render when its contributor count falls to one rather than quietly resolving to a single person's pay.
 - Absent override means the role's rate. That is the normal case and must stay the normal case.
 
 ## Worth
