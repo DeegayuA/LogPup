@@ -65,6 +65,7 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   calendar: 'no tables of its own',
   dashboard: 'no tables of its own',
   gemini: "a user's own API keys are private, not workspace-searchable",
+  intel: 'no tables of its own — it reads other features’ rows and links back to them',
   notifications: 'a personal inbox, not a workspace index',
   notion: 'no tables of its own',
   onboarding: 'no tables of its own',

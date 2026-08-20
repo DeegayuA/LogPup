@@ -5,6 +5,7 @@ import { settingsNavItem } from '@/features/settings/nav'
 import { commands as appsCommands } from '@/features/apps/commands'
 import { commands as authCommands } from '@/features/auth/commands'
 import { commands as bugsCommands } from '@/features/bugs/commands'
+import { commands as intelCommands } from '@/features/intel/commands'
 import { commands as meetingsCommands } from '@/features/meetings/commands'
 import { commands as notificationsCommands } from '@/features/notifications/commands'
 import { commands as peopleCommands } from '@/features/people/commands'
@@ -38,6 +39,7 @@ const FEATURE_COMMANDS: CommandDescriptor[] = [
   ...appsCommands,
   ...authCommands,
   ...bugsCommands,
+  ...intelCommands,
   ...meetingsCommands,
   ...notificationsCommands,
   ...peopleCommands,
