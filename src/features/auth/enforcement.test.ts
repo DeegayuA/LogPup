@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
  * SERVER-SIDE ENFORCEMENT, proven at the action boundary.
@@ -59,6 +59,31 @@ vi.mock('@/db', () => ({
 
 const as = (role: string, id = 'actor-1') =>
   authMock.mockResolvedValue({ user: { id, role, status: 'approved' } })
+
+/**
+ * Pay for the module ONCE, outside any test's budget.
+ *
+ * Every test below does `await import('@/features/auth/actor')`. The module
+ * is cached after the first, so exactly one test — whichever vitest happens to
+ * run first — was charged with loading the real actor module and everything it
+ * pulls in. On an idle machine that is a few hundred milliseconds; under a
+ * full parallel run it has exceeded vitest's 5s per-test timeout and failed
+ * the file. The test that failed was never the slow one, and re-running it
+ * alone always passed.
+ *
+ * A red whose verdict depends on machine load is worse than no test: it
+ * teaches people that reds here are noise, which is exactly the habit that
+ * lets a real failure through. Raising testTimeout would have hidden the cost
+ * instead of moving it; beforeAll has its own separate budget and this is the
+ * only thing in it.
+ *
+ * The import stays dynamic in the tests themselves so they keep reading as
+ * "call the real action with a real session" rather than depending on
+ * module-load order at the top of the file.
+ */
+beforeAll(async () => {
+  await import('@/features/auth/actor')
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
