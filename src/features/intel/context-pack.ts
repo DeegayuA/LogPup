@@ -202,6 +202,16 @@ export async function loadWorkspaceSnapshot(
   //   safeguard. Rejected days must stay IN the gap list: a refused request is
   //   precisely the case where the day still has to be logged, and dropping it
   //   would hide the one absence outcome that leaves work owed.
+  //
+  // AND THE ASYMMETRY THAT LOOKS LIKE A BUG: a pending day leaves this GAP LIST
+  // but stays in coverage's DENOMINATOR, because the two answer different
+  // questions — "what should I do now" versus "what did this month actually
+  // look like". /worklog holds the same split from the other end (its
+  // exemptDays is approved-only, so nobody lowers their own denominator by
+  // typing a request). Anyone who later surfaces a coverage FIGURE on /intel
+  // inherits that: the percentage will count days this list deliberately does
+  // not, and reconciling the two by filtering the denominator here would let a
+  // person improve their own month by filing a request nobody has approved.
   const filedDays = absenceDays(pendingAbsences, gapFrom, todayIso)
   const gapDays = (coverage?.days ?? [])
     .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
