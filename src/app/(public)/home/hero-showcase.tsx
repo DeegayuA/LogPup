@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useId, type DragEvent } from 'react'
+import { useState, useEffect, useId, type DragEvent, useMemo } from 'react'
 import {
   LayoutDashboard,
   Users,
@@ -164,8 +164,25 @@ const MODEL_SPECS: GeminiModelSpec[] = [
   },
 ]
 
-/** One moment for every rate on the page, so no two disagree mid-render. */
-const PRICED_AT = new Date()
+/**
+ * WHY THIS IS A PROP AND NOT `new Date()` AT MODULE SCOPE.
+ *
+ * This file is 'use client', and the page is statically prerendered — so a
+ * module-scope `new Date()` evaluates TWICE at different moments: once on the
+ * server at build time, once in the browser at load. Today both land in the
+ * same pricing window, so the numbers agree and nothing is visible. They stop
+ * agreeing the moment a promotional rate rolls over: a build from before the
+ * rollover ships HTML quoting the old price while the client computes the new
+ * one, which is a hydration mismatch and a visible flip of a number the page
+ * presents as fact.
+ *
+ * Resolving on the server and passing the instant down means both sides use
+ * the SAME moment, so the page is merely stale until the next deploy — which
+ * is the behaviour the copy can honestly claim.
+ */
+function geminiModels(pricedAt: Date): GeminiModel[] {
+  return MODEL_SPECS.flatMap((spec) => resolveSpec(spec, pricedAt))
+}
 
 /**
  * Specs with rates resolved. A model pricing.ts cannot price is DROPPED, not
@@ -173,8 +190,8 @@ const PRICED_AT = new Date()
  * an unpriceable model on a public page, so this branch should be unreachable;
  * dropping is simply the honest thing to do if it ever is reached.
  */
-export const GEMINI_MODELS: GeminiModel[] = MODEL_SPECS.flatMap((spec) => {
-  const price = priceForModel(spec.id, PRICED_AT)
+function resolveSpec(spec: (typeof MODEL_SPECS)[number], pricedAt: Date): GeminiModel[] {
+  const price = priceForModel(spec.id, pricedAt)
   if (!price) return []
   return [
     {
@@ -185,7 +202,7 @@ export const GEMINI_MODELS: GeminiModel[] = MODEL_SPECS.flatMap((spec) => {
       outputCostPer1M: price.outputPer1M,
     },
   ]
-})
+}
 
 const TABS = [
   { id: 'briefing' as TabKey, label: 'Briefing', icon: LayoutDashboard },
@@ -392,7 +409,11 @@ const ACTIVITY_ROWS = [
   { who: 'AI', what: 'Gemini synthesized 3 action items from Sprint Sync', where: 'Meetings', when: '4h ago' },
 ]
 
-export function HeroShowcase() {
+export function HeroShowcase({ pricedAt }: { pricedAt: string }) {
+  /* One moment for every rate on the page, so no two disagree mid-render —
+     and it comes from the server, so the client cannot compute a different
+     one. See geminiModels above. */
+  const GEMINI_MODELS = useMemo(() => geminiModels(new Date(pricedAt)), [pricedAt])
   const [activeTab, setActiveTab] = useState<TabKey>('briefing')
   const [selectedStat, setSelectedStat] = useState<string | null>('due')
   const [people, setPeople] = useState<EngineerCapacity[]>(INITIAL_PEOPLE)

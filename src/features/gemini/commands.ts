@@ -10,11 +10,15 @@ import type { CommandDescriptor } from '@/features/search/registry/types'
  * person writes their row from it and ships a link to where the thing used to
  * be. Retired rather than reworded.
  *
- * PLAIN /settings, NOT /settings#gemini. The fragment was the obvious thing to
- * write and there is no element carrying that id — the link would land at the
- * top of the page and look like it had failed. A row that half-works is worse
- * than a row that goes somewhere honest, so this points at the page until an
- * anchor exists to point into.
+ * The fragments are real, and were checked before being written. They landed
+ * in d407ccc on wrappers rather than inside the cards, with the AI-features one
+ * deliberately wrapping the Suspense boundary rather than its child — an anchor
+ * that only exists once data resolves is an anchor that misses on a cold
+ * navigation, which is exactly when somebody follows a palette row. Both carry
+ * scroll-mt-20 so the sticky header does not cover what the fragment scrolled
+ * to. Until they existed these pointed at plain /settings, because a link that
+ * silently lands at the page top reads as the feature being broken rather than
+ * as the link being plain.
  *
  * NO PER-FEATURE TOGGLES YET, deliberately. Rows like "Turn off read-aloud"
  * need each feature's current state to name the state they will leave you in,
@@ -30,7 +34,7 @@ export const commands: CommandDescriptor[] = [
     keywords: ['api key', 'byok', 'gemini', 'ai key', 'add key'],
     group: 'navigate',
     icon: KeyRound,
-    href: '/settings',
+    href: '/settings#gemini',
   },
   {
     id: 'gemini.features',
@@ -38,6 +42,6 @@ export const commands: CommandDescriptor[] = [
     keywords: ['ai settings', 'turn off ai', 'read aloud', 'dictation', 'cost', 'tokens'],
     group: 'navigate',
     icon: Sparkles,
-    href: '/settings',
+    href: '/settings#ai-features',
   },
 ]

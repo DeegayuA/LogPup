@@ -138,7 +138,13 @@ export default function PublicHomePage() {
                 scroll inside a page scroll means you swipe and the wrong thing
                 moves. */}
             <div className="lg:col-span-7 lg:max-h-[calc(100svh-7rem)] lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
-              <HeroShowcase />
+              {/* Rates are resolved HERE, on the server, and handed down as one instant.
+                  hero-showcase.tsx is a client component, so a `new Date()` at its
+                  module scope would evaluate at build time on the server AND at load
+                  time in the browser — agreeing today, disagreeing the moment a
+                  promotional rate rolls over, as a hydration mismatch on a number the
+                  page states as fact. */}
+              <HeroShowcase pricedAt={new Date().toISOString()} />
             </div>
           </div>
         </section>
