@@ -44,6 +44,12 @@ const FEATURES = readdirSync(FEATURES_DIR, { withFileTypes: true })
 const NO_COMMANDS: Readonly<Record<string, string>> = {
   admin: 'every action needs a target row, and the purges need a typed confirmation',
   calendar: 'an internal Google Calendar wrapper, no user-facing action',
+  // Pure cost arithmetic today — cost.ts and its test, no route, no server
+  // action, no component. There is nothing to navigate to and nothing to
+  // invoke. RETIRE THIS the moment a /finance route or a cost action exists:
+  // project cost is superadmin/admin-only, so its rows will need visible()
+  // through the capability layer rather than a bare role comparison.
+  finance: 'pure cost arithmetic; no route and no invocable action yet',
   dashboard: 'no actions; its page is a nav row',
   finance: 'pure maths over rows passed in; it has no action of any kind yet, and the one that would set a rate is blocked on a capability nobody owns',
   notion: 'its one action needs a sprintId',
@@ -63,6 +69,7 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   calendar: 'no tables of its own',
   dashboard: 'no tables of its own',
   finance: 'rates are salary-adjacent and project value is commercial; neither belongs in a workspace-wide index anyone can type into',
+  finance: 'rate cards and project value are figures you read on a project, not rows you jump to',
   gemini: "a user's own API keys are private, not workspace-searchable",
   intel: 'no tables of its own — it reads other features’ rows and links back to them',
   notifications: 'a personal inbox, not a workspace index',
