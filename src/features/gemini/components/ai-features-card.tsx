@@ -7,6 +7,7 @@ import {
   type AiFeatureEstimate,
   type FeatureKind,
 } from '@/features/gemini/ai-features'
+import { isFeatureRouted } from '@/features/gemini/model-choice'
 import { getAiPrefs } from '@/features/gemini/prefs'
 import { formatUsd } from '@/features/gemini/pricing'
 import { aggregateAiUsage, listGeminiKeys } from '@/features/gemini/queries'
@@ -220,7 +221,17 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
             const estimate: AiFeatureEstimate = f.estimate
             const splitReprice = chosenModel !== null && estimate.chosenModelApplies !== undefined
             const perUseModel = chosenModel ?? estimate.tokens.model
-            const perUse = estimatePerUseCostUsd(estimate, chosenModel, now)
+            // A feature can be registered in AI_FEATURES without an entry in
+            // DEFAULT_CHAIN — it has happened, and several sessions add
+            // features here. Such a feature reaches no model and throws on
+            // first use. The per-use estimate would NOT notice: it prices the
+            // registry's static token shape, which is independent of the
+            // chain, so an unroutable feature would otherwise render a
+            // confident "≈$0.0028 per draft" beside a working-looking switch.
+            // The price is knowable; the model is not; quoting the first while
+            // the second is missing is the lie worth preventing.
+            const routed = isFeatureRouted(f.id)
+            const perUse = routed ? estimatePerUseCostUsd(estimate, chosenModel, now) : null
             const isEstimatedFeature = f.id === ESTIMATED_USAGE_FEATURE_ID
             const suggestion = suggestModelFor(
               f.kind,
@@ -248,7 +259,11 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                     {splitReprice ? `${estimate.tokens.model} + ${perUseModel}` : perUseModel} ·{' '}
                     {estimate.tokens.inputTokens.toLocaleString('en-US')} in /{' '}
                     {estimate.tokens.outputTokens.toLocaleString('en-US')} out ·{' '}
-                    {perUse !== null ? `${formatUsd(perUse)} ${estimate.label}` : 'price unknown'}
+                    {!routed
+                      ? 'not routed — reaches no model, so it cannot run'
+                      : perUse !== null
+                        ? `${formatUsd(perUse)} ${estimate.label}`
+                        : 'price unknown'}
                   </span>
                   <span className="font-mono text-xs tabular-nums text-muted-foreground">
                     {describeUsage(used, isEstimatedFeature)}

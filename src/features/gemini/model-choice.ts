@@ -76,6 +76,26 @@ export function defaultChainFor(featureId: AiFeatureId): readonly string[] {
 }
 
 /**
+ * Does this feature reach a model at all? Non-throwing, because ACTIONS and
+ * SURFACES need opposite things from a mis-wired feature.
+ *
+ * An AI action must die loudly — the request cannot be served and pretending
+ * otherwise hides the wiring gap. A surface that REPORTS on every feature must
+ * not: one unrouted feature should cost the reader that row, not the whole
+ * card. So actions call defaultChainFor and let it throw; UIs ask this first.
+ *
+ * A UI that skips this asks a subtler question wrong. The per-use estimate is
+ * priced from the registry's static token shape, which is INDEPENDENT of the
+ * chain — so an unroutable feature still renders a confident "≈$0.0028 per
+ * draft" next to a switch for something that throws on first use. The price is
+ * knowable; the model is not; and quoting the first while the second is missing
+ * is the failure this exists to prevent.
+ */
+export function isFeatureRouted(featureId: AiFeatureId): boolean {
+  return Boolean(DEFAULT_CHAIN[featureId])
+}
+
+/**
  * Resolve the chain an AI action should actually call Gemini with.
  *
  * `chosenModel` is PREPENDED to the feature's default chain, never
