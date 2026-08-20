@@ -103,3 +103,93 @@ describe('buildBriefingPrompt', () => {
     expect(buildBriefingPrompt(INPUT)).toContain('Use ONLY the facts between the fences.')
   })
 })
+
+describe('parsePriority refuses to leave the product', () => {
+  // The text these run on is written by a model reading a grounding pack built
+  // from user-authored task and meeting titles, and briefing-card renders the
+  // result as a Next <Link> on the dashboard. Every case below is a link a
+  // planted title could otherwise have produced there.
+  it('rejects an absolute URL in every shape it can arrive in', async () => {
+    const { parsePriority } = await import('@/features/intel/prompt')
+    for (const raw of [
+      'Review the deploy [dashboard](https://evil.example/steal)',
+      'Review the deploy [https://evil.example/steal]',
+      'Review the deploy https://evil.example/steal',
+      'Review the deploy [dashboard](http://evil.example)',
+    ]) {
+      expect(parsePriority(raw).href, raw).toBeUndefined()
+    }
+  })
+
+  it('rejects a protocol-relative URL, which looks like a route and is not', async () => {
+    const { parsePriority } = await import('@/features/intel/prompt')
+    expect(parsePriority('Check this [//evil.example/x]').href).toBeUndefined()
+    expect(parsePriority('Check this [x](//evil.example/x)').href).toBeUndefined()
+  })
+
+  it('rejects a backslash path, which the URL parser resolves off-site', async () => {
+    // new URL('/\\evil.example', 'https://app') is https://evil.example/ in
+    // every WHATWG-conformant browser — a leading slash is not enough.
+    const { parsePriority } = await import('@/features/intel/prompt')
+    expect(parsePriority('Open it [x](/\\evil.example)').href).toBeUndefined()
+    expect(parsePriority('Open it [/\\evil.example]').href).toBeUndefined()
+  })
+
+  it('keeps the words when it drops the link, and never leaks the markup', async () => {
+    const { parsePriority } = await import('@/features/intel/prompt')
+    const parsed = parsePriority('Review the deploy [dashboard](https://evil.example)')
+    expect(parsed.href).toBeUndefined()
+    expect(parsed.text).not.toContain('evil.example')
+    expect(parsed.text).not.toContain('](')
+    expect(parsed.text).toContain('Review the deploy')
+  })
+
+  it('still accepts the in-app routes the briefing actually emits', async () => {
+    const { parsePriority } = await import('@/features/intel/prompt')
+    expect(parsePriority('Answer Nuwan [/meetings?open=abc-123]').href).toBe('/meetings?open=abc-123')
+    expect(parsePriority('Check the board [Solar](/apps/solar?tab=roadmap)').href)
+      .toBe('/apps/solar?tab=roadmap')
+    expect(parsePriority('Fill the gaps /worklog').href).toBe('/worklog')
+  })
+})
+
+describe('parsePriority', () => {
+  it('extracts bracketed routes correctly', async () => {
+    const { parsePriority } = await import('@/features/intel/prompt')
+    const item1 = parsePriority(
+      'Complete the write-up for the August 15 Daily Standup meeting [/meetings?open=3e9ee358-8ba1-424e-8254-370c718a77cb]',
+    )
+    expect(item1).toEqual({
+      text: 'Complete the write-up for the August 15 Daily Standup meeting',
+      href: '/meetings?open=3e9ee358-8ba1-424e-8254-370c718a77cb',
+    })
+
+    const item2 = parsePriority('Fill in the 7 missing worklog entries [/worklog]')
+    expect(item2).toEqual({
+      text: 'Fill in the 7 missing worklog entries',
+      href: '/worklog',
+    })
+
+    const item3 = parsePriority(
+      'Review open tasks for the sprints ending today [/apps/solar-app-uk?tab=roadmap]',
+    )
+    expect(item3).toEqual({
+      text: 'Review open tasks for the sprints ending today',
+      href: '/apps/solar-app-uk?tab=roadmap',
+    })
+  })
+
+  it('handles markdown links and plain text without href', async () => {
+    const { parsePriority } = await import('@/features/intel/prompt')
+    const mdItem = parsePriority('Check sprint status [Solar App](/apps/solar-app)')
+    expect(mdItem).toEqual({
+      text: 'Check sprint status Solar App',
+      href: '/apps/solar-app',
+    })
+
+    const plain = parsePriority('Move work off Nuwan, now at 120%.')
+    expect(plain).toEqual({
+      text: 'Move work off Nuwan, now at 120%.',
+    })
+  })
+})

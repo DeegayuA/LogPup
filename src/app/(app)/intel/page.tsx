@@ -29,7 +29,27 @@ export const metadata = { title: 'Studio Intel' }
  * the board would sit blank waiting on the model, which is the one thing on
  * this page that has to be readable immediately.
  */
-export default function IntelPage() {
+/**
+ * `ask` arrives from the command palette: a ⌘K search that found nothing
+ * offers "Ask about '<query>'" and routes here rather than making the person
+ * retype it. Capped at ASK_MAX_CHARS — the same ceiling askWorkspace's schema
+ * enforces — and TRUNCATED rather than rejected, because a query that
+ * overflows should still land as a question somebody can edit down, not as an
+ * error page about a search they already typed.
+ */
+const ASK_MAX_CHARS = 500
+
+export default async function IntelPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ask?: string | string[] }>
+}) {
+  const { ask } = await searchParams
+  // A repeated param arrives as an array. Take the first rather than joining:
+  // ?ask=a&ask=b is a malformed link, and "ab" is a question nobody asked.
+  const raw = Array.isArray(ask) ? ask[0] : ask
+  const askedQuestion = (raw ?? '').trim().slice(0, ASK_MAX_CHARS)
+
   return (
     <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8">
       <AmbientBackdrop />
@@ -65,7 +85,7 @@ export default function IntelPage() {
             </>
           }
         >
-          <SignalsAndAsk />
+          <SignalsAndAsk askedQuestion={askedQuestion} />
         </Suspense>
       </div>
     </div>
@@ -79,7 +99,7 @@ export default function IntelPage() {
  */
 function SignalsSlot({ children }: { children: ReactNode }) {
   return (
-    <section id="signals" aria-label="Studio signals" className="scroll-mt-6">
+    <section id="signals" aria-label="Studio signals" className="scroll-mt-6 min-w-0">
       {children}
     </section>
   )
@@ -87,7 +107,11 @@ function SignalsSlot({ children }: { children: ReactNode }) {
 
 function AskSlot({ children }: { children: ReactNode }) {
   return (
-    <section id="ask" aria-label="Ask LogPup" className="scroll-mt-6">
+    <section
+      id="ask"
+      aria-label="Ask LogPup"
+      className="scroll-mt-6 lg:sticky lg:top-20 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto no-scrollbar"
+    >
       {children}
     </section>
   )
@@ -119,7 +143,7 @@ async function BriefingRegion() {
  * capacities, sprints, worklog gaps, meetings and apps for a handful of
  * suggestion strings.
  */
-async function SignalsAndAsk() {
+async function SignalsAndAsk({ askedQuestion }: { askedQuestion: string }) {
   const res = await getSignals()
 
   return (
@@ -137,7 +161,10 @@ async function SignalsAndAsk() {
         {/* No suggestions when the read failed: the panel treats an empty
             list as "no chips" and the question box itself is unaffected, so a
             broken signals read costs the shortcuts and nothing else. */}
-        <AskPanel suggestions={res.ok ? suggestQuestions(res.data) : []} />
+        <AskPanel
+          suggestions={res.ok ? suggestQuestions(res.data) : []}
+          initialQuestion={askedQuestion}
+        />
       </AskSlot>
     </>
   )

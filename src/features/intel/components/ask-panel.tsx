@@ -90,12 +90,25 @@ function pushRecent(question: string) {
 
 export function AskPanel({
   suggestions = [],
+  initialQuestion = '',
   className,
 }: {
   suggestions?: string[]
+  /**
+   * A question the box opens with, from `/intel?ask=…` — the command palette
+   * hands a missed ⌘K search over rather than making the person retype it.
+   *
+   * PREFILLS AND DOES NOT SUBMIT, deliberately. Auto-asking on navigation
+   * spends somebody's Gemini quota on a keystroke, and the palette is exactly
+   * where a half-typed query is most likely to be the thing that arrives.
+   * Seeding React state rather than syncing to the prop: this is the box's
+   * opening value, not its master, and re-imposing the URL on every render
+   * would fight the person editing it.
+   */
+  initialQuestion?: string
   className?: string
 }) {
-  const [question, setQuestion] = React.useState('')
+  const [question, setQuestion] = React.useState(initialQuestion)
   const [pending, setPending] = React.useState(false)
   const [answer, setAnswer] = React.useState<AskAnswer | null>(null)
   const [error, setError] = React.useState<string | null>(null)

@@ -43,7 +43,9 @@ export default function LoadingStudioIntel() {
           this file exists to prevent. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)] lg:items-start">
         <SignalBoardSkeleton />
-        <AskPanelSkeleton />
+        <div className="lg:sticky lg:top-20 lg:self-start">
+          <AskPanelSkeleton />
+        </div>
       </div>
     </div>
   )

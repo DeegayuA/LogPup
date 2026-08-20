@@ -118,3 +118,85 @@ ${SHARED_RULES}
 - If the facts show a genuinely quiet workspace, say that. A calm day reported calmly is a
   correct briefing; a manufactured worry is not.`
 }
+
+export type ParsedPriority = {
+  text: string
+  href?: string
+}
+
+/**
+ * Parse a priority line from the briefing to extract its destination route.
+ * Handles:
+ * 1. Markdown link: "Label [Text](/route)"
+ * 2. Bracketed route: "Complete write-up [/meetings?open=123]"
+ * 3. Trailing route: "Fill missing log /worklog"
+ */
+/**
+ * Split a briefing priority into its words and the route it points at.
+ *
+ * The model is asked for a bare route and, like every model, writes whichever
+ * of three shapes it feels like: a markdown link, a bracketed route, or a bare
+ * path on the end of the sentence. All three are accepted here so a link is
+ * not lost to formatting — but EVERY candidate goes through isInAppRoute
+ * before it is returned.
+ *
+ * THAT GUARD IS THE WHOLE POINT OF THIS FUNCTION, not a detail of it. The text
+ * is written by a model reading a grounding pack built from user-authored task
+ * titles, meeting titles and follow-up text, and briefing-card renders the
+ * result as a Next <Link> on the dashboard — the most-visited route in the
+ * app. Accepting `https?://` here, or a permissive `/[^)]+` that lets
+ * "/\evil.com" through (the WHATWG URL parser resolves that to
+ * https://evil.com/), turns a planted task title into an off-site link in
+ * somebody's morning briefing. An unparsed priority renders as plain text,
+ * which is the correct failure: losing a link costs a click, and honouring a
+ * hostile one costs the reader.
+ */
+export function parsePriority(raw: string): ParsedPriority {
+  // Markdown link: "Label [Text](/route)"
+  const markdown = raw.match(/^(.*?)\s*\[([^\]]+)\]\(([^)]+)\)\s*(.*?)$/)
+  if (markdown) {
+    const [, before, label, href, after] = markdown
+    if (isInAppRoute(href)) {
+      const text = [before, label, after].filter(Boolean).join(' ').trim()
+      return { text: text || label, href }
+    }
+    // A rejected href must not leave its own markup in the sentence.
+    return { text: [before, label, after].filter(Boolean).join(' ').trim() || raw.trim() }
+  }
+
+  // Bracketed route: "Complete the write-up [/meetings?open=123]" — the shape
+  // the grounding pack itself uses, so it is the one the model copies most.
+  const bracketed = raw.match(/^(.*?)\s*\[([^\]\s]+)\]\s*(.*?)$/)
+  if (bracketed) {
+    const [, before, href, after] = bracketed
+    const text = [before, after].filter(Boolean).join(' ').trim()
+    if (isInAppRoute(href)) return { text: text || href, href }
+    return { text: text || raw.trim() }
+  }
+
+  // Bare path on the end: "Fill in the missing work log days /worklog"
+  const trailing = raw.match(/^(.*?)\s+(\S+)$/)
+  if (trailing) {
+    const [, before, href] = trailing
+    if (isInAppRoute(href)) return { text: before.trim(), href }
+  }
+
+  return { text: raw }
+}
+
+/**
+ * Is this string a route that stays inside LogPup?
+ *
+ * ALLOWLIST, not a leading-character test, and shared with splitAnswer in
+ * actions.ts so the two can never disagree. A leading '/' is not enough:
+ * '/\evil.com' starts with a slash, but WHATWG URL parsing folds a backslash
+ * into a slash, so the browser resolves it to https://evil.com/ and the
+ * "citation" chip walks the reader off the product. That text is written by
+ * the model, which reads task titles, meeting titles and follow-up text out
+ * of the grounding pack — so a planted title is enough to steer it.
+ */
+export function isInAppRoute(href: string): boolean {
+  // '//host' is a protocol-relative URL, not a route, and it clears the
+  // character allowlist on its own.
+  return /^\/[A-Za-z0-9/_\-?=&.#%]*$/.test(href) && !href.startsWith('//')
+}

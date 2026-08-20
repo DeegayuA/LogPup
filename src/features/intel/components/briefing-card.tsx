@@ -1,18 +1,22 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Copy, RefreshCw, Sparkles } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowUpRight, Check, Copy, RefreshCw, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SpotlightCard } from '@/components/ui/spotlight-card'
 import { getBriefing, type Briefing } from '@/features/intel/actions'
+import { parsePriority, type ParsedPriority } from '@/features/intel/prompt'
 import {
   formatBusinessTime,
   formatBusinessWeekdayDayMonth,
 } from '@/features/people/format-instant'
 import { cn } from '@/lib/utils'
+
+export { parsePriority, type ParsedPriority }
 
 /**
  * The morning briefing, rendered from a server-supplied `initial` so the
@@ -138,17 +142,52 @@ export function BriefingCard({
 
             {briefing.priorities.length > 0 ? (
               <ol className="flex flex-col gap-2 border-t border-border/50 pt-3.5">
-                {briefing.priorities.map((priority, index) => (
-                  <li key={priority} className="flex items-baseline gap-2.5 text-sm">
-                    <span
-                      aria-hidden
-                      className="font-mono text-2xs font-bold tabular-nums text-primary"
-                    >
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    <span className="min-w-0 text-foreground">{priority}</span>
-                  </li>
-                ))}
+                {briefing.priorities.map((rawPriority, index) => {
+                  const { text, href } = parsePriority(rawPriority)
+                  const num = String(index + 1).padStart(2, '0')
+
+                  if (href) {
+                    return (
+                      <li key={rawPriority}>
+                        <Link
+                          href={href}
+                          className="group flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm text-foreground transition-all hover:border-primary/40 hover:bg-muted/50 hover:shadow-xs focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+                        >
+                          <div className="flex items-baseline gap-2.5 min-w-0">
+                            <span
+                              aria-hidden
+                              className="font-mono text-2xs font-bold tabular-nums text-primary shrink-0"
+                            >
+                              {num}
+                            </span>
+                            <span className="min-w-0 font-medium text-foreground group-hover:text-primary transition-colors">
+                              {text}
+                            </span>
+                          </div>
+                          <span className="shrink-0 flex items-center gap-1 font-mono text-[11px] font-medium text-muted-foreground group-hover:text-primary bg-background/80 px-2 py-0.5 rounded-md border border-border/50 transition-colors">
+                            <span>Open</span>
+                            <ArrowUpRight
+                              aria-hidden
+                              className="size-3 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                            />
+                          </span>
+                        </Link>
+                      </li>
+                    )
+                  }
+
+                  return (
+                    <li key={rawPriority} className="flex items-baseline gap-2.5 text-sm px-3 py-1">
+                      <span
+                        aria-hidden
+                        className="font-mono text-2xs font-bold tabular-nums text-primary shrink-0"
+                      >
+                        {num}
+                      </span>
+                      <span className="min-w-0 text-foreground">{text}</span>
+                    </li>
+                  )
+                })}
               </ol>
             ) : null}
           </>
@@ -222,8 +261,13 @@ function toMarkdown(briefing: Briefing): string {
   const lines = [`## ${briefing.headline}`, '']
   if (briefing.body) lines.push(briefing.body, '')
   if (briefing.priorities.length > 0) {
-    briefing.priorities.forEach((priority, index) => {
-      lines.push(`${index + 1}. ${priority}`)
+    briefing.priorities.forEach((rawPriority, index) => {
+      const parsed = parsePriority(rawPriority)
+      if (parsed.href) {
+        lines.push(`${index + 1}. [${parsed.text}](${parsed.href})`)
+      } else {
+        lines.push(`${index + 1}. ${parsed.text}`)
+      }
     })
     lines.push('')
   }

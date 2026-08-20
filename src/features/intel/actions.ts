@@ -7,13 +7,14 @@ import { GeminiError, callGemini, hasGeminiKeys } from '@/features/gemini/client
 import { isFeatureRouted, resolveChain } from '@/features/gemini/model-choice'
 import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { deriveBriefing } from '@/features/intel/briefing-fallback'
-import {
-  isInAppRoute,
-  loadWorkspaceSnapshot,
-  type WorkspaceSnapshot,
-} from '@/features/intel/context-pack'
+import { loadWorkspaceSnapshot, type WorkspaceSnapshot } from '@/features/intel/context-pack'
 import { isAiFeatureEnabled } from '@/features/gemini/prefs'
-import { CITATIONS_HEADER, buildAskPrompt, buildBriefingPrompt } from '@/features/intel/prompt'
+import {
+  CITATIONS_HEADER,
+  buildAskPrompt,
+  buildBriefingPrompt,
+  isInAppRoute,
+} from '@/features/intel/prompt'
 import { buildSignals, type Signal } from '@/features/intel/signals'
 
 /**

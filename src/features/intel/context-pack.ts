@@ -4,6 +4,7 @@ import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
 import { meetingAiNotes, meetingAttendees } from '@/db/schema'
 import { loadActor } from '@/features/auth/actor'
+import { isInAppRoute } from '@/features/intel/prompt'
 import { UNWRITTEN_MEETING_LIMIT } from '@/features/intel/signals'
 import { absenceDays } from '@/features/worklog/absence-days'
 import { getMyPendingAbsences } from '@/features/worklog/queries'
@@ -342,22 +343,6 @@ function render(header: string, sections: GroundingSection[]): string {
  *  pointer and becomes the pack again. */
 const MAX_SOURCES = 6
 
-/**
- * Is this string a route that stays inside LogPup?
- *
- * ALLOWLIST, not a leading-character test, and shared with splitAnswer in
- * actions.ts so the two can never disagree. A leading '/' is not enough:
- * '/\evil.com' starts with a slash, but WHATWG URL parsing folds a backslash
- * into a slash, so the browser resolves it to https://evil.com/ and the
- * "citation" chip walks the reader off the product. That text is written by
- * the model, which reads task titles, meeting titles and follow-up text out
- * of the grounding pack — so a planted title is enough to steer it.
- */
-export function isInAppRoute(href: string): boolean {
-  // '//host' is a protocol-relative URL, not a route, and it clears the
-  // character allowlist on its own.
-  return /^\/[A-Za-z0-9/_\-?=&.#%]*$/.test(href) && !href.startsWith('//')
-}
 
 /**
  * The rows of a rendered pack, as clickable sources.
