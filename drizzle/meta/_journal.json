@@ -337,6 +337,13 @@
       "when": 1787156400000,
       "tag": "0048_project_finance",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1787156500000,
+      "tag": "0049_deadline_grading",
+      "breakpoints": true
     }
   ]
 }

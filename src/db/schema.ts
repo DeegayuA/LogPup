@@ -80,6 +80,10 @@ export const bugSeverity = pgEnum('bug_severity', ['low', 'medium', 'high', 'cri
 export const bugStatus = pgEnum('bug_status', [
   'open', 'triaged', 'in_progress', 'resolved', 'closed',
 ])
+// Two values, deliberately not three: a 'soft' middle would be a synonym for
+// 'target' that lets somebody avoid naming a counterparty while still looking
+// serious. See docs/superpowers/specs/2026-08-20-deadlines-and-bugs-design.md.
+export const dueKind = pgEnum('due_kind', ['target', 'committed'])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
 export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
 export const attendeeResponse = pgEnum('attendee_response', ['pending', 'going', 'maybe', 'declined'])
@@ -363,7 +367,34 @@ export const tasks = pgTable('tasks', {
   sortOrder: doublePrecision('sort_order').notNull().default(0),
   // Plain calendar day, no time: set from phrases like "today" / "friday" in
   // the ⌘K natural-language quick-add (see src/lib/task-intent.ts).
+  //
+  // Compared as a YYYY-MM-DD STRING against a business-timezone today, never
+  // parsed into a Date — see task-workload.ts, which documents why:
+  // `new Date('2026-08-12')` is midnight UTC, still the 11th west of
+  // Greenwich. Do not "improve" this into a timestamp; that request is
+  // refused on purpose in the deadlines spec.
   dueDate: date('due_date'),
+  // WHAT KIND OF DATE THIS IS, because one column meant two incompatible
+  // things: a date somebody jotted into quick-add, and a date the studio
+  // promised a client. Every reader (dueState, isOverdue, the app overdue
+  // counts, the dashboard tiles) reads `due_date` exactly as before; this only
+  // says whether breaking it breaks a promise. Defaults to 'target' so no
+  // existing row is retroactively turned into a commitment.
+  dueKind: dueKind('due_kind').notNull().default('target'),
+  // Who it was promised to, in words. Required by the action layer when
+  // dueKind is 'committed' — not by a CHECK, because the rule belongs with the
+  // capability that enforces it. The promises view shows this as its primary
+  // column, so a commitment naming nobody looks empty, because it is.
+  dueCommitmentNote: text('due_commitment_note'),
+  // Written ONCE, on the first null -> non-null transition, and never again:
+  // not on a move, a clear, a restore, or a reassignment. Those are precisely
+  // the operations that destroy every other answer to "what did we originally
+  // say", which is why this is a column rather than a derivation.
+  originalDueDate: date('original_due_date'),
+  // A RECOMPUTABLE CACHE over activity_log, never the record — when the two
+  // disagree, activity_log wins. Increments only on non-null -> DIFFERENT
+  // non-null, so first-set and clear both leave it alone.
+  dueChangedCount: integer('due_changed_count').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   deletedBy: uuid('deleted_by').references(() => users.id),
