@@ -8,6 +8,7 @@ import { db } from '@/db'
 import { liveApps } from '@/db/live'
 import { assignments, tasks, users } from '@/db/schema'
 import { canHoldWork } from '@/features/people/removal-queries'
+import { applyDueDate } from '@/features/sprints/due-date'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { canAccessApp } from '@/lib/access-gate'
 import { parseTaskIntent } from '@/lib/task-intent'
@@ -234,7 +235,14 @@ export async function quickAssignTask(raw: string): Promise<ActionResult<QuickAs
     priority: intent.priority ?? 0,
     description: intent.description,
     sortOrder: 0,
-    dueDate: intent.due,
+    // Same helper as the board's two writers. A date typed into the palette
+    // ("shanika fix login friday") is a first null -> non-null transition and
+    // must stamp original_due_date exactly like one typed into the dialog —
+    // a task's history should not depend on which surface created it.
+    ...applyDueDate(
+      { dueDate: null, dueKind: 'target', originalDueDate: null, dueChangedCount: 0 },
+      { dueDate: intent.due },
+    ),
   })
 
   revalidatePath('/apps/' + app.slug)

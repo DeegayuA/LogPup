@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
+import { applyDueDate } from '@/features/sprints/due-date'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { meetingFollowups, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
@@ -332,7 +333,15 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
         priority,
         status,
         sortOrder,
-        dueDate: dueDate ?? null,
+        // Through applyDueDate rather than writing dueDate straight: a task
+        // created WITH a date is a first null -> non-null transition and must
+        // stamp original_due_date like any other. Writing the column directly
+        // here is how the invariant would quietly become "true except for
+        // tasks that were born with a deadline".
+        ...applyDueDate(
+          { dueDate: null, dueKind: 'target', originalDueDate: null, dueChangedCount: 0 },
+          { dueDate: dueDate ?? null },
+        ),
       })
       .returning({ id: tasks.id })
   } catch (error) {
@@ -389,6 +398,30 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     !(await sprintIsInApp(set.sprintId, existing.appId))
   ) {
     return err('That sprint belongs to a different app')
+  }
+
+  // Only when the caller actually named a date. `set` carries every field the
+  // dialog submitted, so testing for the KEY rather than a truthy value is what
+  // separates "cleared the date" (null, a real change) from "did not mention
+  // it" (absent, must not reset anything).
+  if ('dueDate' in set) {
+    try {
+      Object.assign(
+        set,
+        applyDueDate(
+          {
+            dueDate: existing.dueDate,
+            dueKind: existing.dueKind,
+            originalDueDate: existing.originalDueDate,
+            dueChangedCount: existing.dueChangedCount,
+          },
+          { dueDate: (set.dueDate as string | null) ?? null },
+        ),
+      )
+    } catch (error) {
+      // DueDateError carries a sentence written for the person, not a stack.
+      return err(error instanceof Error ? error.message : 'That deadline is not valid')
+    }
   }
 
   try {
