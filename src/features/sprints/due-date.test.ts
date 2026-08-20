@@ -124,6 +124,22 @@ describe('hasSlipped', () => {
     expect(hasSlipped({ dueDate: '2026-08-01', originalDueDate: '2026-08-12' })).toBe(false)
   })
 
+  it('answers false for a task that predates migration 0049 — no original, no answer', () => {
+    // Every row dated before 0049 has due_date set and original_due_date null,
+    // and the stamp only fires on null -> non-null, so these never gain one.
+    // False here means "unknown", not "on time" — see the module docblock for
+    // why backfilling due_date into original would have been a confident lie.
+    const legacy = { dueDate: '2026-08-26', originalDueDate: null }
+    expect(hasSlipped(legacy)).toBe(false)
+    // ...and moving it again does not retroactively invent one.
+    const moved = applyDueDate(
+      { dueDate: '2026-08-26', dueKind: 'target', originalDueDate: null, dueChangedCount: 0 },
+      { dueDate: '2026-09-30' },
+    )
+    expect(moved.originalDueDate).toBeNull()
+    expect(moved.dueChangedCount).toBe(1)
+  })
+
   it('says false rather than guessing when either side is missing', () => {
     expect(hasSlipped({ dueDate: null, originalDueDate: '2026-08-12' })).toBe(false)
     expect(hasSlipped({ dueDate: '2026-08-12', originalDueDate: null })).toBe(false)

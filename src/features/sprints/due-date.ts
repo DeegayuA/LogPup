@@ -25,6 +25,26 @@
  * Nothing in this module parses a date.
  */
 
+/**
+ * TASKS THAT PREDATE MIGRATION 0049 NEVER GET AN ORIGINAL, AND THAT IS
+ * CORRECT.
+ *
+ * 0049 added `original_due_date` as NULL for every existing row, including the
+ * dated ones. Since the stamp fires only on a null -> non-null transition of
+ * `due_date`, a task that already had a date when the column arrived will
+ * never receive one — so `hasSlipped` answers false for those tasks forever.
+ *
+ * The alternative was backfilling `original_due_date = due_date`, and it is
+ * worse for a reason worth stating: for a task whose date had already moved
+ * three times, that backfill asserts it never moved. It would not be a missing
+ * answer, it would be a confident wrong one, and it would be indistinguishable
+ * from a real first promise ever after. The first promise is genuinely
+ * unknowable after the fact, and a column whose whole purpose is "what did we
+ * originally say" must not be seeded with a guess.
+ *
+ * So: no original means no answer, not "no slip". Any UI reading these fields
+ * must render the absence as unknown rather than as on-time.
+ */
 export type DueKind = 'target' | 'committed'
 
 /** The deadline fields as they currently stand on the row. */
