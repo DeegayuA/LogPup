@@ -1,35 +1,21 @@
 /**
- * Backdrop art for the sign-in brand panel: quiet topographic contours, the
- * terrain LogPup keeps watch over.
+ * Backdrop art for the sign-in brand panel: luxury topographic contours and radar rings,
+ * evoking the terrain LogPup keeps watch over.
  *
- * Drawn inline (not a file in public/) so every stroke is `currentColor` and
- * the art re-tints itself for light and dark instead of shipping two assets.
- *
- * To use a photo instead: drop it in `public/` and swap this component for
- *   <Image src="/your-photo.jpg" alt="" fill priority className="object-cover" />
- * plus a readability scrim (`absolute inset-0 bg-sidebar/80`) so the headline
- * and capability list keep their contrast.
+ * Rendered with high contrast and smooth breathing animation.
  */
-const RINGS = Array.from({ length: 11 }, (_, index) => {
-  const step = index / 10
+const RINGS = Array.from({ length: 9 }, (_, index) => {
+  const step = index / 8
   return {
-    rx: 120 + step * 460,
-    ry: 96 + step * 330,
-    rotate: -18 + step * 10,
-    // Fades outward so the panel edge stays calm and the text sits on the
-    // quietest part of the drawing.
-    opacity: 0.5 - step * 0.34,
-    // Outer rings breathe slower and start later, so the pulse reads as one
-    // wave travelling outward rather than eleven ellipses throbbing in unison.
-    // Periods are deliberately non-harmonic (13s, 14.1s, 15.2s …) — equal or
-    // multiple durations re-sync every few cycles into a visible heartbeat.
-    duration: `${13 + index * 1.1}s`,
-    delay: `${index * 0.42}s`,
+    rx: 130 + step * 420,
+    ry: 100 + step * 320,
+    rotate: -16 + step * 8,
+    opacity: 0.65 - step * 0.35, // ranges from 0.65 down to 0.30 (crisp and visible)
+    duration: `${14 + index * 1.2}s`,
+    delay: `${index * 0.4}s`,
   }
 })
 
-// Custom properties the .ring-breathe utility in globals.css reads. Declared
-// as a type because React's CSSProperties has no slot for custom properties.
 type RingVars = React.CSSProperties & {
   '--ring-duration': string
   '--ring-delay': string
@@ -38,84 +24,67 @@ type RingVars = React.CSSProperties & {
 
 export function SignInBackdrop() {
   return (
-    <svg
-      aria-hidden
-      // Slower and quieter than the text sequence so the contours settle in
-      // behind the content instead of competing with it for attention.
-      className="pointer-events-none absolute inset-0 size-full text-primary motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-1000 motion-safe:ease-out"
-      viewBox="0 0 900 1200"
-      preserveAspectRatio="xMidYMid slice"
-      fill="none"
-    >
-      {/* The static rotate lives on a wrapping <g> in both clusters: a CSS
-          `transform` on the ellipse itself would replace the presentation
-          attribute outright, flattening every ring back to zero degrees the
-          moment the animation applied. */}
-      <g transform="translate(640 300)">
-        {RINGS.map((ring) => (
-          <g key={ring.rx} transform={`rotate(${ring.rotate})`}>
-            <ellipse
-              className="ring-breathe"
-              style={
-                {
-                  '--ring-duration': ring.duration,
-                  '--ring-delay': ring.delay,
-                  // The keyframes animate opacity, and a CSS opacity overrides
-                  // the SVG presentation attribute outright — without passing
-                  // each ring's own value through, every ring would animate
-                  // between the same two opacities and the cluster would lose
-                  // the depth that the varied `ring.opacity` gives it.
-                  '--ring-opacity': String(ring.opacity),
-                } as RingVars
-              }
-              rx={ring.rx}
-              ry={ring.ry}
-              stroke="currentColor"
-              strokeWidth={1.25}
-              /* Without this the stroke scales with the ring: 1.25px at
-                 scale(1.11) paints at 1.39px, so every contour visibly
-                 THICKENS as it swells and thins as it settles. That reads as
-                 an image being zoomed rather than as light moving across
-                 terrain, and it is the largest single reason the motion felt
-                 cheap. A non-scaling stroke holds the line weight constant,
-                 so the only thing that changes is where the line is. */
-              vectorEffect="non-scaling-stroke"
-              opacity={ring.opacity}
-            />
-          </g>
-        ))}
-      </g>
-      <g transform="translate(120 980)">
-        {RINGS.slice(0, 7).map((ring) => (
-          <g key={ring.rx} transform={`rotate(${-ring.rotate})`}>
-            <ellipse
-              className="ring-breathe"
-              // Counter-phase against the top cluster — offsetting the delay by
-              // half a period keeps the two corners from pulsing together, which
-              // is what would make the whole panel look like it is beating.
-              style={
-                {
-                  '--ring-duration': ring.duration,
-                  '--ring-delay': `-${parseFloat(ring.duration) / 2}s`,
-                } as RingVars
-              }
-              rx={ring.rx * 0.62}
-              ry={ring.ry * 0.62}
-              stroke="currentColor"
-              strokeWidth={1.25}
-              /* Without this the stroke scales with the ring: 1.25px at
-                 scale(1.11) paints at 1.39px, so every contour visibly
-                 THICKENS as it swells and thins as it settles. That reads as
-                 an image being zoomed rather than as light moving across
-                 terrain, and it is the largest single reason the motion felt
-                 cheap. A non-scaling stroke holds the line weight constant,
-                 so the only thing that changes is where the line is. */
-              vectorEffect="non-scaling-stroke"
-              opacity={ring.opacity * 0.8}
-            />
-          </g>
-        ))}
-      </g>
-    </svg>
+    <div className="pointer-events-none absolute inset-0 size-full overflow-hidden">
+      {/* Top right ambient glow */}
+      <div className="absolute -top-20 -right-20 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
+      {/* Bottom left ambient glow */}
+      <div className="absolute -bottom-20 -left-20 h-96 w-96 rounded-full bg-chart-1/15 blur-3xl" />
+
+      <svg
+        aria-hidden
+        className="absolute inset-0 size-full text-primary"
+        viewBox="0 0 900 1200"
+        preserveAspectRatio="xMidYMid slice"
+        fill="none"
+      >
+        {/* Top-Right Orbital Radar Cluster */}
+        <g transform="translate(640 280)">
+          {RINGS.map((ring) => (
+            <g key={ring.rx} transform={`rotate(${ring.rotate})`}>
+              <ellipse
+                className="ring-breathe"
+                style={
+                  {
+                    '--ring-duration': ring.duration,
+                    '--ring-delay': ring.delay,
+                    '--ring-opacity': String(ring.opacity),
+                  } as RingVars
+                }
+                rx={ring.rx}
+                ry={ring.ry}
+                stroke="currentColor"
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+                opacity={ring.opacity}
+              />
+            </g>
+          ))}
+        </g>
+
+        {/* Bottom-Left Orbital Radar Cluster */}
+        <g transform="translate(120 1000)">
+          {RINGS.slice(0, 6).map((ring) => (
+            <g key={ring.rx} transform={`rotate(${-ring.rotate})`}>
+              <ellipse
+                className="ring-breathe"
+                style={
+                  {
+                    '--ring-duration': ring.duration,
+                    '--ring-delay': `-${parseFloat(ring.duration) / 2}s`,
+                    '--ring-opacity': String(ring.opacity * 0.85),
+                  } as RingVars
+                }
+                rx={ring.rx * 0.6}
+                ry={ring.ry * 0.6}
+                stroke="currentColor"
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+                opacity={ring.opacity * 0.85}
+              />
+            </g>
+          ))}
+        </g>
+      </svg>
+    </div>
   )
 }
