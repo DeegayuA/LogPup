@@ -105,6 +105,64 @@ export async function updateCalendarEventTime(opts: {
 }
 
 /**
+ * The FULL patch — everything a guest can see, not just the time.
+ *
+ * updateCalendarEventTime above sends start/end only, deliberately. That left
+ * a hole nothing closed: rename a meeting, rewrite its agenda, add four
+ * people, and twenty calendars keep the old title, the old agenda and the old
+ * roster forever, with no signal on either side. The LogPup row and the invite
+ * guests actually read diverge permanently.
+ *
+ * Three rules, each preventing a specific loss:
+ *
+ * - `patch`, NEVER `update`. events.update REPLACES the resource, so a body
+ *   without `conferenceData` drops the Meet room — the one field on the event
+ *   that cannot be reconstructed from LogPup, because the room is minted by
+ *   Google and exists only as a property of the event.
+ *
+ * - The attendee array REPLACES the whole list, so it must always be built
+ *   from the current roster, never as a delta. Google preserves
+ *   `responseStatus` for attendees whose email is unchanged and starts new
+ *   ones at `needsAction`; a delta send silently drops everyone omitted.
+ *
+ * - `sendUpdates` is a decision, not a default. 'all' when the time or the
+ *   roster changed — the two facts a person needs in their inbox. 'none' when
+ *   only the title or agenda moved: the entry on their calendar updates
+ *   silently, which is the correct outcome. A twenty-person studio that gets a
+ *   Google email every time somebody fixes a typo in an agenda mutes the
+ *   calendar, and Google's invite mail is currently the only channel in this
+ *   product that reliably reaches anyone.
+ */
+export async function updateCalendarEvent(opts: {
+  refreshToken: string
+  eventId: string
+  title: string
+  agenda?: string
+  startsAt: Date
+  endsAt: Date
+  /** The CURRENT roster in full — see the delta warning above. */
+  attendeeEmails: { email: string; optional: boolean }[]
+  /**
+   * Whether this edit changed the time or the roster. Drives `sendUpdates`,
+   * and is the caller's to decide because only the caller knows what moved.
+   */
+  notify: boolean
+}): Promise<void> {
+  await client(opts.refreshToken).events.patch({
+    calendarId: 'primary',
+    eventId: opts.eventId,
+    sendUpdates: opts.notify ? 'all' : 'none',
+    requestBody: {
+      summary: opts.title,
+      description: opts.agenda,
+      start: { dateTime: opts.startsAt.toISOString() },
+      end: { dateTime: opts.endsAt.toISOString() },
+      attendees: opts.attendeeEmails.map(({ email, optional }) => ({ email, optional })),
+    },
+  })
+}
+
+/**
  * Turns a googleapis failure into one short, plain sentence a person can act
  * on. Until this existed the whole path was a bare `catch {}` — the meeting
  * saved, the invite silently did not, and the reason was never written down
@@ -134,7 +192,30 @@ export async function updateCalendarEventTime(opts: {
  *
  * Never returns anything derived from the token itself.
  */
-export function describeCalendarError(error: unknown): string {
+export type CalendarErrorKey =
+  | 'invalid_grant'
+  | 'api_disabled'
+  | 'insufficient_scope'
+  | 'bad_credentials'
+  | 'not_found'
+  | 'unavailable'
+  | 'refused'
+
+/**
+ * The same diagnostic ladder, returning a KEY instead of a sentence.
+ *
+ * Split out because a failure needs to be RECORDED as well as shown, and a
+ * sentence written at failure time is a permanent decision about a reader
+ * whose language is not known until read time — LogPup's surfaces are
+ * bilingual Sinhala + English. A key survives that; a rendered English string
+ * does not. Same reason notifications store a title key rather than a title.
+ *
+ * describeCalendarError keeps its exported name, its signature and every one
+ * of its callers: it is now sentenceFor(classifyCalendarError(error)). The
+ * ladder itself — including which branch is checked before which, and why —
+ * moved here unchanged.
+ */
+export function classifyCalendarError(error: unknown): CalendarErrorKey {
   const e = error as
     | {
         code?: unknown
@@ -165,7 +246,7 @@ export function describeCalendarError(error: unknown): string {
   const detailReason = nestedError?.details?.[0]?.reason
 
   if (oauthError === 'invalid_grant' || message.includes('invalid_grant')) {
-    return 'the organiser’s Google connection has expired — sign out and back in with Google to renew it'
+    return 'invalid_grant'
   }
   // Checked before the generic 403 branch below: both are 403s, but only one
   // of them is fixed by re-consenting.
@@ -175,21 +256,47 @@ export function describeCalendarError(error: unknown): string {
     message.toLowerCase().includes('has not been used in project') ||
     message.toLowerCase().includes('it is disabled')
   ) {
-    return 'the Google Calendar API is disabled for LogPup’s Google Cloud project — an admin needs to enable it in Google Cloud Console before Meet links can be created'
+    return 'api_disabled'
   }
   if (
     status === 403 ||
     reason === 'insufficientPermissions' ||
     message.toLowerCase().includes('insufficient authentication scopes')
   ) {
-    return 'LogPup was not granted Google Calendar access — sign in with Google again and tick the Calendar permission'
+    return 'insufficient_scope'
   }
   if (status === 401 || oauthError === 'invalid_client') {
-    return 'Google rejected LogPup’s credentials'
+    return 'bad_credentials'
   }
-  if (status === 404) return 'the event no longer exists in Google Calendar'
-  if (status >= 500) return 'Google Calendar is unavailable right now'
-  return 'Google Calendar refused the request'
+  if (status === 404) return 'not_found'
+  if (status >= 500) return 'unavailable'
+  return 'refused'
+}
+
+const CALENDAR_ERROR_SENTENCES: Record<CalendarErrorKey, string> = {
+  invalid_grant:
+    'the organiser’s Google connection has expired — sign out and back in with Google to renew it',
+  api_disabled:
+    'the Google Calendar API is disabled for LogPup’s Google Cloud project — an admin needs to enable it in Google Cloud Console before Meet links can be created',
+  insufficient_scope:
+    'LogPup was not granted Google Calendar access — sign in with Google again and tick the Calendar permission',
+  bad_credentials: 'Google rejected LogPup’s credentials',
+  not_found: 'the event no longer exists in Google Calendar',
+  unavailable: 'Google Calendar is unavailable right now',
+  refused: 'Google Calendar refused the request',
+}
+
+/** The English sentence for a classification. */
+export function sentenceFor(key: CalendarErrorKey): string {
+  return CALENDAR_ERROR_SENTENCES[key]
+}
+
+/**
+ * Unchanged for every caller: same name, same signature, same sentences.
+ * Only the return type gained a sibling.
+ */
+export function describeCalendarError(error: unknown): string {
+  return sentenceFor(classifyCalendarError(error))
 }
 
 export async function deleteCalendarEvent(refreshToken: string, eventId: string): Promise<void> {
