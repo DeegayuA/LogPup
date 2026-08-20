@@ -9,6 +9,7 @@ import { auth } from '@/lib/auth'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
+import { liveApps } from '@/db/live'
 
 const MAX_COMMENT_LENGTH = 2000
 
@@ -45,9 +46,9 @@ export async function postAppComment(appId: string, body: string): Promise<Actio
 
   try {
     const [app] = await db
-      .select({ slug: apps.slug, name: apps.name })
-      .from(apps)
-      .where(eq(apps.id, validAppId))
+      .select({ slug: liveApps.slug, name: liveApps.name })
+      .from(liveApps)
+      .where(eq(liveApps.id, validAppId))
     if (!app) return err('App not found')
 
     const [created] = await db

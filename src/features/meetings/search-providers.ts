@@ -1,8 +1,8 @@
 import { desc, eq, ilike, or, sql } from 'drizzle-orm'
 import { format } from 'date-fns'
 import { db } from '@/db'
-import { liveMeetings } from '@/db/live'
-import { apps, meetingApps } from '@/db/schema'
+import { liveApps, liveMeetings } from '@/db/live'
+import { meetingApps } from '@/db/schema'
 import { formatAppNames } from '@/features/meetings/app-labels'
 import { PALETTE_RESULT_LIMIT, likePattern } from '@/features/search/registry/limits'
 import type { SearchProvider } from '@/features/search/registry/types'
@@ -61,11 +61,11 @@ export const searchProviders: SearchProvider[] = [
           startsAt: liveMeetings.startsAt,
           appNames: sql<
             string | null
-          >`string_agg(${apps.name}, ${NAME_SEPARATOR} order by ${apps.name})`,
+          >`string_agg(${liveApps.name}, ${NAME_SEPARATOR} order by ${liveApps.name})`,
         })
         .from(liveMeetings)
         .leftJoin(meetingApps, eq(meetingApps.meetingId, liveMeetings.id))
-        .leftJoin(apps, eq(apps.id, meetingApps.appId))
+        .leftJoin(liveApps, eq(liveApps.id, meetingApps.appId))
         .where(or(ilike(liveMeetings.title, pattern), ilike(liveMeetings.agenda, pattern)))
         .groupBy(liveMeetings.id, liveMeetings.title, liveMeetings.startsAt)
         .orderBy(desc(liveMeetings.startsAt))

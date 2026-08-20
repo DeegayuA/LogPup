@@ -234,12 +234,18 @@ export default function PublicHomePage() {
           <p className="max-w-[56ch] text-base leading-relaxed text-muted-foreground">
             An engineering-operations HQ for one software studio. Every product in flight, everyone
             on it and how loaded they are, what ships this sprint, what each person actually did
-            today, and what was decided in every meeting — with the meeting write-ups produced in
             {/* lang="si" on the Sinhala word itself (WCAG 3.1.2, Language of
                 Parts). Without it a screen reader on an English page reads
                 these glyphs with an English voice, which is unintelligible.
-                PlateWriteup already does this correctly for its Sinhala
-                block — this one inline word was the exception. */}
+                PlateWriteup already does this correctly for its Sinhala block —
+                this one inline word was the exception.
+
+                The comment sits ABOVE the sentence rather than inside it: a
+                JSX comment between two words swallows the newline that was
+                carrying the space, and this paragraph shipped reading
+                "produced inboth English" until someone looked at the rendered
+                page. */}
+            today, and what was decided in every meeting — with the meeting write-ups produced in
             both English and Sinhala (<span lang="si">සිංහල</span>).
           </p>
 

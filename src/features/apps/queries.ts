@@ -3,7 +3,7 @@ import { and, asc, count, eq, getTableColumns, gte, isNotNull, lt, max, ne, sql,
 import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
 import { db } from '@/db'
-import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import { appComments, appRoleHistory, apps, assignments, meetingApps, users } from '@/db/schema'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import {
@@ -128,7 +128,7 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
           pmName: pm.name,
           pmAvatarUrl: pm.avatarUrl,
         })
-        .from(apps)
+        .from(liveApps)
         // Left join: an app whose lead row was deleted must still list.
         .leftJoin(lead, eq(apps.leadId, lead.id))
         .leftJoin(pm, eq(apps.pmId, pm.id))
@@ -331,10 +331,10 @@ export async function getAppBySlug(slug: string) {
       pmName: pm.name,
       pmAvatarUrl: pm.avatarUrl,
     })
-    .from(apps)
-    .leftJoin(lead, eq(apps.leadId, lead.id))
-    .leftJoin(pm, eq(apps.pmId, pm.id))
-    .where(eq(apps.slug, slug))
+    .from(liveApps)
+    .leftJoin(lead, eq(liveApps.leadId, lead.id))
+    .leftJoin(pm, eq(liveApps.pmId, pm.id))
+    .where(eq(liveApps.slug, slug))
   return app ?? null
 }
 
@@ -476,7 +476,7 @@ export async function getAppCounts(appId: string): Promise<AppCounts> {
  * unnest/aggregate-distinct query and just as cheap.
  */
 export async function listDistinctTechTags(): Promise<string[]> {
-  const rows = await db.select({ techTags: apps.techTags }).from(apps)
+  const rows = await db.select({ techTags: liveApps.techTags }).from(liveApps)
   const tags = new Set<string>()
   for (const row of rows) {
     for (const tag of row.techTags) {

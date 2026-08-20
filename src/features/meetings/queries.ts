@@ -1,8 +1,8 @@
 import { cache } from 'react'
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
-import { liveMeetings } from '@/db/live'
-import { apps, meetingApps, meetingAttendees, users } from '@/db/schema'
+import { liveApps, liveMeetings } from '@/db/live'
+import { meetingApps, meetingAttendees, users } from '@/db/schema'
 import type { MeetingApp } from '@/features/meetings/app-labels'
 
 export type MeetingAttendee = {
@@ -119,14 +119,14 @@ async function attachApps(rows: MeetingRow[]): Promise<Map<string, MeetingApp[]>
   const appRows = await db
     .select({
       meetingId: meetingApps.meetingId,
-      id: apps.id,
-      name: apps.name,
-      slug: apps.slug,
+      id: liveApps.id,
+      name: liveApps.name,
+      slug: liveApps.slug,
     })
     .from(meetingApps)
-    .innerJoin(apps, eq(meetingApps.appId, apps.id))
+    .innerJoin(liveApps, eq(meetingApps.appId, liveApps.id))
     .where(inArray(meetingApps.meetingId, rows.map((r) => r.id)))
-    .orderBy(asc(apps.name))
+    .orderBy(asc(liveApps.name))
 
   const byMeeting = new Map<string, MeetingApp[]>()
   for (const row of appRows) {

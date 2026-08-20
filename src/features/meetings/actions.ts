@@ -4,12 +4,11 @@ import { z } from 'zod'
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { liveMeetings } from '@/db/live'
+import { liveApps, liveMeetings } from '@/db/live'
 // meetingScreenshots is deliberately NOT imported: deleteMeeting used to read
 // its rows to sweep the Blob objects, and a soft delete keeps both the rows and
 // the objects (they are purged with the meeting from admin Trash, not here).
 import {
-  apps,
   meetingApps,
   meetingAttendeeHistory,
   meetingAttendees,
@@ -172,9 +171,9 @@ async function appIdsForMeeting(meetingId: string): Promise<string[]> {
   const rows = await db
     .select({ appId: meetingApps.appId })
     .from(meetingApps)
-    .innerJoin(apps, eq(meetingApps.appId, apps.id))
+    .innerJoin(liveApps, eq(meetingApps.appId, liveApps.id))
     .where(eq(meetingApps.meetingId, meetingId))
-    .orderBy(asc(apps.name))
+    .orderBy(asc(liveApps.name))
   return rows.map((row) => row.appId)
 }
 
@@ -185,7 +184,7 @@ async function appIdsForMeeting(meetingId: string): Promise<string[]> {
  */
 async function appNameById(appId: string | null): Promise<string | null> {
   if (!appId) return null
-  const [app] = await db.select({ name: apps.name }).from(apps).where(eq(apps.id, appId))
+  const [app] = await db.select({ name: liveApps.name }).from(liveApps).where(eq(liveApps.id, appId))
   return app?.name ?? null
 }
 
@@ -193,10 +192,10 @@ async function appNameById(appId: string | null): Promise<string | null> {
 async function appNamesByIds(appIds: readonly string[]): Promise<string[]> {
   if (appIds.length === 0) return []
   const rows = await db
-    .select({ name: apps.name })
-    .from(apps)
-    .where(inArray(apps.id, [...appIds]))
-    .orderBy(asc(apps.name))
+    .select({ name: liveApps.name })
+    .from(liveApps)
+    .where(inArray(liveApps.id, [...appIds]))
+    .orderBy(asc(liveApps.name))
   return rows.map((row) => row.name)
 }
 
@@ -228,7 +227,7 @@ function mirroredAppId(current: string | null, appIds: readonly string[]): strin
 async function revalidateMeetingPaths(appIds: readonly (string | null)[]) {
   const ids = [...new Set(appIds.filter((id): id is string => id !== null))]
   if (ids.length > 0) {
-    const rows = await db.select({ slug: apps.slug }).from(apps).where(inArray(apps.id, ids))
+    const rows = await db.select({ slug: liveApps.slug }).from(liveApps).where(inArray(liveApps.id, ids))
     for (const row of rows) revalidatePath('/apps/' + row.slug)
   }
   revalidatePath('/meetings')
