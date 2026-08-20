@@ -173,6 +173,21 @@ export const ROLE_GRANTS = {
   'audit.view':                 { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: A },
   'admin.view':                 { superadmin: A, admin: A, manager: A, editor: N, member: N, stakeholder: N, auditor: A },
   'danger.dbclear':             { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
+  // Money: rate cards, per-person rates, and every figure derived from them
+  // (project cost, margin, accruals). Superadmin and admin, by the user's
+  // decision.
+  //
+  // ONE capability for rates AND totals, deliberately. Splitting them — rates
+  // restricted, totals open — reads as the safer design and is not: a cost
+  // total narrowed to a single contributor IS that person's rate, whether it
+  // is narrowed by a one-person project or by a date range in which only one
+  // person logged. Anything computed from a rate sits behind the same gate as
+  // the rate.
+  //
+  // No scoped arm at any level. A manager running a project does not thereby
+  // acquire the right to see what their team is paid, and 'scoped' here would
+  // grant precisely that to whoever happens to hold the project.
+  'finance.view':               { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   // The rest of the danger zone. Each is separately grantable rather than
   // folded into danger.dbclear, because they differ in what they destroy and
   // therefore in who should hold them.
@@ -212,6 +227,12 @@ const APPROVAL_ACTIONS = [
   // though it destroys nothing.
   'danger.backup.export', 'danger.trash.empty', 'danger.recordings.wipe',
   'danger.app.reset',
+  // A read, like danger.backup.export and here for the same reason: what it
+  // returns is what everybody is paid. Somebody still being taught the job, or
+  // engaged for one project, holding an admin seat should not thereby see the
+  // studio's salaries — and an employment stage is the only lever that can say
+  // so without inventing a second seat.
+  'finance.view',
 ] as const
 // NOT trash.restore. Restoring is recovering something somebody deleted by
 // mistake, and it is reversible — you can trash it again. A trainee who spots
