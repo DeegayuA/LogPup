@@ -42,6 +42,22 @@ const PRICE_TABLE: Record<string, PriceRow[]> = {
   'gemini-2.5-flash-native-audio-preview-12-2025': [{ inputPer1M: 3.0, outputPer1M: 12.0 }],
 }
 
+/**
+ * Deliberately absent from PRICE_TABLE, even though MODEL_CHOICES
+ * (ai-features.ts) offers them as selectable models: no published figure
+ * covers BOTH input and output for these ids, so priceForModel legitimately
+ * returns null and the UI shows "price unknown" rather than a guess.
+ *   - gemini-3.1-flash-lite, gemini-3-flash-preview, gemini-omni-flash — no
+ *     published rate found for either direction.
+ *   - gemini-2.5-pro-preview-tts — paid-tier only; no published rate found.
+ *   - gemini-3.5-live-translate-preview — only audio-input is published
+ *     ($3.50/1M, per docs/superpowers/specs/2026-08-11-gemini-live-streaming
+ *     -design.md §1.3); no published output rate, so adding a row would mean
+ *     inventing half of it.
+ * Add a row here the moment a real published figure exists — don't infer one
+ * from a sibling model's ratio.
+ */
+
 export function priceForModel(model: string, at: Date): ModelPrice | null {
   const rows = PRICE_TABLE[model]
   if (!rows) return null
