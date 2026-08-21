@@ -182,7 +182,17 @@
   --border: oklch(0.905 0.008 100);
   --input: oklch(0.905 0.008 100);
   --ring: oklch(0.56 0.08 165);
-  --chart-1: oklch(0.62 0.13 70);
+  /* Purple, following --holiday. Hue only, L and C untouched, so every
+     contrast ratio measured against this stays measured.
+
+     WHAT MOVED WITH IT, because this token is not only the calendar: --chart-1
+     is the ember the design system reserved for capacity and attention, so the
+     capacity bar's near-capacity band, the paused status dot in the palette
+     and the worklog's "Owed" day all turn purple together. That is the
+     intended consequence of "all orange to purple", but it does cost the
+     warm-means-watch-out reading those surfaces had. Every one of them also
+     carries a label or an icon, so none depended on the hue alone. */
+  --chart-1: oklch(0.62 0.13 305);
   --chart-2: oklch(0.55 0.09 165);
   --chart-3: oklch(0.44 0.09 165);
   --chart-4: oklch(0.68 0.1 70);
@@ -277,7 +287,7 @@
      priority chips, the roadmap's today line) keeps its contrast. Colour is
      still not the ONLY signal: see the "Near capacity" badge in
      capacity-card.tsx and the band named in CapacityBar's aria-label. */
-  --chart-1: oklch(0.68 0.13 70);
+  --chart-1: oklch(0.68 0.13 305);
   --chart-2: oklch(0.72 0.1 165);
   --chart-3: oklch(0.78 0.1 165);
   --chart-4: oklch(0.68 0.11 70);
