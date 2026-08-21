@@ -579,6 +579,86 @@ export function SharedPeopleList({
 // Overlap
 // ---------------------------------------------------------------------------
 
+/** The card an entry in the summary jumps to. One rule, both ends. */
+function overlapAnchorId(slug: string): string {
+  return `overlap-${slug}`
+}
+
+/**
+ * Every overlap ranked, before any of them is read.
+ *
+ * The cards below answer "who exactly", which is the right thing for one
+ * project and the wrong thing for eight — comparing them meant scrolling past
+ * full member lists and holding counts in your head. This is the comparison,
+ * stated once.
+ *
+ * THE BAR IS SHARED / ROOM SIZE, not shared / anchor size. Two projects
+ * sharing four people mean something different when the room is six than when
+ * it is forty, and that ratio is exactly what decides whether one session can
+ * cover both — the question this whole view exists to answer.
+ *
+ * Only shown for more than one overlap. Ranking a list of one is furniture.
+ */
+function OverlapSummary({
+  anchorName,
+  overlaps,
+}: {
+  anchorName: string
+  overlaps: OverlapReport['overlaps']
+}) {
+  const ranked = [...overlaps].sort(
+    (a, b) =>
+      b.shared.length - a.shared.length || a.project.name.localeCompare(b.project.name),
+  )
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle as="h2" className="text-sm">
+          What overlaps {anchorName}
+        </CardTitle>
+        <CardDescription>
+          Widest overlap first. The bar is how much of a combined room the two
+          projects already share.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="flex flex-col gap-1.5">
+          {ranked.map((overlap) => {
+            const share = overlap.roomSize > 0 ? overlap.shared.length / overlap.roomSize : 0
+            return (
+              <li key={overlap.project.appId}>
+                <a
+                  href={`#${overlapAnchorId(overlap.project.slug)}`}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-muted/60',
+                    linkFocus,
+                  )}
+                >
+                  <ProjectDot appId={overlap.project.appId} />
+                  <span className="min-w-0 flex-1 truncate text-sm">{overlap.project.name}</span>
+                  <span
+                    aria-hidden
+                    className="hidden h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-muted sm:block"
+                  >
+                    <span
+                      className={cn('block h-full rounded-full', eventDotClasses(overlap.project.appId) ?? 'bg-primary')}
+                      style={{ width: `${Math.max(share * 100, 4)}%` }}
+                    />
+                  </span>
+                  <span className={cn(PCT_CLASS, 'shrink-0 text-2xs text-muted-foreground')}>
+                    {overlap.shared.length} of {overlap.roomSize}
+                  </span>
+                </a>
+              </li>
+            )
+          })}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
 /** The anchor picker: one link per project that has anybody on it. */
 function OverlapPicker({
   cohorts,
@@ -672,6 +752,14 @@ export function ProjectOverlapView({
         the number who would have to be in a meeting that covered both.
       </HelpNote>
 
+      {/* THE SHAPE BEFORE THE DETAIL. Every overlap was a full card with its
+          own member list, so answering "which project shares the most with
+          this one" meant scrolling the whole page and holding numbers in your
+          head. This ranks them in one glance and jumps to the card. */}
+      {overlaps.length > 1 ? (
+        <OverlapSummary anchorName={anchor.name} overlaps={overlaps} />
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle as="h2" className="flex min-w-0 items-center gap-2">
@@ -715,7 +803,7 @@ export function ProjectOverlapView({
         </Card>
       ) : (
         overlaps.map((overlap) => (
-          <Card key={overlap.project.appId}>
+          <Card key={overlap.project.appId} id={overlapAnchorId(overlap.project.slug)} className="scroll-mt-4">
             <CardHeader>
               <CardTitle as="h2" className="flex min-w-0 items-center gap-2">
                 <ProjectDot appId={overlap.project.appId} />
