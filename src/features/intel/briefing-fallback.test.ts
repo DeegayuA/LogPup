@@ -26,7 +26,8 @@ function input(over: Partial<SignalInput> = {}): SignalInput {
     sprints: [],
     worklogGapDays: [],
     unwrittenMeetings: [],
-    quietApps: [],
+    mergeableMeetings: null,
+  quietApps: [],
     ...over,
   }
 }

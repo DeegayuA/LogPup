@@ -241,6 +241,8 @@ function questionFor(signal: Signal): string {
       return 'Which working days am I missing from my work log?'
     case 'meeting.unwritten':
       return 'Which meetings still need their notes written up?'
+    case 'meeting.mergeable':
+      return 'Which open items need the same people, and could share one meeting?'
     case 'app.quiet':
       return 'Which apps have gone quiet, and what was last done on them?'
   }

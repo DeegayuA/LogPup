@@ -91,22 +91,55 @@ function withTeamPrefill(f: FormState, roster: string[]): FormState {
   return { ...f, ...applyTeamPrefill(f, team, roster) }
 }
 
-function emptyState(defaultAppId?: string, startAt?: Date, endAt?: Date): FormState {
+/**
+ * A meeting somebody has been ASKED to schedule, but has not yet.
+ *
+ * The R6 COVER-TOGETHER board proposes who, what and how long, and stops
+ * there: the proposal ends where the create flow begins, so there is no second
+ * form, no second write path and no second set of validation. Everything here
+ * is a starting value in a dialog a human still has to submit — which is what
+ * "suggestions, never invites" means in practice.
+ */
+export type MeetingPrefill = {
+  appIds?: string[]
+  title?: string
+  /** Committed attendees, NOT app-team prefill. See the note in `emptyState`. */
+  attendeeIds?: string[]
+  agenda?: string
+  /** How long the proposal says it needs. The start is still whatever the
+   *  dialog would have defaulted to — nothing here knows who is free. */
+  minutes?: number
+}
+
+function emptyState(
+  defaultAppId?: string,
+  startAt?: Date,
+  endAt?: Date,
+  prefill?: MeetingPrefill,
+): FormState {
   // A slot the person clicked is already an exact time — round only the
   // "right now" default, which is never on a step boundary. Callers that
   // only know a DAY (the month grid's empty-cell click) put a sensible time
   // on it before calling, rather than this guessing one back out of a date.
   const start = startAt ?? roundUpToStep(new Date())
+  const proposed = prefill?.minutes
+    ? new Date(start.getTime() + prefill.minutes * 60_000)
+    : null
   return {
-    appIds: defaultAppId ? [defaultAppId] : [],
-    title: '',
+    appIds: prefill?.appIds ?? (defaultAppId ? [defaultAppId] : []),
+    title: prefill?.title ?? '',
     start,
     // A drag-created range hands in its own end; a click only knows a start,
     // and an hour is the default the wheel already teaches.
-    end: endAt && endAt > start ? endAt : addHours(start, 1),
-    agenda: '',
+    end: proposed ?? (endAt && endAt > start ? endAt : addHours(start, 1)),
+    agenda: prefill?.agenda ?? '',
     meetingUrl: '',
-    attendeeIds: [],
+    attendeeIds: prefill?.attendeeIds ?? [],
+    // Deliberately empty even when `prefill` named attendees. `prefilledIds`
+    // marks people the APP-TEAM prefill put here, which a later app switch may
+    // silently swap out (see attendee-prefill.ts). A proposal's group is a
+    // deliberate answer to "who does this decision need", so it is treated the
+    // way stateFromMeeting treats a saved meeting's attendees: committed.
     prefilledIds: [],
     teamsByApp: {},
   }
@@ -229,6 +262,7 @@ export function MeetingForm({
   defaultOpen,
   onOpenChange: onOpenChangeProp,
   editing,
+  prefill,
 }: {
   apps: { id: string; name: string }[]
   activeUsers: ActiveUser[]
@@ -247,13 +281,19 @@ export function MeetingForm({
    *  opened it can drop that slot again on close. */
   onOpenChange?: (open: boolean) => void
   editing?: EditableMeeting
+  /** Starting values for a meeting somebody has been asked to schedule. Ignored
+   *  when `editing` is set — a proposal cannot be an edit of a meeting that
+   *  already exists. */
+  prefill?: MeetingPrefill
 }) {
   const [open, setOpen] = useState(defaultOpen ?? false)
   const [isPending, startTransition] = useTransition()
   const [attendeePickerOpen, setAttendeePickerOpen] = useState(false)
   const [appPickerOpen, setAppPickerOpen] = useState(false)
   const [form, setForm] = useState<FormState>(() =>
-    editing ? stateFromMeeting(editing) : emptyState(defaultAppId, defaultStart, defaultEnd),
+    editing
+      ? stateFromMeeting(editing)
+      : emptyState(defaultAppId, defaultStart, defaultEnd, prefill),
   )
   // Which projects' teamForApp calls are in flight — drives the loading line
   // in the attendees block. A SET, not one id: adding two projects at once

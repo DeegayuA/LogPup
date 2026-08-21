@@ -69,6 +69,12 @@ function priorityFor(signal: Signal, input: SignalInput): string {
       return `Fill in ${plural(signal.count, 'missing work log day', 'missing work log days')}.`
     case 'meeting.unwritten':
       return `Write up ${plural(signal.count, 'meeting', 'meetings')} with no notes.`
+    case 'meeting.mergeable':
+      // Phrased as a look, not a do: this is the one row that is an
+      // opportunity rather than something already going wrong, and telling
+      // somebody to "combine" it would be the value claim the rule refuses to
+      // make.
+      return `See whether ${plural(signal.count, 'open item', 'open items')} could be fewer meetings.`
     case 'app.quiet': {
       const app = input.quietApps.find((a) => a.slug === entityKey(signal.id))
       return app

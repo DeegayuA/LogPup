@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { CalendarDaysIcon } from 'lucide-react'
 import { getSession } from '@/lib/session'
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,9 @@ import { StatTile } from '@/features/meetings/components/meeting-chips'
 import { summarizeMeetings } from '@/features/meetings/components/meeting-glance'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingsViews } from '@/features/meetings/components/meetings-views'
+import {
+  MeetingLoadLink, MeetingLoadLinkFallback,
+} from '@/features/meetings/components/meeting-load-link'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 import { isAdminRole } from '@/features/auth/capabilities'
 
@@ -71,12 +75,19 @@ export default async function MeetingsPage(props: {
         title="Meeting Intelligence"
         description="Everything the pack has scheduled — Google Calendar synced with Gemini 2.5 transcripts."
         actions={
-          <MeetingForm
-            apps={appOptions}
-            activeUsers={activeUsers}
-            trigger={<Button className="shadow-sm font-semibold">New meeting</Button>}
-            defaultOpen={newParam === '1'}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Suspended on purpose: the label is a finding the sweep has to
+                compute, and this page must not wait on it to draw. */}
+            <Suspense fallback={<MeetingLoadLinkFallback />}>
+              <MeetingLoadLink />
+            </Suspense>
+            <MeetingForm
+              apps={appOptions}
+              activeUsers={activeUsers}
+              trigger={<Button className="shadow-sm font-semibold">New meeting</Button>}
+              defaultOpen={newParam === '1'}
+            />
+          </div>
         }
       />
 

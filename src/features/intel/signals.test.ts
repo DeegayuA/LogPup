@@ -3,6 +3,7 @@ import { FOLLOWUP_STALE_DAYS } from '@/features/people/followup-split'
 import {
   buildSignals,
   capacitySignals,
+  mergeableMeetingSignal,
   overdueTaskSignal,
   OVERDUE_ALERT_DAYS,
   QUIET_APP_DAYS,
@@ -47,7 +48,8 @@ function input(over: Partial<SignalInput> = {}): SignalInput {
     sprints: [],
     worklogGapDays: [],
     unwrittenMeetings: [],
-    quietApps: [],
+    mergeableMeetings: null,
+  quietApps: [],
     ...over,
   }
 }
@@ -552,5 +554,66 @@ describe('buildSignals', () => {
     for (const signal of signals) {
       expect(signal.title.length).toBeLessThanOrEqual(60)
     }
+  })
+})
+
+describe('mergeableMeetingSignal', () => {
+  it('says nothing when the reader may not see the sweep', () => {
+    // null is "not shown the question", NOT "nothing to combine" — the two
+    // must never render the same, or somebody who was never allowed to look
+    // gets a reassuring answer.
+    expect(mergeableMeetingSignal(input({ mergeableMeetings: null }))).toBeNull()
+  })
+
+  it('says nothing when there is nothing worth combining', () => {
+    expect(
+      mergeableMeetingSignal(
+        input({ mergeableMeetings: { groups: 0, items: 0, savedPersonMinutes: 0 } }),
+      ),
+    ).toBeNull()
+  })
+
+  it('reports the finding as a count, and links to the board', () => {
+    const signal = mergeableMeetingSignal(
+      input({ mergeableMeetings: { groups: 2, items: 8, savedPersonMinutes: 150 } }),
+    )
+    expect(signal).not.toBeNull()
+    expect(signal!.kind).toBe('meeting.mergeable')
+    expect(signal!.title).toBe('8 meetings could be 2')
+    expect(signal!.detail).toContain('150 person-minutes less')
+    expect(signal!.href).toBe('/meetings/load')
+    expect(signal!.count).toBe(8)
+  })
+
+  it('is info, not an alert — an opportunity is not something going wrong', () => {
+    const signal = mergeableMeetingSignal(
+      input({ mergeableMeetings: { groups: 1, items: 4, savedPersonMinutes: 75 } }),
+    )
+    expect(signal!.severity).toBe('info')
+  })
+
+  it('is keyed to the workspace, not to the reader', () => {
+    // Two people looking at the same workspace must not see two ids for one
+    // fact neither of them owns.
+    const found = { groups: 1, items: 4, savedPersonMinutes: 75 }
+    const mine = mergeableMeetingSignal(input({ mergeableMeetings: found }))
+    const theirs = mergeableMeetingSignal(
+      input({ mergeableMeetings: found, me: { id: 'someone-else', name: 'Ama' } }),
+    )
+    expect(mine!.id).toBe(theirs!.id)
+  })
+
+  it('leaves the saving out rather than printing a zero', () => {
+    const signal = mergeableMeetingSignal(
+      input({ mergeableMeetings: { groups: 1, items: 2, savedPersonMinutes: 0 } }),
+    )
+    expect(signal!.detail).not.toContain('0 person-minutes')
+  })
+
+  it('reaches the board through buildSignals', () => {
+    const signals = buildSignals(
+      input({ mergeableMeetings: { groups: 2, items: 8, savedPersonMinutes: 150 } }),
+    )
+    expect(signals.map((s) => s.kind)).toContain('meeting.mergeable')
   })
 })

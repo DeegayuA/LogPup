@@ -32,6 +32,7 @@ export type SignalKind =
   | 'sprint.at-risk'
   | 'worklog.gap'
   | 'meeting.unwritten'
+  | 'meeting.mergeable'
   | 'app.quiet'
 
 export type Signal = {
@@ -66,6 +67,15 @@ export type SignalInput = {
   }[]
   worklogGapDays: string[]
   unwrittenMeetings: { id: string; title: string; endedIso: string }[]
+  /**
+   * What R6 COVER-TOGETHER found, or null when the reader may not see it.
+   *
+   * NULL AND ZERO ARE DIFFERENT and must stay that way: null is "this reader
+   * does not get a workspace-wide reading of everybody's open work", zero is
+   * "nothing worth combining". Collapsing them would put a reassuring row in
+   * front of somebody who was never shown the question.
+   */
+  mergeableMeetings: { groups: number; items: number; savedPersonMinutes: number } | null
   quietApps: { slug: string; name: string; lastActivityIso: string | null }[]
 }
 
@@ -385,6 +395,42 @@ export function quietAppSignals(input: SignalInput): Signal[] {
   return signals
 }
 
+/**
+ * Meetings that have not been scheduled yet, and need not all be.
+ *
+ * The only INFO-severity row that is an opportunity rather than a problem —
+ * every other signal here reports something already going wrong. It earns its
+ * place on the board because this is how somebody finds the load page without
+ * knowing it exists: nobody searches for a rule they have never heard of.
+ *
+ * A question, never a value claim. The rule cannot know whether one room is
+ * better than several; it knows only that it costs fewer person-minutes, and
+ * that is exactly what the sentence says.
+ */
+export function mergeableMeetingSignal(input: SignalInput): Signal | null {
+  const found = input.mergeableMeetings
+  if (found === null) return null
+  if (found.groups === 0) return null
+
+  const saved = found.savedPersonMinutes
+  return {
+    // Workspace-scoped, not personal: unlike the overdue and follow-up rows,
+    // this is not about the reader's own work, and keying it to them would
+    // make two people's boards disagree about a fact neither of them owns.
+    id: 'meeting.mergeable:workspace',
+    kind: 'meeting.mergeable',
+    severity: 'info',
+    title: clip(`${found.items} meetings could be ${found.groups}`),
+    detail:
+      `${plural(found.items, 'open item', 'open items')} need the same people and could be `
+      + `${plural(found.groups, 'conversation', 'conversations')} instead of ${found.items}`
+      + `${saved > 0 ? `, ${saved} person-minutes less` : ''}. `
+      + 'Each one is a suggestion: scheduling it still opens the meeting form.',
+    href: '/meetings/load',
+    count: found.items,
+  }
+}
+
 const SEVERITY_RANK: Record<SignalSeverity, number> = { alert: 0, watch: 1, info: 2 }
 
 /**
@@ -409,6 +455,7 @@ export function buildSignals(input: SignalInput): Signal[] {
     ...sprintRiskSignals(input),
     worklogGapSignal(input),
     unwrittenMeetingSignal(input),
+    mergeableMeetingSignal(input),
     ...quietAppSignals(input),
   ]
     .filter((signal): signal is Signal => signal !== null)

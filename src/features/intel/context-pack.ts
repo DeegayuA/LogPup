@@ -16,6 +16,7 @@ import { DUE_STATE_LABEL, bucketOpenTasks, dueState } from '@/features/people/ta
 import { getActiveSprints } from '@/features/sprints/queries'
 import { getCoverage } from '@/features/worklog/coverage-queries'
 import type { SignalInput } from '@/features/intel/signals'
+import { getMeetingLoadSuggestions } from '@/features/meetings/load-actions'
 
 /**
  * The one read the /intel surface makes: everything the signal rules and the
@@ -106,6 +107,7 @@ export async function loadWorkspaceSnapshot(
     unwritten,
     coverage,
     pendingAbsences,
+    mergeable,
   ] = await Promise.all([
     getPersonWorkload(user.id),
     getPersonFollowups(user.id),
@@ -160,6 +162,10 @@ export async function loadWorkspaceSnapshot(
     // await in front of the others is another Neon round trip on a path
     // somebody is waiting on.
     getMyPendingAbsences(user.id),
+    // R6 COVER-TOGETHER's sweep. It runs its own gate — a reader who may not
+    // see a workspace-wide reading of everybody's open work gets `err`, which
+    // becomes a null below and no row at all, rather than a reassuring zero.
+    getMeetingLoadSuggestions(),
   ])
 
   const rankedCapacities = sortCapacities(capacities).slice(0, CAPACITY_LIMIT)
@@ -244,6 +250,15 @@ export async function loadWorkspaceSnapshot(
       totalTasks: sprint.counts.todo + sprint.counts.in_progress + sprint.counts.done,
     })),
     worklogGapDays: gapDays,
+    mergeableMeetings: mergeable.ok
+      ? {
+        groups: mergeable.data.suggestions.length,
+        items: mergeable.data.suggestions.reduce((sum, s) => sum + s.items.length, 0),
+        savedPersonMinutes: mergeable.data.suggestions.reduce(
+          (sum, s) => sum + s.savedPersonMinutes, 0,
+        ),
+      }
+      : null,
     unwrittenMeetings: unwritten.map((meeting) => ({
       id: meeting.id,
       title: meeting.title,
