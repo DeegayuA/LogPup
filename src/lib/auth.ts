@@ -1,6 +1,7 @@
 import NextAuth from 'next-auth'
 import Google from 'next-auth/providers/google'
 import Notion from 'next-auth/providers/notion'
+import GitHub from 'next-auth/providers/github'
 import { createHash } from 'node:crypto'
 import Credentials from 'next-auth/providers/credentials'
 import { and, isNull, gt, eq, type SQL } from 'drizzle-orm'
@@ -281,6 +282,30 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           clientSecret: process.env.NOTION_OAUTH_CLIENT_SECRET,
           redirectUri: `${authBaseUrl}/api/auth/callback/notion`,
         })]
+      : []),
+    // GitHub OAuth, in the NOTION shape rather than the Google one, and that
+    // difference is the whole security decision here.
+    //
+    // Google AUTO-PROVISIONS: any verified Google address may sign in and
+    // lands as status='pending' for an admin to approve. GitHub must not,
+    // because a GitHub account's email is frequently personal, can be
+    // unverified, and can be hidden entirely — so "has a GitHub account" is
+    // not evidence of anything about who somebody is. Sign-in therefore
+    // succeeds only for an address that ALREADY matches an allowed user, the
+    // way Notion does; the signIn callback below enforces that and needs no
+    // change. GitHub is a convenience for people who are already here, never
+    // a way in.
+    //
+    // Registered only when both vars are set: constructing it with
+    // possibly-undefined credentials would offer a broken "Continue with
+    // GitHub" button rather than simply not offering one.
+    ...(process.env.GITHUB_OAUTH_CLIENT_ID && process.env.GITHUB_OAUTH_CLIENT_SECRET
+      ? [
+          GitHub({
+            clientId: process.env.GITHUB_OAUTH_CLIENT_ID,
+            clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET,
+          }),
+        ]
       : []),
     ...(testLoginEnabled
       ? [Credentials({
