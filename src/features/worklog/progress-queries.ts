@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, lte, or } from 'drizzle-orm'
 import { db } from '@/db'
-import { absences, assignments, users, workSchedules } from '@/db/schema'
+import { absences, assignments, users, workSchedules, worklogEntries } from '@/db/schema'
 import { liveApps } from '@/db/live'
 import { canHoldWork } from '@/features/people/removal-queries'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
@@ -8,6 +8,7 @@ import { computeCoverage, type CoverageSummary } from '@/features/worklog/covera
 import { buildHolidayCalendar, closesTheStudio } from '@/features/worklog/holiday-listing'
 import { listOrgHolidays } from '@/features/worklog/org-holiday-queries'
 import { addDaysIso, eachDayInclusive } from '@/features/worklog/progress-params'
+import { buildMixLegend, type DayEntry, type LegendEntry } from '@/features/worklog/day-app-mix'
 import { getTeamWorklogs } from '@/features/worklog/queries'
 import { patternForDay, type SchedulePattern } from '@/features/worklog/schedules'
 import { listApps, type AppMember } from '@/features/apps/queries'
@@ -44,6 +45,13 @@ export type ProgressPersonRow = {
   percentByDay: ReadonlyMap<string, number>
   /** Days covered by an APPROVED absence. Pending ones never excuse. */
   absentDays: ReadonlySet<string>
+  /**
+   * What each logged day went TO, from worklog_entries — the question the
+   * percent raises and cannot answer. Absent for a day with no entries, which
+   * is normal rather than missing: daily_worklogs carries the percent, and
+   * per-project entries are a separate, optional record on top of it.
+   */
+  entriesByDay: ReadonlyMap<string, DayEntry[]>
   coverage: CoverageSummary
 }
 
@@ -56,6 +64,12 @@ export type ProgressMatrixData = {
   holidayNames: ReadonlyMap<string, string>
   /** Rows, most owed days first — the page's job is finding gaps. */
   people: ProgressPersonRow[]
+  /**
+   * Projects appearing anywhere in the visible grid, heaviest first — the
+   * legend for the colour bars. Built from the SAME entries the cells are, so
+   * a hue on screen always has a name under it and vice versa.
+   */
+  mixLegend: LegendEntry[]
 }
 
 type ScheduleWindowRow = {
@@ -108,6 +122,7 @@ export async function getProgressMatrix(opts: {
     closedDays: new Set(),
     holidayNames: new Map(),
     people: [],
+    mixLegend: [],
   }
 
   // Which app memberships admit a person onto the matrix. null = everyone.
@@ -154,7 +169,7 @@ export async function getProgressMatrix(opts: {
   // computeCoverage takes a half-open [from, to); the window is inclusive.
   const toExclusive = addDaysIso(opts.to, 1)
 
-  const [teamRows, absenceRows, scheduleRows, orgRows] = await Promise.all([
+  const [teamRows, absenceRows, scheduleRows, orgRows, entryRows] = await Promise.all([
     // Already a single bounded range read over EVERYBODY — filtered to the
     // visible people here rather than re-queried per person.
     getTeamWorklogs(opts.from, opts.to),
@@ -183,6 +198,30 @@ export async function getProgressMatrix(opts: {
       .where(inArray(workSchedules.userId, ids))
       .orderBy(desc(workSchedules.effectiveFrom)),
     listOrgHolidays(),
+    // One bounded range read for the whole visible grid, matching the shape of
+    // the reads beside it — never per person and never per day.
+    //
+    // liveApps, not the raw table: a project someone TRASHED must not put its
+    // name and its hue back on the grid. The entry survives the project being
+    // removed (app_id is ON DELETE SET NULL and the row keeps its minutes), so
+    // that time renders as unassigned, which is what it has become.
+    db
+      .select({
+        userId: worklogEntries.userId,
+        day: worklogEntries.day,
+        appId: worklogEntries.appId,
+        appName: liveApps.name,
+        minutes: worklogEntries.minutes,
+      })
+      .from(worklogEntries)
+      .leftJoin(liveApps, eq(worklogEntries.appId, liveApps.id))
+      .where(
+        and(
+          inArray(worklogEntries.userId, ids),
+          gte(worklogEntries.day, opts.from),
+          lte(worklogEntries.day, opts.to),
+        ),
+      ),
   ])
 
   // ONE holiday composition for the whole range: the gazette merged with the
@@ -208,6 +247,20 @@ export async function getProgressMatrix(opts: {
       percentByUser.set(row.userId, byDay)
     }
     byDay.set(row.day, row.percent)
+  }
+
+  const entriesByUser = new Map<string, Map<string, DayEntry[]>>()
+  for (const row of entryRows) {
+    let byDay = entriesByUser.get(row.userId)
+    if (!byDay) {
+      byDay = new Map()
+      entriesByUser.set(row.userId, byDay)
+    }
+    const list = byDay.get(row.day) ?? []
+    // appName is null both for genuinely unassigned time and for a TRASHED
+    // project. day-app-mix keeps those apart on appId, not on the name.
+    list.push({ appId: row.appId, appName: row.appName, minutes: row.minutes })
+    byDay.set(row.day, list)
   }
 
   // Absence bounds are INCLUSIVE on both ends (dates a person stated in
@@ -260,6 +313,7 @@ export async function getProgressMatrix(opts: {
       joinDay,
       percentByDay,
       absentDays,
+      entriesByDay: entriesByUser.get(person.id) ?? new Map<string, DayEntry[]>(),
       coverage,
     }
   })
@@ -269,7 +323,13 @@ export async function getProgressMatrix(opts: {
     (a, b) => b.coverage.missing - a.coverage.missing || a.name.localeCompare(b.name),
   )
 
-  return { days, closedDays, holidayNames, people }
+  // Built from the rows that actually reached the grid, so the legend can
+  // never name a project no cell shows, or omit one that a cell colours.
+  const mixLegend = buildMixLegend(
+    entryRows.map((row) => ({ appId: row.appId, appName: row.appName, minutes: row.minutes })),
+  )
+
+  return { days, closedDays, holidayNames, people, mixLegend }
 }
 
 // ---------------------------------------------------------------------------

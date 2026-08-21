@@ -13,6 +13,12 @@ import {
   type DayState,
 } from '@/features/worklog/day-state'
 import { formatCoverage, type CoverageSummary } from '@/features/worklog/coverage'
+import {
+  buildDayMix,
+  type LegendEntry,
+  type MixSegment,
+} from '@/features/worklog/day-app-mix'
+import { eventDotClasses } from '@/features/meetings/event-color'
 import type { ProgressMatrixData } from '@/features/worklog/progress-queries'
 
 /**
@@ -138,12 +144,17 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
                       joinDay: person.joinDay,
                     }
                     const state = classifyDay(input)
+                    const mix = buildDayMix(person.entriesByDay.get(iso) ?? [])
                     const holidayName = state === 'holiday' ? holidayNames.get(iso) : undefined
                     const text = holidayName
                       ? `${dayStateText(input)} — ${holidayName}`
                       : dayStateText(input)
                     return (
-                      <td key={iso} className={cn('px-0.5 py-1 text-center', border)} title={text}>
+                      <td
+                        key={iso}
+                        className={cn('px-0.5 py-1 text-center', border)}
+                        title={mixTitle(text, mix)}
+                      >
                         <span
                           aria-hidden
                           className={cn(
@@ -156,7 +167,33 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
                             <span className="hidden md:inline">{input.percent}</span>
                           ) : null}
                         </span>
-                        <span className="sr-only">{text}</span>
+                        {/* Which projects the day went to, UNDER the number
+                            rather than behind it: a saturated cell would fight
+                            the figure it annotates, and the identity hues were
+                            never chosen to carry text. Widths are minute
+                            shares, so a day that was mostly one project reads
+                            as that without being read. */}
+                        {mix.length > 0 ? (
+                          <span
+                            aria-hidden
+                            className="mx-auto mt-0.5 flex h-1 w-6 gap-px overflow-hidden rounded-full"
+                          >
+                            {mix.map((segment, i) => (
+                              <span
+                                key={`${segment.appId ?? 'none'}-${i}`}
+                                style={{ width: `${segment.share * 100}%` }}
+                                className={cn(
+                                  'h-full',
+                                  // Unassigned time takes the neutral tone,
+                                  // never a hue — colouring it would invent a
+                                  // project for work nobody assigned to one.
+                                  eventDotClasses(segment.appId) ?? 'bg-muted-foreground/40',
+                                )}
+                              />
+                            ))}
+                          </span>
+                        ) : null}
+                        <span className="sr-only">{mixTitle(text, mix)}</span>
                       </td>
                     )
                   })}
@@ -182,6 +219,11 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
             })}
           </tbody>
         </table>
+
+        {/* Inside the scroll container and under the grid: the hues belong to
+            the cells above them, and a legend that scrolled away from its own
+            grid would be a key to a lock in another room. */}
+        <MixLegend legend={data.mixLegend} />
       </div>
 
       {/* Colour never carries a state alone: every cell already speaks via
@@ -210,6 +252,64 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
  * route's loading.tsx so the swap never shifts layout. Columns are capped at
  * a fortnight's worth; a month of shimmer squares promises nothing extra.
  */
+/**
+ * The cell's title and screen-reader text, with the project split appended.
+ *
+ * Written as hours, not shares: "3h Kestrel · 1h 30m Apollo" is what somebody
+ * can check against their own memory of the day, where "67% / 33%" is a figure
+ * they would have to convert before it means anything. The bar carries the
+ * proportion visually; the text carries the amount.
+ */
+function mixTitle(base: string, mix: MixSegment[]): string {
+  if (mix.length === 0) return base
+  return `${base} — ${mix.map((s) => `${formatMinutes(s.minutes)} ${s.label}`).join(' · ')}`
+}
+
+function formatMinutes(minutes: number): string {
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  if (hours === 0) return `${rest}m`
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`
+}
+
+/**
+ * The legend, and the reason the bars mean anything.
+ *
+ * Only projects actually on screen, heaviest first — a legend listing the
+ * whole portfolio would name projects no cell shows, and a reader checking a
+ * hue against it would find several candidates.
+ *
+ * "Unassigned" is named here even though it is not a project, because the grey
+ * segment IS on screen and an unexplained grey reads as a rendering fault
+ * rather than as a real state.
+ */
+function MixLegend({ legend }: { legend: LegendEntry[] }) {
+  if (legend.length === 0) return null
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border/60 px-3 py-2.5">
+      <span className="font-mono text-2xs tracking-wide text-muted-foreground uppercase">
+        Projects
+      </span>
+      {/* A key, not navigation. /apps/[slug] is keyed by SLUG and the entries
+          carry only an id, so linking here would 404 — and a legend swatch is
+          answering "what is this colour", not offering a destination. */}
+      {legend.map((item) => (
+        <span key={item.appId} className="flex items-center gap-1.5 text-2xs text-muted-foreground">
+          <span
+            aria-hidden
+            className={cn('size-2 rounded-full', eventDotClasses(item.appId) ?? 'bg-muted')}
+          />
+          <span className="truncate">{item.label}</span>
+        </span>
+      ))}
+      <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
+        <span aria-hidden className="size-2 rounded-full bg-muted-foreground/40" />
+        Unassigned
+      </span>
+    </div>
+  )
+}
+
 export function ProgressMatrixSkeleton({ rows = 6 }: { rows?: number }) {
   return (
     <div className="flex flex-col gap-2">
