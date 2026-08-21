@@ -4,6 +4,8 @@ import { Sidebar } from '@/components/shell/sidebar'
 import { Header } from '@/components/shell/header'
 import { AccountMenu } from '@/components/shell/account-menu'
 import { CommandCenterProvider } from '@/features/search/components/command-center'
+import { AskBubble } from '@/features/intel/components/ask-bubble'
+import { askAvailable } from '@/features/intel/actions'
 import { getOwnTitle } from '@/features/auth/queries'
 import { effectiveGrant, isAdminRole } from '@/features/auth/capabilities'
 
@@ -37,7 +39,17 @@ export default async function AppLayout({
   // features/admin/actions.ts never re-mints the token) — read it here,
   // right alongside the session this layout already fetches, and thread it
   // into Header as a prop rather than adding a client-side fetch there.
-  const title = await getOwnTitle(session.user.id)
+  //
+  // Whether to mount the Ask bubble is ONE predicate: askAvailable() owns
+  // routed-ness, the feature pref and key presence together, so the bubble
+  // cannot advertise on every page something the action would then refuse.
+  // Resolved here rather than in the component because the layout is already
+  // async — a client-side probe would flash a trigger and then remove it.
+  //
+  // Both reads in one Promise.all: they are independent, and every authed page
+  // waits on this layout, so sequencing them would add a round trip to every
+  // navigation in the app.
+  const [title, canAsk] = await Promise.all([getOwnTitle(session.user.id), askAvailable()])
   const user = { name: session.user.name, image: session.user.image, title }
 
   return (
@@ -63,6 +75,9 @@ export default async function AppLayout({
             canSeeProgress={canSeeProgress}
           />
           <main className="flex flex-1 flex-col">{children}</main>
+          {/* Mounted once, outside <main>, so it floats over every page
+              without entering any page's document flow or heading outline. */}
+          {canAsk ? <AskBubble /> : null}
         </div>
       </div>
     </CommandCenterProvider>
