@@ -2,14 +2,14 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ArrowRight, CornerDownLeft, History, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowRight, CornerDownLeft, Sparkles, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SpotlightCard } from '@/components/ui/spotlight-card'
 import { Textarea } from '@/components/ui/textarea'
-import { askWorkspace, type AskAnswer } from '@/features/intel/actions'
+import { askWorkspace } from '@/features/intel/actions'
 import { splitAnswerLinks } from '@/features/intel/answer-links'
 import { appendTurn, parseChat, type ChatTurn } from '@/features/intel/chat-history'
 import { cn } from '@/lib/utils'
@@ -125,7 +125,6 @@ export function AskPanel({
 }) {
   const [question, setQuestion] = React.useState(initialQuestion)
   const [pending, setPending] = React.useState(false)
-  const [answer, setAnswer] = React.useState<AskAnswer | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   /* Set once per arriving answer and cleared the moment a new ask starts, so
      the live region announces "answer ready" exactly once and never re-reads
@@ -143,13 +142,31 @@ export function AskPanel({
   const hadFocus = React.useRef(false)
 
   const chat = React.useSyncExternalStore(subscribeToChat, readChat, () => NO_CHAT)
-  /* The turn just written, so the transcript below does not repeat the answer
-     already rendered above it from state. */
-  const [lastTurnId, setLastTurnId] = React.useState<string | null>(null)
-  const earlier = React.useMemo(
-    () => chat.filter((turn) => turn.id !== lastTurnId),
-    [chat, lastTurnId],
-  )
+  /* The turn just answered, held in state as well as storage. A browser that
+     refuses to write (private mode, a full quota) still shows the answer it was
+     just asked for and only loses the history — the alternative is an answer
+     that arrives and vanishes, which reads as the product losing it. */
+  const [lastTurn, setLastTurn] = React.useState<ChatTurn | null>(null)
+  /* The question currently in flight, kept out of the box so the box can empty
+     the way every composer does. */
+  const [asking, setAsking] = React.useState('')
+  const scrollRef = React.useRef<HTMLOListElement>(null)
+
+  /* Storage is newest-first (eviction works from the tail); a conversation
+     reads oldest-first. */
+  const transcript = React.useMemo(() => {
+    const stored = [...chat].reverse()
+    if (lastTurn === null || stored.some((turn) => turn.id === lastTurn.id)) return stored
+    return [...stored, lastTurn]
+  }, [chat, lastTurn])
+
+  React.useEffect(() => {
+    /* Follow the conversation down, the way a chat does. `scrollTop` rather
+       than scrollIntoView: this scrolls the transcript's own box, where
+       scrollIntoView would scroll the whole page and move the composer. */
+    const box = scrollRef.current
+    if (box) box.scrollTop = box.scrollHeight
+  }, [transcript.length, pending])
 
   React.useEffect(() => {
     if (pending || !hadFocus.current) return
@@ -167,34 +184,41 @@ export function AskPanel({
       document.activeElement !== null && document.activeElement !== document.body
     setPending(true)
     setError(null)
-    setAnswer(null)
     setAnnouncement('')
+    setAsking(trimmed)
+    /* The box empties on send, like every composer. The text is not lost — it
+       is on screen above, as the question being answered — and it comes BACK on
+       failure, because a rejected question the person has to retype is a
+       rejection they will not bother with twice. */
+    setQuestion('')
     try {
       const res = await askWorkspace(trimmed)
       if (!res.ok) {
         setError(res.error)
+        setQuestion(trimmed)
         return
       }
-      setAnswer(res.data)
       setAnnouncement('Answer ready.')
       // crypto.randomUUID, not question+timestamp: asking the same thing twice
       // in one second collides, and a duplicate React key silently drops a
       // turn out of the transcript.
-      const id = crypto.randomUUID()
-      setLastTurnId(id)
-      pushTurn({
-        id,
+      const turn: ChatTurn = {
+        id: crypto.randomUUID(),
         question: trimmed,
         answer: res.data.answer,
         citations: res.data.citations,
         grounded: res.data.grounded,
         model: res.data.model,
         askedAt: Date.now(),
-      })
+      }
+      setLastTurn(turn)
+      pushTurn(turn)
     } catch {
       setError('Could not reach LogPup — try asking again')
+      setQuestion(trimmed)
     } finally {
       setPending(false)
+      setAsking('')
     }
   }
 
@@ -221,10 +245,84 @@ export function AskPanel({
       )}
     >
       <div className="relative flex flex-col gap-4 p-5 sm:p-6">
-        <div className="flex items-center gap-1.5 font-mono text-2xs font-semibold tracking-[0.18em] text-primary uppercase">
-          <Sparkles aria-hidden className="size-3.5" />
-          Ask LogPup
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 font-mono text-2xs font-semibold tracking-[0.18em] text-primary uppercase">
+            <Sparkles aria-hidden className="size-3.5" />
+            Ask LogPup
+          </div>
+          {transcript.length > 0 ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                clearChat()
+                setLastTurn(null)
+                setError(null)
+              }}
+              className="text-muted-foreground"
+            >
+              <Trash2 aria-hidden className="size-3" />
+              Clear
+            </Button>
+          ) : null}
         </div>
+
+        {/* THE TRANSCRIPT, above the box and oldest-first — the shape of every
+            chat anybody uses all day. It replaces a layout where the newest
+            answer sat under the box and older ones under that, so reading the
+            conversation meant reading upward through it. */}
+        {transcript.length > 0 || pending ? (
+          <ol
+            ref={scrollRef}
+            aria-busy={pending}
+            className="flex max-h-[26rem] flex-col gap-4 overflow-y-auto [scrollbar-color:var(--border)_transparent] [scrollbar-width:thin]"
+          >
+            {transcript.map((turn) => (
+              <li key={turn.id} className="flex flex-col gap-2">
+                <AskedBubble question={turn.question} askedAt={turn.askedAt} />
+                <AnswerBody
+                  answer={turn.answer}
+                  citations={turn.citations}
+                  grounded={turn.grounded}
+                  model={turn.model}
+                />
+              </li>
+            ))}
+
+            {/* The question stays on screen while it is being answered. A
+                composer that empties into nothing looks like it lost the
+                message. */}
+            {pending ? (
+              <li className="flex flex-col gap-2">
+                <AskedBubble question={asking} />
+                <AnswerPending />
+              </li>
+            ) : null}
+          </ol>
+        ) : null}
+
+        {/* Inline and quiet, not a red panel: a question one character under
+            the minimum is a nudge, not a failure of the product. */}
+        {error !== null && !pending ? (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-2xs"
+          >
+            <span className="text-foreground">{error}</span>
+            {question.trim() !== '' ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => void submit(question)}
+                className="ml-auto"
+              >
+                Try again
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
 
         <form
           onSubmit={(event) => {
@@ -251,7 +349,10 @@ export function AskPanel({
             placeholder="Who is over capacity, and which sprint is it hurting?"
           />
 
-          {suggestions.length > 0 && answer === null && !pending ? (
+          {/* Starters, and only before there is a conversation. Once the
+              transcript exists they are clutter under a box somebody is
+              already using. */}
+          {suggestions.length > 0 && transcript.length === 0 && !pending ? (
             <div className="flex flex-wrap gap-1.5">
               {suggestions.map((suggestion) => (
                 <Button
@@ -283,27 +384,6 @@ export function AskPanel({
           </div>
         </form>
 
-        {chat.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-3">
-            <span className="flex items-center gap-1 font-mono text-2xs tracking-wide text-muted-foreground uppercase">
-              <History aria-hidden className="size-3" />
-              Recent
-            </span>
-            {chat.slice(0, 4).map((turn) => (
-              <Button
-                key={turn.id}
-                type="button"
-                size="xs"
-                variant="ghost"
-                onClick={() => fill(turn.question)}
-                className="max-w-[16rem] text-muted-foreground"
-              >
-                <span className="truncate">{turn.question}</span>
-              </Button>
-            ))}
-          </div>
-        ) : null}
-
         {/* One short sentence per answer. The answer body deliberately stays
             out of the live region: announcing it here would read the whole
             thing again on every re-render. */}
@@ -311,95 +391,32 @@ export function AskPanel({
           {announcement}
         </p>
 
-        <div aria-busy={pending} className="empty:hidden">
-          {pending ? <AnswerPending /> : null}
-
-          {error !== null && !pending ? (
-            <div
-              role="alert"
-              className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3.5 text-sm"
-            >
-              <p className="font-medium">That question did not get through</p>
-              <p className="text-muted-foreground">{error}</p>
-              <div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void submit(question)}
-                  disabled={question.trim() === ''}
-                >
-                  Try again
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          {answer !== null && !pending ? (
-            <div className="border-t border-border/50 pt-4">
-              <AnswerBody
-                answer={answer.answer}
-                citations={answer.citations}
-                grounded={answer.grounded}
-                model={answer.model}
-              />
-            </div>
-          ) : null}
-        </div>
-
-        {/* EARLIER TURNS. The fresh answer above is rendered from state, not
-            from storage, so a browser that refuses to write (private mode, a
-            full quota) still shows the answer it was just asked for — it only
-            loses the history. Excluding the turn we just pushed is what keeps
-            the two from rendering the same answer twice. */}
-        {earlier.length > 0 ? (
-          <div className="flex flex-col gap-3 border-t border-border/50 pt-4">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-2xs tracking-wide text-muted-foreground uppercase">
-                Earlier {earlier.length === 1 ? 'question' : 'questions'}
-              </span>
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                onClick={() => {
-                  clearChat()
-                  setLastTurnId(null)
-                }}
-                className="text-muted-foreground"
-              >
-                <Trash2 aria-hidden className="size-3" />
-                Clear
-              </Button>
-            </div>
-
-            <ul className="flex flex-col gap-4">
-              {earlier.map((turn) => (
-                <li key={turn.id} className="flex flex-col gap-2">
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                    <p className="min-w-0 text-sm font-medium text-foreground">{turn.question}</p>
-                    {/* An answer about "right now" is only readable next to the
-                        now it was asked in — these are kept, not refreshed. */}
-                    <time
-                      dateTime={new Date(turn.askedAt).toISOString()}
-                      className="shrink-0 font-mono text-2xs text-muted-foreground"
-                    >
-                      {ASKED_AT.format(turn.askedAt)}
-                    </time>
-                  </div>
-                  <AnswerBody
-                    answer={turn.answer}
-                    citations={turn.citations}
-                    grounded={turn.grounded}
-                    model={turn.model}
-                  />
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
       </div>
     </SpotlightCard>
+  )
+}
+
+/**
+ * The question, as it sits above its answer in the transcript.
+ *
+ * The time is shown for a REASON, not as decoration: these answers are about
+ * right now — "who is carrying too much" is true at 09:00 and wrong by
+ * Thursday — and they are kept, not refreshed. A remembered answer with no
+ * timestamp is a stale finding wearing a fresh one's typography.
+ */
+function AskedBubble({ question, askedAt }: { question: string; askedAt?: number }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-lg bg-muted/50 px-3 py-2">
+      <p className="min-w-0 text-sm font-medium text-foreground">{question}</p>
+      {askedAt !== undefined ? (
+        <time
+          dateTime={new Date(askedAt).toISOString()}
+          className="shrink-0 font-mono text-2xs text-muted-foreground"
+        >
+          {ASKED_AT.format(askedAt)}
+        </time>
+      ) : null}
+    </div>
   )
 }
 

@@ -106,10 +106,17 @@ export async function askWorkspace(question: string): Promise<ActionResult<AskAn
 
   const parsed = askInput.safeParse({ question })
   if (!parsed.success) {
+    // THREE CASES, THREE SENTENCES. "Ask a question first" used to be the
+    // fallback for everything that was not too long, so typing "hi" — two
+    // characters, one under the minimum — was answered by telling the person to
+    // ask a question they had just asked. That reads as the product not seeing
+    // their input, which is the one thing a question box must never suggest.
+    const code = parsed.error.issues[0].code
+    if (code === 'too_big') return err('That question is too long — ask something shorter')
     return err(
-      parsed.error.issues[0].code === 'too_big'
-        ? 'That question is too long — ask something shorter'
-        : 'Ask a question first',
+      question.trim() === ''
+        ? 'Ask a question first'
+        : 'That is a bit short to work with — try asking it as a full question',
     )
   }
 
