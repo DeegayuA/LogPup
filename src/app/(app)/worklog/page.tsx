@@ -13,8 +13,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { HelpDetail, HelpNote } from '@/components/shared/help-note'
-import { WorklogForm } from '@/features/worklog/components/worklog-form'
-import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
+import { DayPanel } from '@/features/worklog/components/day-panel'
 import { listDayEntriesForDisplay } from '@/features/worklog/entry-queries'
 import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
 import {
@@ -639,29 +638,20 @@ async function CalendarZone({
           </HelpNote>
         ) : null}
 
-        <WorklogForm
-          // Keyed by day so paging to another day starts from THAT day's
-          // saved state instead of carrying the previous day's edits over.
-          key={selectedDay}
+        {/* One panel, not three cards: the score, the note and the hours are
+            three answers to one question, and they now share a single
+            "Fill my day" rather than carrying two overlapping AI buttons. */}
+        <DayPanel
           day={selectedDay}
           initial={selectedRow ? { percent: selectedRow.percent, note: selectedRow.note } : null}
-          aiDraftEnabled={aiDraftEnabled}
-          assignedApps={assignedApps}
-        />
-
-        {/* Hours sit BELOW the score, not beside it. The score is the question
-            the day asks ("of what you planned, how much got done"); the hours
-            are the record of where the time actually went. Reading order
-            follows that: judgement first, then evidence. */}
-        <DayHoursCard
-          key={`hours-${selectedDay}`}
-          day={selectedDay}
           entries={dayEntries}
           scheduledMinutes={scheduledMinutes}
-          apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
+          assignedApps={assignedApps}
           canEdit={canLogHours}
-          aiDraftEnabled={entriesAiEnabled}
+          noteAiEnabled={aiDraftEnabled}
+          entriesAiEnabled={entriesAiEnabled}
         />
+
       </section>
     </div>
   )

@@ -88,6 +88,8 @@ export function DayHoursCard({
   apps,
   canEdit,
   aiDraftEnabled = false,
+  suggestions = null,
+  evidence = 0,
 }: {
   day: string
   entries: WorklogEntryRow[]
@@ -98,6 +100,15 @@ export function DayHoursCard({
   canEdit: boolean
   /** Whether the per-entry AI draft is switched on for this person. */
   aiDraftEnabled?: boolean
+  /**
+   * Suggestions produced by an OUTER control — the day panel's single "Fill my
+   * day", which drafts the note and the hours in one pass. When this is
+   * supplied the card shows no button of its own: two AI triggers on one
+   * screen doing overlapping work is how somebody spends their quota twice
+   * and wonders which one they were meant to press.
+   */
+  suggestions?: DraftedEntry[] | null
+  evidence?: number
 }) {
   const [pending, startTransition] = React.useTransition()
   const [duration, setDuration] = React.useState('')
@@ -109,8 +120,42 @@ export function DayHoursCard({
   // somebody accepts one. A draft that saved itself would be the model filing
   // a timesheet in a person's name — and hours, unlike a note, are the thing
   // an invoice is built from.
-  const [drafted, setDrafted] = React.useState<DraftedEntry[] | null>(null)
-  const [evidenceCount, setEvidenceCount] = React.useState(0)
+  const [ownDrafted, setOwnDrafted] = React.useState<DraftedEntry[] | null>(null)
+  const [ownEvidence, setOwnEvidence] = React.useState(0)
+  // Dismissed suggestions are tracked by index against whichever list is
+  // showing, so a person can clear rows the outer panel handed down without
+  // that panel having to own the dismissal.
+  const [dismissed, setDismissed] = React.useState<Set<number>>(new Set())
+  const externallyDriven = suggestions !== null
+  // ONE source list, and dismissal is tracked by INDEX INTO IT rather than by
+  // rebuilding the array. The panel owns its array and this card cannot
+  // rewrite it, so a filtered copy would make every index mean something
+  // different from what the dismiss handler was given — rows would vanish in
+  // the wrong order as soon as two were cleared.
+  const sourceDrafts = externallyDriven ? suggestions : ownDrafted
+  const evidenceCount = externallyDriven ? evidence : ownEvidence
+  const visibleCount = sourceDrafts
+    ? sourceDrafts.filter((_, i) => !dismissed.has(i)).length
+    : 0
+
+  // A fresh batch clears the previous batch's dismissals, or new rows inherit
+  // the old list's holes. Adjusted DURING RENDER rather than in an effect —
+  // React's own guidance for "reset state when a prop changes", and the
+  // effect version trips the cascading-render rule because it sets state on
+  // the commit after the one that already had the new list.
+  const [seenSuggestions, setSeenSuggestions] = React.useState(suggestions)
+  if (suggestions !== seenSuggestions) {
+    setSeenSuggestions(suggestions)
+    setDismissed(new Set())
+  }
+
+  const dismissAt = React.useCallback((index: number) => {
+    setDismissed((prev) => new Set(prev).add(index))
+  }, [])
+
+  const dismissAll = React.useCallback(() => {
+    setDismissed(new Set(sourceDrafts?.map((_, i) => i) ?? []))
+  }, [sourceDrafts])
   const [drafting, setDrafting] = React.useState(false)
 
   async function handleDraft() {
@@ -121,8 +166,8 @@ export function DayHoursCard({
         toast.error(res.error)
         return
       }
-      setDrafted(res.data.entries)
-      setEvidenceCount(res.data.evidenceCount)
+      setOwnDrafted(res.data.entries)
+      setOwnEvidence(res.data.evidenceCount)
       if (res.data.entries.length === 0) {
         // An empty day is a quiet day, not a failure. Saying so beats an
         // empty list somebody reads as the feature being broken.
@@ -156,7 +201,7 @@ export function DayHoursCard({
           toast.error(res.error)
           return
         }
-        setDrafted((rows) => (rows ? rows.filter((_, i) => i !== index) : rows))
+        dismissAt(index)
         toast.success(`Logged ${formatHours(entry.minutes)}h`)
       } catch {
         toast.error('Could not log that — try again')
@@ -219,7 +264,7 @@ export function DayHoursCard({
     >
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-heading text-sm font-semibold">Where the time went</h3>
-        {canEdit && aiDraftEnabled ? (
+        {canEdit && aiDraftEnabled && !externallyDriven ? (
           <Button
             type="button"
             variant="outline"
@@ -244,7 +289,7 @@ export function DayHoursCard({
         </p>
       </header>
 
-      {drafted && drafted.length > 0 ? (
+      {sourceDrafts && visibleCount > 0 ? (
         <div className="flex flex-col gap-1.5 rounded-xl border border-primary/30 bg-primary/5 p-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="flex items-center gap-1.5 text-2xs font-medium text-primary">
@@ -255,7 +300,7 @@ export function DayHoursCard({
               type="button"
               variant="ghost"
               size="xs"
-              onClick={() => setDrafted(null)}
+              onClick={dismissAll}
               disabled={pending}
             >
               Dismiss all
@@ -266,7 +311,8 @@ export function DayHoursCard({
               inferring durations from meetings and activity, which is exactly
               where it is most likely to be plausibly wrong. */}
           <ul className="flex flex-col gap-1">
-            {drafted.map((entry, index) => (
+            {sourceDrafts.map((entry, index) =>
+              dismissed.has(index) ? null : (
               <li
                 key={`${entry.category}-${entry.minutes}-${index}`}
                 className="flex items-start gap-2 rounded-lg bg-background/60 px-2.5 py-2"
@@ -298,12 +344,13 @@ export function DayHoursCard({
                   size="icon-xs"
                   aria-label="Dismiss this suggestion"
                   disabled={pending}
-                  onClick={() => setDrafted((rows) => rows?.filter((_, i) => i !== index) ?? null)}
+                  onClick={() => dismissAt(index)}
                 >
                   <X aria-hidden />
                 </Button>
               </li>
-            ))}
+              ),
+            )}
           </ul>
         </div>
       ) : null}
