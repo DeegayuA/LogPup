@@ -143,7 +143,7 @@ export default async function ActivityPage(props: {
 
       <header className="flex flex-col gap-1">
         <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
-          Studio Activity
+          LogPup 🐾 Activity
         </h1>
         {/* The page has to say which slice it is showing: every row below is
             conditional on the filters, and a reader often arrives on a shared

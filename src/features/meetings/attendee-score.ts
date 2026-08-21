@@ -1258,6 +1258,21 @@ export function scoreCandidate(facts: CandidateFacts, ctx: ScoreContext): Scored
  * agenda_match) and the deliberately-unfloored `lead_role_heuristic` — is
  * `skip`, exactly as before.
  */
+/**
+ * How many people a room holds before it stops being a conversation.
+ *
+ * R10's soft cap, NAMED rather than inlined because it stopped being local:
+ * R6 COVER-TOGETHER refuses to build a group past this same number
+ * (coverage.ts). A second literal `8` elsewhere would be a second opinion
+ * about the same question, and the two would drift the first time either was
+ * tuned.
+ *
+ * Soft here, hard there, and the difference is deliberate: this module
+ * describes a room somebody already booked, so it warns; R6 proposes one that
+ * does not exist yet, so it declines to propose it at all.
+ */
+export const ROOM_CAP = 8
+
 export function tierAll(scored: ScoredCandidate[], ctx: ScoreContext): RecommendationRun {
   const hardEvidenceCandidates = new Set(scored.filter((c) => c.hardEvidenceCount >= 1).map((c) => c.userId))
   const abstained = hardEvidenceCandidates.size < 2
@@ -1279,6 +1294,6 @@ export function tierAll(scored: ScoredCandidate[], ctx: ScoreContext): Recommend
     abstained,
     scored: finalScored,
     requiredCount,
-    requiredOverflow: requiredCount > 8, // R10 soft cap — warning only, never a demotion
+    requiredOverflow: requiredCount > ROOM_CAP, // R10 soft cap — warning only, never a demotion
   }
 }

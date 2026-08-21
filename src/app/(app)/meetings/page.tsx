@@ -15,7 +15,7 @@ import { MeetingsViews } from '@/features/meetings/components/meetings-views'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 import { isAdminRole } from '@/features/auth/capabilities'
 
-export const metadata = { title: 'Meetings & Intelligence — Studio Ops' }
+export const metadata = { title: 'Meetings & Intelligence' }
 
 export default async function MeetingsPage(props: {
   searchParams: Promise<{ new?: string; view?: string; date?: string; open?: string }>

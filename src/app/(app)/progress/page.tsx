@@ -32,7 +32,7 @@ import {
   ProgressMatrixSkeleton,
 } from '@/features/worklog/components/progress-matrix'
 
-export const metadata = { title: 'Progress — Studio Ops' }
+export const metadata = { title: 'Progress' }
 
 export default async function ProgressPage(props: {
   searchParams: Promise<RawProgressParams>
@@ -64,7 +64,7 @@ export default async function ProgressPage(props: {
 
   const header = (
     <PageHeader
-      title="Studio Progress"
+      title="LogPup 🐾 Progress"
       description="Who did what, where, and how far — each person's days beside each app's sprint."
     />
   )

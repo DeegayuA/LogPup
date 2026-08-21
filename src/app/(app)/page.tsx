@@ -60,7 +60,7 @@ export default async function DashboardPage() {
       </div>
 
       <PageHeader
-        title="Studio Dashboard"
+        title="LogPup 🐾 Dashboard"
         description={`${greeting} · ${formatBusinessWeekdayLong(now)}`}
         actions={
           user ? (

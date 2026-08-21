@@ -14,7 +14,7 @@ import {
   SignalBoardSkeleton,
 } from '@/features/intel/components/intel-skeletons'
 
-export const metadata = { title: 'Studio Intel' }
+export const metadata = { title: 'Intel' }
 
 /**
  * Everything the watchdog noticed, in one place: a written briefing, the
@@ -55,7 +55,7 @@ export default async function IntelPage({
       <AmbientBackdrop />
 
       <PageHeader
-        title="Studio Intel"
+        title="LogPup 🐾 Intel"
         description="What LogPup noticed across every app, sprint, meeting and work log — and a box for whatever it did not think to mention."
       />
 
@@ -99,7 +99,7 @@ export default async function IntelPage({
  */
 function SignalsSlot({ children }: { children: ReactNode }) {
   return (
-    <section id="signals" aria-label="Studio signals" className="scroll-mt-6 min-w-0">
+    <section id="signals" aria-label="LogPup signals" className="scroll-mt-6 min-w-0">
       {children}
     </section>
   )

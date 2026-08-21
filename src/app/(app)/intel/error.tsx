@@ -41,7 +41,7 @@ export default function StudioIntelError({
     <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
       <TriangleAlert aria-hidden className="size-8 text-destructive" />
       <div className="flex flex-col gap-1">
-        <h1 className="font-heading text-lg font-semibold">Studio Intel wouldn&apos;t load.</h1>
+        <h1 className="font-heading text-lg font-semibold">LogPup 🐾 Intel wouldn&apos;t load.</h1>
         <p className="max-w-md text-sm text-muted-foreground">
           Nothing here is a record of its own — every signal is read from your tasks, sprints,
           meetings and work log, so nothing has been lost and none of it is out of date. Trying

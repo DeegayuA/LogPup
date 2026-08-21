@@ -126,7 +126,7 @@ export default async function SettingsPage() {
 
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
         <PageHeader
-          title="Account &amp; Studio Settings"
+          title="Account &amp; LogPup 🐾 Settings"
           description="How LogPup behaves for you. Nothing here changes anything for your teammates."
         />
 

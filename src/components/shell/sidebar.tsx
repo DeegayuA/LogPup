@@ -110,7 +110,7 @@ export function Sidebar({
           </span>
           <div className="flex flex-col">
             <span className="font-heading text-sm font-bold tracking-tight">LogPup</span>
-            <span className="font-mono text-2xs text-sidebar-foreground/60 leading-none">Ops Studio</span>
+            <span className="font-mono text-2xs text-sidebar-foreground/60 leading-none">LogPup 🐾 Ops</span>
           </div>
         </Link>
         <a

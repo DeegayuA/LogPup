@@ -33,7 +33,7 @@ export default function DashboardLoading() {
         Loading dashboard…
       </span>
       <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold tracking-tight">Studio Dashboard</h1>
+        <h1 className="text-xl font-semibold tracking-tight">LogPup 🐾 Dashboard</h1>
         <Skeleton className="h-5 w-64" />
       </header>
       <MyDayZoneSkeleton />

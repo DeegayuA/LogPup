@@ -13,7 +13,7 @@ import { AppFormDialog } from '@/features/apps/components/app-form-dialog'
 import { isAdminRole } from '@/features/auth/capabilities'
 import { getAiPrefs } from '@/features/gemini/prefs'
 
-export const metadata = { title: 'App Portfolio — Studio Ops' }
+export const metadata = { title: 'App Portfolio' }
 
 export default async function AppsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>

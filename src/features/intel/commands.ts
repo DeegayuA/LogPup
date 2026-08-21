@@ -48,7 +48,7 @@ export const commands: CommandDescriptor[] = [
   },
   {
     id: 'intel.signals',
-    label: 'Studio signals',
+    label: 'LogPup signals',
     keywords: ['signals', 'alerts', 'warnings', 'attention', 'at risk', 'overdue', 'what needs me'],
     group: 'navigate',
     icon: Radar,
