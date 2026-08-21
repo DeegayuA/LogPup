@@ -142,7 +142,21 @@
      warning 5.34 / 5.71 / 5.01. Both foregrounds clear 4.5:1 on their fill. */
   --success: oklch(0.52 0.15 148);
   --success-foreground: oklch(0.98 0.005 95);
-  --warning: oklch(0.52 0.12 62);
+  /* Purple, joining --holiday and --chart-1. Hue only — L and C are the
+     audited values, so the ratios recorded above (5.34 / 5.71 / 5.01) still
+     hold; only the hue moved.
+
+     THREE TOKENS NOW SHARE HUE 293.61 and are told apart by chroma alone:
+     --chart-1 the highlight at 0.29, this at 0.12, --holiday at 0.29 in light
+     and 0.18 in dark. That is a real narrowing — they used to be 230 degrees
+     apart — and it holds only because every surface using them also carries a
+     word or an icon: "Watch" on the app card, "Owed" on the calendar, the
+     holiday's own name. None of them was ever safe to read by hue alone
+     (WCAG 1.4.1), which is why this is survivable rather than merely accepted.
+
+     If two of these ever need to sit side by side and be told apart at a
+     glance, move one to a different HUE rather than nudging its chroma. */
+  --warning: oklch(0.52 0.12 293.61);
   --warning-foreground: oklch(0.98 0.005 95);
   --weekend: oklch(0.5 0.19 25);
   /* #7f00ff exactly, converted: oklch(0.5294 0.2931 293.61).
@@ -270,7 +284,7 @@
   --destructive-foreground: oklch(0.18 0.03 25);
   --success: oklch(0.8 0.15 145);
   --success-foreground: oklch(0.18 0.03 160);
-  --warning: oklch(0.82 0.13 72);
+  --warning: oklch(0.82 0.13 293.61);
   --warning-foreground: oklch(0.2 0.04 60);
   --weekend: oklch(0.72 0.18 25);
   --holiday: oklch(0.78 0.18 293.61);
