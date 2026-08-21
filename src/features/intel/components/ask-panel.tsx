@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ArrowRight, CornerDownLeft, History, Sparkles } from 'lucide-react'
+import { ArrowRight, CornerDownLeft, History, Sparkles, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -10,6 +10,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SpotlightCard } from '@/components/ui/spotlight-card'
 import { Textarea } from '@/components/ui/textarea'
 import { askWorkspace, type AskAnswer } from '@/features/intel/actions'
+import { splitAnswerLinks } from '@/features/intel/answer-links'
+import { appendTurn, parseChat, type ChatTurn } from '@/features/intel/chat-history'
 import { cn } from '@/lib/utils'
 
 /**
@@ -22,71 +24,84 @@ import { cn } from '@/lib/utils'
  * second Gemini call.
  */
 
-/** Versioned, so a shape change retires the old list instead of parsing it. */
-const RECENTS_KEY = 'logpup.intel.recentQuestions.v1'
-const RECENTS_MAX = 5
-const RECENTS_EVENT = 'logpup:intel-recents'
+/** Versioned, so a shape change retires the old transcript instead of parsing it. */
+const CHAT_KEY = 'logpup.intel.chat.v1'
+const CHAT_EVENT = 'logpup:intel-chat'
 
 /*
- * Recents are read through useSyncExternalStore rather than hydrated into
- * state from an effect: localStorage IS an external system, and this is
+ * The transcript is read through useSyncExternalStore rather than hydrated
+ * into state from an effect: localStorage IS an external system, and this is
  * React's contract for one. The server snapshot is the empty list, so SSR and
  * the hydration render agree, and no setState-in-effect cascade is needed.
  * Same-tab writes announce themselves on a custom event; 'storage' covers
  * other tabs for free.
  */
-const NO_RECENTS: readonly string[] = []
+const NO_CHAT: readonly ChatTurn[] = []
 
 /** getSnapshot must be referentially stable while the store is unchanged, or
- *  useSyncExternalStore loops — so the parsed list is cached against the raw
- *  string it came from. Module-level, because localStorage is global too. */
-let recentsCache: { raw: string; value: readonly string[] } | null = null
+ *  useSyncExternalStore loops — so the parsed transcript is cached against the
+ *  raw string it came from. Module-level, because localStorage is global too. */
+let chatCache: { raw: string; value: readonly ChatTurn[] } | null = null
 
-function readRecents(): readonly string[] {
+function readChat(): readonly ChatTurn[] {
   let raw: string
   try {
-    raw = window.localStorage.getItem(RECENTS_KEY) ?? ''
+    raw = window.localStorage.getItem(CHAT_KEY) ?? ''
   } catch {
-    /* Private mode or a hardened browser: recents are a convenience. */
-    return NO_RECENTS
+    /* Private mode or a hardened browser: the transcript is a convenience. */
+    return NO_CHAT
   }
-  if (raw === '') return NO_RECENTS
-  if (recentsCache && recentsCache.raw === raw) return recentsCache.value
-  let value: readonly string[] = NO_RECENTS
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (Array.isArray(parsed)) {
-      value = parsed.filter((item): item is string => typeof item === 'string').slice(0, RECENTS_MAX)
-    }
-  } catch {
-    /* Corrupt entry — treat it as no history rather than crashing the panel. */
-  }
-  recentsCache = { raw, value }
+  if (raw === '') return NO_CHAT
+  if (chatCache && chatCache.raw === raw) return chatCache.value
+  const value = parseChat(raw)
+  chatCache = { raw, value }
   return value
 }
 
-function subscribeToRecents(onStoreChange: () => void): () => void {
+function subscribeToChat(onStoreChange: () => void): () => void {
   window.addEventListener('storage', onStoreChange)
-  window.addEventListener(RECENTS_EVENT, onStoreChange)
+  window.addEventListener(CHAT_EVENT, onStoreChange)
   return () => {
     window.removeEventListener('storage', onStoreChange)
-    window.removeEventListener(RECENTS_EVENT, onStoreChange)
+    window.removeEventListener(CHAT_EVENT, onStoreChange)
   }
 }
 
-function pushRecent(question: string) {
-  const next = [question, ...readRecents().filter((item) => item !== question)].slice(
-    0,
-    RECENTS_MAX,
-  )
+function writeChat(turns: readonly ChatTurn[]): void {
   try {
-    window.localStorage.setItem(RECENTS_KEY, JSON.stringify(next))
+    window.localStorage.setItem(CHAT_KEY, JSON.stringify(turns))
   } catch {
-    /* Not remembering a question is not worth interrupting anyone over. */
+    /* Quota or a hardened browser. Not remembering the conversation is not
+       worth interrupting anyone over — and appendTurn already caps the size
+       precisely so this branch stays theoretical. */
     return
   }
-  window.dispatchEvent(new Event(RECENTS_EVENT))
+  window.dispatchEvent(new Event(CHAT_EVENT))
 }
+
+function pushTurn(turn: ChatTurn): void {
+  writeChat(appendTurn(readChat(), turn))
+}
+
+function clearChat(): void {
+  try {
+    window.localStorage.removeItem(CHAT_KEY)
+  } catch {
+    return
+  }
+  window.dispatchEvent(new Event(CHAT_EVENT))
+}
+
+/** Colombo-local, and SHOWN — an answer about "right now" is only readable
+ *  next to the now it was asked in. */
+const ASKED_AT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Colombo',
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
 
 export function AskPanel({
   suggestions = [],
@@ -127,10 +142,13 @@ export function AskPanel({
      ask is what took it away. */
   const hadFocus = React.useRef(false)
 
-  const recents = React.useSyncExternalStore(
-    subscribeToRecents,
-    readRecents,
-    () => NO_RECENTS,
+  const chat = React.useSyncExternalStore(subscribeToChat, readChat, () => NO_CHAT)
+  /* The turn just written, so the transcript below does not repeat the answer
+     already rendered above it from state. */
+  const [lastTurnId, setLastTurnId] = React.useState<string | null>(null)
+  const earlier = React.useMemo(
+    () => chat.filter((turn) => turn.id !== lastTurnId),
+    [chat, lastTurnId],
   )
 
   React.useEffect(() => {
@@ -159,7 +177,20 @@ export function AskPanel({
       }
       setAnswer(res.data)
       setAnnouncement('Answer ready.')
-      pushRecent(trimmed)
+      // crypto.randomUUID, not question+timestamp: asking the same thing twice
+      // in one second collides, and a duplicate React key silently drops a
+      // turn out of the transcript.
+      const id = crypto.randomUUID()
+      setLastTurnId(id)
+      pushTurn({
+        id,
+        question: trimmed,
+        answer: res.data.answer,
+        citations: res.data.citations,
+        grounded: res.data.grounded,
+        model: res.data.model,
+        askedAt: Date.now(),
+      })
     } catch {
       setError('Could not reach LogPup — try asking again')
     } finally {
@@ -252,22 +283,22 @@ export function AskPanel({
           </div>
         </form>
 
-        {recents.length > 0 ? (
+        {chat.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5 border-t border-border/50 pt-3">
             <span className="flex items-center gap-1 font-mono text-2xs tracking-wide text-muted-foreground uppercase">
               <History aria-hidden className="size-3" />
               Recent
             </span>
-            {recents.map((recent) => (
+            {chat.slice(0, 4).map((turn) => (
               <Button
-                key={recent}
+                key={turn.id}
                 type="button"
                 size="xs"
                 variant="ghost"
-                onClick={() => fill(recent)}
+                onClick={() => fill(turn.question)}
                 className="max-w-[16rem] text-muted-foreground"
               >
-                <span className="truncate">{recent}</span>
+                <span className="truncate">{turn.question}</span>
               </Button>
             ))}
           </div>
@@ -305,46 +336,141 @@ export function AskPanel({
           ) : null}
 
           {answer !== null && !pending ? (
-            <div className="flex flex-col gap-3 border-t border-border/50 pt-4">
-              {toParagraphs(answer.answer).map((paragraph) => (
-                <p key={paragraph} className="max-w-prose text-sm leading-relaxed text-foreground">
-                  {paragraph}
-                </p>
-              ))}
-
-              {/* Keyed off `grounded`, never off citations.length — see the
-                  field's comment in actions.ts. An ungrounded answer still
-                  carries rows (the ones the pack held), and they are labelled
-                  as what was SEARCHED rather than what was cited, because
-                  calling them sources would put a provenance claim on an
-                  answer that explicitly disclaimed one. */}
-              {answer.citations.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-2xs tracking-wide text-muted-foreground uppercase">
-                    {answer.grounded ? 'From' : 'Looked at'}
-                  </span>
-                  {answer.citations.map((citation) => (
-                    <Link
-                      key={`${citation.href}:${citation.label}`}
-                      href={citation.href}
-                      className="inline-flex max-w-full items-center gap-1 rounded-4xl border border-border bg-muted/60 px-2 py-0.5 text-2xs font-medium text-muted-foreground outline-none transition-[color,background-color,border-color] duration-(--dur-quick) ease-out hover:border-primary/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
-                    >
-                      <span className="truncate">{citation.label}</span>
-                    </Link>
-                  ))}
-                </div>
-              ) : null}
-
-              <p className="text-2xs text-muted-foreground">
-                {answer.grounded
-                  ? `Answered by ${answer.model} from your workspace data — check the links before acting on it.`
-                  : `${answer.model} could not tie this to specific rows. Treat it as a starting point, not a finding, and check what it looked at.`}
-              </p>
+            <div className="border-t border-border/50 pt-4">
+              <AnswerBody
+                answer={answer.answer}
+                citations={answer.citations}
+                grounded={answer.grounded}
+                model={answer.model}
+              />
             </div>
           ) : null}
         </div>
+
+        {/* EARLIER TURNS. The fresh answer above is rendered from state, not
+            from storage, so a browser that refuses to write (private mode, a
+            full quota) still shows the answer it was just asked for — it only
+            loses the history. Excluding the turn we just pushed is what keeps
+            the two from rendering the same answer twice. */}
+        {earlier.length > 0 ? (
+          <div className="flex flex-col gap-3 border-t border-border/50 pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-2xs tracking-wide text-muted-foreground uppercase">
+                Earlier {earlier.length === 1 ? 'question' : 'questions'}
+              </span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                onClick={() => {
+                  clearChat()
+                  setLastTurnId(null)
+                }}
+                className="text-muted-foreground"
+              >
+                <Trash2 aria-hidden className="size-3" />
+                Clear
+              </Button>
+            </div>
+
+            <ul className="flex flex-col gap-4">
+              {earlier.map((turn) => (
+                <li key={turn.id} className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                    <p className="min-w-0 text-sm font-medium text-foreground">{turn.question}</p>
+                    {/* An answer about "right now" is only readable next to the
+                        now it was asked in — these are kept, not refreshed. */}
+                    <time
+                      dateTime={new Date(turn.askedAt).toISOString()}
+                      className="shrink-0 font-mono text-2xs text-muted-foreground"
+                    >
+                      {ASKED_AT.format(turn.askedAt)}
+                    </time>
+                  </div>
+                  <AnswerBody
+                    answer={turn.answer}
+                    citations={turn.citations}
+                    grounded={turn.grounded}
+                    model={turn.model}
+                  />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </SpotlightCard>
+  )
+}
+
+/**
+ * One answer, rendered the same whether it just arrived or came back out of
+ * the transcript — a remembered answer that looked different from a fresh one
+ * would read as a different kind of thing.
+ */
+function AnswerBody({
+  answer,
+  citations,
+  grounded,
+  model,
+}: {
+  answer: string
+  citations: { label: string; href: string }[]
+  grounded: boolean
+  model: string
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      {toParagraphs(answer).map((paragraph) => (
+        <p key={paragraph} className="max-w-prose text-sm leading-relaxed text-foreground">
+          {/* Routes are INLINE in the prose — "Pasindu (110 percent)
+              [/people/09844444-…]" — and were rendering as bracketed hex where
+              a name belongs. splitAnswerLinks resolves each one against the
+              citation list and refuses anything that is not an in-app route. */}
+          {splitAnswerLinks(paragraph, citations).map((segment, i) =>
+            segment.kind === 'text' ? (
+              <React.Fragment key={i}>{segment.text}</React.Fragment>
+            ) : (
+              <Link
+                key={i}
+                href={segment.href}
+                className="rounded-sm font-medium text-primary underline decoration-primary/30 underline-offset-2 outline-none hover:decoration-primary focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                {segment.label}
+              </Link>
+            ),
+          )}
+        </p>
+      ))}
+
+      {/* Keyed off `grounded`, never off citations.length — see the field's
+          comment in actions.ts. An ungrounded answer still carries rows (the
+          ones the pack held), and they are labelled as what was SEARCHED
+          rather than what was cited, because calling them sources would put a
+          provenance claim on an answer that explicitly disclaimed one. */}
+      {citations.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-mono text-2xs tracking-wide text-muted-foreground uppercase">
+            {grounded ? 'From' : 'Looked at'}
+          </span>
+          {citations.map((citation) => (
+            <Link
+              key={`${citation.href}:${citation.label}`}
+              href={citation.href}
+              className="inline-flex max-w-full items-center gap-1 rounded-4xl border border-border bg-muted/60 px-2 py-0.5 text-2xs font-medium text-muted-foreground outline-none transition-[color,background-color,border-color] duration-(--dur-quick) ease-out hover:border-primary/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
+            >
+              <span className="truncate">{citation.label}</span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+
+      <p className="text-2xs text-muted-foreground">
+        {grounded
+          ? `Answered by ${model} from your workspace data — check the links before acting on it.`
+          : `${model} could not tie this to specific rows. Treat it as a starting point, not a finding, and check what it looked at.`}
+      </p>
+    </div>
   )
 }
 
