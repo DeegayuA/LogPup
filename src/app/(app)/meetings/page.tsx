@@ -18,6 +18,9 @@ import {
 } from '@/features/meetings/components/meeting-load-link'
 import { splitByUpcoming } from '@/features/meetings/split-upcoming'
 import { isAdminRole } from '@/features/auth/capabilities'
+import { getMyPendingInvites, getWeeklyLoadTable } from '@/features/meeting-load/queries'
+import { getSuggestionsForOrganizer } from '@/features/meeting-load/admin-queries'
+import { YourSeriesCard } from '@/features/meeting-load/components/your-series-card'
 
 export const metadata = { title: 'Meetings & Intelligence' }
 
@@ -98,6 +101,11 @@ export default async function MeetingsPage(props: {
           <StatTile value={overview.awaitingYou} label="Waiting on you" tone="warning" />
           {overview.live > 0 ? <StatTile value={overview.live} label="Now" tone="active" /> : null}
           <StatTile value={overview.past} label="Past" />
+          {/* Suspended: the invited-hours figure is a sweep, and the tiles it
+              sits beside are already computed. */}
+          <Suspense fallback={<StatTile value={0} label="Invited hours" />}>
+            <InvitedHoursTile />
+          </Suspense>
         </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-border/80 bg-card/40 p-8 backdrop-blur-sm">
@@ -120,6 +128,12 @@ export default async function MeetingsPage(props: {
         </div>
       )}
 
+      {/* Suspended so a sweep over six months of meetings never delays the
+          calendar somebody came here to look at. */}
+      <Suspense fallback={null}>
+        <YourSeries userId={currentUserId} />
+      </Suspense>
+
       <MeetingsViews
         upcoming={upcoming}
         past={past}
@@ -132,6 +146,62 @@ export default async function MeetingsPage(props: {
         todayIso={todayIso}
         initialOpenMeetingId={initialOpenMeetingId}
       />
+    </div>
+  )
+}
+
+/**
+ * How much of this week is already spoken for.
+ *
+ * Warning tone above 1.25x the trailing four-week MEDIAN — median, so one
+ * workshop week does not leave the tile amber for a month. Computed server-side
+ * here, above the client MeetingsViews boundary, so the number and the meetings
+ * it summarises come from the same render.
+ */
+async function InvitedHoursTile() {
+  const rows = await getWeeklyLoadTable(new Date())
+  if (rows.length === 0) return <StatTile value={0} label="Invited hours" />
+
+  const thisWeek = rows[rows.length - 1]
+  const trailing = rows.slice(-5, -1).map((row) => row.invitedHours).sort((a, b) => a - b)
+  const median = trailing.length === 0
+    ? 0
+    : trailing.length % 2 === 0
+      ? (trailing[trailing.length / 2 - 1] + trailing[trailing.length / 2]) / 2
+      : trailing[Math.floor(trailing.length / 2)]
+
+  return (
+    <StatTile
+      value={Math.round(thisWeek.invitedHours)}
+      label="Invited hours"
+      tone={median > 0 && thisWeek.invitedHours > 1.25 * median ? 'warning' : undefined}
+    />
+  )
+}
+
+/**
+ * The organizer's own queue, and their own pending invitations.
+ *
+ * ORGANIZER-PRIVATE. `getSuggestionsForOrganizer` checks eligibility before it
+ * reads any evidence, so a non-organizer's payload never contains the data at
+ * all — filtering at render time would mean it had already been fetched.
+ */
+async function YourSeries({ userId }: { userId: string }) {
+  if (!userId) return null
+  const [suggestions, pending] = await Promise.all([
+    getSuggestionsForOrganizer(userId, new Date()),
+    getMyPendingInvites(userId),
+  ])
+
+  return (
+    <div className="flex flex-col gap-4">
+      <YourSeriesCard suggestions={suggestions} />
+      {pending.length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {pending.length} invite{pending.length === 1 ? '' : 's'} without an in-app reply —
+          replies may live in Google Calendar; a tap here helps planning.
+        </p>
+      ) : null}
     </div>
   )
 }

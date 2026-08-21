@@ -11,6 +11,10 @@ import {
   getUserCapacities,
   listAssignableApps,
 } from '@/features/people/queries'
+import { MeetingLoadCard } from '@/features/meeting-load/components/meeting-load-card'
+import { getSuggestionsAggregate, getWeeklyLoadTable } from '@/features/meeting-load/queries'
+import { buildLoadTrend } from '@/features/meeting-load/trend-points'
+import { getAllDecidedKeys } from '@/features/meeting-load/admin-queries'
 import { getActiveSprints, getNextUpcomingSprint } from '@/features/sprints/queries'
 import { listApps } from '@/features/apps/queries'
 import { summarizePortfolio } from '@/features/apps/app-health'
@@ -291,13 +295,40 @@ export function MyDayZoneSkeleton() {
 /* ──────────────────────────── Team ──────────────────────────── */
 
 export async function TeamZone({ isAdmin }: { isAdmin: boolean }) {
-  const [capacities, activeSprints, assignableApps] = await Promise.all([
+  // One "now" for the zone, so the trend's last point and the this-week figure
+  // cannot straddle midnight and disagree about which week it is.
+  const now = new Date()
+  const [capacities, activeSprints, assignableApps, weeklyRows, decidedKeys] = await Promise.all([
     getUserCapacities(),
     getActiveSprints(),
     // Only the admin's inline "Assign to app" control renders this list — a
     // member never sees it, so don't pay for the query.
     isAdmin ? listAssignableApps() : Promise.resolve([]),
+    getWeeklyLoadTable(now),
+    // Fetched for everybody, not just admins: the aggregate is org-wide and
+    // would over-count if a member's copy could not see what has been decided.
+    getAllDecidedKeys(),
   ])
+  const aggregate = await getSuggestionsAggregate(now, decidedKeys)
+  // Built from the SAME rows the drill-down renders, rather than a second
+  // query with its own bucketing — a card that disagreed with the page it
+  // links to would make both unreadable.
+  const trend = buildLoadTrend(
+    weeklyRows.map((row) => ({ weekStartIso: row.weekStartIso, hours: row.invitedHours })),
+    now,
+  )
+  const weekly = trend.points.map((point) => point.hours)
+  const thisWeekHours = weekly[weekly.length - 1] ?? 0
+  const thisWeekIso = trend.points[trend.points.length - 1]?.weekStartIso
+  const coverage = weeklyRows.find((row) => row.weekStartIso === thisWeekIso)?.coverage ?? 0
+  // MEDIAN of the trailing four, not the mean: one workshop week should not
+  // leave the card reading "down 40%" for the month afterwards.
+  const trailing = weekly.slice(-5, -1).sort((a, b) => a - b)
+  const trailingMedianHours = trailing.length === 0
+    ? 0
+    : trailing.length % 2 === 0
+      ? (trailing[trailing.length / 2 - 1] + trailing[trailing.length / 2]) / 2
+      : trailing[Math.floor(trailing.length / 2)]
   // Only needed for the sprints card's empty-but-not-really state, so it is
   // fetched after we already know whether anything is running now.
   const nextSprint = activeSprints.length === 0 ? await getNextUpcomingSprint() : null
@@ -306,6 +337,17 @@ export async function TeamZone({ isAdmin }: { isAdmin: boolean }) {
     <div className={pairedCards(2)}>
       <CapacityHeat capacities={capacities} isAdmin={isAdmin} apps={assignableApps} />
       <ActiveSprints sprints={activeSprints} nextSprint={nextSprint} />
+      {/* A team number, not a personal one — how much of everybody's week is
+          spoken for before any work starts. No names and no named series: the
+          org-wide view is a count, and the questions go to the organizers. */}
+      <MeetingLoadCard
+        thisWeekHours={thisWeekHours}
+        trailingMedianHours={trailingMedianHours}
+        coverage={coverage}
+        trend={trend}
+        suggestionCount={aggregate.count}
+        potentialHoursPerWeek={aggregate.potentialHoursPerWeek}
+      />
     </div>
   )
 }
@@ -315,6 +357,7 @@ export function TeamZoneSkeleton() {
     <div className={pairedCards(2)} aria-hidden>
       <CardSkeleton rows={5} />
       <CardSkeleton rows={3} />
+      <CardSkeleton rows={4} />
     </div>
   )
 }

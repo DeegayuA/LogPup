@@ -53,6 +53,12 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   // need visible() through the capability layer rather than a bare role
   // comparison.
   finance: 'pure cost arithmetic; no route, no invocable action, and the rate-setting one is blocked on an unowned capability',
+  // The route it would point at is already in the palette, contributed by the
+  // meetings feature as `meetings.load` — the two live on one page and a second
+  // row for the same href would be the palette offering the same jump twice.
+  // Everything else here is a metric you read, and its one interactive control
+  // (accept/dismiss) needs a suggestion selected.
+  'meeting-load': 'its route is already a palette row under meetings; the rest is metrics you read and a decision that needs a suggestion selected',
   notion: 'its one action needs a sprintId',
   onboarding: 'renders only on /pending, where the palette does not exist',
   pwa: 'its affordances are components wired to browser events, not callables',
@@ -78,6 +84,11 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   gemini: "a user's own API keys are private, not workspace-searchable",
   intel: 'no tables of its own — it reads other features’ rows and links back to them',
   maintenance: 'one row of app configuration, not a thing anybody navigates to — the window announces itself',
+  // Its only table holds DECISIONS about suggestions. Series are inferred, not
+  // stored, so there is nothing here with an identity somebody could search
+  // for — and a dismissed suggestion is the last thing that should be findable
+  // by typing somebody's series name.
+  'meeting-load': 'series are inferred rather than stored, and its one table holds dismissals nobody should be able to search for',
   notifications: 'a personal inbox, not a workspace index',
   notion: 'no tables of its own',
   onboarding: 'no tables of its own',

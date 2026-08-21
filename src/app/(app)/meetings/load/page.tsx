@@ -5,6 +5,10 @@ import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { listApps } from '@/features/apps/queries'
+import { getPerAppLoad, getSeriesTable, getWeeklyLoadTable } from '@/features/meeting-load/queries'
+import { PerAppLoad } from '@/features/meeting-load/components/per-app-load'
+import { SeriesLoadTable } from '@/features/meeting-load/components/series-load-table'
+import { WeeklyLoadTable } from '@/features/meeting-load/components/weekly-load-table'
 import { listActiveUsers } from '@/features/people/queries'
 import { getMeetingLoadSuggestions } from '@/features/meetings/load-actions'
 import { LoadBoard } from '@/features/meetings/components/load-board'
@@ -35,7 +39,7 @@ export default function MeetingLoadPage() {
 
       <PageHeader
         title="Meeting load"
-        description="Open items that need the same people, and could be one conversation instead of several. Every card is a question — accepting one opens the meeting form, it never invites anybody."
+        description="Hours on calendars, not hours in rooms — we cannot see attendance. Every card below is a question; accepting one opens a form or a flow you already own, and never changes a meeting on its own."
         actions={
           <Button variant="outline" render={<Link href="/meetings" />}>
             Back to meetings
@@ -45,6 +49,13 @@ export default function MeetingLoadPage() {
 
       <Suspense fallback={<BoardSkeleton />}>
         <Board />
+      </Suspense>
+
+      {/* The audit half. Suspended separately from the suggestion queue: these
+          are aggregate sweeps over six months of meetings, and holding the
+          cards behind them would make the page feel broken while it thinks. */}
+      <Suspense fallback={<TablesSkeleton />}>
+        <Audit />
       </Suspense>
     </div>
   )
@@ -107,6 +118,50 @@ function BoardSkeleton() {
               <Skeleton key={chip} className="h-5 w-20 rounded-full" />
             ))}
           </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+async function Audit() {
+  const now = new Date()
+  const [weekly, perApp, series] = await Promise.all([
+    getWeeklyLoadTable(now),
+    getPerAppLoad(now),
+    getSeriesTable(now),
+  ])
+
+  return (
+    <div className="flex flex-col gap-8">
+      <section className="flex flex-col gap-3">
+        <h2 className="font-heading text-sm font-semibold">Week by week</h2>
+        <WeeklyLoadTable rows={weekly} />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-heading text-sm font-semibold">Where the hours went</h2>
+        <PerAppLoad rows={perApp} />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-heading text-sm font-semibold">Series</h2>
+        {/* Nobody is named here, and that is a rule rather than an omission:
+            churn is a count, and a name attached to a number that reads as
+            criticism is a bug on this page. */}
+        <SeriesLoadTable rows={series} />
+      </section>
+    </div>
+  )
+}
+
+function TablesSkeleton() {
+  return (
+    <div className="flex flex-col gap-8" aria-hidden>
+      {[0, 1].map((block) => (
+        <div key={block} className="flex flex-col gap-3">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-40 w-full rounded-xl" />
         </div>
       ))}
     </div>

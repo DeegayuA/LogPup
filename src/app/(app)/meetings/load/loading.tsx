@@ -13,7 +13,7 @@ export default function MeetingLoadLoading() {
     <div className="flex flex-1 flex-col gap-6 p-6 md:p-8">
       <PageHeader
         title="Meeting load"
-        description="Open items that need the same people, and could be one conversation instead of several. Every card is a question — accepting one opens the meeting form, it never invites anybody."
+        description="Hours on calendars, not hours in rooms — we cannot see attendance. Every card below is a question; accepting one opens a form or a flow you already own, and never changes a meeting on its own."
         actions={<Skeleton className="h-8 w-36" />}
       />
       <div className="flex flex-col gap-4" aria-hidden>

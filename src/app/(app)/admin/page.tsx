@@ -9,6 +9,11 @@ import { getTrash } from '@/features/admin/trash-queries'
 import { listPendingAbsences } from '@/features/worklog/absence-queries'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
+import { MeetingLoadAdminCard } from '@/features/meeting-load/components/meeting-load-admin-card'
+import {
+  getAcceptanceByKind, getAllSuggestionsForAdmin, getDismissedDecisions,
+  getObservedChangesForAdmin,
+} from '@/features/meeting-load/admin-queries'
 
 /**
  * Org health at a glance, and what is waiting on somebody.
@@ -71,7 +76,32 @@ export default async function AdminOverviewPage() {
       <Suspense fallback={<AdoptionSkeleton />}>
         <AiAdoptionCard activeUserCount={activeUserCount} />
       </Suspense>
+
+      {/* Behind the same notFound() gate as everything else on this page. This
+          is the ONE place trim-invite may render with names — every other
+          surface is built on reads that cannot supply them. */}
+      <Suspense fallback={<AdoptionSkeleton />}>
+        <MeetingLoad />
+      </Suspense>
     </div>
+  )
+}
+
+async function MeetingLoad() {
+  const now = new Date()
+  const [suggestions, dismissed, observed, acceptance] = await Promise.all([
+    getAllSuggestionsForAdmin(now),
+    getDismissedDecisions(),
+    getObservedChangesForAdmin(now),
+    getAcceptanceByKind(),
+  ])
+  return (
+    <MeetingLoadAdminCard
+      suggestions={suggestions}
+      dismissed={dismissed}
+      observed={observed}
+      acceptance={acceptance}
+    />
   )
 }
 
