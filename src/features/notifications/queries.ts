@@ -16,7 +16,7 @@ const notificationMeetingIsLiveOrAbsent = or(
 
 export type NotificationItem = {
   id: string
-  type: 'mention' | 'meeting'
+  type: 'mention' | 'meeting' | 'system'
   title: string
   body: string | null
   link: string | null

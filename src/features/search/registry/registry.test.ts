@@ -77,6 +77,7 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   finance: 'figures you read on a project rather than rows you jump to — and rates are salary-adjacent, project value commercial, so neither belongs in an index anyone can type into',
   gemini: "a user's own API keys are private, not workspace-searchable",
   intel: 'no tables of its own — it reads other features’ rows and links back to them',
+  maintenance: 'one row of app configuration, not a thing anybody navigates to — the window announces itself',
   notifications: 'a personal inbox, not a workspace index',
   notion: 'no tables of its own',
   onboarding: 'no tables of its own',

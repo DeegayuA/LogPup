@@ -14,6 +14,8 @@ import {
   type Resource,
   type UserRole,
 } from '@/features/auth/capabilities'
+import { maintenanceActiveNow } from '@/features/maintenance/freeze'
+import { isFrozenByMaintenance } from '@/features/maintenance/write-actions'
 
 export { scopeSourceFor, type ScopeSource } from '@/features/auth/capabilities'
 
@@ -114,6 +116,22 @@ export async function requireCapability(
   // read a token minted before the field existed as a locked-out account.
   if (user.active === false) return null
   const role = user.role as UserRole
+
+  // MAINTENANCE FREEZE, before the matrix and before any query.
+  //
+  // The database gate in src/db/write-gate.ts is the one that cannot be
+  // bypassed; this is the one that refuses politely. Coming through here means
+  // the ~100 actions that call this guard turn a frozen write into their
+  // existing `if (!actor) return err(...)` path — a refused action rather than
+  // a thrown error surfacing as "something went wrong". The fourteen write
+  // paths that never call this guard are exactly why the database gate exists
+  // as well; neither layer is sufficient alone.
+  //
+  // Reads are untouched. A window that blanked the pages explaining itself
+  // would be a worse outage than the maintenance.
+  if (isFrozenByMaintenance(action) && ROLE_GRANTS['maintenance.manage'][role] === 'none') {
+    if (await maintenanceActiveNow()) return null
+  }
 
   // Resolve the scope set ONLY when the grant actually depends on it. A
   // refusal, a workspace-wide 'all', and an ownership check are all decidable

@@ -4,7 +4,7 @@ import { notifications } from '@/db/schema'
 export type NewNotification = {
   userId: string
   actorId?: string | null
-  type: 'mention' | 'meeting'
+  type: 'mention' | 'meeting' | 'system'
   title: string
   body?: string | null
   link?: string | null

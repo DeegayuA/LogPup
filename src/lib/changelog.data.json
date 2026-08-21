@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.344",
+  "current": "v0.0.409",
   "versions": [
     {
       "version": "v0.0.1",
@@ -2752,6 +2752,526 @@
       "hash": "8dc8285",
       "kind": "feat",
       "change": "page the triage queue, and move its filters into SQL"
+    },
+    {
+      "version": "v0.0.345",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:21:37+05:30",
+      "hash": "dea6d7f",
+      "kind": "feat",
+      "change": "land the sweep's remaining view-layer work"
+    },
+    {
+      "version": "v0.0.346",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:23:52+05:30",
+      "hash": "b008306",
+      "kind": "fix",
+      "change": "register the AI features HEAD already calls, and stop a capped list reading as a total"
+    },
+    {
+      "version": "v0.0.347",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:30:16+05:30",
+      "hash": "a6ac38b",
+      "kind": "feat",
+      "change": "ask the audit log in words, and get its own filters back"
+    },
+    {
+      "version": "v0.0.348",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:32:19+05:30",
+      "hash": "d0da911",
+      "kind": "test",
+      "change": "a public page may only name a model the app can price"
+    },
+    {
+      "version": "v0.0.349",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:36:20+05:30",
+      "hash": "f180d72",
+      "kind": "feat",
+      "change": "capacity in hours, derived from each person's own week"
+    },
+    {
+      "version": "v0.0.350",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:41:26+05:30",
+      "hash": "8d1c180",
+      "kind": "fix",
+      "change": "lift absenceDays out of the page, and render a bullet as one"
+    },
+    {
+      "version": "v0.0.351",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:45:15+05:30",
+      "hash": "473168b",
+      "kind": "docs",
+      "change": "restore the reasoning the sweep deleted, and record one rule it broke"
+    },
+    {
+      "version": "v0.0.352",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:46:37+05:30",
+      "hash": "55c832b",
+      "kind": "fix",
+      "change": "stop the catch-up run claiming days it did not draft"
+    },
+    {
+      "version": "v0.0.353",
+      "date": "2026-08-20",
+      "at": "2026-08-20T15:47:55+05:30",
+      "hash": "3e3e1f7",
+      "kind": "fix",
+      "change": "restore the ring pulse, and stop the comment contradicting it"
+    },
+    {
+      "version": "v0.0.354",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:11:30+05:30",
+      "hash": "264e022",
+      "kind": "fix",
+      "change": "align three read sites with MeetingIntelItem's field names"
+    },
+    {
+      "version": "v0.0.355",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:14:32+05:30",
+      "hash": "89dee50",
+      "kind": "fix",
+      "change": "craft regressions the sweep introduced into its own surfaces"
+    },
+    {
+      "version": "v0.0.356",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:28:58+05:30",
+      "hash": "c1235a2",
+      "kind": "docs",
+      "change": "restore the four explanations the rewrite dropped, and the hero cap"
+    },
+    {
+      "version": "v0.0.357",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:29:41+05:30",
+      "hash": "bddbb00",
+      "kind": "fix",
+      "change": "a day you already asked to be away for is not a missing work log"
+    },
+    {
+      "version": "v0.0.358",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:30:15+05:30",
+      "hash": "0ef5142",
+      "kind": "fix",
+      "change": "correctness, responsive and skeleton findings from the review"
+    },
+    {
+      "version": "v0.0.359",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:31:41+05:30",
+      "hash": "743b1f2",
+      "kind": "fix",
+      "change": "a false-positive tag match, a dead branch, and two restored docs"
+    },
+    {
+      "version": "v0.0.360",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:33:45+05:30",
+      "hash": "137eacc",
+      "kind": "docs",
+      "change": "write down which absence set the gap filter means, since no test pins it"
+    },
+    {
+      "version": "v0.0.361",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:35:29+05:30",
+      "hash": "1eb625d",
+      "kind": "docs",
+      "change": "name the gap-list / denominator asymmetry before it reads as a bug"
+    },
+    {
+      "version": "v0.0.362",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:40:46+05:30",
+      "hash": "3c30bf4",
+      "kind": "other",
+      "change": "worklog: per-task hours substrate (worklog_entries + pure check)"
+    },
+    {
+      "version": "v0.0.363",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:43:19+05:30",
+      "hash": "dd6f2fd",
+      "kind": "feat",
+      "change": "define how long a full day is, in one place"
+    },
+    {
+      "version": "v0.0.364",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:45:10+05:30",
+      "hash": "a1e227e",
+      "kind": "feat",
+      "change": "a zero-hit search becomes a question, not a dead end"
+    },
+    {
+      "version": "v0.0.365",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:45:11+05:30",
+      "hash": "029ff45",
+      "kind": "feat",
+      "change": "worklog and activity join the palette, and two stale exemptions retire"
+    },
+    {
+      "version": "v0.0.366",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:45:44+05:30",
+      "hash": "7b6d19c",
+      "kind": "docs",
+      "change": "cost spec — gate aggregate reads, not just the rate field"
+    },
+    {
+      "version": "v0.0.367",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:47:19+05:30",
+      "hash": "c6cff98",
+      "kind": "feat",
+      "change": "gate money behind one capability, rates and totals alike"
+    },
+    {
+      "version": "v0.0.368",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:47:21+05:30",
+      "hash": "227e958",
+      "kind": "build",
+      "change": "npm run verify:head — typecheck the commit, not the working tree"
+    },
+    {
+      "version": "v0.0.369",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:47:44+05:30",
+      "hash": "3d461b5",
+      "kind": "fix",
+      "change": "derive advertised Gemini rates instead of hand-writing them"
+    },
+    {
+      "version": "v0.0.370",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:48:10+05:30",
+      "hash": "0ef5105",
+      "kind": "fix",
+      "change": "a briefing priority may only link inside the product, and accept ?ask="
+    },
+    {
+      "version": "v0.0.371",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:49:09+05:30",
+      "hash": "92857d0",
+      "kind": "docs",
+      "change": "cost spec — finance.view is the gate, with its three deliberate properties"
+    },
+    {
+      "version": "v0.0.372",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:49:30+05:30",
+      "hash": "cbd4a9c",
+      "kind": "feat",
+      "change": "gemini joins the palette, and its exemption was wrong not stale"
+    },
+    {
+      "version": "v0.0.373",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:52:23+05:30",
+      "hash": "d407ccc",
+      "kind": "fix",
+      "change": "give the AI sections the anchors the palette links to"
+    },
+    {
+      "version": "v0.0.374",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:52:25+05:30",
+      "hash": "d7a4a59",
+      "kind": "fix",
+      "change": "a follow-up that already became a task is one commitment, not two"
+    },
+    {
+      "version": "v0.0.375",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:53:57+05:30",
+      "hash": "5d6c459",
+      "kind": "fix",
+      "change": "resolve model rates on the server, and point the palette at real anchors"
+    },
+    {
+      "version": "v0.0.376",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:54:00+05:30",
+      "hash": "8e2986a",
+      "kind": "feat",
+      "change": "push the whole event to guests, and classify why a push failed"
+    },
+    {
+      "version": "v0.0.377",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:55:07+05:30",
+      "hash": "85c3961",
+      "kind": "feat",
+      "change": "cost and worth data substrate — tables and pure maths"
+    },
+    {
+      "version": "v0.0.378",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:55:43+05:30",
+      "hash": "82d20fd",
+      "kind": "docs",
+      "change": "the KNOWN LIMIT paragraph named a constant I had deleted"
+    },
+    {
+      "version": "v0.0.379",
+      "date": "2026-08-20",
+      "at": "2026-08-20T16:59:11+05:30",
+      "hash": "e282043",
+      "kind": "feat",
+      "change": "grade the date column, and give it one writer"
+    },
+    {
+      "version": "v0.0.380",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:00:41+05:30",
+      "hash": "d8dbc1f",
+      "kind": "test",
+      "change": "declare the new finance feature, honestly and falsifiably"
+    },
+    {
+      "version": "v0.0.381",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:01:04+05:30",
+      "hash": "ba3e95b",
+      "kind": "test",
+      "change": "stop a red that depends on machine load rather than on the code"
+    },
+    {
+      "version": "v0.0.382",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:02:16+05:30",
+      "hash": "325eb16",
+      "kind": "fix",
+      "change": "one finance entry per allowlist, not two"
+    },
+    {
+      "version": "v0.0.383",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:03:01+05:30",
+      "hash": "2865231",
+      "kind": "feat",
+      "change": "route all three due_date writers through applyDueDate"
+    },
+    {
+      "version": "v0.0.384",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:03:24+05:30",
+      "hash": "6909ea3",
+      "kind": "feat",
+      "change": "AI drafts the day's hours, and phrases what the check found"
+    },
+    {
+      "version": "v0.0.385",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:04:30+05:30",
+      "hash": "c8914a7",
+      "kind": "feat",
+      "change": "an error boundary that names the page that failed"
+    },
+    {
+      "version": "v0.0.386",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:05:52+05:30",
+      "hash": "c2dbc08",
+      "kind": "fix",
+      "change": "stop approved change requests bypassing the deadline helper, and gate deadlines"
+    },
+    {
+      "version": "v0.0.387",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:06:57+05:30",
+      "hash": "353c6e9",
+      "kind": "docs",
+      "change": "pre-0049 tasks never gain an original, and that is the answer"
+    },
+    {
+      "version": "v0.0.388",
+      "date": "2026-08-20",
+      "at": "2026-08-20T17:27:09+05:30",
+      "hash": "35d16f8",
+      "kind": "feat",
+      "change": "server layer for project cost, worth and margin"
+    },
+    {
+      "version": "v0.0.389",
+      "date": "2026-08-20",
+      "at": "2026-08-20T18:06:34+05:30",
+      "hash": "59aa7b9",
+      "kind": "feat",
+      "change": "people's cohort views join the palette, derived not listed"
+    },
+    {
+      "version": "v0.0.390",
+      "date": "2026-08-20",
+      "at": "2026-08-20T18:10:32+05:30",
+      "hash": "e432241",
+      "kind": "feat",
+      "change": "the escalation ladder, in working days"
+    },
+    {
+      "version": "v0.0.391",
+      "date": "2026-08-20",
+      "at": "2026-08-20T18:10:52+05:30",
+      "hash": "04583d8",
+      "kind": "feat",
+      "change": "the words a task hand-off says, as a tested rule"
+    },
+    {
+      "version": "v0.0.392",
+      "date": "2026-08-21",
+      "at": "2026-08-21T12:48:22+05:30",
+      "hash": "53ae2f3",
+      "kind": "feat",
+      "change": "attribute hours to a project, not only to a task"
+    },
+    {
+      "version": "v0.0.393",
+      "date": "2026-08-21",
+      "at": "2026-08-21T12:50:34+05:30",
+      "hash": "2b1ac4a",
+      "kind": "feat",
+      "change": "the organiser is its own fact, and a failed cancel is recorded"
+    },
+    {
+      "version": "v0.0.394",
+      "date": "2026-08-21",
+      "at": "2026-08-21T12:50:57+05:30",
+      "hash": "b6bde77",
+      "kind": "feat",
+      "change": "key census — who shares, who keeps, and who to thank"
+    },
+    {
+      "version": "v0.0.395",
+      "date": "2026-08-21",
+      "at": "2026-08-21T12:51:27+05:30",
+      "hash": "03e2c3f",
+      "kind": "feat",
+      "change": "grade and order an app's promises, with a test that discriminates"
+    },
+    {
+      "version": "v0.0.396",
+      "date": "2026-08-21",
+      "at": "2026-08-21T12:54:56+05:30",
+      "hash": "8382eb6",
+      "kind": "fix",
+      "change": "project tags become links, and the amber squares get a name"
+    },
+    {
+      "version": "v0.0.397",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:01:47+05:30",
+      "hash": "2e02b26",
+      "kind": "feat",
+      "change": "suggest a person's day by what their role on it makes it about"
+    },
+    {
+      "version": "v0.0.398",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:03:17+05:30",
+      "hash": "40c5d41",
+      "kind": "feat",
+      "change": "decide whether a Google event and a LogPup meeting are the same"
+    },
+    {
+      "version": "v0.0.399",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:06:23+05:30",
+      "hash": "924eca4",
+      "kind": "feat",
+      "change": "expand a daily or weekly rule into the days it means"
+    },
+    {
+      "version": "v0.0.400",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:08:16+05:30",
+      "hash": "1c2fee5",
+      "kind": "fix",
+      "change": "a trashed task must not accept hours"
+    },
+    {
+      "version": "v0.0.401",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:12:58+05:30",
+      "hash": "050a921",
+      "kind": "feat",
+      "change": "classify a two-way sync field by field, and refuse to guess"
+    },
+    {
+      "version": "v0.0.402",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:13:47+05:30",
+      "hash": "10e7430",
+      "kind": "fix",
+      "change": "a clipped seat description and an error toast that looked like a success"
+    },
+    {
+      "version": "v0.0.403",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:16:07+05:30",
+      "hash": "dda9cf6",
+      "kind": "feat",
+      "change": "the AI draft knows what your role on each project makes the day"
+    },
+    {
+      "version": "v0.0.404",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:25:37+05:30",
+      "hash": "de4cd09",
+      "kind": "feat",
+      "change": "a select you can type into, and use it to pick an app"
+    },
+    {
+      "version": "v0.0.405",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:28:55+05:30",
+      "hash": "e594a52",
+      "kind": "feat",
+      "change": "each app carries its own colour, and says which ones are yours"
+    },
+    {
+      "version": "v0.0.406",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:30:17+05:30",
+      "hash": "b33670d",
+      "kind": "feat",
+      "change": "make the three selects over unbounded lists searchable"
+    },
+    {
+      "version": "v0.0.407",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:30:56+05:30",
+      "hash": "d8e49ed",
+      "kind": "fix",
+      "change": "ownership is a word, not a third colour"
+    },
+    {
+      "version": "v0.0.408",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:32:59+05:30",
+      "hash": "bd5f524",
+      "kind": "feat",
+      "change": "the honest half of the live AI meter"
+    },
+    {
+      "version": "v0.0.409",
+      "date": "2026-08-21",
+      "at": "2026-08-21T13:36:27+05:30",
+      "hash": "d269096",
+      "kind": "feat",
+      "change": "keep the Ask LogPup conversation, and stop printing UUIDs at people"
     }
   ]
 }

@@ -3,9 +3,11 @@ import { Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 import Script from "next/script";
+import { Suspense } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider, themeInitScript } from "@/components/shell/theme-provider";
 import { PwaRegister } from "@/features/pwa/pwa";
+import { MaintenanceMount } from "@/features/maintenance/components/maintenance-mount";
 import { Analytics } from "@vercel/analytics/next"
 import { SpeedInsights } from "@vercel/speed-insights/next"
 
@@ -75,6 +77,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col">
         <ThemeProvider>
           {children}
+          {/* App-wide, and outside (app) on purpose: the sign-in screen needs
+              the maintenance notice and the console command too. Suspended so
+              the window read can never delay first paint — the freeze itself
+              is enforced server-side, not by this rendering. */}
+          <Suspense fallback={null}>
+            <MaintenanceMount />
+          </Suspense>
           <Toaster />
           <PwaRegister />
           <Analytics />

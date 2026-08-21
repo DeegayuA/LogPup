@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useMemo, useState, useTransition } from 'react'
 import { formatDistanceToNow } from 'date-fns'
-import { AtSign, Bell, CalendarPlus } from 'lucide-react'
+import { AtSign, Bell, CalendarPlus, Wrench } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,6 +28,23 @@ import { cn } from '@/lib/utils'
  */
 function sameSnapshot(a: NotificationSnapshot, b: NotificationSnapshot): boolean {
   return a.unread === b.unread && a.items[0]?.id === b.items[0]?.id
+}
+
+/**
+ * A LOOKUP, NOT A TERNARY. This was `type === 'mention' ? AtSign : CalendarPlus`,
+ * which is a shape that answers "calendar" for every kind that is not a
+ * mention — so the third kind arrived wearing a meeting invite's icon without
+ * anything failing. A Record keyed by the union makes the next kind a
+ * compile error here instead.
+ */
+const NOTIFICATION_ICONS: Record<NotificationItem['type'], typeof AtSign> = {
+  mention: AtSign,
+  meeting: CalendarPlus,
+  system: Wrench,
+}
+
+function iconFor(type: NotificationItem['type']): typeof AtSign {
+  return NOTIFICATION_ICONS[type] ?? CalendarPlus
 }
 
 const POLL_BASE_MS = 20_000
@@ -128,7 +145,7 @@ export function NotificationBellClient({
         ) : (
           <div className="max-h-96 overflow-y-auto py-1">
             {liveItems.map((n) => {
-              const Icon = n.type === 'mention' ? AtSign : CalendarPlus
+              const Icon = iconFor(n.type)
               const inner = (
                 <>
                   <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-muted-foreground">

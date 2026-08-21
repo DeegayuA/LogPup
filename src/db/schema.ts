@@ -85,7 +85,12 @@ export const bugStatus = pgEnum('bug_status', [
 // serious. See docs/superpowers/specs/2026-08-20-deadlines-and-bugs-design.md.
 export const dueKind = pgEnum('due_kind', ['target', 'committed'])
 export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
-export const notificationType = pgEnum('notification_type', ['mention', 'meeting'])
+// 'system' is the workspace talking about itself rather than a person talking
+// to a person — today only the maintenance lifecycle writes one. It is a third
+// enum value rather than a reuse of 'meeting' because both notification
+// surfaces pick their icon off this column, and a maintenance notice wearing a
+// calendar icon reads as a meeting invite.
+export const notificationType = pgEnum('notification_type', ['mention', 'meeting', 'system'])
 export const attendeeResponse = pgEnum('attendee_response', ['pending', 'going', 'maybe', 'declined'])
 export const followupKind = pgEnum('followup_kind', ['question', 'action'])
 export const followupStatus = pgEnum('followup_status', ['open', 'resolved'])
@@ -1711,3 +1716,49 @@ export const projectValue = pgTable('project_value', {
   // is this project worth" ambiguous in the one place the question is asked.
   uniqueIndex('project_value_app_idx').on(t.appId),
 ])
+
+// PLANNED MAINTENANCE — the one row in this file that can hold every person
+// out of the app.
+//
+// A SINGLETON, enforced by the primary key rather than by convention: `id` is
+// text with a CHECK that pins it to 'current', so a second window is a
+// constraint violation instead of an ambiguity about which one is in force.
+//
+// EPOCH MILLISECONDS, NOT timestamps. The admin picks the window in a
+// datetime-local input and every surface counts down to it in the browser, so
+// the number the client needs is a millisecond. Storing timestamptz would mean
+// a conversion on the way out, in the one place where being five and a half
+// hours wrong locks the workspace at the wrong time. See
+// src/features/maintenance/window.ts, which owns every reading of these.
+//
+// mode AND kind ARE text, NOT pgEnum, on purpose. The parser in window.ts
+// treats an unrecognised value as "no maintenance", which is the fail-open
+// behaviour the whole feature rests on. A database enum would instead make an
+// unknown value an INSERT error at arm time and a value this build cannot read
+// at parse time — trading a safe read for a hard write failure, in the feature
+// whose one rule is that a malformed row must never lock anybody out.
+//
+// NO deletedAt. This is app configuration, not somebody's work, so it is
+// outside the soft-delete contract (adding the column would also fail check 5
+// in src/db/live.test.ts unless the table joined SOFT_TABLES, which it must
+// not). An ended window is inert and the next arming overwrites it.
+export const maintenanceWindow = pgTable('maintenance_window', {
+  id: text('id').primaryKey().default('current'),
+  enabled: boolean('enabled').notNull().default(false),
+  startAtMs: bigint('start_at_ms', { mode: 'number' }).notNull(),
+  endAtMs: bigint('end_at_ms', { mode: 'number' }).notNull(),
+  message: text('message').notNull().default(''),
+  mode: text('mode').notNull(),
+  kind: text('kind').notNull(),
+  // Nullable: a window armed by an account since removed still has to render
+  // its own message rather than failing to load.
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdByName: text('created_by_name').notNull().default('an admin'),
+  // THESE HOLD A startAtMs, NOT THE MOMENT OF THE ANNOUNCEMENT — which is why
+  // "notified for which window" is answerable at all. Comparing them against
+  // the current startAtMs is what makes a re-armed window announce again
+  // instead of staying silent because a previous window was already announced.
+  startNotifiedAtMs: bigint('start_notified_at_ms', { mode: 'number' }),
+  endNotifiedAtMs: bigint('end_notified_at_ms', { mode: 'number' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})

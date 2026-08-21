@@ -97,6 +97,10 @@ export type PlannerProject = {
   healthLabel: string
   pmName: string | null
   leadName: string | null
+  /** Carried alongside the names so the planner can hang a person card off
+   *  them — a name you cannot act on is a name that made you go looking. */
+  pmId: string | null
+  leadId: string | null
 }
 
 export type MeetingPlan = {
@@ -494,6 +498,8 @@ export function assembleMeetingPlan(input: AssembleMeetingPlanInput): MeetingPla
         healthLabel: HEALTH_LABEL[project.healthLevel],
         pmName: pmId ? (personById.get(pmId)?.name ?? null) : null,
         leadName: leadId ? (personById.get(leadId)?.name ?? null) : null,
+        pmId: pmId ?? null,
+        leadId: leadId ?? null,
       }
     }),
     candidates,

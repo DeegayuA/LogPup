@@ -1,0 +1,15 @@
+-- A third notification kind: the workspace talking about itself.
+--
+-- SHIPS ALONE, for the reason 0037 spells out — Postgres refuses to USE a new
+-- enum value in the same transaction that added it, so nothing in this file
+-- may insert a 'system' row. The maintenance lifecycle that writes one is
+-- application code and runs long after this has committed.
+--
+-- No DO $$ guard, same as 0037: ALTER TYPE ... ADD VALUE is not permitted
+-- inside a function or transaction block on all paths, so the usual
+-- EXCEPTION WHEN duplicate_object idiom cannot wrap it. ADD VALUE IF NOT
+-- EXISTS gives the same replay safety on its own.
+--
+-- Additive. Every existing 'mention' and 'meeting' row keeps meaning exactly
+-- what it meant, and no query narrows.
+ALTER TYPE "public"."notification_type" ADD VALUE IF NOT EXISTS 'system';

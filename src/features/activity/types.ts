@@ -37,6 +37,11 @@ export const ACTIVITY_ENTITY_TYPES = [
   'rate_card',
   'person_rate',
   'project_value',
+  // A planned maintenance window. entityId is the singleton row id ('current')
+  // rather than a per-window id: there is only ever one window, and the trail
+  // is answering "who closed the workspace, and when" rather than "which of
+  // several windows was this".
+  'maintenance_window',
 ] as const
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number]

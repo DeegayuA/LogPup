@@ -186,6 +186,17 @@ export const ROLE_GRANTS = {
   'activity.view':              { superadmin: A, admin: A, manager: A, editor: A, member: A, stakeholder: N, auditor: A },
   'audit.view':                 { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: A },
   'admin.view':                 { superadmin: A, admin: A, manager: A, editor: N, member: N, stakeholder: N, auditor: A },
+  // Arming, extending and cancelling a planned maintenance window — and, as
+  // the same seat, writing THROUGH one. This is the spec's `isAdmin()` in the
+  // form this codebase can actually enforce: `role === 'admin'` would read
+  // false for a superadmin and lock the highest seat out of the switch that
+  // reopens the workspace.
+  //
+  // Deliberately NOT granted to manager or auditor, both of whom hold
+  // 'admin.view'. Seeing the admin area is not the same power as closing the
+  // building, and a freeze that a manager could write through would not be a
+  // freeze.
+  'maintenance.manage':         { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'danger.dbclear':             { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   // Money: rate cards, per-person rates, and every figure derived from them
   // (project cost, margin, accruals). Superadmin and admin, by the user's

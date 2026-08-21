@@ -1,10 +1,16 @@
 import Link from 'next/link'
 import { formatDistance } from 'date-fns'
-import { AtSign, Bell, CalendarPlus, PawPrint } from 'lucide-react'
+import { AtSign, Bell, CalendarPlus, PawPrint, Wrench } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import type { NotificationItem } from '@/features/notifications/queries'
 import { cn } from '@/lib/utils'
+
+const ICONS: Record<NotificationItem['type'], typeof AtSign> = {
+  mention: AtSign,
+  meeting: CalendarPlus,
+  system: Wrench,
+}
 
 /**
  * What pinged you — the same items as the header bell, on the page you
@@ -14,7 +20,9 @@ import { cn } from '@/lib/utils'
  * bolder, with unreadness carried in words for screen readers.
  */
 function RowBody({ item, now }: { item: NotificationItem; now: Date }) {
-  const Icon = item.type === 'mention' ? AtSign : CalendarPlus
+  // Keyed lookup, not a ternary — see the note in notification-bell-client.tsx:
+  // the two-arm form quietly gave every non-mention kind a calendar icon.
+  const Icon = ICONS[item.type] ?? CalendarPlus
   return (
     <>
       <Icon
