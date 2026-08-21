@@ -56,12 +56,63 @@ export function splitAnswerLinks(
       continue
     }
 
+    const cited = labelByHref.get(href)
+
+    // THE NAME IS USUALLY ALREADY THERE. The model writes "Pasindu
+    // Prabhashwara [/people/<id>]" — the route ANNOTATES a name it just said.
+    // Appending the citation label after it printed the name twice in a row:
+    // "Pasindu Prabhashwara Pasindu Prabhashwara have the highest workload".
+    //
+    // So when the label is already in the words just before the route, the
+    // existing words BECOME the link and the route contributes nothing visible.
+    // Searching backwards from the route handles the case where something sits
+    // between them — "Pasindu Prabhashwara (110 percent) [/people/<id>]" links
+    // the name and keeps the parenthetical after it.
+    const found = cited ? findLabelNearEnd(before, cited) : null
+    if (found) {
+      pushText(segments, before.slice(0, found.start))
+      segments.push({ kind: 'link', label: before.slice(found.start, found.end), href })
+      // Trailing whitespace is dropped because the markup between it and the
+      // next word is being REMOVED: "Name [/route] and" leaves a space on each
+      // side of the deleted bracket, and both surviving would render "Name  and".
+      // The text that follows supplies the single space.
+      pushText(segments, before.slice(found.end).replace(/\s+$/, ''))
+      continue
+    }
+
     pushText(segments, before)
-    segments.push({ kind: 'link', label: labelByHref.get(href) ?? readableLabel(href), href })
+    segments.push({ kind: 'link', label: cited ?? readableLabel(href), href })
   }
 
   pushText(segments, answer.slice(cursor))
   return segments.filter((s) => s.kind !== 'text' || s.text !== '')
+}
+
+/**
+ * The last occurrence of `label` in `text`, if it is close enough to the end to
+ * be the thing the route was annotating.
+ *
+ * WINDOWED, and that is the whole safety of it. Without a bound, a long answer
+ * that mentioned somebody in its first sentence and cited them in its last
+ * would hoist the link back into the opening sentence — moving a link away from
+ * the claim it supports, which is worse than repeating a name. 160 characters
+ * is about a sentence and a half: long enough for "Name (110 percent), who is
+ * on three projects, [/people/<id>]", short enough that the link stays inside
+ * the clause that earned it.
+ *
+ * Case-insensitive because the model reflows names into sentence case, but the
+ * SLICE is taken from the original text, so the person's own capitalisation is
+ * what renders.
+ */
+const LABEL_LOOKBACK = 160
+
+function findLabelNearEnd(text: string, label: string): { start: number; end: number } | null {
+  if (label === '') return null
+  const from = Math.max(0, text.length - LABEL_LOOKBACK)
+  const window = text.slice(from)
+  const at = window.toLowerCase().lastIndexOf(label.toLowerCase())
+  if (at === -1) return null
+  return { start: from + at, end: from + at + label.length }
 }
 
 /** Merge adjacent prose so the renderer never emits a run of empty spans. */

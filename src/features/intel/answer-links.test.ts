@@ -8,21 +8,105 @@ const CITES = [
 
 describe('splitAnswerLinks', () => {
   it('turns an inline route into a NAME, not a UUID', () => {
-    // The visible bug: "[/people/09844444-…]" rendered as bracketed hex
-    // mid-sentence, with the person one un-clickable click away.
+    // The original bug: "[/people/09844444-…]" rendered as bracketed hex
+    // mid-sentence, with the person one un-clickable click away. The name the
+    // model already wrote is what becomes the link — see the duplication tests
+    // below for why it is not appended after it.
     const out = splitAnswerLinks(
       'Pasindu Prabhashwara (110 percent) [/people/09844444-19a1-47d3-9d90-bb8cac317ed8] is over.',
       CITES,
     )
     expect(out).toEqual([
-      { kind: 'text', text: 'Pasindu Prabhashwara (110 percent) ' },
       {
         kind: 'link',
         label: 'Pasindu Prabhashwara',
         href: '/people/09844444-19a1-47d3-9d90-bb8cac317ed8',
       },
-      { kind: 'text', text: ' is over.' },
+      { kind: 'text', text: ' (110 percent) is over.' },
     ])
+    expect(out.map((s) => (s.kind === 'text' ? s.text : s.label)).join('')).toBe(
+      'Pasindu Prabhashwara (110 percent) is over.',
+    )
+  })
+
+  it('does NOT print the name twice when the prose already said it', () => {
+    // The reported bug: "Pasindu Prabhashwara Pasindu Prabhashwara and Sumeera
+    // Madushanka Sumeera Madushanka have the highest workload". The route
+    // ANNOTATES a name the model just wrote, so the existing words become the
+    // link rather than the label being appended after them.
+    const out = splitAnswerLinks(
+      'Pasindu Prabhashwara [/people/09844444-19a1-47d3-9d90-bb8cac317ed8] and Sumeera Madushanka [/people/dcecf1f4-4e69-4a04-a571-1aa471fc3e66] have the highest workload.',
+      CITES,
+    )
+    expect(out).toEqual([
+      {
+        kind: 'link',
+        label: 'Pasindu Prabhashwara',
+        href: '/people/09844444-19a1-47d3-9d90-bb8cac317ed8',
+      },
+      { kind: 'text', text: ' and ' },
+      {
+        kind: 'link',
+        label: 'Sumeera Madushanka',
+        href: '/people/dcecf1f4-4e69-4a04-a571-1aa471fc3e66',
+      },
+      { kind: 'text', text: ' have the highest workload.' },
+    ])
+    // The rendered sentence reads exactly once through.
+    expect(out.map((s) => (s.kind === 'text' ? s.text : s.label)).join('')).toBe(
+      'Pasindu Prabhashwara and Sumeera Madushanka have the highest workload.',
+    )
+  })
+
+  it('links the name and keeps what sits between it and the route', () => {
+    const out = splitAnswerLinks(
+      'Pasindu Prabhashwara (110 percent) [/people/09844444-19a1-47d3-9d90-bb8cac317ed8] is over.',
+      CITES,
+    )
+    expect(out).toEqual([
+      {
+        kind: 'link',
+        label: 'Pasindu Prabhashwara',
+        href: '/people/09844444-19a1-47d3-9d90-bb8cac317ed8',
+      },
+      { kind: 'text', text: ' (110 percent) is over.' },
+    ])
+  })
+
+  it('matches the name however the model cased it, and keeps the original casing', () => {
+    const out = splitAnswerLinks(
+      'pasindu prabhashwara [/people/09844444-19a1-47d3-9d90-bb8cac317ed8] logged nothing.',
+      CITES,
+    )
+    expect(out[0]).toEqual({
+      kind: 'link',
+      label: 'pasindu prabhashwara',
+      href: '/people/09844444-19a1-47d3-9d90-bb8cac317ed8',
+    })
+  })
+
+  it('does not hoist a link back to a name mentioned far earlier', () => {
+    // Moving a link away from the claim it supports is worse than repeating a
+    // name, so the backward search is windowed.
+    const far = `Pasindu Prabhashwara had a quiet week. ${'Filler sentence about the sprint. '.repeat(8)}The most loaded person [/people/09844444-19a1-47d3-9d90-bb8cac317ed8] is elsewhere.`
+    const out = splitAnswerLinks(far, CITES)
+    const firstText = out[0]
+    expect(firstText.kind).toBe('text')
+    expect(firstText.kind === 'text' && firstText.text.startsWith('Pasindu Prabhashwara had')).toBe(
+      true,
+    )
+  })
+
+  it('still appends a label when the prose never named them', () => {
+    const out = splitAnswerLinks(
+      'The most loaded person is [/people/09844444-19a1-47d3-9d90-bb8cac317ed8].',
+      CITES,
+    )
+    expect(out).toContainEqual({
+      kind: 'link',
+      label: 'Pasindu Prabhashwara',
+      href: '/people/09844444-19a1-47d3-9d90-bb8cac317ed8',
+    })
   })
 
   it('handles several routes in one sentence', () => {
