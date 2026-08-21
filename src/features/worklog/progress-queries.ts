@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, inArray, lte, or } from 'drizzle-orm'
 import { db } from '@/db'
-import { absences, assignments, users, workSchedules, worklogEntries } from '@/db/schema'
-import { liveApps } from '@/db/live'
+import { absences, assignments, users, workSchedules } from '@/db/schema'
+import { liveApps, liveWorklogEntries } from '@/db/live'
 import { canHoldWork } from '@/features/people/removal-queries'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { computeCoverage, type CoverageSummary } from '@/features/worklog/coverage'
@@ -207,19 +207,23 @@ export async function getProgressMatrix(opts: {
     // that time renders as unassigned, which is what it has become.
     db
       .select({
-        userId: worklogEntries.userId,
-        day: worklogEntries.day,
-        appId: worklogEntries.appId,
+        userId: liveWorklogEntries.userId,
+        day: liveWorklogEntries.day,
+        appId: liveWorklogEntries.appId,
         appName: liveApps.name,
-        minutes: worklogEntries.minutes,
+        minutes: liveWorklogEntries.minutes,
       })
-      .from(worklogEntries)
-      .leftJoin(liveApps, eq(worklogEntries.appId, liveApps.id))
+      // The LIVE view, not the raw table: worklog entries are soft-deleted, so
+      // reading the table directly would keep counting hours somebody removed
+      // — and this feeds a per-person progress matrix, where a phantom hour is
+      // read as work that happened. db/live.test.ts caught this.
+      .from(liveWorklogEntries)
+      .leftJoin(liveApps, eq(liveWorklogEntries.appId, liveApps.id))
       .where(
         and(
-          inArray(worklogEntries.userId, ids),
-          gte(worklogEntries.day, opts.from),
-          lte(worklogEntries.day, opts.to),
+          inArray(liveWorklogEntries.userId, ids),
+          gte(liveWorklogEntries.day, opts.from),
+          lte(liveWorklogEntries.day, opts.to),
         ),
       ),
   ])

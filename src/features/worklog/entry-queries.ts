@@ -1,8 +1,7 @@
 import { and, asc, eq } from 'drizzle-orm'
 
 import { db } from '@/db'
-import { liveWorklogEntries } from '@/db/live'
-import { apps, tasks } from '@/db/schema'
+import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
 import type { EntryCategory } from '@/features/worklog/entries'
 
 /**
@@ -54,18 +53,26 @@ export async function listDayEntriesForDisplay(
       billable: liveWorklogEntries.billable,
       note: liveWorklogEntries.note,
       taskId: liveWorklogEntries.taskId,
-      taskTitle: tasks.title,
+      taskTitle: liveTasks.title,
       appId: liveWorklogEntries.appId,
-      appName: apps.name,
-      appSlug: apps.slug,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
     })
     .from(liveWorklogEntries)
-    // LEFT joins, both: `task_id` is ON DELETE SET NULL and `app_id` is stored
-    // rather than derived, precisely so hours survive the task being deleted.
-    // An inner join would make those rows vanish from the day's total — losing
+    // LEFT joins onto the LIVE views, and both halves of that matter.
+    //
+    // LEFT, because `task_id` is ON DELETE SET NULL and `app_id` is stored
+    // rather than derived, precisely so hours survive the work being deleted.
+    // An inner join would make those rows vanish from the day's total, losing
     // time somebody actually worked.
-    .leftJoin(tasks, eq(tasks.id, liveWorklogEntries.taskId))
-    .leftJoin(apps, eq(apps.id, liveWorklogEntries.appId))
+    //
+    // LIVE, because tasks and apps are soft-deletable: joining the raw tables
+    // would surface a trashed task's title as though it were current. Through
+    // the live views a trashed task yields a null title and the entry renders
+    // under its category instead — the hours are kept, the stale name is not.
+    // db/live.test.ts enforces this repo-wide, and it caught this file.
+    .leftJoin(liveTasks, eq(liveTasks.id, liveWorklogEntries.taskId))
+    .leftJoin(liveApps, eq(liveApps.id, liveWorklogEntries.appId))
     .where(and(eq(liveWorklogEntries.userId, userId), eq(liveWorklogEntries.day, day)))
     // Oldest first: the list reads in the order the day happened, which is how
     // somebody reconstructing it will check it.
