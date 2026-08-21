@@ -186,12 +186,16 @@ export function AppCard({
           >
             {app.name}
           </h3>
-          {/* Your relationship to the project, in WORDS. The dot beside the
-              name is identity, not ownership — two apps you are on have two
-              different hues — so the fact that one is yours has to be said
-              rather than tinted (WCAG 1.4.1). */}
+          {/* Your relationship to the project, in WORDS — and in the SAME
+              neutral treatment as the status pill below, deliberately.
+              This card already spends colour twice: the left edge on health
+              (which one needs a person today) and the dot on identity (which
+              project this is). Tinting ownership as well made every card you
+              are on look like a different kind of card, which is a third
+              colour system saying something neither urgent nor ambiguous.
+              Ownership is a fact; facts get words. */}
           {mine ? (
-            <span className="shrink-0 rounded-sm bg-primary/10 px-1.5 font-mono text-2xs font-medium text-primary">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 font-mono text-2xs text-muted-foreground">
               {MINE_LABEL[mine]}
             </span>
           ) : null}
