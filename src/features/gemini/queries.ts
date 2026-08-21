@@ -208,3 +208,35 @@ export async function perUserFeatureUsage(since: Date) {
     .groupBy(aiUsageEvents.userId, users.name, aiUsageEvents.feature)
     .orderBy(desc(count()))
 }
+
+/**
+ * Every key in the workspace, reduced to ownership — for `keyCensus`.
+ *
+ * NO KEY MATERIAL LEAVES THIS FUNCTION. It selects the owner, the name, and
+ * the two booleans the census needs. The encrypted secret and its last-four
+ * are not selected at all, rather than selected and discarded, so a future
+ * caller cannot widen the return type into a leak by accident.
+ *
+ * Admin-only by intent, and the CALLER must enforce that: this is a plain
+ * query with no session in scope, so it cannot check anything itself. It
+ * exposes who holds keys and who shares them across the whole workspace, which
+ * is a fair thing for an admin to see and not for everyone.
+ *
+ * Ordered by name so the census is stable between reads; keyCensus sorts by
+ * count afterwards, and an unstable input would make equal-count rows shuffle
+ * between refreshes for no reason a reader could see.
+ */
+export async function listKeyOwnership(): Promise<
+  { userId: string; userName: string; shared: boolean; active: boolean }[]
+> {
+  return db
+    .select({
+      userId: geminiKeys.userId,
+      userName: users.name,
+      shared: geminiKeys.shared,
+      active: geminiKeys.active,
+    })
+    .from(geminiKeys)
+    .innerJoin(users, eq(geminiKeys.userId, users.id))
+    .orderBy(asc(users.name))
+}
