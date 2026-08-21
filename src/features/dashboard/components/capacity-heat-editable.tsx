@@ -13,6 +13,7 @@ import { toast } from 'sonner'
 import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SearchSelect } from '@/components/ui/search-select'
 import { Label } from '@/components/ui/label'
 import {
   Popover,
@@ -22,13 +23,6 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
 import { sortCapacities } from '@/features/dashboard/sort-capacities'
 import { summarizeAllocations } from '@/features/people/allocation'
@@ -655,42 +649,31 @@ function AssignPopover({
         <form onSubmit={handleSubmit} className="flex flex-col gap-2.5">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`assign-app-${fieldId}`}>App</Label>
-            <Select
+            {/* Searchable, because this list is every app in the studio and it
+                grows. A plain Select made picking one a scroll through names
+                the person already knew — typing is the faster path the moment
+                the list outgrows a glance.
+
+                aria-required, not `required`: a native `required` on a hidden
+                control cannot be focused for the browser to report on, so the
+                form would refuse to submit with nothing on screen. handleSubmit
+                does the reporting, on the control that failed. */}
+            <SearchSelect
+              id={`assign-app-${fieldId}`}
+              ref={appTriggerRef}
               value={appId}
               onValueChange={(next) => {
-                setAppId(next ?? '')
+                setAppId(next)
                 if (errors.app) setErrors((current) => ({ ...current, app: undefined }))
               }}
-            >
-              {/* aria-required, not `required`: Base UI's Select satisfies a
-                  native `required` through a hidden control, which a browser
-                  cannot focus to report on — the form would refuse to submit
-                  with nothing on screen. This marks the control required to
-                  assistive tech and leaves the reporting to handleSubmit. */}
-              <SelectTrigger
-                id={`assign-app-${fieldId}`}
-                ref={appTriggerRef}
-                aria-required="true"
-                aria-invalid={Boolean(errors.app)}
-                aria-describedby={errors.app ? `assign-app-${fieldId}-error` : undefined}
-                className="w-full"
-              >
-                {/* The Select's value is the id, so without an explicit label
-                    mapping the trigger renders a raw UUID. */}
-                <SelectValue placeholder="Pick an app">
-                  {(current: string) =>
-                    available.find((app) => app.id === current)?.name ?? 'Pick an app'
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {available.map((app) => (
-                  <SelectItem key={app.id} value={app.id}>
-                    {app.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={available.map((app) => ({ value: app.id, label: app.name }))}
+              placeholder="Pick an app"
+              searchPlaceholder="Search apps…"
+              emptyText="No app by that name."
+              aria-required="true"
+              aria-invalid={Boolean(errors.app)}
+              aria-describedby={errors.app ? `assign-app-${fieldId}-error` : undefined}
+            />
             {errors.app ? (
               <p
                 id={`assign-app-${fieldId}-error`}
