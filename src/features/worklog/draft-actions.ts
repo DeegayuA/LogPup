@@ -9,6 +9,8 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { GeminiError, callGemini } from '@/features/gemini/client'
 import { resolveChain } from '@/features/gemini/model-choice'
 import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
+import { roleBadgeTone } from '@/lib/project-roles'
+import { getMyAssignedApps } from './queries'
 import { buildWorklogDraftPrompt, type DraftActivity } from './draft-prompt'
 import { WORK_DAY_PATTERN } from './worklog-day'
 
@@ -88,10 +90,22 @@ export async function draftWorklogNote(day: string): Promise<ActionResult<Worklo
     .orderBy(asc(activityLog.createdAt))
     .limit(MAX_ACTIVITY_ROWS)
 
+  // Per-project role, so a lead's draft reads like a lead's day. The role is
+  // free text on the assignment (job-roles.ts keeps it suggestions, not an
+  // enum), so roleBadgeTone derives the meaning — the same helper the UI badge
+  // uses, because two answers to "who counts as a lead" drift and it drifts on
+  // the person being mis-drafted.
+  const assigned = await getMyAssignedApps(session.user.id)
+  const roles = assigned.map((app) => ({
+    appName: app.name,
+    tone: roleBadgeTone(app.role),
+  }))
+
   const prompt = buildWorklogDraftPrompt({
     name: session.user.name ?? 'this engineer',
     day,
     activity,
+    roles,
     suggestPercent: true,
   })
 
