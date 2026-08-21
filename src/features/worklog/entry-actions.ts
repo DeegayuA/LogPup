@@ -4,8 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { tasks, worklogEntries } from '@/db/schema'
-import { liveWorklogEntries } from '@/db/live'
+import { worklogEntries } from '@/db/schema'
+import { liveTasks, liveWorklogEntries } from '@/db/live'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { loadActor } from '@/features/auth/actor'
@@ -108,10 +108,16 @@ async function resolveEntryAppId(
   if (category !== 'task') return { ok: true, appId }
   if (!taskId) return { ok: false, message: 'Pick the task that time went to' }
 
+  // liveTasks, not the raw table: a TRASHED task must not accept hours. Read
+  // raw and a soft-deleted task comes back as live, so time gets attributed to
+  // work somebody deliberately removed — and the entry then carries that task's
+  // app id, quietly filing the hours under a project the task no longer belongs
+  // to. The "no longer exists" message below is already the right sentence for
+  // it; it just was not reachable.
   const [task] = await db
-    .select({ appId: tasks.appId })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))
+    .select({ appId: liveTasks.appId })
+    .from(liveTasks)
+    .where(eq(liveTasks.id, taskId))
     .limit(1)
 
   if (!task) return { ok: false, message: 'That task no longer exists' }
