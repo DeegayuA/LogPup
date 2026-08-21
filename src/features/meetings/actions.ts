@@ -25,6 +25,7 @@ import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { format } from 'date-fns'
 import { getTeamForApp } from '@/features/people/queries'
 import {
+  classifyCalendarError,
   createCalendarEvent,
   deleteCalendarEvent,
   describeCalendarError,
@@ -299,7 +300,10 @@ async function syncCalendarInvite(
     agenda: string | null
     startsAt: Date
     endsAt: Date
-    createdBy: string
+    /** WHOSE calendar, not who authored it — see the column comment in
+     *  src/db/schema.ts. Reading createdBy here is what made every calendar
+     *  write a single point of failure on one person's personal account. */
+    calendarOrganiserId: string
   },
   attendees: AttendeeRef[],
   /** Ask Google to mint a Meet room with the event and store its link. */
@@ -308,7 +312,7 @@ async function syncCalendarInvite(
   const [creator] = await db
     .select({ googleRefreshToken: users.googleRefreshToken })
     .from(users)
-    .where(eq(users.id, meeting.createdBy))
+    .where(eq(users.id, meeting.calendarOrganiserId))
   if (!creator?.googleRefreshToken) {
     return { reason: NO_GOOGLE_CONNECTION_REASON }
   }
@@ -423,6 +427,9 @@ export async function createMeeting(
     await db.batch([
       db.insert(meetings).values({
         id: meetingId,
+        // Seeded to the creator, which is what makes the two columns equal on
+        // day one; the handover action is what will ever make them differ.
+        calendarOrganiserId: session.user.id,
         // DEPRECATED mirror, written so change-request routing has one stable
         // project id for this meeting — see mirroredAppId and the comment on
         // the column in src/db/schema.ts. meeting_apps is the real answer.
@@ -489,7 +496,7 @@ export async function createMeeting(
       agenda: agenda || null,
       startsAt: new Date(startsAt),
       endsAt: new Date(endsAt),
-      createdBy: session.user.id,
+      calendarOrganiserId: session.user.id,
     },
     // createMeeting doesn't yet collect a per-attendee optional flag (the
     // invite-list UI work is a later task) — every row it inserts above is
@@ -622,7 +629,7 @@ export async function rescheduleMeeting(
   })
 
   const calendarWarning = existing.googleEventId
-    ? await syncCalendarTime(existing.createdBy, existing.googleEventId, nextStart, nextEnd)
+    ? await syncCalendarTime(existing.calendarOrganiserId, existing.googleEventId, nextStart, nextEnd)
     : undefined
 
   // Tell the attendees their meeting moved — the same best-effort treatment
@@ -892,7 +899,7 @@ export async function updateMeeting(
   // to send it.
   const calendarWarning =
     existing.googleEventId && moved
-      ? await syncCalendarTime(existing.createdBy, existing.googleEventId, nextStart, nextEnd)
+      ? await syncCalendarTime(existing.calendarOrganiserId, existing.googleEventId, nextStart, nextEnd)
       : undefined
 
   // Best-effort, exactly as in createMeeting and rescheduleMeeting: the edit
@@ -1121,12 +1128,39 @@ export async function deleteMeeting(meetingId: string): Promise<ActionResult> {
       const [creator] = await db
         .select({ googleRefreshToken: users.googleRefreshToken })
         .from(users)
-        .where(eq(users.id, existing.createdBy))
+        .where(eq(users.id, existing.calendarOrganiserId))
       if (creator?.googleRefreshToken) {
         await deleteCalendarEvent(creator.googleRefreshToken, existing.googleEventId)
+        await db
+          .update(meetings)
+          .set({ calendarSyncState: 'ok', calendarSyncedAt: new Date(), calendarError: null })
+          .where(eq(meetings.id, existing.id))
       }
-    } catch {
-      // Ignore — proceed with the soft delete regardless.
+    } catch (error) {
+      // The soft delete proceeds regardless — that part of the old bare catch
+      // was right. What was wrong was the ignoring.
+      //
+      // This is the ONE calendar failure where doing nothing leaves a live
+      // event holding a joinable Meet link on twenty calendars for a meeting
+      // that no longer exists in LogPup. And a bare catch cannot tell the two
+      // cases apart: a 404 means the event was already gone and nothing is
+      // wrong, while invalid_grant means it is still there and nobody can
+      // remove it. Recording the classification is what lets an admin list
+      // find the second kind.
+      //
+      // It also protects restoreMeeting, which nulls googleEventId on the
+      // stated premise that the event was cancelled on delete. When the cancel
+      // failed, that premise is false and the restore throws away the only
+      // handle anyone had on the stale event.
+      const key = classifyCalendarError(error)
+      await db
+        .update(meetings)
+        .set(
+          key === 'not_found'
+            ? { calendarSyncState: 'ok', calendarSyncedAt: new Date(), calendarError: null }
+            : { calendarSyncState: 'failed', calendarSyncedAt: new Date(), calendarError: key },
+        )
+        .where(eq(meetings.id, existing.id))
     }
   }
 
