@@ -522,3 +522,68 @@ Read first: spec surface 4 (/admin).
 1. **R2 SHORTEN has no exact copy string in the spec**, unlike R1/R3/R4/R5, which all give quoted sentences. Task 9 Step 4 builds a numbers-only template as a placeholder-free stand-in and flags it for sign-off rather than inventing wording that would read as spec-authoritative.
 2. **R3's Sinhala purpose-token vocabulary is never enumerated.** The spec explicitly requires "Sinhala equivalents in the same tested list" for standup/retro/planning/crit/review/demo/sync/1:1/postmortem, but — unlike `attendee-series.ts`'s weekday list, which spells every Sinhala word out — gives none of them. Shipping guessed translations risks the veto silently failing to protect Sinhala-titled meetings exactly where it matters most; Task 9 Step 5 stubs this with a loud TODO rather than guessing.
 3. **The accept/dismiss guard for `share_slot` is ambiguous with two organizers.** The spec's guard text ("`session.user.id === createdBy` of the target series' most recent occurrence") is written for a single-series `targetKey`, but `share_slot` targets a sorted PAIR of series that may have two different organizers. Must either organizer be able to accept/dismiss on behalf of both, must both consent, or is this action admin-only for `share_slot` specifically? Task 13 implements a best-effort reading and flags the choice for review rather than silently picking one interpretation as if the spec said so.
+
+---
+
+## Outcome — SHIPPED 2026-08-21
+
+All 18 tasks. 3584 tests pass, `tsc` clean, lint 0 errors, `next build` green,
+soft-delete guard green (19).
+
+| Tasks | Landed as |
+|---|---|
+| 1 | `meeting_load_decisions` + `0054` (shipped with R6) |
+| 2–10 | ten pure modules in `src/features/meeting-load/`, 131 tests |
+| 11–13 | `gather.ts`, `queries.ts`, `admin-queries.ts`, `actions.ts`, `redaction-boundary.test.ts` |
+| 14–17 | dashboard card, /meetings tile + organizer card, /meetings/load audit half, /admin card |
+| 18 | `e2e/meeting-load.spec.ts` |
+
+### Departures from the plan, each deliberate
+
+1. **`/meetings/load` was already built by R6**, so B's audit tables were
+   merged into that route rather than creating a second one — which is what §1
+   of the R6 plan said would happen. The suggestion queue and the audit half
+   are Suspense-split from each other: the sweeps are over six months of
+   meetings, and holding the cards behind them makes the page feel broken.
+
+2. **The Sinhala purpose tokens are real, not a `TODO(human)` stub.** Task 9
+   Step 5 said to stub them and flag it. They were already written and tested
+   during R6 (`series-key.ts`), confined to three words whose meaning is not in
+   doubt — a wrong entry asserts a title means something it does not, whereas a
+   missing one only leaves the veto quiet. R3 imports that list rather than
+   building a second one.
+
+3. **`SeriesMetrics` gained a `title` field**, because R3's purpose veto reads
+   the meeting title and the plan's interface had no way to reach one.
+
+4. **`share_slot` may be decided by EITHER organizer.** Task 13 Step 2 left
+   this open. Requiring the same person to run both series would make the rule
+   undecidable exactly when it is most useful — two different people holding two
+   meetings that could be one.
+
+5. **R2's copy is built from the numbers**, with the proposed duration in
+   `evidence`. The design gives no sentence for R2, and inventing one that reads
+   as spec-given is how an unapproved wording becomes permanent.
+
+### Two bugs the guards caught
+
+- The gather read `apps` raw. A deleted project would have kept naming itself
+  on the per-project breakdown while admin Trash listed it deleted.
+- The dashboard's coverage figure was a function that always returned zero.
+
+### Still not live, and why
+
+**R1–R5 will render nothing until meetings are recorded.** Every rule needs
+analysed occurrences; `meeting_ai_notes` rows only exist where somebody ran the
+analysis. The rules are correct and tested by value — they are simply quiet,
+which is the designed behaviour ("insufficient data renders nothing") rather
+than a gap. R4 RECORD-OR-REVIEW is the exception and will fire first: it exists
+precisely to make never-recording cost something.
+
+**R5 stays silent until the attendee recommender writes rows.** It is gated on
+a non-trivial `hardEvidencePool`, which is zero everywhere today. That is the
+right failure: a rule that names people should not fire on no evidence.
+
+**`e2e/meeting-load.spec.ts` has not been executed.** It needs the dev server on
+3400 and seeds the shared dev database, which parallel sessions are using. It
+typechecks and lints, and every delete in it is scoped.
