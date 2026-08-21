@@ -28,7 +28,6 @@ import { HEALTH_LABEL, type HealthLevel } from '@/features/apps/app-health'
 import {
   checkinAskContext,
   checkinAskText,
-  isPastDue,
   overdueAskText,
   overdueRowsByUserApp,
   plural,
