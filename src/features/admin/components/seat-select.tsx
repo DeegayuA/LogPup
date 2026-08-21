@@ -75,15 +75,33 @@ export function SeatSelect({
             renders the raw enum value ('superadmin') instead of its label. */}
         <SelectValue>{(v: string) => ROLE_LABELS[v as UserRole] ?? v}</SelectValue>
       </SelectTrigger>
-      <SelectContent>
+      {/* Three overrides of the shared primitive, all for the same reason: this
+          is the only Select in the product whose ITEMS are two lines of prose
+          rather than one short label.
+
+          w-auto breaks the popup off `w-(--anchor-width)`. That default is right
+          everywhere else — a menu the width of its trigger — but this trigger is
+          size="sm" inside a table cell, so the seat descriptions were being
+          clipped mid-word ("Everything, including destructiv…") with no ellipsis,
+          which turns the one line that tells an admin what they are granting into
+          a guess. Capped against --available-width so it can never run off a
+          narrow viewport. */}
+      <SelectContent className="w-auto min-w-[min(20rem,var(--available-width))] max-w-[min(26rem,var(--available-width))]">
         {SEAT_GROUPS.map((group) => (
           <SelectGroup key={group.label}>
             <SelectLabel>{group.label}</SelectLabel>
             {group.seats.map((seat) => (
               <SelectItem key={seat.value} value={seat.value}>
-                <span className="flex flex-col gap-0.5">
-                  <span>{ROLE_LABELS[seat.value]}</span>
-                  <span className="text-2xs text-muted-foreground">{seat.hint}</span>
+                {/* whitespace-normal because the primitive's ItemText sets
+                    whitespace-nowrap for single-label selects. white-space
+                    inherits, so the child wins — the hint wraps instead of
+                    being cut off. items-start keeps both lines flush left
+                    against the primitive's items-center. */}
+                <span className="flex min-w-0 flex-col items-start gap-0.5 whitespace-normal py-0.5">
+                  <span className="font-medium">{ROLE_LABELS[seat.value]}</span>
+                  <span className="text-2xs leading-snug text-balance text-muted-foreground">
+                    {seat.hint}
+                  </span>
                 </span>
               </SelectItem>
             ))}
