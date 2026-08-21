@@ -145,11 +145,19 @@
   --warning: oklch(0.52 0.12 62);
   --warning-foreground: oklch(0.98 0.005 95);
   --weekend: oklch(0.5 0.19 25);
-  /* Purple, not the amber it was. Hue only — L and C are unchanged from the
-     audited orange, so the contrast that was measured against --background
-     and --card still holds; moving lightness as well would have silently
-     re-opened a ratio somebody had already checked. */
-  --holiday: oklch(0.55 0.15 305);
+  /* #7f00ff exactly, converted: oklch(0.5294 0.2931 293.61).
+     Measured 5.91:1 against --background, so it clears AA for text.
+
+     THE DARK VALUE IS NOT THE SAME COLOUR, on purpose. #7f00ff measures
+     2.93:1 against the dark ground — under even the 3:1 floor for non-text —
+     so the dark theme carries a lightened sibling at the same hue. Shipping
+     the literal hex in both themes would have been faithful to the request
+     and unreadable in half the app.
+
+     Its chroma (0.29) is roughly double anything else in this palette, which
+     ranges 0.12-0.19. That is the point of a highlight colour, and also why
+     it should stay on the few surfaces that mean it rather than spreading. */
+  --holiday: oklch(0.5294 0.2931 293.61);
   /* Bank/mercantile-only holidays (not gazetted public holidays): a blue
      family, distinct from --holiday and --weekend (red).
 
@@ -192,7 +200,7 @@
      intended consequence of "all orange to purple", but it does cost the
      warm-means-watch-out reading those surfaces had. Every one of them also
      carries a label or an icon, so none depended on the hue alone. */
-  --chart-1: oklch(0.62 0.13 305);
+  --chart-1: oklch(0.5294 0.2931 293.61);
   --chart-2: oklch(0.55 0.09 165);
   --chart-3: oklch(0.44 0.09 165);
   --chart-4: oklch(0.68 0.1 70);
@@ -265,7 +273,7 @@
   --warning: oklch(0.82 0.13 72);
   --warning-foreground: oklch(0.2 0.04 60);
   --weekend: oklch(0.72 0.18 25);
-  --holiday: oklch(0.78 0.15 305);
+  --holiday: oklch(0.78 0.18 293.61);
   /* Same blue family as light mode, lightened for a dark surface: ~9.4:1
      against --background and ~8.7:1 against --card. */
   --mercantile: oklch(0.78 0.12 268);
@@ -287,7 +295,7 @@
      priority chips, the roadmap's today line) keeps its contrast. Colour is
      still not the ONLY signal: see the "Near capacity" badge in
      capacity-card.tsx and the band named in CapacityBar's aria-label. */
-  --chart-1: oklch(0.68 0.13 305);
+  --chart-1: oklch(0.78 0.18 293.61);
   --chart-2: oklch(0.72 0.1 165);
   --chart-3: oklch(0.78 0.1 165);
   --chart-4: oklch(0.68 0.11 70);
