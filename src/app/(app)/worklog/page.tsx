@@ -14,6 +14,9 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
+import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
+import { getMyDayEntries } from '@/features/worklog/entry-queries'
+import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
 import {
   WorklogCalendar,
   shiftMonth,
@@ -53,7 +56,7 @@ import { listOrgHolidays, type OrgHolidayRow } from '@/features/worklog/org-holi
 import { absenceDays } from '@/features/worklog/absence-days'
 import { patternForDay } from '@/features/worklog/schedules'
 import { MAX_BACKFILL_DAYS } from '@/features/worklog/missing-days'
-import { WORK_DAY_PATTERN, resolveWorkDay, worklogDaysBack } from '@/features/worklog/worklog-day'
+import { WORK_DAY_PATTERN, resolveWorkDay, worklogDaysBack, isFutureWorkDay } from '@/features/worklog/worklog-day'
 import { getAiPrefs } from '@/features/gemini/prefs'
 
 export const metadata = { title: 'Work log' }
@@ -507,7 +510,28 @@ async function CalendarZone({
     })
     const owedDays = monthCoverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
 
+    // The selected day's logged hours. Fetched here rather than in a nested
+    // Suspense: it is one indexed read on (user_id, day) and the panel it
+    // feeds sits beside the form, so a second boundary would flash an empty
+    // card next to a full one.
+    const dayEntries = await getMyDayEntries(userId, selectedDay)
+
+    // Scheduled minutes for the selected day, taken from the coverage pass
+    // already computed above rather than re-derived: that fraction is
+    // schedule-aware AND holiday-folded, so a closed day reads as 0 here for
+    // the same reason it does everywhere else. A day outside the month window
+    // yields null, which the card renders as "cannot say" rather than
+    // assuming a working day — there is deliberately no ?? 480 in this repo.
+    const selectedFraction =
+      monthCoverage.days.find((d) => d.day === selectedDay)?.fraction ?? null
+    const scheduledMinutes =
+      selectedFraction === null ? null : scheduledMinutesForFraction(selectedFraction)
+    const canLogHours = !isFutureWorkDay(selectedDay, new Date())
+
     return {
+      dayEntries,
+      scheduledMinutes,
+      canLogHours,
       joinedOn,
       facts,
       selectedRow,
@@ -531,6 +555,9 @@ async function CalendarZone({
   if (!data) return <ZoneError title="The calendar could not be read." retryHref={retryHref} />
 
   const {
+    dayEntries,
+    scheduledMinutes,
+    canLogHours,
     joinedOn,
     facts,
     selectedRow,
@@ -614,6 +641,19 @@ async function CalendarZone({
           initial={selectedRow ? { percent: selectedRow.percent, note: selectedRow.note } : null}
           aiDraftEnabled={aiDraftEnabled}
           assignedApps={assignedApps}
+        />
+
+        {/* Hours sit BELOW the score, not beside it. The score is the question
+            the day asks ("of what you planned, how much got done"); the hours
+            are the record of where the time actually went. Reading order
+            follows that: judgement first, then evidence. */}
+        <DayHoursCard
+          key={`hours-${selectedDay}`}
+          day={selectedDay}
+          entries={dayEntries}
+          scheduledMinutes={scheduledMinutes}
+          apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
+          canEdit={canLogHours}
         />
       </section>
     </div>
