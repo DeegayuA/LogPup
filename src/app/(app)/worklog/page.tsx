@@ -34,6 +34,7 @@ import {
   loggedTone,
   DAY_STATE_CLASS,
 } from '@/features/worklog/day-state'
+import { splitNoteAppTags, type AppRef } from '@/features/worklog/note-app-tags'
 import {
   countMyWorklogDays,
   getMyApprovedAbsences,
@@ -43,6 +44,7 @@ import {
   getMyWorklogsInRange,
   getTeamApprovedAbsences,
   getTeamWorklogs,
+  listAppTagTargets,
   getUserJoinDay,
 } from '@/features/worklog/queries'
 import { computeCoverage, formatCoverage } from '@/features/worklog/coverage'
@@ -790,10 +792,11 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
   }
 
   const load = async () => {
-    const [rows, teamAbsences, orgRows] = await Promise.all([
+    const [rows, teamAbsences, orgRows, apps] = await Promise.all([
       getTeamWorklogs(from, today),
       getTeamApprovedAbsences(from, today),
       listOrgHolidays(),
+      listAppTagTargets(),
     ])
 
     const closed = closedStudioDays(orgRows, from, today)
@@ -817,7 +820,7 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
       absentByUser.set(range.userId, set)
     }
 
-    return { people, absentByUser, closed }
+    return { people, absentByUser, closed, apps }
   }
 
   let data: Awaited<ReturnType<typeof load>> | null = null
@@ -828,7 +831,7 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
   }
   if (!data) return <ZoneError title="The team view could not be read." retryHref={retryHref} />
 
-  const { people, absentByUser, closed } = data
+  const { people, absentByUser, closed, apps } = data
 
   return (
       <section className="flex flex-col gap-3">
@@ -848,8 +851,23 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
             className="rounded-xl border border-dashed"
           />
         ) : (
-          <div className="grid gap-3 md:grid-cols-2">
-            {people.map((person) => (
+          <div className="grid items-start gap-3 md:grid-cols-2">
+            {people.map((person) => {
+              // A working day this person neither logged nor was away for —
+              // the amber squares in the strip. Counted from the same
+              // classifier the strip renders, so the number and the squares
+              // can never disagree.
+              const owed = strip.filter(
+                (iso) =>
+                  classifyDay({
+                    iso,
+                    percent: person.entries.get(iso)?.percent,
+                    absent: absentByUser.get(person.userId)?.has(iso) ?? false,
+                    holiday: closed.has(iso),
+                    today,
+                  }) === 'owed',
+              ).length
+              return (
               <div
                 key={person.userId}
                 className="flex min-w-0 flex-col gap-2 rounded-xl border bg-card p-3"
@@ -861,9 +879,18 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
                   >
                     {person.name}
                   </Link>
+                  {/* Both halves, because the strip below shows both. "3 days
+                      logged" beside three amber squares left the amber ones
+                      unnamed, and an unnamed state reads as decoration. */}
                   <span className="shrink-0 text-2xs text-muted-foreground">
-                    <span className="font-mono tabular-nums">{person.entries.size}</span>
-                    {person.entries.size === 1 ? ' day logged' : ' days logged'}
+                    <span className="font-mono tabular-nums">{person.entries.size}</span> logged
+                    {owed > 0 ? (
+                      <>
+                        {' · '}
+                        <span className="font-mono tabular-nums text-chart-1">{owed}</span>
+                        <span className="text-chart-1"> not logged</span>
+                      </>
+                    ) : null}
                   </span>
                 </div>
 
@@ -918,14 +945,13 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
                             {entry.percent}%
                           </span>
                         </span>
-                        <span className={cn(bilingualText, 'min-w-0 flex-1')}>
-                          {entry.note ?? <span className="text-muted-foreground">No note</span>}
-                        </span>
+                        <NoteWithAppTags note={entry.note} apps={apps} />
                       </li>
                     ))}
                 </ul>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </section>
@@ -934,6 +960,53 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
 
 // ---------------------------------------------------------------------------
 // Zone states
+/**
+ * A day's note, with the `[Project Name]` tags people write at the end lifted
+ * out and rendered as links.
+ *
+ * The tags were showing as literal brackets mid-paragraph, which is both ugly
+ * and a dead end — the project they name is one click away and the note could
+ * not take you there. An unmatched tag still renders, just without a link: the
+ * person wrote it, and a project renamed last month must not silently eat a
+ * word out of their own account of their day.
+ */
+function NoteWithAppTags({ note, apps }: { note: string | null; apps: AppRef[] }) {
+  const { text, tags } = splitNoteAppTags(note, apps)
+
+  if (!text && tags.length === 0) {
+    return <span className="min-w-0 flex-1 text-muted-foreground">No note</span>
+  }
+
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-1">
+      {text ? <span className={cn(bilingualText, 'min-w-0')}>{text}</span> : null}
+      {tags.length > 0 ? (
+        <span className="flex flex-wrap gap-1">
+          {tags.map((tag, i) =>
+            tag.slug ? (
+              <Link
+                key={`${tag.label}-${i}`}
+                href={`/apps/${tag.slug}`}
+                className="rounded border border-primary/30 bg-primary/10 px-1.5 py-px font-mono text-2xs text-primary outline-none transition-colors hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {tag.label}
+              </Link>
+            ) : (
+              <span
+                key={`${tag.label}-${i}`}
+                className="rounded border border-border bg-muted/50 px-1.5 py-px font-mono text-2xs text-muted-foreground"
+                title="No project answers to this name"
+              >
+                {tag.label}
+              </span>
+            ),
+          )}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 // ---------------------------------------------------------------------------
 
 /**

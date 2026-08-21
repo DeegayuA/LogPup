@@ -107,6 +107,16 @@ export async function getMyWorklogsInRange(
  * Bounded by date on both sides so this cannot become a full-table scan as
  * the log grows; `daily_worklogs_day_idx` is the access path.
  */
+/**
+ * Every live project's name and slug, for turning the `[Project Name]` tags
+ * people write at the end of a note into links. Deliberately two columns and
+ * no aggregates — listApps runs five of them, and this only needs to answer
+ * "does a project answer to this name, and where does it live".
+ */
+export async function listAppTagTargets(): Promise<{ name: string; slug: string }[]> {
+  return db.select({ name: liveApps.name, slug: liveApps.slug }).from(liveApps)
+}
+
 export async function getTeamWorklogs(fromIso: string, toIso: string): Promise<TeamWorklogRow[]> {
   return db
     .select({
