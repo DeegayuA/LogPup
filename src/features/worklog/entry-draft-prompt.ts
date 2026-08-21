@@ -252,7 +252,11 @@ export function parseDraftedEntries(
       taskId,
       note,
     }
-    if (!validateEntry(candidate).ok) continue
+    // requireAppForTask: false — a proposal is not a saved row. The model is
+    // shown task ids and never apps; entry-actions.ts derives the project
+    // from the task at save time and ignores any client-supplied one. Holding
+    // a draft to that rule would drop every task row the model proposed.
+    if (!validateEntry(candidate, { requireAppForTask: false }).ok) continue
     if (total + minutes > ENTRY_MINUTES_MAX) continue
 
     total += minutes

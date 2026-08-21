@@ -130,6 +130,40 @@ export const users = pgTable('users', {
   // Free-form organization labels (client/team names) an admin pins on a user.
   orgTags: text('org_tags').array().notNull().default([]),
   googleRefreshToken: text('google_refresh_token'),
+  /**
+   * What we last OBSERVED about this person's Google grant — never a guess.
+   *
+   * `google_refresh_token` is one nullable column, so it cannot tell "never
+   * connected" from "revoked" from "signed in but left the Calendar box
+   * unticked on Google's granular consent screen". describeCalendarError
+   * already knows how to make that distinction AFTER a failure; this is what
+   * lets anything ask BEFORE one.
+   *
+   * Defaults to 'unknown', never 'ok'. A status column defaulting to the good
+   * state asserts something nobody checked, and the first feature built on top
+   * would trust it. Existing token holders backfilled to 'unknown' for exactly
+   * that reason; rows with no token at all backfilled to 'none', which is a
+   * fact rather than an absence of one.
+   *
+   * TWO RULES that matter more than the column: a 5xx NEVER downgrades anyone
+   * (Google being down for ten minutes must not mark the whole workspace
+   * broken, a state that would then sit there being wrong), and 'unknown' must
+   * never render as "fine".
+   *
+   * `text` plus a TS union rather than a pgEnum — the repo's standing reason
+   * (Postgres forbids using a freshly ADD VALUE'd member in the same
+   * transaction) applies, and activity_log.verb set the precedent.
+   */
+  googleTokenStatus: text('google_token_status')
+    .$type<'none' | 'unknown' | 'ok' | 'invalid_grant' | 'insufficient_scope' | 'api_disabled'>()
+    .notNull()
+    .default('unknown'),
+  /** Space-separated scopes Google actually granted, written from
+   *  `account.scope` on every Google sign-in. This is what makes an unticked
+   *  Calendar checkbox detectable at sign-in rather than at first failure. */
+  googleScopes: text('google_scopes'),
+  /** When googleTokenStatus was last written from an observation. */
+  googleCheckedAt: timestamp('google_checked_at'),
   // Alternate names/initials this person is known by elsewhere in the data
   // (meeting transcripts, follow-up authors, AI notes) — e.g. "W.A.D.N. Perera"
   // stored here as an alias for a user named "Nuwan". matchPersonToAttendee
@@ -425,6 +459,50 @@ export const meetings = pgTable('meetings', {
   // Video-call link (Meet/Zoom/etc.) for one-click join. Optional.
   meetingUrl: text('meeting_url'),
   googleEventId: text('google_event_id'),
+  /**
+   * WHOSE calendar this meeting lives on — deliberately NOT `created_by`.
+   *
+   * Every calendar write resolves a refresh token, and all three call sites
+   * resolved it from `created_by`. That made each of them a single point of
+   * failure on one person's PERSONAL Google account: deactivate them and every
+   * future meeting they created becomes unpatchable and uncancellable at once,
+   * because the offboarding gate counts assignments, roles and tasks — not
+   * meetings.
+   *
+   * Reassigning `created_by` instead would have been cheaper and wrong: that
+   * is the authorship fact activity_log was written against and the meeting
+   * detail renders. Migration 0034_app_role_history exists in this repo
+   * precisely because overwriting a historical holder in place destroys the
+   * answer to "who held this on 12 June". The same mistake one table over is
+   * not cheaper.
+   *
+   * Backfilled to `created_by`, which is what makes the column safe to ship
+   * ahead of the handover action that will move it: on the day it landed the
+   * two were equal and behaviour was byte-for-byte unchanged.
+   */
+  calendarOrganiserId: uuid('calendar_organiser_id')
+    .notNull()
+    .references(() => users.id),
+  /** Which Google calendar to write to. 'primary' is the organiser's own; a
+   *  shared studio calendar is the cheap eighty percent of removing the
+   *  personal-account SPOF. No picker yet — a second organiser patching an
+   *  event they did not create gets a 403 that is NOT the insufficient-scope
+   *  403, and mislabelling it is how a fixable permission problem becomes
+   *  "Google is broken". */
+  googleCalendarId: text('google_calendar_id').notNull().default('primary'),
+  /** Sticky result of the last calendar write. The yellow banner on save is a
+   *  good sentence but it is not a record: today a dead token produces the same
+   *  toast on every save until everyone clicks past it, and six weeks later
+   *  nobody knows which meetings guests can actually see. */
+  calendarSyncState: text('calendar_sync_state').$type<'ok' | 'failed' | 'stale'>(),
+  calendarSyncedAt: timestamp('calendar_synced_at'),
+  /** A classification KEY from classifyCalendarError, never a rendered
+   *  sentence — LogPup's surfaces are bilingual, and a sentence written at
+   *  failure time is a permanent decision about a reader whose language is not
+   *  known until read time. */
+  calendarError: text('calendar_error').$type<
+    'invalid_grant' | 'api_disabled' | 'insufficient_scope' | 'bad_credentials' | 'not_found' | 'unavailable' | 'refused'
+  >(),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   // Per-meeting override for the auto-assign pipeline (see notes.ts
@@ -1107,6 +1185,21 @@ export const worklogEntries = pgTable('worklog_entries', {
   // cannot drift the way floats do once a month of half-hours is summed.
   // Division by 60 happens at the display edge, never in storage.
   minutes: integer('minutes').notNull(),
+  // Which project this time belongs to. NOT derivable from taskId: that is
+  // set only on category='task' rows, so without this a meeting, a review or
+  // an incident on a project could not be attributed at all — per-project
+  // cost undercounted silently and effort mix read ~100% 'task'. Non-task
+  // time being first class is the whole reason categories exist.
+  //
+  // NULLABLE: some time belongs to no project (admin, learning). Forcing a
+  // choice would make people pick a wrong one, which is worse than null.
+  //
+  // Stored on EVERY row including task rows, derived from the task's app at
+  // write time. It survives the task being deleted (taskId does not), and
+  // where the two later disagree THIS value wins for historical figures: a
+  // task moved between projects must not retroactively move hours somebody
+  // logged against the old one.
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'set null' }),
   // Set ONLY when the time went to a tracked task. SET NULL rather than
   // cascade: deleting a task must not delete the record that somebody spent
   // three hours on it — the hours were still worked.
@@ -1138,6 +1231,12 @@ export const worklogEntries = pgTable('worklog_entries', {
   // "How many hours went into this task" — what the effort and cost reports
   // are built on.
   index('worklog_entries_task_live_idx').on(t.taskId).where(sql`${t.deletedAt} is null`),
+  // Every per-project figure — cost, effort mix, portfolio rollup — reads by
+  // app and date range. Task-scoped hours alone would miss meetings, reviews
+  // and incidents, which is why this exists alongside the task index.
+  index('worklog_entries_app_day_live_idx')
+    .on(t.appId, t.day)
+    .where(sql`${t.deletedAt} is null`),
 ])
 
 // One registered passkey (WebAuthn credential) per row. `id` IS the

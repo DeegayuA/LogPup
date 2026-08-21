@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { worklogEntries } from '@/db/schema'
+import { tasks, worklogEntries } from '@/db/schema'
 import { liveWorklogEntries } from '@/db/live'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -67,6 +67,11 @@ const entryFields = {
   // Nullable AND optional: the UI sends null to clear it, and omits it
   // entirely for the non-task categories that must not carry one.
   taskId: z.string().uuid('That is not a task').nullable().optional(),
+  // Which project the time belongs to. For a task entry the server DERIVES
+  // this from the task rather than trusting the client, so a stale or forged
+  // appId cannot attribute somebody's hours to a project the task is not on.
+  // For non-task entries it is the caller's answer, and null is legitimate.
+  appId: z.string().uuid('That is not a project').nullable().optional(),
   billable: z.boolean().optional(),
   note: z.string().trim().max(ENTRY_NOTE_MAX, 'That note is too long').nullable().optional(),
 }
@@ -82,6 +87,36 @@ const createInput = z.object({
   // without saying otherwise was typed by a person.
   source: z.enum(ENTRY_SOURCES).optional(),
 })
+
+/**
+ * Resolve which project an entry belongs to.
+ *
+ * For a TASK entry the project is read from the task itself — the client's
+ * appId is ignored entirely. A caller could otherwise attribute their hours
+ * to a project the task does not belong to, which would land in that
+ * project's cost with nothing to contradict it.
+ *
+ * For every other category the caller's answer stands, including null:
+ * admin and learning time frequently belongs to no project, and forcing a
+ * choice would make people name a wrong one.
+ */
+async function resolveEntryAppId(
+  category: string,
+  taskId: string | null,
+  appId: string | null,
+): Promise<{ ok: true; appId: string | null } | { ok: false; message: string }> {
+  if (category !== 'task') return { ok: true, appId }
+  if (!taskId) return { ok: false, message: 'Pick the task that time went to' }
+
+  const [task] = await db
+    .select({ appId: tasks.appId })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1)
+
+  if (!task) return { ok: false, message: 'That task no longer exists' }
+  return { ok: true, appId: task.appId }
+}
 
 export async function createWorklogEntry(
   raw: z.input<typeof createInput>,
@@ -103,6 +138,13 @@ export async function createWorklogEntry(
 
   const note = input.note?.trim() ? input.note.trim() : null
 
+  // Attribution is resolved SERVER-SIDE for task entries: the project comes
+  // from the task, never from the client. Storing it (rather than joining at
+  // read time) is what keeps the hours attributed after the task is deleted —
+  // taskId is ON DELETE SET NULL, appId is not derived from it again.
+  const resolvedAppId = await resolveEntryAppId(input.category, input.taskId ?? null, input.appId ?? null)
+  if (!resolvedAppId.ok) return err(resolvedAppId.message)
+
   try {
     const [row] = await db
       .insert(worklogEntries)
@@ -114,6 +156,7 @@ export async function createWorklogEntry(
         // already refused a task on a non-task category, so this only ever
         // collapses '' and undefined to the column's real empty value.
         taskId: input.category === 'task' ? (input.taskId ?? null) : null,
+        appId: resolvedAppId.appId,
         category: input.category,
         billable: input.billable ?? false,
         note,
@@ -182,6 +225,12 @@ export async function updateWorklogEntry(
 
   const note = input.note?.trim() ? input.note.trim() : null
 
+  // Same server-side resolution as create: a task entry's project comes from
+  // the task, never the client. An edit that switches category from 'meeting'
+  // to 'task' must RE-derive it rather than keep the meeting's project.
+  const resolvedAppId = await resolveEntryAppId(input.category, input.taskId ?? null, input.appId ?? null)
+  if (!resolvedAppId.ok) return err(resolvedAppId.message)
+
   try {
     // Through the LIVE subquery: a soft-deleted entry must read as gone, or
     // "edit" would quietly resurrect a row the person had already removed.
@@ -199,6 +248,7 @@ export async function updateWorklogEntry(
       .set({
         minutes: input.minutes,
         taskId: input.category === 'task' ? (input.taskId ?? null) : null,
+        appId: resolvedAppId.appId,
         category: input.category,
         billable: input.billable ?? false,
         note,

@@ -88,10 +88,28 @@ describe('accountedFraction', () => {
 })
 
 describe('validateEntry: the category/task rule', () => {
-  const base: EntryInput = { minutes: 60, category: 'task', taskId: 'task-1' }
+  const base: EntryInput = { minutes: 60, category: 'task', taskId: 'task-1', appId: 'app-1' }
 
   it('accepts a task entry that names its task', () => {
     expect(validateEntry(base)).toEqual({ ok: true })
+  })
+
+  it('REQUIRES a project on a task entry — appId is what survives the task being deleted', () => {
+    const result = validateEntry({ ...base, appId: null })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.problem).toBe('app-required-for-task')
+  })
+
+  // The point of app_id existing. Before it, a meeting about a project could
+  // not be attributed at all: per-project cost undercounted every meeting,
+  // review and incident hour, and effort mix read ~100% 'task' because
+  // nothing else could be counted.
+  it('accepts a NON-TASK entry that names a project — a meeting on a project is that project\'s time', () => {
+    expect(validateEntry({ minutes: 45, category: 'meeting', appId: 'app-1' })).toEqual({ ok: true })
+  })
+
+  it('accepts a non-task entry with NO project — admin and learning need not belong to one', () => {
+    expect(validateEntry({ minutes: 30, category: 'admin' })).toEqual({ ok: true })
   })
 
   it('REQUIRES a task when the category is task', () => {

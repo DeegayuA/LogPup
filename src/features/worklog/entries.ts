@@ -116,6 +116,13 @@ export type EntryInput = {
   minutes: number
   category: EntryCategory | (string & {})
   taskId?: string | null
+  /**
+   * Which project the time belongs to. Absent and null both mean "no project",
+   * which is a legitimate answer for admin and learning — forcing a choice
+   * would make people name a wrong project, and a wrong attribution is worse
+   * than an honest blank in every figure built on this.
+   */
+  appId?: string | null
   note?: string | null
 }
 
@@ -126,6 +133,7 @@ export type EntryProblem =
   | 'minutes-too-large'
   | 'task-required'
   | 'task-forbidden'
+  | 'app-required-for-task'
   | 'note-too-long'
 
 export type EntryValidation =
@@ -148,7 +156,29 @@ export type EntryValidation =
  * Messages are the ones a person reads, so the action can return them
  * verbatim rather than inventing a second set of words for the same rule.
  */
-export function validateEntry(input: EntryInput): EntryValidation {
+export type ValidateEntryOptions = {
+  /**
+   * Whether a task entry must already name its project.
+   *
+   * TRUE for anything being SAVED — appId is what keeps the hours attributed
+   * after the task is deleted, so a stored task row without one is a hole.
+   *
+   * FALSE for an AI PROPOSAL, which is not a saved row: the model is shown
+   * task ids and never apps, and `resolveEntryAppId` in entry-actions.ts
+   * derives the project from the task at save time and deliberately IGNORES
+   * any client-supplied appId for task rows. Making a draft carry one would
+   * attach a value the save path throws away, and holding a proposal to a
+   * rule the save path itself fulfils would drop every task row the model
+   * proposed.
+   */
+  requireAppForTask?: boolean
+}
+
+export function validateEntry(
+  input: EntryInput,
+  options: ValidateEntryOptions = {},
+): EntryValidation {
+  const requireAppForTask = options.requireAppForTask ?? true
   const fail = (problem: EntryProblem, message: string): EntryValidation =>
     ({ ok: false, problem, message })
 
@@ -172,6 +202,15 @@ export function validateEntry(input: EntryInput): EntryValidation {
   }
   if (input.category !== 'task' && hasTask) {
     return fail('task-forbidden', 'Only task entries can name a task')
+  }
+
+  // A task always belongs to a project, so a task entry always can be
+  // attributed — and must be, because appId is what survives the task being
+  // deleted. Non-task categories stay free: a meeting may or may not be about
+  // a project, and admin time usually is not.
+  const hasApp = input.appId != null && input.appId !== ''
+  if (requireAppForTask && input.category === 'task' && !hasApp) {
+    return fail('app-required-for-task', 'That task is not linked to a project')
   }
 
   if ((input.note?.length ?? 0) > ENTRY_NOTE_MAX) {
