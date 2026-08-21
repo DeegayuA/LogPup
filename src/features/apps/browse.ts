@@ -81,6 +81,13 @@ export type BrowseParams = {
    * apps it is counting.
    */
   risk: AppRiskFilter | null
+  /**
+   * Narrow to the viewer's own projects. A boolean rather than a person id:
+   * this is "mine", not "somebody's", and an id in the URL would invite a
+   * filter-by-person view that the page does not have and permissions would
+   * have to gate.
+   */
+  mine: boolean
 }
 
 export const DEFAULT_BROWSE_PARAMS: BrowseParams = {
@@ -89,6 +96,7 @@ export const DEFAULT_BROWSE_PARAMS: BrowseParams = {
   sort: DEFAULT_SORT,
   tag: null,
   risk: null,
+  mine: false,
 }
 
 /** Next hands repeated params through as arrays; take the first and move on. */
@@ -109,6 +117,7 @@ export function parseBrowseParams(
     status: APP_STATUS_FILTERS.includes(status) ? status : DEFAULT_STATUS,
     sort: APP_SORTS.includes(sort) ? sort : DEFAULT_SORT,
     tag: tag || null,
+    mine: firstValue(raw.mine) === '1',
     risk: APP_RISK_FILTERS.includes(risk) ? risk : null,
   }
 }
@@ -142,6 +151,7 @@ export function browseHref(
   if (next.sort !== DEFAULT_SORT) search.set('sort', next.sort)
   if (next.tag) search.set('tag', next.tag)
   if (next.risk) search.set('risk', next.risk)
+  if (next.mine) search.set('mine', '1')
   const query = search.toString()
   return query ? `${base}?${query}` : base
 }
@@ -213,13 +223,25 @@ export function riskMatches(app: BrowsableApp, risk: AppRiskFilter | null): bool
 export function filterApps<T extends BrowsableApp>(
   apps: readonly T[],
   params: BrowseParams,
+  /**
+   * Whether an app belongs to the viewer. INJECTED rather than computed here,
+   * because `BrowsableApp` carries members as `{ name }` only — widening it to
+   * hold ids would force every other caller of this function to supply them.
+   * The caller knows who is looking; this function only knows how to filter.
+   *
+   * Absent means the `mine` filter cannot apply, so it is ignored rather than
+   * silently emptying the grid — which is what a deactivated account with no
+   * Actor would otherwise see.
+   */
+  isMine?: (app: T) => boolean,
 ): T[] {
   return apps.filter(
     (app) =>
       statusMatches(app.status, params.status) &&
       queryMatches(app, params.q) &&
       tagMatches(app, params.tag) &&
-      riskMatches(app, params.risk),
+      riskMatches(app, params.risk) &&
+      (!params.mine || !isMine || isMine(app)),
   )
 }
 

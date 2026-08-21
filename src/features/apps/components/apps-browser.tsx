@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { AppCard } from '@/features/apps/components/app-card'
+import { isMine } from '@/features/apps/mine'
 import {
   APP_SORTS,
   APP_STATUS_FILTERS,
@@ -58,14 +59,21 @@ export function AppsBrowser({
   apps,
   params,
   today,
+  viewerId = null,
 }: {
   apps: AppPortfolioEntry[]
   params: BrowseParams
   today: string
+  /** Signed-in person, or null for a deactivated account with no Actor. */
+  viewerId?: string | null
 }) {
   const counts = statusCounts(apps)
   const facets = tagFacets(apps, MAX_TAG_FACETS)
-  const visible = sortApps(filterApps(apps, params), params.sort)
+  const mineCount = viewerId ? apps.filter((app) => isMine(app, viewerId)).length : 0
+  const visible = sortApps(
+    filterApps(apps, params, (app) => isMine(app, viewerId)),
+    params.sort,
+  )
   const filtered = !isDefaultBrowse(params)
 
   return (
@@ -109,6 +117,31 @@ export function AppsBrowser({
             role="group"
             aria-label="Filter by status"
           >
+            {/* "Mine" sits with the status filters because it answers the
+                same question they do — which slice of the grid am I looking
+                at. Rendered only when there is a viewer AND they are actually
+                on something: a chip that always returns an empty grid is
+                worse than no chip, and a deactivated account has no Actor to
+                match against at all. */}
+            {viewerId && mineCount > 0 ? (
+              <Link
+                href={browseHref(BASE, params, { mine: !params.mine })}
+                aria-pressed={params.mine}
+                className={cn(
+                  'flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium outline-none',
+                  'transition-colors duration-150 motion-reduce:transition-none',
+                  'focus-visible:ring-2 focus-visible:ring-ring',
+                  params.mine
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                Mine
+                <span className="font-mono tabular-nums text-2xs text-muted-foreground">
+                  {mineCount}
+                </span>
+              </Link>
+            ) : null}
             {APP_STATUS_FILTERS.map((filter) => {
               const selected = params.status === filter
               return (
@@ -261,7 +294,7 @@ export function AppsBrowser({
            the two disagreeing is a horizontal jump on every cold load. */
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visible.map((app) => (
-            <AppCard key={app.id} app={app} today={today} />
+            <AppCard key={app.id} app={app} today={today} viewerId={viewerId} />
           ))}
         </div>
       )}

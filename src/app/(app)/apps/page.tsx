@@ -79,7 +79,12 @@ export default async function AppsPage(props: {
               atRiskHref={browseHref('/apps', params, { risk: 'at-risk', status: 'live' })}
             />
           </div>
-          <AppsBrowser apps={apps} params={params} today={today} />
+          <AppsBrowser
+            apps={apps}
+            params={params}
+            today={today}
+            viewerId={session?.user?.id ?? null}
+          />
         </>
       )}
     </div>

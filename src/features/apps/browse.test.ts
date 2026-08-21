@@ -50,6 +50,15 @@ describe('parseBrowseParams', () => {
     )
   })
 
+  it('reads the mine flag, and defaults it off', () => {
+    // '1' rather than a person id: this is "mine", not "somebody's". An id in
+    // the URL would invite a filter-by-person view the page does not have and
+    // permissions would have to gate.
+    expect(parseBrowseParams({ mine: '1' }).mine).toBe(true)
+    expect(parseBrowseParams({}).mine).toBe(false)
+    expect(parseBrowseParams({ mine: 'true' }).mine).toBe(false)
+  })
+
   it('reads valid values through', () => {
     expect(
       parseBrowseParams({
@@ -61,6 +70,7 @@ describe('parseBrowseParams', () => {
       }),
     ).toEqual({
       q: 'ledger',
+      mine: false,
       status: 'archived',
       sort: 'name',
       tag: 'React',
@@ -334,5 +344,38 @@ describe('tagFacets', () => {
       app({ techTags: ['a', 'b', 'c'] }),
     ]
     expect(tagFacets(many, 2)).toHaveLength(2)
+  })
+})
+
+describe('filterApps with the mine filter', () => {
+  const app = (name: string, over: Record<string, unknown> = {}) =>
+    ({
+      name,
+      slug: name.toLowerCase(),
+      description: null,
+      status: 'active',
+      techTags: [],
+      members: [],
+      health: { level: 'on-track' },
+      stats: { tasks: { todo: 0, in_progress: 0, done: 0, overdue: 0 }, lastActivityAt: null },
+      ...over,
+    }) as never
+
+  const all = [app('Kestrel'), app('Tessera')]
+  const params = { ...DEFAULT_BROWSE_PARAMS, mine: true }
+
+  it('narrows to what the predicate claims', () => {
+    const out = filterApps(all, params, (a) => (a as { name: string }).name === 'Kestrel')
+    expect(out.map((a) => (a as { name: string }).name)).toEqual(['Kestrel'])
+  })
+
+  it('IGNORES the filter when no predicate is supplied, rather than emptying the grid', () => {
+    // A deactivated account has no Actor, so nothing can be matched. Showing
+    // every app is right; showing none would look like a broken page.
+    expect(filterApps(all, params)).toHaveLength(2)
+  })
+
+  it('leaves the grid alone when the flag is off', () => {
+    expect(filterApps(all, DEFAULT_BROWSE_PARAMS, () => false)).toHaveLength(2)
   })
 })

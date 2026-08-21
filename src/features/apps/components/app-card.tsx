@@ -20,6 +20,8 @@ import {
 } from '@/features/apps/app-health'
 import { HealthDot } from '@/features/apps/components/health-dot'
 import { TaskSplitBar } from '@/features/apps/components/task-split-bar'
+import { eventDotClasses } from '@/features/meetings/event-color'
+import { MINE_LABEL, mineKind } from '@/features/apps/mine'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
 
 const STATUS_LABEL: Record<AppStatus, string> = {
@@ -73,7 +75,27 @@ const MAX_AVATARS = 4
  * span or genuinely deleted; a hover-only fact is invisible to keyboard and
  * touch users, which is most of the ways this page is read.
  */
-export function AppCard({ app, today }: { app: AppPortfolioEntry; today: string }) {
+export function AppCard({
+  app,
+  today,
+  viewerId = null,
+}: {
+  app: AppPortfolioEntry
+  today: string
+  /** Signed-in person, or null for a deactivated account with no Actor. */
+  viewerId?: string | null
+}) {
+  // How this viewer is attached to the project, if at all. Read off the row
+  // the page already has — see features/apps/mine.ts for why this is
+  // membership rather than the permission scope.
+  const mine = mineKind(app, viewerId)
+  // The app's identity hue, the SAME one its meetings are painted with
+  // (features/meetings/event-color.ts assigns it deterministically from the
+  // id). A dot rather than the left rule: that edge already carries HEALTH,
+  // and the comment on HEALTH_ACCENT is right that a grid where every card is
+  // coloured says nothing. Identity answers "which project", health answers
+  // "which one needs me today" — two questions, two channels.
+  const identityDot = eventDotClasses(app.id)
   const { tasks, currentSprint, nextSprint, lastActivityAt } = app.stats
   const openTasks = tasks.todo + tasks.in_progress
   const donePct = completionPct(tasks)
@@ -128,6 +150,7 @@ export function AppCard({ app, today }: { app: AppPortfolioEntry; today: string 
       // hears — if a future band goes, this string still does not.
       aria-label={
         `${app.name} — ${HEALTH_LABEL[app.health.level]}. ` +
+        (mine ? `${MINE_LABEL[mine]}. ` : '') +
         `${openTasks} open, ${tasks.overdue} overdue, ${donePct}% done.`
       }
       className="group block h-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
@@ -151,12 +174,27 @@ export function AppCard({ app, today }: { app: AppPortfolioEntry; today: string 
             so the name truncates sooner than it used to and a clipped name is
             the one string on the card worth a pointer to recover. */}
         <header className="flex min-h-6 items-center gap-2">
+          {identityDot ? (
+            <span
+              aria-hidden
+              className={cn('size-2 shrink-0 rounded-full', identityDot)}
+            />
+          ) : null}
           <h3
             title={app.name}
             className="min-w-0 flex-1 truncate font-heading text-base font-semibold tracking-tight"
           >
             {app.name}
           </h3>
+          {/* Your relationship to the project, in WORDS. The dot beside the
+              name is identity, not ownership — two apps you are on have two
+              different hues — so the fact that one is yours has to be said
+              rather than tinted (WCAG 1.4.1). */}
+          {mine ? (
+            <span className="shrink-0 rounded-sm bg-primary/10 px-1.5 font-mono text-2xs font-medium text-primary">
+              {MINE_LABEL[mine]}
+            </span>
+          ) : null}
           {/* Silent for `active`, and silent for archived because the health
               pill's own word for `dormant` is already "Archived" — printing it
               twice on one 24px row is the duplicated emphasis this card was
