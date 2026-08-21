@@ -38,6 +38,44 @@ describe('splitAnswerLinks', () => {
     expect(out).toContainEqual({ kind: 'link', label: 'View person', href: '/people/unknown-id' })
   })
 
+  it('labels a detail route whose id is in the QUERY, not the path', () => {
+    // The morning briefing writes "[/meetings?open=<uuid>]" for one meeting.
+    // Labelling that "Meetings" sends the reader to the list, where they then
+    // have to find the meeting the sentence just named for them.
+    const out = splitAnswerLinks(
+      '1 meeting is missing a write-up [/meetings?open=3e9ee358-8ba1-424e-8254-370c718a77cb].',
+      [],
+    )
+    expect(out).toContainEqual({
+      kind: 'link',
+      label: 'View meeting',
+      href: '/meetings?open=3e9ee358-8ba1-424e-8254-370c718a77cb',
+    })
+  })
+
+  it('still labels a plain section route as the section', () => {
+    // The same briefing writes "[/worklog]" for the page, not a row — the two
+    // must not collapse into one label.
+    expect(splitAnswerLinks('Log them [/worklog].', [])).toContainEqual({
+      kind: 'link',
+      label: 'Work log',
+      href: '/worklog',
+    })
+    expect(splitAnswerLinks('Open [/meetings].', [])).toContainEqual({
+      kind: 'link',
+      label: 'Meetings',
+      href: '/meetings',
+    })
+  })
+
+  it('labels a project route carrying a tab as the project', () => {
+    expect(splitAnswerLinks('Sprint ends soon [/apps/unilever?tab=roadmap].', [])).toContainEqual({
+      kind: 'link',
+      label: 'View project',
+      href: '/apps/unilever?tab=roadmap',
+    })
+  })
+
   it('REFUSES an off-site route and keeps the words', () => {
     // The answer is written by a model reading user-authored titles, so a
     // planted title is enough to steer it. WHATWG folds the backslash into a

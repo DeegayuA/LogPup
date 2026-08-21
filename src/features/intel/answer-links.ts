@@ -101,9 +101,17 @@ const SECTION_LABEL: Record<string, string> = {
 }
 
 function readableLabel(href: string): string {
-  const path = href.split('?')[0].replace(/^\/+|\/+$/g, '')
+  const [rawPath, query = ''] = href.split('?')
+  const path = rawPath.replace(/^\/+|\/+$/g, '')
   const [section, rest] = path.split('/')
-  if (rest) return DETAIL_LABEL[section] ?? SECTION_LABEL[section] ?? titleCase(section)
+
+  // A detail route does not always put its id in the PATH. "/meetings?open=<id>"
+  // opens ONE meeting, and labelling that "Meetings" points at the list instead
+  // of the thing the sentence is about — the reader lands somewhere they then
+  // have to search. `open` is this app's convention for "this row, in a dialog".
+  const opensOne = new URLSearchParams(query).has('open')
+
+  if (rest || opensOne) return DETAIL_LABEL[section] ?? SECTION_LABEL[section] ?? titleCase(section)
   return SECTION_LABEL[section] ?? titleCase(section || 'link')
 }
 

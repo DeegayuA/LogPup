@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SpotlightCard } from '@/components/ui/spotlight-card'
 import { getBriefing, type Briefing } from '@/features/intel/actions'
 import { parsePriority, type ParsedPriority } from '@/features/intel/prompt'
+import { splitAnswerLinks } from '@/features/intel/answer-links'
 import {
   formatBusinessTime,
   formatBusinessWeekdayDayMonth,
@@ -135,8 +136,32 @@ export function BriefingCard({
             </h2>
 
             {briefing.body ? (
-              <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
-                {briefing.body}
+              /* The body is the one paragraph anybody reads on this card, so it
+                 is foreground text. It was muted, which put the actual briefing
+                 a shade below the priorities listed under it and made the most
+                 important sentence the faintest thing here. The footer stays
+                 muted — that is where "quieter than the content" is right. */
+              <p className="max-w-prose text-sm leading-relaxed text-foreground/90">
+                {/* Routes are INLINE in the prose — "…across the last 14 days
+                    [/worklog]" — and were printing as literal brackets, with a
+                    raw UUID sitting in the middle of the meetings one. Same fix
+                    as the answer panel: resolve each to a link, and refuse
+                    anything that is not an in-app route, because this text is
+                    written by a model reading user-authored task and meeting
+                    titles and a planted title is enough to steer it. */}
+                {splitAnswerLinks(briefing.body, []).map((segment, i) =>
+                  segment.kind === 'text' ? (
+                    <React.Fragment key={i}>{segment.text}</React.Fragment>
+                  ) : (
+                    <Link
+                      key={i}
+                      href={segment.href}
+                      className="rounded-sm font-medium text-primary underline decoration-primary/30 underline-offset-2 outline-none hover:decoration-primary focus-visible:ring-2 focus-visible:ring-ring/50"
+                    >
+                      {segment.label}
+                    </Link>
+                  ),
+                )}
               </p>
             ) : null}
 
@@ -213,7 +238,16 @@ export function BriefingCard({
               unavailable.
             </span>
           ) : (
-            <span>Written by {briefing.model ?? 'Gemini'} from your workspace data.</span>
+            /* Says where it came from AND what to do about that. "Written by
+               gemini-flash-latest from your workspace data." names a model most
+               readers cannot evaluate and stops; the sentence a person needs is
+               that the links are the evidence and are worth opening before
+               acting. Same wording as the answer panel, deliberately — one
+               product should make one promise about its generated text. */
+            <span>
+              Written by {briefing.model ?? 'Gemini'} from your workspace data — open the links
+              before acting on it.
+            </span>
           )}
         </p>
       </div>
