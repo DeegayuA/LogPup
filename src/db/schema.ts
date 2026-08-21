@@ -594,6 +594,52 @@ export const meetingAttendeeRecommendations = pgTable('meeting_attendee_recommen
   index('meeting_attendee_recs_meeting_surface_idx').on(t.meetingId, t.surface),
 ])
 
+// Decisions about meeting-load suggestions. The engine's only table.
+//
+// OPEN SUGGESTIONS ARE NOT STORED, and that is the whole design. Every
+// suggestion is an assertion about live work ("these four items need the same
+// five people"). The moment one is written down it starts rotting: the
+// follow-up is answered, the task is ticked, the deadline moves, and the row
+// on screen keeps insisting otherwise. So suggestions are computed live on
+// every render and only DECISIONS persist — the same doctrine planner.ts
+// states for asks ("a stale ask-list is worse than none").
+//
+//   kind        which rule produced the suggestion — 'cover_together' today,
+//               R1-R5 later. TEXT, not a pgEnum, per the activityLog
+//               precedent: each further rule would otherwise cost a migration,
+//               and ALTER TYPE ... ADD VALUE cannot be used in the transaction
+//               that added it (see 0037, 0053).
+//   targetKey   the suggestion's stable identity. R6 builds it in
+//               coverage.ts's coverageTargetKey; the shape is documented
+//               there, and it is stable across runs precisely so a dismissal
+//               sticks.
+//   status      REUSES suggestionStatus rather than minting an enum. Rows only
+//               ever hold 'accepted' or 'dismissed' — 'open' is what it means
+//               for no row to exist, and storing it would create a second,
+//               contradictable answer to "is this still open". No default, for
+//               the same reason: every write states which it is.
+//   evidence    a snapshot of the numbers that were on screen when somebody
+//               decided. IDS ONLY, never names — a dismissed group must not
+//               become a place somebody's name is kept after they are gone.
+//   decidedBy   set null rather than cascade: removing an account should not
+//               silently un-dismiss everything that account ever dismissed.
+//
+// The unique index on (kind, targetKey) IS the never-re-show guarantee — the
+// renderer filters live suggestions against the decided keys, and the index is
+// what stops two clicks racing into two rows that half-suppress it. Admin
+// Reopen deletes the row, and is the only path back.
+export const meetingLoadDecisions = pgTable('meeting_load_decisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').notNull(),
+  targetKey: text('target_key').notNull(),
+  status: suggestionStatus('status').notNull(),
+  evidence: jsonb('evidence').notNull(),
+  decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('meeting_load_decisions_kind_target_idx').on(t.kind, t.targetKey),
+])
+
 // Append-only audit of who was on a meeting, and when. Exactly the
 // assignment_history pattern above, applied to meeting membership — read that
 // comment first; this one only records where the two differ.

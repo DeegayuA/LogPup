@@ -342,6 +342,14 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   // chain, which is why the regex above tolerates whitespace/newlines
   // between `db` and `.delete(`).
   'src/features/gemini/actions.ts': 'deleteGeminiKey',
+  // why: the decision row IS the suppression. `meeting_load_decisions` records
+  // that somebody dismissed a suggestion, and the renderer filters live
+  // suggestions against those keys — so marking one deleted and leaving it in
+  // place would suppress the suggestion forever, which is the exact opposite
+  // of reopening it. There is also nothing to preserve: open suggestions are
+  // never stored, and the sweep re-derives this one from live rows the moment
+  // the row is gone. Admin-only, and the only path back from a dismissal.
+  'src/features/meetings/load-actions.ts': 'reopenLoadDecision',
   // why: `assignments` is deliberately NOT one of the soft-deleted tables
   // (see SOFT_TABLES in src/db/live.ts / schema.ts) — the design spec keeps
   // assignments hard-deleted on purpose. assignment_history already records

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from 'drizzle-orm'
+import { and, desc, eq, gte, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { absences, users } from '@/db/schema'
 import { can, type Actor } from '@/features/auth/capabilities'
@@ -85,4 +85,33 @@ export async function approvedAbsenceDays(
     }
   }
   return days
+}
+
+/**
+ * Everyone with an APPROVED absence overlapping [from, to].
+ *
+ * Batched, unlike `approvedAbsenceDays` above: the meeting-load sweep asks
+ * "who cannot be in a room this week" about the whole workspace at once, and a
+ * per-person call would issue one round trip per candidate on a driver where
+ * every await is a full one.
+ *
+ * BOTH BOUNDS INCLUSIVE, matching the column comment and the sibling function
+ * — an absence that ends on the first day of the window still covers that day.
+ * Overlap is therefore `startDate <= to AND endDate >= from`, not containment;
+ * a fortnight's leave spanning the whole window has neither bound inside it
+ * and is exactly the row that must not be missed.
+ *
+ * Pending absences are deliberately absent, for the same reason as above: a
+ * person cannot excuse themselves from a room by typing.
+ */
+export async function approvedAbsenceUserIds(from: string, to: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ userId: absences.userId })
+    .from(absences)
+    .where(and(
+      eq(absences.status, 'approved'),
+      lte(absences.startDate, to),
+      gte(absences.endDate, from),
+    ))
+  return new Set(rows.map((row) => row.userId))
 }
