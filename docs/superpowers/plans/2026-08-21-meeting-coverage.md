@@ -1,7 +1,7 @@
 # Meeting coverage — R6 COVER-TOGETHER
 
 **Date:** 2026-08-21
-**Status:** plan, not started
+**Status:** SHIPPED 2026-08-21 — all six steps of §9. See §11.
 **Host:** rule six of the suggestion engine in
 `docs/superpowers/specs/2026-08-12-meeting-load-reduction-design.md`
 
@@ -243,3 +243,76 @@ R6 as specified reads only rows that exist on every workspace, so it can ship
 before the recording pipeline R1–R5 depend on. The alternative is to wait and
 ship B in rule order. Shipping R6 first means `/meetings/load` launches with one
 rule on it and a page title promising more — worth deciding before step 5.
+
+---
+
+## 11. What shipped, and where it differs from this plan
+
+All six steps of §9 are done. 3451 tests pass, `tsc` and lint are clean.
+
+| Step | Landed as |
+|---|---|
+| 1 | `coverage.ts`, `coverage.test.ts` — 48 tests over §3 and §5 |
+| 2 | `ask-derivation.ts`; `planner.ts` rewired, output unchanged |
+| 3 | `series-key.ts` + the shared purpose veto; `attendee-series.ts` keeps `sameSeries` |
+| 4 | `0054_meeting_load_decisions` + journal, `meetingLoadDecisions`, `load-actions.ts` |
+| 5 | `/meetings/load` page/loading/error, `load-board.tsx` |
+| 6 | meetings-page button, `meetings.load` palette row, `meeting.mergeable` signal |
+
+### §10 answered: R6 shipped first
+
+The plan's own argument won — R6 reads rows that exist on every workspace, so
+waiting for the recording pipeline would have held the route, the table and the
+lifecycle hostage to five rules that cannot run yet.
+
+The "page title promising more" worry is handled by not promising: the page is
+called **Meeting load**, not "Suggestions", and its empty state reads as a
+complete answer ("Nothing worth combining right now") rather than a placeholder
+for rules that have not arrived.
+
+### Four places the implementation departs from the text
+
+1. **The pseudocode in §4 absorbs unconditionally, and that is a defect.**
+   `if |A ∪ Pₜ| ≤ CAP and not vetoed(...)` takes in any ask that fits, so one
+   cheap unrelated ask drags in a sixth person, pushes the group past what the
+   separate meetings cost, and the whole suggestion evaporates — a good group
+   would disappear because somebody elsewhere gained a follow-up. Absorption is
+   now scored (`>=`, so a free absorption still happens). This implements §4's
+   own prose: *"adding a sixth person to clear a fifth item has to pay for
+   itself."* Pinned in `coverage.test.ts` as "stops absorbing once an extra ask
+   stops paying for itself".
+
+2. **R6 never proposes merging fewer than four asks**, which follows from the
+   §4 formula and is worth deciding on. `ceil15(15 + 10(m−1))` equals `15m`
+   exactly at m=2 and m=3, so the strictly-lower guard can never fire below
+   four items. The headline sentence in this plan ("four open items — one
+   **thirty**-minute slot") also disagrees with the formula, which gives 45
+   minutes for four. The formula was implemented, being the normative half.
+   Dropping the round-up, or snapping down, would make pairs and triples
+   proposable — a real product decision, not a bug fix.
+
+3. **"Forced into a group" for a pinned follow-up** is implemented as: sorted
+   first so it seeds and is absorbed first, and exempt from the person-minutes
+   guard — a human already said it needs a room and the arithmetic does not get
+   to overrule them. It is NOT exempt from the cap, the veto, or the singleton
+   guard: "this needs a meeting" is not "this needs a meeting with anyone".
+
+4. **The purpose veto reads the source meeting's title**, since an ask has no
+   title of its own. Only follow-ups carry a purpose; task-derived asks have
+   none, and a null purpose merges with anything. The veto is therefore
+   permissive — it blocks the crossings it can name and is silent about the
+   rest. Safe for a suggestion a human accepts, unsafe for anything that acts
+   on its own, which is why nothing built on it may be wired to a write. The
+   Sinhala list is deliberately three words: a wrong entry asserts a title
+   means something it does not, a missing one only leaves the veto quiet.
+
+### Still not done, deliberately
+
+**R1–R5.** Unchanged from §1: they need analysed occurrences, AI-derived output
+counts and participation medians, none of which exist yet. They now have a
+board, a table, a `targetKey` lifecycle and a decided-keys filter to arrive
+into, which was the point of shipping R6 first.
+
+**Proposing a time**, per §7. Still no free/busy anywhere. Cards say who, what
+and how long, plus `notBefore` — the earliest day the studio works, which is a
+floor, not a slot.
