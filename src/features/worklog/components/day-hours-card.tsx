@@ -247,11 +247,19 @@ export function DayHoursCard({
               </Label>
               <Select
                 value={category}
-                items={ENTRY_CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))}
                 onValueChange={(value) => setCategory(value as EntryCategory)}
               >
                 <SelectTrigger id="entry-category" size="sm" className="w-32">
-                  <SelectValue />
+                  {/* Function child, NOT a bare <SelectValue />. Base UI renders
+                      String(value) without one, so the closed trigger showed
+                      "task" rather than "Task" — and for the project select
+                      below it showed the raw "__none__" sentinel. This repo
+                      has now hit that default four times. */}
+                  <SelectValue>
+                    {(value: string) =>
+                      CATEGORY_LABEL[value as EntryCategory] ?? 'Kind'
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {ENTRY_CATEGORIES.map((c) => (
@@ -270,14 +278,16 @@ export function DayHoursCard({
                 </Label>
                 <Select
                   value={appId}
-                  items={[
-                    { value: NO_APP, label: 'No project' },
-                    ...apps.map((a) => ({ value: a.id, label: a.name })),
-                  ]}
                   onValueChange={(value) => setAppId(value ?? NO_APP)}
                 >
                   <SelectTrigger id="entry-app" size="sm" className="w-40">
-                    <SelectValue />
+                    <SelectValue>
+                      {(value: string) =>
+                        value === NO_APP
+                          ? 'No project'
+                          : (apps.find((a) => a.id === value)?.name ?? 'No project')
+                      }
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NO_APP}>No project</SelectItem>
