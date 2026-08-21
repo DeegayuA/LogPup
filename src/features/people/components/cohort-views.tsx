@@ -20,6 +20,16 @@ import { SectionEmpty } from '@/features/people/components/section-empty'
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
 import { peopleHref, type CohortParams } from '@/features/people/cohort-params'
 import {
+  PROJECT_SORTS,
+  PROJECT_SORT_LABEL,
+  ROLE_FILTERS,
+  ROLE_FILTER_LABEL,
+  STAFF_FILTERS,
+  STAFF_FILTER_LABEL,
+  filterSortProjects,
+  hasActiveProjectFilters,
+} from '@/features/people/cohort-filter'
+import {
   type CohortMember,
   type OverlapReport,
   type ProjectCohort,
@@ -175,11 +185,157 @@ function SprintLine({ stats, todayIso }: { stats: AppPortfolioEntry['stats']; to
   )
 }
 
+/** Everything back to its default, in one link. */
+const CLEARED = { q: '', staff: 'all', role: 'all', sort: 'name' } as const
+
+/**
+ * The toolbar for "By project".
+ *
+ * LINKS, NOT A FORM. Every control is an <a> that sets one param, which keeps
+ * the page a server component, makes a narrowed grid pasteable into a message,
+ * and means the back button undoes a filter — the same rule the cohort tabs
+ * and the history filters already follow.
+ *
+ * The search box is the one exception, because a link cannot carry a phrase
+ * somebody is still typing. It submits on Enter and is a GET form to the same
+ * URL, so it degrades to exactly the link behaviour everything else has.
+ */
+function ProjectFilterBar({
+  params,
+  showing,
+  total,
+}: {
+  params: CohortParams
+  showing: number
+  total: number
+}) {
+  const active = hasActiveProjectFilters(params)
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border bg-card/60 p-3">
+      <form method="get" className="flex flex-wrap items-center gap-2">
+        {/* The other params ride along as hidden fields, so searching does not
+            silently drop the filters somebody already set. */}
+        <input type="hidden" name="view" value="projects" />
+        <input type="hidden" name="staff" value={params.staff} />
+        <input type="hidden" name="role" value={params.role} />
+        <input type="hidden" name="sort" value={params.sort} />
+        <label htmlFor="cohort-q" className="sr-only">
+          Search projects, people and roles
+        </label>
+        <input
+          id="cohort-q"
+          name="q"
+          defaultValue={params.q}
+          placeholder="Search a project, a person, or a role…"
+          className="h-8 min-w-0 flex-1 rounded-lg border bg-background px-2.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        />
+        <Button type="submit" size="sm" variant="outline">
+          Search
+        </Button>
+      </form>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <FilterGroup
+          label="Show"
+          params={params}
+          current={params.staff}
+          options={STAFF_FILTERS}
+          labels={STAFF_FILTER_LABEL}
+          toPatch={(value) => ({ staff: value })}
+        />
+        <FilterGroup
+          label="Roles"
+          params={params}
+          current={params.role}
+          options={ROLE_FILTERS}
+          labels={ROLE_FILTER_LABEL}
+          toPatch={(value) => ({ role: value })}
+        />
+        <FilterGroup
+          label="Sort"
+          params={params}
+          current={params.sort}
+          options={PROJECT_SORTS}
+          labels={PROJECT_SORT_LABEL}
+          toPatch={(value) => ({ sort: value })}
+        />
+
+        <span className="ml-auto flex items-center gap-2 text-2xs text-muted-foreground">
+          {/* Said in words when it is narrowed and not at all when it is not —
+              "16 of 16" is noise that trains people to stop reading the line. */}
+          {showing === total ? (
+            <span>
+              {total} project{total === 1 ? '' : 's'}
+            </span>
+          ) : (
+            <span className="text-foreground">
+              {showing} of {total}
+            </span>
+          )}
+          {active ? (
+            <Link
+              href={peopleHref(params, CLEARED)}
+              className={cn('underline underline-offset-2 hover:text-foreground', linkFocus)}
+            >
+              Clear
+            </Link>
+          ) : null}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function FilterGroup<T extends string>({
+  label,
+  params,
+  current,
+  options,
+  labels,
+  toPatch,
+}: {
+  label: string
+  params: CohortParams
+  current: T
+  options: readonly T[]
+  labels: Record<T, string>
+  toPatch: (value: T) => Partial<CohortParams>
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <span className="mr-0.5 font-mono text-2xs tracking-wide text-muted-foreground uppercase">
+        {label}
+      </span>
+      {options.map((option) => {
+        const selected = option === current
+        return (
+          <Link
+            key={option}
+            href={peopleHref(params, toPatch(option))}
+            aria-current={selected ? 'true' : undefined}
+            className={cn(
+              'rounded-lg border px-2 py-0.5 text-2xs transition-colors',
+              selected
+                ? 'border-primary/40 bg-primary/10 text-primary'
+                : 'border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+              linkFocus,
+            )}
+          >
+            {labels[option]}
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
+
 export function ProjectCohortList({
   apps,
   cohorts,
   actor,
   todayIso,
+  params,
 }: {
   /** Every project, from the portfolio read — including the ones with nobody on them. */
   apps: AppPortfolioEntry[]
@@ -188,6 +344,8 @@ export function ProjectCohortList({
   /** Only used to decide whether an empty state may offer its action. */
   actor: Actor | null
   todayIso: string
+  /** The URL IS the filter state — see cohort-params.ts. */
+  params: CohortParams
 }) {
   if (apps.length === 0) {
     return (
@@ -211,10 +369,41 @@ export function ProjectCohortList({
     )
   }
 
+  // Filtered from the SAME cohorts the cards render, so the count in the
+  // toolbar and the cards under it can never disagree.
+  const filtered = filterSortProjects(
+    apps.map((app) => ({
+      appId: app.id,
+      name: app.name,
+      slug: app.slug,
+      members: cohorts.get(app.id)?.members ?? [],
+    })),
+    params,
+  )
+  const byId = new Map(apps.map((app) => [app.id, app]))
+
   return (
     <div className="flex flex-col gap-3">
-      {apps.map((app) => {
-        const members = cohorts.get(app.id)?.members ?? []
+      <ProjectFilterBar params={params} showing={filtered.length} total={apps.length} />
+
+      {filtered.length === 0 ? (
+        <Card>
+          <SectionEmpty
+            icon={LayersIcon}
+            title="No project matches those filters."
+            hint="Every project is still here — the filters are just narrower than the portfolio."
+            action={
+              <Button variant="outline" size="sm" render={<Link href={peopleHref(params, CLEARED)} />}>
+                Clear filters
+              </Button>
+            }
+          />
+        </Card>
+      ) : null}
+
+      {filtered.map((row) => {
+        const app = byId.get(row.appId)!
+        const members = row.members as CohortMember[]
         return (
           <Card key={app.id}>
             <CardHeader>

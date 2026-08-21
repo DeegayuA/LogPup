@@ -1,3 +1,12 @@
+import {
+  PROJECT_SORTS,
+  ROLE_FILTERS,
+  STAFF_FILTERS,
+  type ProjectSort,
+  type RoleFilter,
+  type StaffFilter,
+} from '@/features/people/cohort-filter'
+
 // URL params for the cohort views on /people, and the hrefs that set them.
 //
 // Same house rule as history-params.ts and apps/browse.ts: the whole state of
@@ -37,11 +46,30 @@ export type CohortParams = {
   view: CohortView
   /** Slug of the project the overlap view is anchored on. */
   project: string | undefined
+  /** Free-text narrowing for "By project" — matches projects, people and roles. */
+  q: string
+  staff: StaffFilter
+  role: RoleFilter
+  sort: ProjectSort
 }
 
 export type RawCohortParams = {
   view?: string
   project?: string
+  q?: string
+  staff?: string
+  role?: string
+  sort?: string
+}
+
+/** A phrase typed into a box has no natural length; a URL does. */
+const MAX_QUERY_CHARS = 80
+
+/** Parse-or-default, the same total rule `view` follows: these arrive from
+ *  bookmarks and hand-edited URLs, so an unknown value is the default rather
+ *  than an error. */
+function oneOf<T extends string>(allowed: readonly T[], raw: string | undefined, fallback: T): T {
+  return (allowed as readonly string[]).includes(raw ?? '') ? (raw as T) : fallback
 }
 
 /**
@@ -58,6 +86,10 @@ export function parseCohortParams(raw: RawCohortParams): CohortParams {
       ? (raw.view as CohortView)
       : DEFAULT_COHORT_VIEW,
     project: project || undefined,
+    q: (raw.q ?? '').trim().slice(0, MAX_QUERY_CHARS),
+    staff: oneOf(STAFF_FILTERS, raw.staff, 'all'),
+    role: oneOf(ROLE_FILTERS, raw.role, 'all'),
+    sort: oneOf(PROJECT_SORTS, raw.sort, 'name'),
   }
 }
 
@@ -72,6 +104,16 @@ export function peopleHref(params: CohortParams, patch: Partial<CohortParams> = 
   // other three tabs would put a param on screen that nothing there honours,
   // and the copy on this page has to be true of what is actually rendered.
   if (next.view === 'overlap' && next.project) search.set('project', next.project)
+  // Carried ONLY by the view that honours them, for the same reason `project`
+  // is: a filter in the URL that the visible tab ignores is a param claiming
+  // something the page is not doing. Defaults stay absent so a plain
+  // ?view=projects remains the canonical link to the unfiltered grid.
+  if (next.view === 'projects') {
+    if (next.q) search.set('q', next.q)
+    if (next.staff !== 'all') search.set('staff', next.staff)
+    if (next.role !== 'all') search.set('role', next.role)
+    if (next.sort !== 'name') search.set('sort', next.sort)
+  }
   const query = search.toString()
   return query ? `/people?${query}` : '/people'
 }

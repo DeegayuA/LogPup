@@ -196,6 +196,7 @@ async function CohortData({ params }: { params: CohortParams }) {
     const todayIso = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
     return (
       <ProjectCohortList
+        params={params}
         apps={apps}
         cohorts={byApp}
         actor={actor}
