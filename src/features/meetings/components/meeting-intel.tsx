@@ -2810,12 +2810,17 @@ export function MeetingIntelPanel({
                 through mediaSession while the mic is held); the button is the
                 everywhere-else path, since the API needs a gesture. */}
             <MeetingPip
+              meetingTitle={meetingTitle}
               recording={recording}
               seconds={seconds}
-              tail={`${finalText} ${provisional?.text ?? ''} ${interimText}`.trim().slice(-240)}
+              // The WHOLE live transcript, not a 240-character tail: the popup
+              // scrolls and follows it, which is how somebody watching from
+              // another tab can tell the mic is still being heard.
+              transcript={`${finalText} ${provisional?.text ?? ''} ${interimText}`.trim()}
               micOn={micOn}
               canToggleMic={captureMode !== 'mic'}
-              onToggleMic={toggleMic}
+              savedSegments={segments.length}
+              onToggleMic={() => void toggleMic()}
               onStop={() => recorderRef.current?.stop()}
             />
             <span
