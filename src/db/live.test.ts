@@ -350,6 +350,12 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   // never stored, and the sweep re-derives this one from live rows the moment
   // the row is gone. Admin-only, and the only path back from a dismissal.
   'src/features/meetings/load-actions.ts': 'reopenLoadDecision',
+  // why: the same argument as load-actions.ts above, for the other five rules.
+  // `meeting_load_decisions` carries no deletedAt (it is not one of the
+  // soft-deleted tables) and a genuinely-open suggestion is simply the absence
+  // of a row, so "reopen" is a real delete rather than a soft-delete somebody
+  // forgot. Admin-only, and the only path back from a dismissal.
+  'src/features/meeting-load/actions.ts': 'reopenLoadDecision',
   // why: `assignments` is deliberately NOT one of the soft-deleted tables
   // (see SOFT_TABLES in src/db/live.ts / schema.ts) — the design spec keeps
   // assignments hard-deleted on purpose. assignment_history already records
