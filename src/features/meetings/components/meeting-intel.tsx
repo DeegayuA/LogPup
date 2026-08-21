@@ -2539,6 +2539,37 @@ export function MeetingIntelPanel({
   const failedSegments = segments.filter((s) => s.status === 'failed')
   const uploadingSegmentCount = segments.filter((s) => s.status === 'uploading').length
 
+  /**
+   * Warn before the tab closes while audio is still in flight.
+   *
+   * NOT a promise that closing is safe, and not a way to stop anybody: the
+   * browser shows its own generic dialog and ignores whatever text we supply.
+   * It buys exactly one thing — somebody about to lose the last minutes of a
+   * meeting gets ASKED first rather than finding out afterwards.
+   *
+   * If they close anyway, nothing is lost: parkSegment has already written
+   * every un-acknowledged segment to IndexedDB, and the recovery effect above
+   * re-uploads them the next time this meeting is opened. That is why this is
+   * a prompt and not an error — an error would claim a finality the storage
+   * layer does not have.
+   *
+   * Gated on work ACTUALLY outstanding. A dialog that fires when nothing is
+   * pending is one people learn to dismiss unread, and then it is not there
+   * for the take that mattered.
+   */
+  const uploadsOutstanding = uploadingSegmentCount > 0 || failedSegments.length > 0
+  useEffect(() => {
+    if (!recording && !uploadsOutstanding) return
+    function warn(event: BeforeUnloadEvent) {
+      event.preventDefault()
+      // Modern browsers ignore returnValue's content but still require it to
+      // be set for the dialog to appear at all.
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [recording, uploadsOutstanding])
+
   const notes = intel?.notes ?? null
   // Default true before intel has loaded — matches meetings.autoAssignTasks'
   // own DB default, so the switch never has to render "unknown".
