@@ -131,6 +131,13 @@ import {
   SEGMENT_UPLOAD_ATTEMPTS,
 } from '@/features/meetings/recording-segments'
 import {
+  nextToUpload,
+  phaseLabel,
+  queueProgress,
+  type QueuedSegment,
+  type SegmentPhase,
+} from '@/features/meetings/segment-queue'
+import {
   loadParkedSegments,
   parkSegment,
   releaseSegment,
@@ -314,14 +321,16 @@ function formatBytes(bytes: number): string {
 // retry affordance — "nothing recorded is lost" now applies per segment
 // instead of to a two-hour blob that would otherwise vanish the instant a
 // transient Gemini failure happened at minute 119.
-type SegmentStatus = 'uploading' | 'done' | 'failed'
 type RecordingSegment = {
   index: number
-  status: SegmentStatus
+  /** The phase vocabulary comes from segment-queue.ts, which is also what
+   *  decides upload order and progress from it — one shared meaning, so the
+   *  queue can never say "waiting" about a segment the chips call done. */
+  status: SegmentPhase
   blob: Blob
   error?: string
-  /** 1-based attempt currently in flight — shown while retrying so a slow
-   *  self-healing upload reads as "still working on it", not as a hang. */
+  /** Attempts SPENT, module-style (0 before the first try) — phaseLabel and
+   *  canRetry both read it that way. */
   attempt?: number
   /** True for a segment recovered from IndexedDB after a reload/crash rather
    *  than cut by the recorder in this page load (see segment-store.ts). Only
@@ -735,10 +744,14 @@ export function MeetingIntelPanel({
   // Base mimeType (codec suffix stripped, e.g. "audio/webm") used to build
   // every segment's Blob — captured once at recording start.
   const mimeBaseRef = useRef('')
-  // Every in-flight segment upload's promise, so Stop can wait for all of
-  // them to settle (success or failure) before running the final synthesis
-  // pass — see runFinalize.
-  const segmentUploadPromisesRef = useRef<Promise<void>[]>([])
+  // The single upload worker's promise while one is draining the queue, null
+  // when idle. ONE worker, ever: segment-queue.ts orders the waiting segments
+  // and this ref is what enforces "one in flight" — uploads used to run
+  // concurrently, which let a fast segment 3 land before a slow segment 2 and
+  // hand synthesis a reordered meeting. Stop waits on this promise before the
+  // final pass (see runFinalize), and starting a new recording deliberately
+  // does NOT touch it — a new take must never cancel earlier audio.
+  const uploadPumpRef = useRef<Promise<void> | null>(null)
   // Mirrors `segments` state; see that state's comment for why a ref is the
   // source of truth here (retrySegment needs the live Blob, not whatever the
   // render closure captured).
@@ -1098,7 +1111,54 @@ export function MeetingIntelPanel({
     setNotices([])
   }
 
-  useEffect(() => cleanupCapture, [])
+  // Unmount while recording is CLIENT-SIDE navigation — a sidebar click, a
+  // route change — where beforeunload never fires and the JS runtime stays
+  // alive. Treated as pressing Stop: recorder.stop() makes MediaRecorder
+  // flush its buffered audio and fire onstop, whose handler cuts the tail
+  // (parked, then queued for upload), releases the mic so the browser's
+  // recording indicator tells the truth, and runs the write-up. All of that
+  // survives the unmount because it holds refs, not rendered state. Only when
+  // no recording is live does this fall through to plain cleanup.
+  useEffect(() => {
+    return () => {
+      const recorder = recorderRef.current
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop()
+        toast.info('Recording stopped — you left the meeting page. The audio is being transcribed.')
+        return
+      }
+      cleanupCapture()
+    }
+    // cleanupCapture and recorderRef are stable across the component's life;
+    // this must run exactly once, at unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The two ways a page dies that beforeunload's warning can't stop: the
+  // person closes anyway, or a mobile OS freezes/reaps the backgrounded tab
+  // with no unload at all (visibilitychange→hidden is the last event those
+  // tabs reliably see). Park the uncut tail right then — best-effort, no
+  // await — so the recovery effect can resume it on the next visit. If the
+  // page lives on, the eventual real cut overwrites the snapshot at the same
+  // index and nothing is doubled.
+  useEffect(() => {
+    if (!recording) return
+    function persistTail() {
+      parkTailSnapshot()
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden') parkTailSnapshot()
+    }
+    window.addEventListener('pagehide', persistTail)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('pagehide', persistTail)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+    // parkTailSnapshot closes only over refs and meetingId — re-subscribing
+    // per render would buy nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording])
 
   // Checked when the panel opens rather than on mount: a page listing thirty
   // meetings would otherwise fire thirty identical key-health reads for a
@@ -1735,8 +1795,8 @@ export function MeetingIntelPanel({
 
   // Uploads and transcribes ONE segment in the background — never awaited by
   // the recorder itself, so recording keeps running while this happens (see
-  // cutSegment). Tracked in segmentUploadPromisesRef so Stop can wait for
-  // every in-flight upload to settle before running the final synthesis
+  // cutSegment). Only ever called by pumpUploads, one segment at a time, so
+  // Stop can wait on the pump's promise for everything in flight before the
   // pass. A failure here leaves the segment's Blob sitting in `segments`
   // with a retry affordance (the failed-segments list further down in the
   // render) — the whole meeting is never aborted over one bad segment.
@@ -1748,7 +1808,7 @@ export function MeetingIntelPanel({
     // failure that survives every attempt (or is permanent by construction,
     // see isRetriableSegmentError) is worth interrupting them for.
     for (let attempt = 1; attempt <= SEGMENT_UPLOAD_ATTEMPTS; attempt += 1) {
-      upsertSegment({ index, status: 'uploading', blob, attempt, recovered })
+      upsertSegment({ index, status: 'uploading', blob, attempt: attempt - 1, recovered })
       let error: string
       try {
         const formData = new FormData()
@@ -1784,11 +1844,45 @@ export function MeetingIntelPanel({
 
       const lastAttempt = attempt === SEGMENT_UPLOAD_ATTEMPTS
       if (lastAttempt || !isRetriableSegmentError(error)) {
-        upsertSegment({ index, status: 'failed', blob, error, recovered })
+        upsertSegment({ index, status: 'failed', blob, error, attempt, recovered })
         return
       }
+      // 'retrying' — not 'uploading' — through the whole backoff wait, so the
+      // per-segment row says what is true: nothing is on the wire right now,
+      // and this segment still owns its place at the head of the queue.
+      upsertSegment({ index, status: 'retrying', blob, error, attempt, recovered })
       await new Promise((resolve) => setTimeout(resolve, segmentRetryDelayMs(attempt)))
     }
+  }
+
+  /** RecordingSegment as segment-queue.ts sees it — same phases by
+   *  construction, so this is just shape, not translation. */
+  function toQueued(segment: RecordingSegment): QueuedSegment {
+    return { index: segment.index, phase: segment.status, attempt: segment.attempt ?? 0 }
+  }
+
+  // Drains the queue: one segment at a time, lowest index first, until
+  // nextToUpload (segment-queue.ts) says nothing is waiting. Everything that
+  // wants a segment sent — a fresh cut, a recovered park, a manual retry —
+  // marks it waiting in `segments` and calls this; whether a worker is
+  // already running is the ONLY thing decided here. Single JS thread means
+  // the idle-check/start pair can't race, and uploadSegment always leaves its
+  // segment 'done' or 'failed', so the loop cannot pick the same one twice.
+  function pumpUploads() {
+    if (uploadPumpRef.current) return
+    uploadPumpRef.current = (async () => {
+      try {
+        for (;;) {
+          const next = nextToUpload(segmentsRef.current.map(toQueued))
+          if (!next) return
+          const segment = segmentsRef.current.find((s) => s.index === next.index)
+          if (!segment) return
+          await uploadSegment(segment.index, segment.blob, segment.recovered)
+        }
+      } finally {
+        uploadPumpRef.current = null
+      }
+    })()
   }
 
   // Cuts whatever's accumulated in chunksRef into its own segment: builds an
@@ -1814,7 +1908,26 @@ export function MeetingIntelPanel({
     // before the first byte goes out, so a crash mid-upload is recoverable,
     // and a slow/unavailable IndexedDB can never delay the recorder.
     void parkSegment(meetingId, index, blob)
-    segmentUploadPromisesRef.current.push(uploadSegment(index, blob))
+    upsertSegment({ index, status: 'queued', blob, attempt: 0 })
+    pumpUploads()
+  }
+
+  /**
+   * Best-effort park of the not-yet-cut tail, WITHOUT cutting: same index the
+   * real cut will use, so the store's put() upsert replaces this snapshot with
+   * the fuller blob if the recording survives, and the recovery effect uploads
+   * it if the page doesn't. Called from pagehide/visibilitychange, where an
+   * async cut-and-upload would never get to run — this is the only copy of the
+   * current tail if the OS reaps the tab a moment later.
+   */
+  function parkTailSnapshot() {
+    if (!recordingRef.current || chunksRef.current.length === 0) return
+    const index = segmentIndexRef.current
+    const parts =
+      index === 0 || !headerChunkRef.current
+        ? chunksRef.current
+        : [headerChunkRef.current, ...chunksRef.current]
+    void parkSegment(meetingId, index, new Blob(parts, { type: mimeBaseRef.current }))
   }
 
   /**
@@ -1841,8 +1954,13 @@ export function MeetingIntelPanel({
 
   function retrySegment(index: number) {
     const segment = segmentsRef.current.find((s) => s.index === index)
-    if (!segment || segment.status === 'uploading') return
-    segmentUploadPromisesRef.current.push(uploadSegment(index, segment.blob, segment.recovered))
+    // Only a 'failed' segment has anything to retry — everything else is
+    // already in the queue's hands, and re-queueing it would double-send.
+    if (!segment || segment.status !== 'failed') return
+    // Back into line at its own index — segment-queue's ordering then sends it
+    // BEFORE anything behind it, with its attempts reset (requeue semantics).
+    upsertSegment({ ...segment, status: 'retrying', attempt: 0, error: undefined })
+    pumpUploads()
   }
 
   // Crash/reload recovery. Any segment still parked in IndexedDB (see
@@ -1871,8 +1989,18 @@ export function MeetingIntelPanel({
         segmentIndexRef.current,
       )
       for (const segment of parked) {
-        segmentUploadPromisesRef.current.push(uploadSegment(segment.index, segment.blob, true))
+        // A parked index already tracked in this session (possible under HMR
+        // remounts) keeps its live state — the park is the stale copy there.
+        if (segmentsRef.current.some((s) => s.index === segment.index)) continue
+        upsertSegment({
+          index: segment.index,
+          status: 'queued',
+          blob: segment.blob,
+          attempt: 0,
+          recovered: true,
+        })
       }
+      pumpUploads()
       toast.info(
         parked.length === 1
           ? 'Recovered 1 unfinished recording segment — transcribing it now'
@@ -1882,9 +2010,9 @@ export function MeetingIntelPanel({
     return () => {
       cancelled = true
     }
-    // uploadSegment closes only over refs and meetingId; adding it as a
-    // dependency would re-run this on every render and re-upload the same
-    // recovered audio.
+    // upsertSegment/pumpUploads close only over refs and meetingId; adding
+    // them as dependencies would re-run this on every render and re-queue the
+    // same recovered audio.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId, canRecord])
 
@@ -1900,11 +2028,13 @@ export function MeetingIntelPanel({
     setFinalizeError(null)
     // Everything this pass covers, fixed BEFORE the first await. Recording can
     // start again while the write-up is still running (a meeting does not stop
-    // for it), so from here on the refs are moving targets: a new take pushes
-    // upload promises, appends segments and rewrites the live transcript. Read
-    // them later and this pass would wait on the new take's uploads, and then
-    // drop its freshly-transcribed segments as though they had been written up.
-    const pendingUploads = [...segmentUploadPromisesRef.current]
+    // for it), so from here on the refs are moving targets: a new take appends
+    // segments and rewrites the live transcript. `consumed` is the snapshot
+    // that protects the new take's segments from being dropped as though they
+    // had been written up. The pump promise is shared, so if a new take is
+    // already cutting, this pass ALSO waits for its uploads — a longer wait,
+    // never a wrong write-up, since `consumed` still bounds what gets dropped.
+    const pendingUploads = uploadPumpRef.current ? [uploadPumpRef.current] : []
     const transcript = finalTranscriptRef.current
     const consumed = new Set(segmentsRef.current.map((segment) => segment.index))
 
@@ -2126,7 +2256,10 @@ export function MeetingIntelPanel({
       headerChunkRef.current = null
       segmentBytesRef.current = 0
       segmentStartRef.current = Date.now()
-      segmentUploadPromisesRef.current = []
+      // The upload pump is deliberately NOT reset: a new take must never
+      // cancel or reorder audio the previous one is still sending. Its
+      // segments simply join the same queue, numbered after everything
+      // already in it.
       mimeBaseRef.current = mimeType.split(';')[0]
       // Continue numbering AFTER anything already recorded for this meeting
       // rather than restarting at 0. Segment index is half the primary key on
@@ -2192,6 +2325,20 @@ export function MeetingIntelPanel({
       recorder.start(1000)
       setRecording(true)
       recordingRef.current = true
+      // A second take while the first is still transcribing: nothing is
+      // cancelled and nothing interleaves — new segments number after the old
+      // ones and join the back of the same one-at-a-time queue. Said out
+      // loud, because silence here reads as "my earlier recording is gone".
+      const stillSending = segmentsRef.current.filter(
+        (s) => s.status !== 'done' && s.status !== 'failed',
+      ).length
+      if (stillSending > 0) {
+        toast.info(
+          stillSending === 1
+            ? 'Still transcribing 1 earlier segment — this recording queues behind it'
+            : `Still transcribing ${stillSending} earlier segments — this recording queues behind them`,
+        )
+      }
       setSeconds(0)
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
 
@@ -2535,9 +2682,15 @@ export function MeetingIntelPanel({
     })
   }
 
-  const doneSegmentCount = segments.filter((s) => s.status === 'done').length
+  // One arithmetic for "how safe is this recording", shared with the tests
+  // that pin it down: queueProgress can't say 100% while anything is queued,
+  // uploading, retrying or failed, and only server-acknowledged segments
+  // count as done. Deriving the chips from anything else is how a UI ends up
+  // claiming more than the queue knows.
+  const segmentProgress = queueProgress(segments.map(toQueued))
   const failedSegments = segments.filter((s) => s.status === 'failed')
-  const uploadingSegmentCount = segments.filter((s) => s.status === 'uploading').length
+  const sendingSegment = segments.find((s) => s.status === 'uploading' || s.status === 'retrying')
+  const waitingSegmentCount = segments.filter((s) => s.status === 'queued').length
 
   /**
    * Warn before the tab closes while audio is still in flight.
@@ -2557,7 +2710,7 @@ export function MeetingIntelPanel({
    * pending is one people learn to dismiss unread, and then it is not there
    * for the take that mattered.
    */
-  const uploadsOutstanding = uploadingSegmentCount > 0 || failedSegments.length > 0
+  const uploadsOutstanding = segmentProgress.outstanding > 0
   useEffect(() => {
     if (!recording && !uploadsOutstanding) return
     function warn(event: BeforeUnloadEvent) {
@@ -2877,12 +3030,29 @@ export function MeetingIntelPanel({
               </MetaChip>
               {segments.length > 0 ? (
                 <>
+                  {/* The one percentage, straight from queueProgress — floored
+                      and pinned below 100 while ANYTHING is still queued,
+                      retrying or failed, because 100% is the number people
+                      close the tab on. */}
                   <MetaChip tone="success">
-                    <span className="font-mono">{doneSegmentCount}</span> transcribed
+                    <span className="font-mono">
+                      {segmentProgress.done}/{segmentProgress.total}
+                    </span>{' '}
+                    transcribed · <span className="font-mono">{segmentProgress.percent}%</span>
                   </MetaChip>
-                  {uploadingSegmentCount > 0 ? (
+                  {sendingSegment ? (
                     <MetaChip>
-                      <span className="font-mono">{uploadingSegmentCount}</span> uploading
+                      uploading <span className="font-mono">{sendingSegment.index + 1}</span>
+                      {waitingSegmentCount > 0 ? (
+                        <>
+                          {' '}
+                          · <span className="font-mono">{waitingSegmentCount}</span> waiting
+                        </>
+                      ) : null}
+                    </MetaChip>
+                  ) : waitingSegmentCount > 0 ? (
+                    <MetaChip>
+                      <span className="font-mono">{waitingSegmentCount}</span> waiting
                     </MetaChip>
                   ) : null}
                   {failedSegments.length > 0 ? (
@@ -3135,6 +3305,65 @@ export function MeetingIntelPanel({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {/* Per-segment state, on demand rather than always on: the chips above
+          answer "how much is safe" in aggregate; opening this answers "which
+          five minutes, exactly, and what is happening to it right now".
+          A native details element — no state to desync, free keyboard and
+          screen-reader semantics, and closed by default so the ordinary
+          recording never pays for the instrumentation. */}
+      {segments.length > 0 ? (
+        <details className="overflow-hidden rounded-lg border border-border bg-muted/25">
+          <summary className="cursor-pointer select-none px-3 py-1.5 text-xs font-medium text-muted-foreground">
+            Segment details —{' '}
+            <span className="font-mono">
+              {segmentProgress.done}/{segmentProgress.total}
+            </span>{' '}
+            transcribed
+            {segmentProgress.failed > 0 ? (
+              <>
+                , <span className="font-mono">{segmentProgress.failed}</span> failed
+              </>
+            ) : null}
+          </summary>
+          <ul className="flex flex-col border-t border-border">
+            {segments.map((segment) => (
+              <li
+                key={segment.index}
+                className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-3 py-1.5 text-xs"
+              >
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="font-mono text-muted-foreground">{segment.index + 1}</span>
+                  <span
+                    className={cn(
+                      segment.status === 'failed'
+                        ? 'text-warning'
+                        : segment.status === 'done'
+                          ? 'text-muted-foreground'
+                          : 'text-foreground',
+                    )}
+                  >
+                    {phaseLabel(toQueued(segment))}
+                  </span>
+                  <span className="font-mono text-muted-foreground">
+                    {formatBytes(segment.blob.size)}
+                  </span>
+                </span>
+                {segment.status === 'failed' ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={() => retrySegment(segment.index)}
+                  >
+                    <RotateCcw aria-hidden /> Retry
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
 
       {/* Post-recording safety net, adapted for segments: what has to
