@@ -145,9 +145,21 @@
   --warning: oklch(0.52 0.12 62);
   --warning-foreground: oklch(0.98 0.005 95);
   --weekend: oklch(0.5 0.19 25);
-  --holiday: oklch(0.55 0.15 55);
+  /* Purple, not the amber it was. Hue only — L and C are unchanged from the
+     audited orange, so the contrast that was measured against --background
+     and --card still holds; moving lightness as well would have silently
+     re-opened a ratio somebody had already checked. */
+  --holiday: oklch(0.55 0.15 305);
   /* Bank/mercantile-only holidays (not gazetted public holidays): a blue
-     family, clearly distinct from --holiday (orange) and --weekend (red).
+     family, distinct from --holiday and --weekend (red).
+
+     NOTE THE NARROWED GAP. This read "clearly distinct from --holiday
+     (orange)" while --holiday was amber at hue 55, which was 210 degrees of
+     separation. --holiday is now purple at 305, leaving 40 degrees between
+     these two. Still separable, and both carry their own label and icon
+     rather than relying on hue (WCAG 1.4.1) — but they are no longer opposites,
+     and anyone tuning either one should move it AWAY from the other, not
+     toward it.
      oklch(0.48 0.17 265) checks at ~6.4:1 against --background and ~6.8:1
      against --card, both well past the WCAG AA 3:1 floor for non-text/UI. */
   --mercantile: oklch(0.48 0.17 265);
@@ -243,7 +255,7 @@
   --warning: oklch(0.82 0.13 72);
   --warning-foreground: oklch(0.2 0.04 60);
   --weekend: oklch(0.72 0.18 25);
-  --holiday: oklch(0.78 0.15 60);
+  --holiday: oklch(0.78 0.15 305);
   /* Same blue family as light mode, lightened for a dark surface: ~9.4:1
      against --background and ~8.7:1 against --card. */
   --mercantile: oklch(0.78 0.12 268);
