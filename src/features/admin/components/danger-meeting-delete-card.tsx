@@ -4,13 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { toast } from 'sonner'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { SearchSelect } from '@/components/ui/search-select'
 import { deleteMeetingFromDanger } from '@/features/admin/danger-actions'
 import { deleteMeetingPhrase, deleteMeetingSummary } from '@/features/admin/danger-logic'
 import { DangerConfirmControl } from '@/features/admin/components/danger-confirm-control'
@@ -68,29 +62,26 @@ export function DangerMeetingDeleteCard({ meetings }: { meetings: DangerMeetingO
           The {meetings.length} most recent meetings. Older ones are deleted from the
           meeting itself.
         </span>
-        <Select value={selectedId} onValueChange={(next) => setSelectedId(next)}>
-          <SelectTrigger className="h-9 w-full max-w-sm" aria-label="Select a meeting to delete">
-            {/* The Select's value is the meeting id, so without this mapping
-                the trigger renders a raw UUID. */}
-            <SelectValue placeholder="Choose a meeting">
-              {(current: string) =>
-                meetings.find((m) => m.id === current)?.title ?? 'Choose a meeting'
-              }
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {meetings.map((meeting) => (
-              <SelectItem key={meeting.id} value={meeting.id}>
-                <span className="flex flex-col gap-0.5">
-                  <span>{meeting.title}</span>
-                  <span className="font-mono text-2xs tabular-nums text-muted-foreground">
-                    {format(meeting.startsAt, 'd MMM yyyy, HH:mm')}
-                  </span>
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Searchable, and here that is a SAFETY property rather than a
+            convenience. The meeting list only grows, the action is destructive,
+            and picking by scrolling is how somebody deletes the row above the
+            one they meant. Typing narrows to the intended meeting before the
+            confirm step is reached. The date is in the hint and therefore
+            searchable too, which is how you tell two standups apart. */}
+        <SearchSelect
+          value={selectedId ?? ''}
+          onValueChange={setSelectedId}
+          options={meetings.map((meeting) => ({
+            value: meeting.id,
+            label: meeting.title,
+            hint: format(meeting.startsAt, 'd MMM yyyy, HH:mm'),
+          }))}
+          placeholder="Choose a meeting"
+          searchPlaceholder="Search meetings…"
+          emptyText="No meeting by that name or date."
+          aria-label="Select a meeting to delete"
+          className="h-9 max-w-sm"
+        />
       </div>
     </DangerConfirmControl>
   )

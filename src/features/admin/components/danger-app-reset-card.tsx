@@ -3,13 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { SearchSelect } from '@/components/ui/search-select'
 import { resetApp } from '@/features/admin/danger-actions'
 import {
   purgeProgressMessage,
@@ -83,27 +77,23 @@ export function DangerAppResetCard({ apps }: { apps: DangerAppOption[] }) {
         <span className="text-2xs text-muted-foreground">
           Already-trashed sprints and tasks are left in Trash — empty the Trash for those.
         </span>
-        <Select value={selectedId} onValueChange={(next) => setSelectedId(next)}>
-          <SelectTrigger className="h-9 w-full max-w-sm" aria-label="Select a project to reset">
-            {/* The Select's value is the app id, so without this mapping the
-                trigger renders a raw UUID. */}
-            <SelectValue placeholder="Choose a project">
-              {(current: string) => apps.find((a) => a.id === current)?.name ?? 'Choose a project'}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {apps.map((app) => (
-              <SelectItem key={app.id} value={app.id}>
-                <span className="flex flex-col gap-0.5">
-                  <span>{app.name}</span>
-                  <span className="font-mono text-2xs tabular-nums text-muted-foreground">
-                    {app.slug} · {app.taskCount} tasks · {app.sprintCount} sprints
-                  </span>
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Searchable for the meeting picker's reason: destructive action over a
+            list that grows. The slug rides in the hint and is searchable, which
+            is what separates two projects sharing a display name. */}
+        <SearchSelect
+          value={selectedId ?? ''}
+          onValueChange={setSelectedId}
+          options={apps.map((app) => ({
+            value: app.id,
+            label: app.name,
+            hint: `${app.slug} · ${app.taskCount} tasks · ${app.sprintCount} sprints`,
+          }))}
+          placeholder="Choose a project"
+          searchPlaceholder="Search projects…"
+          emptyText="No project by that name or slug."
+          aria-label="Select a project to reset"
+          className="h-9 max-w-sm"
+        />
       </div>
     </DangerConfirmControl>
   )

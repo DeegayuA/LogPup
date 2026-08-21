@@ -13,15 +13,9 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { SearchSelect } from '@/components/ui/search-select'
 import { Label } from '@/components/ui/label'
 import { JOB_ROLES } from '@/lib/job-roles'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { assignUser, updateAssignment } from '@/features/people/actions'
 import type { ActiveUser, TeamMember } from '@/features/people/queries'
 
@@ -138,25 +132,19 @@ export function AssignDialog({
           {isEdit ? null : (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="assign-user">Member</Label>
-              <Select value={userId} onValueChange={(value) => pickMember(value ?? '')}>
-                <SelectTrigger id="assign-user" className="w-full">
-                  {/* Explicit label mapping — the raw id is the Select's `value`,
-                      so without this the trigger falls back to rendering that id
-                      (a UUID) instead of the person's name. */}
-                  <SelectValue placeholder="Select a person">
-                    {(value: string) =>
-                      value ? (activeUsers.find((user) => user.id === value)?.name ?? 'Select a person') : 'Select a person'
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {activeUsers.map((user) => (
-                    <SelectItem key={user.id} value={user.id}>
-                      {user.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Searchable: this is every active person in the studio, and the
+                  name is the one thing the assigner already knows. Scrolling to
+                  find someone you could have typed in two keystrokes is the
+                  friction this removes. */}
+              <SearchSelect
+                id="assign-user"
+                value={userId}
+                onValueChange={pickMember}
+                options={activeUsers.map((user) => ({ value: user.id, label: user.name }))}
+                placeholder="Select a person"
+                searchPlaceholder="Search people…"
+                emptyText="Nobody by that name."
+              />
             </div>
           )}
           <div className="flex flex-col gap-1.5">
