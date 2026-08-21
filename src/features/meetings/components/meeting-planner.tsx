@@ -15,6 +15,7 @@ import {
   type PlannerCandidate,
 } from '@/features/meetings/planner'
 import { eventDotClasses } from '@/features/meetings/event-color'
+import { PersonHoverCard } from '@/features/people/components/person-hover-card'
 import {
   MetaChip,
   SectionHeading,
@@ -368,10 +369,33 @@ function ProjectStrip({ plan }: { plan: MeetingPlan }) {
               words rather than rendered as a blank. pmId is NOT NULL, so the
               only way its name is missing is a user row that could not be
               read — which is a different sentence from "there is no PM". */}
+          {/* The names carry a person card now: this row is where somebody
+              decides who to pull into a meeting, and "who is this, and are they
+              already at 112%" was a question the row raised and answered
+              nowhere. The card also holds Call and WhatsApp, so deciding and
+              reaching out happen in the same place. */}
           <span className="text-2xs text-muted-foreground">
-            {project.pmName ? `PM ${project.pmName}` : 'PM not resolved'}
+            {project.pmName && project.pmId ? (
+              <>
+                PM{' '}
+                <PersonHoverCard userId={project.pmId} className="text-foreground">
+                  {project.pmName}
+                </PersonHoverCard>
+              </>
+            ) : (
+              'PM not resolved'
+            )}
             {' · '}
-            {project.leadName ? `lead ${project.leadName}` : 'no lead'}
+            {project.leadName && project.leadId ? (
+              <>
+                lead{' '}
+                <PersonHoverCard userId={project.leadId} className="text-foreground">
+                  {project.leadName}
+                </PersonHoverCard>
+              </>
+            ) : (
+              'no lead'
+            )}
           </span>
         </li>
       ))}
