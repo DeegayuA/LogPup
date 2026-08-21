@@ -6,7 +6,17 @@ import { apps, tasks } from '@/db/schema'
 import type { EntryCategory } from '@/features/worklog/entries'
 
 /**
- * One day's logged hours, for the person reading them.
+ * One day's logged hours AS THE PAGE RENDERS THEM.
+ *
+ * NOT a duplicate of `getMyDayEntries` in entry-evidence.ts, and named
+ * differently on purpose so nobody imports the wrong one. That function feeds
+ * the AI evidence pipeline and returns the narrow shape a prompt needs — id,
+ * minutes, category, task title. This one feeds the UI and needs what a person
+ * reads: the project name, the note, whether it was billable. Two readers, two
+ * shapes, one table.
+ *
+ * If they ever converge, delete this and widen that one — but a display read
+ * pulling two extra joins into every prompt build would be the worse merge.
  *
  * SELF-ONLY, and the caller passes the id rather than this resolving a
  * session: every existing worklog read follows that shape (getMyWorklogsInRange,
@@ -32,7 +42,10 @@ export type WorklogEntryRow = {
   appSlug: string | null
 }
 
-export async function getMyDayEntries(userId: string, day: string): Promise<WorklogEntryRow[]> {
+export async function listDayEntriesForDisplay(
+  userId: string,
+  day: string,
+): Promise<WorklogEntryRow[]> {
   const rows = await db
     .select({
       id: liveWorklogEntries.id,

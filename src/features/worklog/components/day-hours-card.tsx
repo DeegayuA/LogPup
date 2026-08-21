@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Loader2Icon, Plus, Trash2 } from 'lucide-react'
+import { Check, Loader2Icon, Plus, SparklesIcon, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,7 @@ import {
   type EntryCategory,
 } from '@/features/worklog/entries'
 import { createWorklogEntry, deleteWorklogEntry } from '@/features/worklog/entry-actions'
+import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
 import type { WorklogEntryRow } from '@/features/worklog/entry-queries'
 
 /**
@@ -86,6 +87,7 @@ export function DayHoursCard({
   scheduledMinutes,
   apps,
   canEdit,
+  aiDraftEnabled = false,
 }: {
   day: string
   entries: WorklogEntryRow[]
@@ -94,6 +96,8 @@ export function DayHoursCard({
   apps: { id: string; name: string }[]
   /** False for a future day, which cannot be logged against. */
   canEdit: boolean
+  /** Whether the per-entry AI draft is switched on for this person. */
+  aiDraftEnabled?: boolean
 }) {
   const [pending, startTransition] = React.useTransition()
   const [duration, setDuration] = React.useState('')
@@ -101,6 +105,64 @@ export function DayHoursCard({
   const [appId, setAppId] = React.useState<string>(NO_APP)
   const [note, setNote] = React.useState('')
   const [busyId, setBusyId] = React.useState<string | null>(null)
+  // Proposals live HERE, not in the entries list, and are never written until
+  // somebody accepts one. A draft that saved itself would be the model filing
+  // a timesheet in a person's name — and hours, unlike a note, are the thing
+  // an invoice is built from.
+  const [drafted, setDrafted] = React.useState<DraftedEntry[] | null>(null)
+  const [evidenceCount, setEvidenceCount] = React.useState(0)
+  const [drafting, setDrafting] = React.useState(false)
+
+  async function handleDraft() {
+    setDrafting(true)
+    try {
+      const res = await draftWorklogEntries(day)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      setDrafted(res.data.entries)
+      setEvidenceCount(res.data.evidenceCount)
+      if (res.data.entries.length === 0) {
+        // An empty day is a quiet day, not a failure. Saying so beats an
+        // empty list somebody reads as the feature being broken.
+        toast.info(
+          res.data.evidenceCount === 0
+            ? 'LogPup recorded nothing for that day — nothing to suggest.'
+            : 'Nothing worth suggesting on top of what you already logged.',
+        )
+      }
+    } catch {
+      toast.error('Could not draft that right now — try again')
+    } finally {
+      setDrafting(false)
+    }
+  }
+
+  function acceptDraft(entry: DraftedEntry, index: number) {
+    startTransition(async () => {
+      try {
+        const res = await createWorklogEntry({
+          day,
+          minutes: entry.minutes,
+          category: entry.category,
+          taskId: entry.taskId,
+          note: entry.note,
+          // Recorded as AI-suggested so the row remembers how it arrived, and
+          // so nothing can later present it as something a person typed.
+          source: 'ai_suggested',
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setDrafted((rows) => (rows ? rows.filter((_, i) => i !== index) : rows))
+        toast.success(`Logged ${formatHours(entry.minutes)}h`)
+      } catch {
+        toast.error('Could not log that — try again')
+      }
+    })
+  }
 
   const logged = totalMinutes(entries)
   const minutes = parseDuration(duration)
@@ -157,6 +219,22 @@ export function DayHoursCard({
     >
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-heading text-sm font-semibold">Where the time went</h3>
+        {canEdit && aiDraftEnabled ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={drafting || pending}
+            onClick={handleDraft}
+          >
+            {drafting ? (
+              <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <SparklesIcon className="text-primary" aria-hidden />
+            )}
+            {drafting ? 'Reading your day…' : 'Fill from my day'}
+          </Button>
+        ) : null}
         <p className="font-mono text-xs tabular-nums text-muted-foreground">
           {/* Logged over scheduled, never a percentage: this is coverage, and a
               percent here would read as a sibling of the self-score above it,
@@ -165,6 +243,70 @@ export function DayHoursCard({
           {scheduledMinutes ? ` of ${formatHours(scheduledMinutes)}h scheduled` : ''}
         </p>
       </header>
+
+      {drafted && drafted.length > 0 ? (
+        <div className="flex flex-col gap-1.5 rounded-xl border border-primary/30 bg-primary/5 p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-2xs font-medium text-primary">
+              <SparklesIcon className="size-3" aria-hidden />
+              Suggested from {evidenceCount} recorded {evidenceCount === 1 ? 'thing' : 'things'}
+            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => setDrafted(null)}
+              disabled={pending}
+            >
+              Dismiss all
+            </Button>
+          </div>
+          {/* Reviewed one at a time, on purpose. An "accept all" on HOURS is a
+              button that files a timesheet nobody read — and the model is
+              inferring durations from meetings and activity, which is exactly
+              where it is most likely to be plausibly wrong. */}
+          <ul className="flex flex-col gap-1">
+            {drafted.map((entry, index) => (
+              <li
+                key={`${entry.category}-${entry.minutes}-${index}`}
+                className="flex items-start gap-2 rounded-lg bg-background/60 px-2.5 py-2"
+              >
+                <span className="w-14 shrink-0 font-mono text-xs font-semibold tabular-nums">
+                  {formatHours(entry.minutes)}h
+                </span>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-xs font-medium">
+                    {CATEGORY_LABEL[entry.category]}
+                  </span>
+                  {entry.note ? (
+                    <span className="truncate text-2xs text-muted-foreground">{entry.note}</span>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={`Log ${formatHours(entry.minutes)} hours of ${CATEGORY_LABEL[entry.category]}`}
+                  disabled={pending}
+                  onClick={() => acceptDraft(entry, index)}
+                >
+                  <Check aria-hidden />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Dismiss this suggestion"
+                  disabled={pending}
+                  onClick={() => setDrafted((rows) => rows?.filter((_, i) => i !== index) ?? null)}
+                >
+                  <X aria-hidden />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {entries.length === 0 ? (
         <EmptyState

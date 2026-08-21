@@ -15,7 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
-import { getMyDayEntries } from '@/features/worklog/entry-queries'
+import { listDayEntriesForDisplay } from '@/features/worklog/entry-queries'
 import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
 import {
   WorklogCalendar,
@@ -514,7 +514,7 @@ async function CalendarZone({
     // Suspense: it is one indexed read on (user_id, day) and the panel it
     // feeds sits beside the form, so a second boundary would flash an empty
     // card next to a full one.
-    const dayEntries = await getMyDayEntries(userId, selectedDay)
+    const dayEntries = await listDayEntriesForDisplay(userId, selectedDay)
 
     // Scheduled minutes for the selected day, taken from the coverage pass
     // already computed above rather than re-derived: that fraction is
@@ -532,6 +532,11 @@ async function CalendarZone({
       dayEntries,
       scheduledMinutes,
       canLogHours,
+      // A SEPARATE pref from 'worklog-draft': that one drafts the day's NOTE,
+      // this one proposes hours rows. Somebody may reasonably want prose help
+      // and not want a model estimating durations they will be paid against,
+      // so the two switches stay independent.
+      entriesAiEnabled: aiPrefs['worklog-entries-draft'].enabled,
       joinedOn,
       facts,
       selectedRow,
@@ -558,6 +563,7 @@ async function CalendarZone({
     dayEntries,
     scheduledMinutes,
     canLogHours,
+    entriesAiEnabled,
     joinedOn,
     facts,
     selectedRow,
@@ -654,6 +660,7 @@ async function CalendarZone({
           scheduledMinutes={scheduledMinutes}
           apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
           canEdit={canLogHours}
+          aiDraftEnabled={entriesAiEnabled}
         />
       </section>
     </div>
