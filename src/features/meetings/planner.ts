@@ -25,6 +25,16 @@
  */
 
 import { HEALTH_LABEL, type HealthLevel } from '@/features/apps/app-health'
+import {
+  checkinAskContext,
+  checkinAskText,
+  isPastDue,
+  overdueAskText,
+  overdueRowsByUserApp,
+  plural,
+  stalledAskText,
+  stalledCount,
+} from '@/features/meetings/ask-derivation'
 import { boardHref } from '@/features/apps/tabs'
 import { UNASSIGNED_GROUP } from '@/features/sprints/board-view'
 import { checkinGap, computeTaskProgress, type CheckinGap } from '@/features/sprints/checkins'
@@ -172,19 +182,11 @@ export type AssembleMeetingPlanInput = {
 
 // --- helpers ----------------------------------------------------------------
 
-function plural(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? '' : 's'}`
-}
-
-/** The same overdue rule as getAppCounts and notes.ts's isOverdue: not done,
- *  has a due date, and that date is strictly before today. Due TODAY is not
- *  overdue — the number here has to survive being checked against the app
- *  page, which is one click away. */
-function isPastDue(task: PlanTaskRow, todayIso: string): boolean {
-  if (task.status === 'done') return false
-  if (!task.dueDate) return false
-  return task.dueDate < todayIso
-}
+// `plural`, `isPastDue`, the overdue roll-up and every ask sentence live in
+// ask-derivation.ts — the workspace-wide sweep behind R6 COVER-TOGETHER
+// derives the same asks from the same rows, and two copies of "3 tasks past
+// due on Alpha" is how two surfaces end up disagreeing about somebody's week
+// in two wordings a reader cannot check against each other.
 
 function listNames(names: string[]): string {
   if (names.length === 0) return ''
@@ -287,26 +289,15 @@ export function assembleMeetingPlan(input: AssembleMeetingPlanInput): MeetingPla
   // Keyed by a nested map rather than a joined string: joining two uuids means
   // splitting them again later, and a split is one more place for the pair to
   // come back swapped or truncated.
-  const overdueByUserApp = new Map<string, Map<string, number>>()
-  for (const task of input.openTasks) {
-    if (!task.assigneeId) continue
-    if (!projectById.has(task.appId)) continue
-    if (!isPastDue(task, input.todayIso)) continue
-    const perApp = overdueByUserApp.get(task.assigneeId) ?? new Map<string, number>()
-    perApp.set(task.appId, (perApp.get(task.appId) ?? 0) + 1)
-    overdueByUserApp.set(task.assigneeId, perApp)
-  }
-  const overdueRows = [...overdueByUserApp.entries()]
-    .flatMap(([userId, perApp]) =>
-      [...perApp.entries()].map(([appId, count]) => ({ userId, appId, count })),
-    )
-    .sort((a, b) => a.userId.localeCompare(b.userId) || a.appId.localeCompare(b.appId))
+  const overdueRows = overdueRowsByUserApp(input.openTasks, input.todayIso, (appId) =>
+    projectById.has(appId),
+  )
   for (const { userId, appId, count } of overdueRows) {
     addAsk(userId, {
       key: `overdue:${userId}:${appId}`,
       kind: 'overdue',
       appId,
-      text: `${plural(count, 'task')} past due on ${appName(appId)}`,
+      text: overdueAskText(count, appName(appId)),
       context: null,
       href: boardHref(appSlug(appId), null, { who: userId, overdue: '1' }),
       linkLabel: 'Open on the board',
@@ -345,16 +336,13 @@ export function assembleMeetingPlan(input: AssembleMeetingPlanInput): MeetingPla
     // 'none' is agreement — nothing to raise. 'unknown' is NOT agreement and
     // is stated in words below rather than rendered like it (see checkins.ts).
     if (gap === 'none') continue
-    const text =
-      gap === 'unknown'
-        ? `Said ${checkin.percent}% on ${sprint.name} — no tasks on that board to compare against`
-        : `Said ${checkin.percent}% on ${sprint.name}, the board says ${computed.percent}%`
+    const text = checkinAskText(checkin.percent, sprint.name, gap, computed.percent)
     addAsk(checkin.userId, {
       key: `checkin:${checkin.sprintId}:${checkin.userId}`,
       kind: 'checkin',
       appId: sprint.appId,
       text,
-      context: gap === 'ahead' ? 'Reported ahead of the board' : gap === 'behind' ? 'Reported behind the board' : null,
+      context: checkinAskContext(gap),
       href: boardHref(appSlug(sprint.appId), sprint.sprintId, { who: checkin.userId }),
       linkLabel: 'Open their column',
       external: false,
@@ -432,15 +420,13 @@ export function assembleMeetingPlan(input: AssembleMeetingPlanInput): MeetingPla
       // schema, and inventing one from a title keyword would put a word on
       // screen no row can back. Started, past its date, still not finished is
       // the thing the data can actually say.
-      const stalled = sprintTasks.filter(
-        (task) => task.status === 'in_progress' && isPastDue(task, input.todayIso),
-      ).length
+      const stalled = stalledCount(sprintTasks, input.todayIso)
       if (stalled > 0) {
         addAsk(pmId, {
           key: `stalled:${sprint.sprintId}`,
           kind: 'stalled',
           appId: project.appId,
-          text: `${plural(stalled, 'task')} in ${sprint.name} started, past due, and still in progress`,
+          text: stalledAskText(stalled, sprint.name),
           context: `${project.name} — moving slower than the dates say`,
           href: boardHref(project.slug, sprint.sprintId, { overdue: '1' }),
           linkLabel: 'Open the overdue filter',
