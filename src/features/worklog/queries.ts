@@ -1,5 +1,6 @@
 import { and, asc, count, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
+import { canHoldWork } from '@/features/people/removal-queries'
 import { absences, assignments, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
 import { liveApps } from '@/db/live'
 import type { ScheduleRow } from '@/features/worklog/schedules'
@@ -412,4 +413,33 @@ export async function getMyAssignedApps(userId: string): Promise<UserAssignedApp
   }
 
   return rows
+}
+
+/**
+ * Everybody a log is expected from, whether or not they have written one.
+ *
+ * THE TEAM VIEW USED TO BE BUILT FROM WORKLOG ROWS ALONE, which meant the one
+ * screen an admin opens to find out who is behind structurally could not show
+ * them: a person who logged nothing in the window produced no rows, therefore
+ * no card, and the empty state said "nobody has logged a day yet this week" —
+ * a statement about rows dressed up as a statement about the team. With three
+ * of twenty people logging, that view was reporting a full house.
+ *
+ * `canHoldWork()` is the same roster predicate the people and removal surfaces
+ * use — active, approved, not removed — imported rather than restated so a
+ * deactivated account cannot linger on this view after it has vanished from
+ * the others.
+ */
+export type TeamMember = {
+  userId: string
+  name: string
+  avatarUrl: string | null
+}
+
+export async function getTeamRoster(): Promise<TeamMember[]> {
+  return db
+    .select({ userId: users.id, name: users.name, avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(canHoldWork())
+    .orderBy(asc(users.name))
 }

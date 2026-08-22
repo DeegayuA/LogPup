@@ -51,6 +51,7 @@ import {
   getMyWorkSchedule,
   getMyWorklogsInRange,
   getTeamApprovedAbsences,
+  getTeamRoster,
   getTeamWorklogs,
   listAppTagTargets,
   getUserJoinDay,
@@ -953,7 +954,8 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
   }
 
   const load = async () => {
-    const [rows, teamAbsences, orgRows, apps] = await Promise.all([
+    const [roster, rows, teamAbsences, orgRows, apps] = await Promise.all([
+      getTeamRoster(),
       getTeamWorklogs(from, today),
       getTeamApprovedAbsences(from, today),
       listOrgHolidays(),
@@ -962,15 +964,26 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
 
     const closed = closedStudioDays(orgRows, from, today)
 
-    const byUser = new Map<string, Person>()
+    // THE ROSTER SEEDS THE MAP, not the worklog rows. Built the other way
+    // round, a person who logged nothing in the window produced no rows and
+    // therefore no card — so the view an admin opens to find who is behind
+    // could show everyone EXCEPT the people who are behind. Seeding from the
+    // roster means somebody with no logs renders as a full strip of amber
+    // squares, which is the news this zone exists to deliver.
+    const byUser = new Map<string, Person>(
+      roster.map((member) => [
+        member.userId,
+        { userId: member.userId, name: member.name, entries: new Map() },
+      ]),
+    )
     for (const row of rows) {
-      const person = byUser.get(row.userId) ?? {
-        userId: row.userId,
-        name: row.userName,
-        entries: new Map(),
-      }
+      // A row for somebody NOT on the roster is somebody deactivated or
+      // removed since they logged. Their days are not this view's business —
+      // it reports on who is expected to log now — so the row is skipped
+      // rather than resurrecting a card the people surfaces have dropped.
+      const person = byUser.get(row.userId)
+      if (!person) continue
       person.entries.set(row.day, { percent: row.percent, note: row.note })
-      byUser.set(row.userId, person)
     }
     const people = [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name))
 
@@ -1007,8 +1020,8 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
 
         {people.length === 0 ? (
           <EmptyState
-            title="Nobody has logged a day yet this week"
-            description="Entries appear here as people file them — each person writes their own."
+            title="Nobody is on the roster yet"
+            description="This view covers everybody active and approved. Cards appear as soon as somebody is."
             className="rounded-xl border border-dashed"
           />
         ) : (
