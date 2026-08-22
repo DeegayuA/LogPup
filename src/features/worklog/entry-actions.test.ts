@@ -394,6 +394,39 @@ describe('the category/task rule holds on update, not only on create', () => {
     expect(updateCalls[0].values.appId).not.toBe(CLAIMED_APP)
   })
 
+  it('SAVES a task entry that sends no project, which is what the form sends', async () => {
+    /*
+     * THE REGRESSION. Every task-category entry in the product failed with
+     * "That task is not linked to a project" and no task entry could be saved
+     * at all.
+     *
+     * entry-form.ts deliberately sends appId: null for a task entry, because
+     * resolveEntryAppId derives the project from the task server-side. But
+     * validateEntry ran FIRST, on that pre-resolution input, with its default
+     * requireAppForTask: true — so it refused the row before the code that
+     * would have supplied the project ever ran.
+     *
+     * Every pure test of validateEntry passed throughout, because in isolation
+     * the rule is correct. Only the ORDER was wrong, and only an action-level
+     * test can see an order. That is why this one sends appId exactly as the
+     * form does rather than the CLAIMED_APP the test above uses.
+     */
+    rowsByTable.set(liveTasks, [{ appId: TASKS_APP }])
+    rowsByTable.set(liveWorklogEntries, [{ id: ENTRY }])
+
+    const res = await createWorklogEntry({
+      day: PAST_DAY,
+      minutes: 90,
+      category: 'task',
+      taskId: TASK,
+      appId: null,
+      billable: true,
+    })
+
+    expect(res.ok).toBe(true)
+    expect(insertCalls[0].values).toMatchObject({ appId: TASKS_APP, taskId: TASK, minutes: 90 })
+  })
+
   it('refuses a task that is only invisible because it was trashed', async () => {
     // Read raw, a soft-deleted task comes back live and the hours get filed
     // against work somebody deliberately removed. The read goes through the
@@ -406,9 +439,11 @@ describe('the category/task rule holds on update, not only on create', () => {
       minutes: 60,
       category: 'task',
       taskId: TASK,
-      // A project has to be on the body to reach the derivation at all — the
-      // action's own whole-body check demands one first. See the note on the
-      // payload in day-hours-card.tsx.
+      // A project the caller has no business supplying, sent on purpose: this
+      // case is about the TASK being gone, and the claimed project must not
+      // rescue it. (An earlier draft of this comment said a project "has to be
+      // on the body to reach the derivation at all" — that was true only
+      // because of the ordering bug the test above now pins, and is not a rule.)
       appId: CLAIMED_APP,
     })
 

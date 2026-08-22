@@ -139,7 +139,15 @@ export async function createWorklogEntry(
   if (isFutureWorkDay(input.day, new Date())) return err('That day has not happened yet')
 
   // The cross-field rule, from the shared module rather than restated here.
-  const valid = validateEntry(input)
+  //
+  // `requireAppForTask: false` because the project is NOT KNOWN YET. A task
+  // entry deliberately arrives with appId null — entry-form.ts says so, and
+  // resolveEntryAppId below derives it from the task. Checking the rule here,
+  // against the pre-resolution input, refused every task entry in the product
+  // with "That task is not linked to a project" and never reached the code
+  // that would have supplied one. The rule is not skipped, it is MOVED to
+  // below the resolution, where the fact it asks about actually exists.
+  const valid = validateEntry(input, { requireAppForTask: false })
   if (!valid.ok) return err(valid.message)
 
   const note = input.note?.trim() ? input.note.trim() : null
@@ -150,6 +158,12 @@ export async function createWorklogEntry(
   // taskId is ON DELETE SET NULL, appId is not derived from it again.
   const resolvedAppId = await resolveEntryAppId(input.category, input.taskId ?? null, input.appId ?? null)
   if (!resolvedAppId.ok) return err(resolvedAppId.message)
+
+  // The rule validateEntry was asked to skip, now that the answer is known.
+  // Same sentence it would have said, at the point where it is true.
+  if (input.category === 'task' && resolvedAppId.appId === null) {
+    return err('That task is not linked to a project')
+  }
 
   try {
     const [row] = await db
@@ -226,7 +240,8 @@ export async function updateWorklogEntry(
   if (!parsed.success) return err(parsed.error.issues[0].message)
   const input = parsed.data
 
-  const valid = validateEntry(input)
+  // Same reason as create: the project is not known until the task is read.
+  const valid = validateEntry(input, { requireAppForTask: false })
   if (!valid.ok) return err(valid.message)
 
   const note = input.note?.trim() ? input.note.trim() : null
@@ -236,6 +251,10 @@ export async function updateWorklogEntry(
   // to 'task' must RE-derive it rather than keep the meeting's project.
   const resolvedAppId = await resolveEntryAppId(input.category, input.taskId ?? null, input.appId ?? null)
   if (!resolvedAppId.ok) return err(resolvedAppId.message)
+
+  if (input.category === 'task' && resolvedAppId.appId === null) {
+    return err('That task is not linked to a project')
+  }
 
   try {
     // Through the LIVE subquery: a soft-deleted entry must read as gone, or
