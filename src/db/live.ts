@@ -2,7 +2,7 @@ import { QueryBuilder } from 'drizzle-orm/pg-core'
 import { isNull } from 'drizzle-orm'
 import {
   apps, bugReports, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
-  worklogEntries, meetingSeries,
+  worklogEntries, meetingSeries, meetingRecordingSegments, meetingRecordings,
 } from './schema'
 
 // Connection-free: QueryBuilder builds SQL without a client, so importing
@@ -36,6 +36,10 @@ export const liveWorklogEntriesAs = (name: string) =>
   qb.select().from(worklogEntries).where(isNull(worklogEntries.deletedAt)).as(name)
 export const liveMeetingSeriesAs = (name: string) =>
   qb.select().from(meetingSeries).where(isNull(meetingSeries.deletedAt)).as(name)
+export const liveRecordingSegmentsAs = (name: string) =>
+  qb.select().from(meetingRecordingSegments).where(isNull(meetingRecordingSegments.deletedAt)).as(name)
+export const liveRecordingsAs = (name: string) =>
+  qb.select().from(meetingRecordings).where(isNull(meetingRecordings.deletedAt)).as(name)
 
 export const liveApps = liveAppsAs('live_apps')
 export const liveBugReports = liveBugReportsAs('live_bug_reports')
@@ -46,6 +50,8 @@ export const liveNoteSegments = liveNoteSegmentsAs('live_note_segments')
 export const liveScreenshots = liveScreenshotsAs('live_screenshots')
 export const liveWorklogEntries = liveWorklogEntriesAs('live_worklog_entries')
 export const liveMeetingSeries = liveMeetingSeriesAs('live_meeting_series')
+export const liveRecordingSegments = liveRecordingSegmentsAs('live_recording_segments')
+export const liveRecordings = liveRecordingsAs('live_meeting_recordings')
 
 /**
  * Every column of `apps`, taken from the LIVE subquery.
@@ -101,6 +107,13 @@ export const SOFT_TABLES = [
   // deleted one reappearing in a total is the app contradicting them about
   // their own hours.
   { table: worklogEntries, sqlName: 'worklog_entries', live: liveWorklogEntries, liveAs: liveWorklogEntriesAs },
+  // Registered in the SAME change that adds the column, before its first
+  // reader exists — the rule every entry above states. A deleted take's
+  // transcript reappearing in a synthesis is the meeting quoting a recording
+  // somebody removed on purpose, which is the one thing the delete exists to
+  // prevent.
+  { table: meetingRecordingSegments, sqlName: 'meeting_recording_segments', live: liveRecordingSegments, liveAs: liveRecordingSegmentsAs },
+  { table: meetingRecordings, sqlName: 'meeting_recordings', live: liveRecordings, liveAs: liveRecordingsAs },
   // The table landed in 4d94451 carrying deleted_at but never reached this
   // list, so the guard went red the moment it was declared — which is the
   // guard doing precisely its job. Registered here BEFORE the series UI has a

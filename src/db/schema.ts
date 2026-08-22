@@ -1206,9 +1206,64 @@ export const meetingRecordingSegments = pgTable('meeting_recording_segments', {
   index: integer('index').notNull(),
   transcript: text('transcript').notNull(),
   model: text('model').notNull(),
+  // Which TAKE this segment belongs to. NULL is not missing data — it reads
+  // "recorded before takes were tracked", and migration 0060 deliberately
+  // backfilled nothing: inferring take boundaries from timestamps would have
+  // produced rows indistinguishable from observed ones, the exact mistake
+  // migration 0015 made with assignment_history.
+  //
+  // SET NULL rather than cascade, so deleting a take never destroys the
+  // transcript row itself. The soft delete below is what hides it, and a hard
+  // cascade would make restore impossible and the admin trash a lie.
+  recordingId: uuid('recording_id').references(() => meetingRecordings.id, { onDelete: 'set null' }),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-}, (t) => [uniqueIndex('meeting_recording_segments_meeting_index_idx').on(t.meetingId, t.index)])
+  // Soft delete, per the repo rule, registered in SOFT_TABLES (src/db/live.ts)
+  // in the SAME change that adds the column — before any reader exists.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  uniqueIndex('meeting_recording_segments_meeting_index_idx').on(t.meetingId, t.index),
+  index('meeting_recording_segments_recording_live_idx')
+    .on(t.recordingId, t.index)
+    .where(sql`${t.deletedAt} is null`),
+])
+
+// One TAKE: a single press of record and the stop that followed it.
+//
+// A meeting is commonly ten or fifteen of these. Until migration 0060 they
+// existed only as a continuous run of segment indexes — the numbering that
+// stops a second take upserting over the first one's transcripts
+// (ai-actions.ts) — which meant nothing recorded WHICH segments belonged to
+// which take. A studio could not be shown its own takes, could not count them,
+// and could not remove one without hand-picking an index range.
+//
+// take_index KEEPS ITS SLOT WHEN DELETED. The unique index covers deleted rows
+// too, so a restore can never collide with a take recorded after it, and
+// "take 7" means the same thing to anybody who wrote the number down.
+export const meetingRecordings = pgTable('meeting_recordings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  meetingId: uuid('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+  // 1-based and per meeting — what the card calls itself ("Take 3").
+  takeIndex: integer('take_index').notNull(),
+  // Optional, renameable: "client demo", "after the break". A take nobody
+  // named is still a take, so this stays nullable rather than defaulting to a
+  // string that pretends somebody chose it.
+  label: text('label'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  // NULL while still recording. That is also how a take interrupted by a
+  // closed tab is told apart from one somebody stopped.
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  uniqueIndex('meeting_recordings_meeting_take_idx').on(t.meetingId, t.takeIndex),
+  index('meeting_recordings_meeting_live_idx')
+    .on(t.meetingId)
+    .where(sql`${t.deletedAt} is null`),
+])
 
 // Change-detected screen keyframes captured during a "screen + mic" recording
 // (see screen-keyframes.ts). Full-video recording was rejected on cost (720p

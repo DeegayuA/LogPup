@@ -26,15 +26,16 @@ import {
 // --- live.ts sanity ---------------------------------------------------------
 
 describe('live.ts subqueries', () => {
-  it('SOFT_TABLES covers exactly the nine soft-deleted tables', () => {
+  it('SOFT_TABLES covers exactly the eleven soft-deleted tables', () => {
     // Spelled out rather than derived, so ADDING a soft-deleted table is a
     // deliberate edit here as well as in live.ts. The check above already
     // catches a table with deleted_at that nobody registered; this one catches
     // the reverse — a registration nobody meant to make.
     expect(SOFT_TABLES.map((t) => t.sqlName).sort()).toEqual(
       [
-        'apps', 'bug_reports', 'meeting_note_segments', 'meeting_screenshots',
-        'meeting_series', 'meetings', 'sprints', 'tasks', 'worklog_entries',
+        'apps', 'bug_reports', 'meeting_note_segments', 'meeting_recording_segments',
+        'meeting_recordings', 'meeting_screenshots', 'meeting_series', 'meetings',
+        'sprints', 'tasks', 'worklog_entries',
       ].sort(),
     )
   })
