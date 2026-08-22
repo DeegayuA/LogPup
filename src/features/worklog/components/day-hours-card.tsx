@@ -134,13 +134,34 @@ function editableDuration(minutes: number): string {
  * so a correction is refused for the same reason and in the same words an add
  * would be.
  */
-function rowFields(entry: WorklogEntryRow, duration: string, note: string): EntryFormFields {
+type EditDraft = {
+  id: string
+  duration: string
+  note: string
+  /** Absent until the person changes it — the row's own value until then. */
+  category?: EntryCategory
+  appId?: string | null
+}
+
+/**
+ * The body an edit will send.
+ *
+ * KIND AND PROJECT ARE EDITABLE; TASK IS NOT. Fixing "meeting" that should
+ * have been "review", or a project the sentence read wrong, is the ordinary
+ * correction — and before this the only way to make it was to delete the row
+ * and retype it. Converting a row to or from a TASK entry is deliberately not
+ * offered: the server derives a task row's project from the task, the guard
+ * that runs first still demands one, and LoggableTask does not carry an appId
+ * for the client to supply. Guessing it would mis-attribute hours, which is
+ * the one thing this column must never do.
+ */
+function rowFields(entry: WorklogEntryRow, draft: EditDraft): EntryFormFields {
   return {
-    minutes: parseDuration(duration),
-    category: entry.category,
+    minutes: parseDuration(draft.duration),
+    category: draft.category ?? entry.category,
     taskId: entry.taskId,
-    appId: entry.appId,
-    note,
+    appId: draft.appId === undefined ? entry.appId : draft.appId,
+    note: draft.note,
   }
 }
 
@@ -294,11 +315,7 @@ export function DayHoursCard({
    * SERVER's values, and the only way to be sure of that is never to have
    * written the draft anywhere the row reads from.
    */
-  const [editing, setEditing] = React.useState<{
-    id: string
-    duration: string
-    note: string
-  } | null>(null)
+  const [editing, setEditing] = React.useState<EditDraft | null>(null)
   /*
    * The row whose edit button should take focus back once it returns to the
    * DOM. Closing the editor UNMOUNTS the button that opened it, so focus would
@@ -551,7 +568,7 @@ export function DayHoursCard({
            * so it satisfies the guard without the client deciding anything,
            * and the derivation overwrites it with the same value.
            */
-          appId: entry.appId,
+          appId: fields.category === 'task' ? entry.appId : fields.appId,
           // Carried through explicitly. The action reads `billable ?? false`
           // over the WHOLE body, so leaving it out would quietly un-bill an
           // entry somebody had opened only to fix a typo in the note.
@@ -791,7 +808,7 @@ export function DayHoursCard({
             // draft is non-null inside the branch without a second assertion.
             const draft = editing && editing.id === entry.id ? editing : null
             const label = entry.taskTitle ?? CATEGORY_LABEL[entry.category]
-            const fields = draft ? rowFields(entry, draft.duration, draft.note) : null
+            const fields = draft ? rowFields(entry, draft) : null
             const editProblem = fields ? entryFormProblem(fields) : null
             /*
              * NO EDIT CONTROL ON A ROW THE SAVE PATH WOULD REFUSE. Two ways
@@ -813,7 +830,11 @@ export function DayHoursCard({
              */
             const correctable =
               entryFormProblem(
-                rowFields(entry, editableDuration(entry.minutes), entry.note ?? ''),
+                rowFields(entry, {
+                  id: entry.id,
+                  duration: editableDuration(entry.minutes),
+                  note: entry.note ?? '',
+                }),
               ) === null
               && (entry.category !== 'task' || entry.appId !== null)
 
@@ -848,6 +869,64 @@ export function DayHoursCard({
                         inputMode="decimal"
                         className="h-7 w-20 text-xs"
                       />
+                      {/* A TASK ROW'S KIND IS FIXED. Everything else is a
+                          correction somebody makes constantly, and used to
+                          cost a delete and a retype. */}
+                      {entry.category !== 'task' ? (
+                        <Select
+                          value={fields.category}
+                          onValueChange={(value) =>
+                            setEditing({ ...draft, category: value as EntryCategory })
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            aria-label={`Kind for ${label}`}
+                            className="h-7 w-28 text-xs"
+                          >
+                            <SelectValue>
+                              {(value: string) => CATEGORY_LABEL[value as EntryCategory] ?? 'Kind'}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ENTRY_CATEGORIES.filter((c) => c !== 'task').map((c) => (
+                              <SelectItem key={c} value={c}>
+                                {CATEGORY_LABEL[c]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : null}
+                      {entry.category !== 'task' && apps.length > 0 ? (
+                        <Select
+                          value={fields.appId ?? NO_APP}
+                          onValueChange={(value) =>
+                            setEditing({ ...draft, appId: value === NO_APP ? null : value })
+                          }
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            aria-label={`Project for ${label}`}
+                            className="h-7 w-32 text-xs"
+                          >
+                            <SelectValue>
+                              {(value: string) =>
+                                value === NO_APP
+                                  ? 'No project'
+                                  : (apps.find((a) => a.id === value)?.name ?? 'No project')
+                              }
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={NO_APP}>No project</SelectItem>
+                            {apps.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                {a.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : null}
                       <Input
                         value={draft.note}
                         onChange={(e) => setEditing({ ...draft, note: e.target.value })}
