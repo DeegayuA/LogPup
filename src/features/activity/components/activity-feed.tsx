@@ -17,6 +17,12 @@ import {
 import type { ActivityParamState } from '@/features/activity/filters'
 import type { ActivityRow } from '@/features/activity/types'
 
+// Grapheme-aware initial: .slice(0, 1) cuts by UTF-16 code unit, which strips
+// a Sinhala name's vowel sign — 'දීගායු' rendered 'ද' instead of 'දී'.
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+const initialOf = (name: string): string =>
+  ([...graphemes.segment(name)][0]?.segment ?? '').toUpperCase()
+
 /**
  * The trail, in two densities.
  *
@@ -41,7 +47,7 @@ function FlatRow({ row, timeLabel }: { row: ActivityRow; timeLabel: string }) {
     <li className="flex items-start gap-3 py-2.5">
       <Avatar size="sm" className="mt-0.5">
         {row.actorAvatarUrl ? <AvatarImage src={row.actorAvatarUrl} alt={row.actorName} /> : null}
-        <AvatarFallback>{row.actorName.slice(0, 1).toUpperCase()}</AvatarFallback>
+        <AvatarFallback>{initialOf(row.actorName)}</AvatarFallback>
       </Avatar>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="text-sm leading-snug">

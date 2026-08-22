@@ -783,7 +783,12 @@ export default async function MeetingPrintPage(props: {
         </div>
       ) : null}
 
-      <main className="doc-sheet mx-auto my-8 w-[210mm] max-w-full bg-[var(--doc-paper)] px-[18mm] py-[16mm] text-[10pt] leading-[1.5] text-[var(--doc-ink)] shadow-[0_1px_3px_rgba(0,0,0,0.12),0_8px_24px_rgba(0,0,0,0.08)] print:my-0 print:w-auto print:shadow-none">
+      {/* leading-[1.7], not 1.5: action items, discussion bullets, questions
+          and the glossary all render code-switched Sinhala as bare text at
+          this base line-height, and below ~1.7 consecutive Sinhala lines'
+          stacking marks visually collide (see the bilingual leading rule in
+          meeting-chips.tsx). 10pt/17pt still paginates fine on A4. */}
+      <main className="doc-sheet mx-auto my-8 w-[210mm] max-w-full bg-[var(--doc-paper)] px-[18mm] py-[16mm] text-[10pt] leading-[1.7] text-[var(--doc-ink)] shadow-[0_1px_3px_rgba(0,0,0,0.12),0_8px_24px_rgba(0,0,0,0.08)] print:my-0 print:w-auto print:shadow-none">
         {/* The whole document is ONE table so the browser can repeat a header
             and footer on every printed page. thead/tfoot are the only
             mechanism that both repeats AND reserves its own space; the
@@ -984,12 +989,15 @@ export default async function MeetingPrintPage(props: {
           {summaryBlocks.length > 0 ? (
             <div className="flex flex-col gap-3">
               {summaryBlocks.map((block) => (
-                <div
-                  key={block.lang}
-                  lang={block.lang}
-                  className={block.lang === 'si' ? 'leading-[1.8]' : undefined}
-                >
-                  <MarkdownLite content={block.content} />
+                <div key={block.lang} lang={block.lang}>
+                  {/* The leading must ride on MarkdownLite itself: its root
+                      declares leading-relaxed (1.625), so a line-height on
+                      this wrapper never reaches the rendered text — passing
+                      it through className lets twMerge give it the win. */}
+                  <MarkdownLite
+                    content={block.content}
+                    className={block.lang === 'si' ? 'leading-[1.8]' : undefined}
+                  />
                 </div>
               ))}
             </div>

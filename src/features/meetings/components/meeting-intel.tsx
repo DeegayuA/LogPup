@@ -148,6 +148,11 @@ import {
   observedMsPerSegment,
 } from '@/features/meetings/recording-progress'
 import {
+  closeRecordingTake,
+  openRecordingTake,
+} from '@/features/meetings/recording-actions'
+import { RecordingTakes } from '@/features/meetings/components/recording-takes'
+import {
   loadParkedSegments,
   parkSegment,
   releaseSegment,
@@ -771,6 +776,17 @@ export function MeetingIntelPanel({
   const segmentStartRef = useRef(0)
   // Next segment index to assign — 0-based, matches meetingRecordingSegments.index.
   const segmentIndexRef = useRef(0)
+  /**
+   * The take currently being recorded, or null.
+   *
+   * A ref rather than state because the upload loop reads it from inside
+   * async callbacks that would otherwise close over a stale render. Null is a
+   * NORMAL value, not a failure: if openRecordingTake did not land, segments
+   * still upload and still transcribe, they are simply ungrouped. Refusing to
+   * record because a grouping row failed would trade the recording for the
+   * bookkeeping about it.
+   */
+  const recordingTakeRef = useRef<string | null>(null)
   /** Highest index this session has ever assigned, +1. Only ever increases —
    *  unlike `segments`, which finalize empties of everything it consumed. */
   const segmentHighWaterRef = useRef(0)
@@ -801,6 +817,13 @@ export function MeetingIntelPanel({
   // recognizers, never the preference); it drops back if an engine fails
   // (see handleEngineUnavailable).
   const engineModeRef = useRef<'dual' | 'single'>('single')
+  // Languages that permanently failed DURING THIS RECORDING (see
+  // handleEngineUnavailable). What this exists for: bilingual mode falls back
+  // to the other engine when one dies, and this is the memory that stops that
+  // fallback ping-ponging between two engines that have both failed. Reset at
+  // every startLiveRecognition — a language that failed last recording may
+  // work on the next one.
+  const permanentlyFailedRef = useRef<Partial<Record<ActiveLanguage, boolean>>>({})
   const recordingRef = useRef(false)
   const finalTranscriptRef = useRef('')
   const transcriptPanelRef = useRef<HTMLTextAreaElement | null>(null)
@@ -1502,6 +1525,7 @@ export function MeetingIntelPanel({
   // instead of waiting out a window that can no longer produce a pair.
   function handleEngineUnavailable(lang: ActiveLanguage, reason?: string) {
     clearDualProbe()
+    permanentlyFailedRef.current[lang] = true
     teardownEngine(lang)
     syncActiveEngines()
     // Whatever was buffered is real speech that has now lost its only
@@ -1510,6 +1534,24 @@ export function MeetingIntelPanel({
     flushPendingUtterance()
     const remaining = Object.keys(recognitionRefs.current) as ActiveLanguage[]
     if (remaining.length === 0) {
+      // Bilingual promised BOTH languages and only one has failed — try the
+      // other before declaring live text dead. The real-world path here:
+      // lastActiveLang was si-LK, Chrome reports 'language-not-supported'
+      // asynchronously AFTER start() succeeded, and en-US was never started
+      // (the dual probe only fires from audiostart, which a doomed engine may
+      // never reach — and never fires at all once dualUnsupported is
+      // remembered). Giving up silenced live text for the whole meeting while
+      // a perfectly good English engine sat unused.
+      const partner = otherLanguage(lang)
+      if (
+        languagePreferenceRef.current === 'bilingual' &&
+        !permanentlyFailedRef.current[partner] &&
+        startEngine(partner)
+      ) {
+        if (reason) addNotice(reason)
+        addNotice(singleEngineNotice(partner))
+        return
+      }
       // The reason survives even when there is nothing left to fall back to.
       // "Live text stopped" alone says something broke but not whether it is
       // worth acting on — a network drop is worth retrying, a browser with no
@@ -1624,6 +1666,10 @@ export function MeetingIntelPanel({
     if (dualUnsupportedRef.current) return
     if (languagePreferenceRef.current !== 'bilingual') return
     if (Object.keys(recognitionRefs.current).length !== 1) return
+    // A challenger that already permanently failed this recording (the engine
+    // this one is the fallback FOR) would just fail again — don't disturb the
+    // survivor to re-prove it.
+    if (permanentlyFailedRef.current[otherLanguage(lang)]) return
     startDualProbe(lang)
   }
 
@@ -1795,6 +1841,9 @@ export function MeetingIntelPanel({
   // when the probe fails the surviving engine is the useful one rather than
   // an arbitrary default.
   function startLiveRecognition(preference: LanguagePreference) {
+    // Clean slate per recording: a language that permanently failed last time
+    // (network gone, model missing after a browser update) may work now.
+    permanentlyFailedRef.current = {}
     if (preference !== 'bilingual') {
       // Manual override — exactly one engine, in the chosen language.
       engineModeRef.current = 'single'
@@ -1843,6 +1892,10 @@ export function MeetingIntelPanel({
     // Before the retry loop, not inside it: what the user waits through is the
     // whole sequence, backoff included.
     const startedAt = Date.now()
+    /* Read ONCE, here, rather than per attempt. A retry that straddles a stop
+       and a new take must be filed under the take that recorded the audio,
+       not whichever one happens to be open when the retry succeeds. */
+    const takeId = recordingTakeRef.current
     for (let attempt = 1; attempt <= SEGMENT_UPLOAD_ATTEMPTS; attempt += 1) {
       upsertSegment({ index, status: 'uploading', blob, attempt: attempt - 1, recovered })
       let error: string
@@ -1855,7 +1908,7 @@ export function MeetingIntelPanel({
         // quadratically over an hours-long meeting (see hintTail's comment).
         const hint = hintTail(finalTranscriptRef.current)
         if (hint) formData.append('liveTranscriptHint', hint)
-        const res = await transcribeSegment(meetingId, index, formData)
+        const res = await transcribeSegment(meetingId, index, formData, takeId)
         if (res.ok) {
           upsertSegment({ index, status: 'done', blob, recovered, tookMs: Date.now() - startedAt })
           // The transcript is in the database now — that's the durable copy
@@ -2380,6 +2433,13 @@ export function MeetingIntelPanel({
         // still waiting for a partner when Stop was pressed — was dropped.
         flushPendingUtterance()
         cleanupCapture()
+        // Closed before the early return below: a take that captured nothing
+        // is still a take somebody started and stopped, and leaving ended_at
+        // null would make it indistinguishable from one interrupted by a
+        // closed tab.
+        const openTake = recordingTakeRef.current
+        recordingTakeRef.current = null
+        if (openTake) void closeRecordingTake(openTake)
         if (capturedSegments === 0) {
           toast.error('Nothing was recorded')
           return
@@ -2389,6 +2449,14 @@ export function MeetingIntelPanel({
       recorder.start(1000)
       setRecording(true)
       recordingRef.current = true
+      // Opened alongside the recorder, never awaited before it. The mic is
+      // already live and the first segment is already accumulating; making
+      // the person wait on a round trip to learn what their take is NUMBERED
+      // would put the bookkeeping ahead of the recording.
+      recordingTakeRef.current = null
+      void openRecordingTake(meetingId).then((res) => {
+        if (res.ok) recordingTakeRef.current = res.data.id
+      })
       // A second take while the first is still transcribing: nothing is
       // cancelled and nothing interleaves — new segments number after the old
       // ones and join the back of the same one-at-a-time queue. Said out
@@ -3166,6 +3234,18 @@ export function MeetingIntelPanel({
                 </>
               ) : null}
             </span>
+            {/* One card per take, below the live chips rather than beside
+                them. The chips describe THIS moment — captured, transcribed,
+                waiting — and the list below describes what the meeting is
+                made of, which is a different question and outlives the
+                recording. Keyed on the segment count so a finished take
+                appears without anybody pressing refresh. */}
+            <RecordingTakes
+              key={`takes-${segmentProgress.done}`}
+              meetingId={meetingId}
+              canManage={canRecord}
+              className="pt-1"
+            />
             {showLiveText && liveEngine === 'webspeech' && liveEngineLabel ? (
               // Subtle, not a status announcement — which engine is currently
               // winning is a nicety to confirm bilingual mode is doing
