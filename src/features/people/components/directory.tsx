@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { Stagger, StaggerItem } from '@/components/motion/stagger'
 import { ContactButtons } from '@/components/contact-buttons'
 import { eventDotClasses } from '@/features/meetings/event-color'
 import { CapacityBar } from '@/features/people/components/capacity-bar'
@@ -384,12 +385,20 @@ export function PeopleDirectory({
           />
         </div>
       ) : (
-        <ul className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card">
+        /* `count` so the interval shrinks on a big roster: a fixed 40ms step
+           over a 90-person directory would spend three and a half seconds
+           drawing itself. See the note in components/motion/stagger.tsx. */
+        <Stagger
+          as="ul"
+          count={rows.length}
+          className="flex flex-col divide-y overflow-hidden rounded-xl border bg-card"
+        >
           {/* Stretched-link rows: the name anchor covers the row via ::after,
               so the whole row navigates while the call button stays a
               separate, valid sibling link above it. */}
           {rows.map(({ user, totalPct, breakdown }) => (
-            <li
+            <StaggerItem
+              as="li"
               key={user.id}
               className={cn(
                 'relative flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3',
@@ -494,9 +503,9 @@ export function PeopleDirectory({
                 className="relative z-10"
               />
               <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" aria-hidden />
-            </li>
+            </StaggerItem>
           ))}
-        </ul>
+        </Stagger>
       )}
     </div>
   )

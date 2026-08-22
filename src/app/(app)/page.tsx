@@ -14,6 +14,7 @@ import {
   ZONE_VIEWS,
   ZoneLabel,
 } from '@/features/dashboard/components/dashboard-zones'
+import { Reveal } from '@/components/motion/reveal'
 
 function greetingFor(hour: number): string {
   if (hour < 12) return 'Good morning'
@@ -104,13 +105,22 @@ export default async function DashboardPage() {
           before data — and so a slow portfolio scan never holds up somebody's
           own day. */}
       {actor
-        ? zones.map((zone) => {
+        ? zones.map((zone, i) => {
             const { Zone, Skeleton } = ZONE_VIEWS[zone.id]
             return (
               <Fragment key={zone.id}>
                 <ZoneLabel hidden={zone.labelHidden}>{zone.label}</ZoneLabel>
                 <Suspense fallback={<Skeleton />}>
-                  <Zone actor={actor} grant={zone.grant} userName={user?.name ?? 'You'} />
+                  {/* INSIDE the boundary, not around it: a reveal wrapped
+                      around the Suspense would play the moment the page
+                      mounted, animating a skeleton. Here it mounts when the
+                      zone's own data resolves, so the movement marks the
+                      arrival of the content rather than of the placeholder —
+                      and zones that resolve together still cascade, because
+                      the index is their order on the page. */}
+                  <Reveal index={i}>
+                    <Zone actor={actor} grant={zone.grant} userName={user?.name ?? 'You'} />
+                  </Reveal>
                 </Suspense>
               </Fragment>
             )

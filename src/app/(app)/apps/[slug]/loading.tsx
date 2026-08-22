@@ -18,6 +18,13 @@ function Shimmer({ className }: { className?: string }) {
 export default function AppDetailLoading() {
   return (
     <div className="flex flex-1 flex-col gap-5 p-6" aria-busy="true" aria-label="Loading app">
+      {/* The route change itself is silent to a screen reader — the URL moves
+          and the old page's DOM is replaced with placeholders that are all
+          aria-hidden. This is the announcement. Same wording pattern as the
+          other loading routes so the app says one thing, one way. */}
+      <span className="sr-only" role="status">
+        Loading this app…
+      </span>
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex flex-col gap-2">

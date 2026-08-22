@@ -185,7 +185,7 @@ export function CommandCenterProvider({
   children: React.ReactNode
 }) {
   const router = useRouter()
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, accent, setAccent } = useTheme()
   /**
    * OPTIMISTIC PRELOADING for the palette's results.
    *
@@ -492,20 +492,21 @@ export function CommandCenterProvider({
       go,
       close: () => setOpen(false),
       setTheme,
+      setAccent,
       setGoShortcuts,
       invalidateSearch: () => {
         searchDeduper.clear()
         intentDeduper.clear()
       },
     }),
-    [go, setGoShortcuts, setTheme],
+    [go, setGoShortcuts, setTheme, setAccent],
   )
 
   /* Every static row, resolved for this person and this query in one call.
      Which rows exist, what they are called, who may see them and what matches
      them all live in features/search/registry/commands.ts — this file only
      renders what comes back, so a new feature never has to be added here. */
-  const paletteCtx: PaletteContext = { user, theme, goShortcutsOn }
+  const paletteCtx: PaletteContext = { user, theme, accent, goShortcutsOn }
   const commands = paletteCommands(paletteCtx, query)
   const createCommands = commands.filter((command) => command.group === 'create')
   const navCommands = commands.filter((command) => command.group === 'navigate')

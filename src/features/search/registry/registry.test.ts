@@ -147,6 +147,7 @@ function ctx(role: PaletteContext['user']['role'] = 'member'): PaletteContext {
       name: 'Someone',
     },
     theme: 'system',
+    accent: 'pine',
     goShortcutsOn: true,
   }
 }

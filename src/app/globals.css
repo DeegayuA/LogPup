@@ -336,6 +336,193 @@
   --sidebar-ring: oklch(0.68 0.08 165);
 }
 
+/* ===========================================================================
+   COLOURWAYS — the brand hue, six ways, orthogonal to light/dark.
+
+   WHAT A WAY IS ALLOWED TO MOVE. Ten tokens, all of them the "this is the
+   product's colour" ones: --primary, --accent, --ring and their sidebar
+   counterparts, plus the two foregrounds that sit ON a coloured fill. Nothing
+   else. Surfaces (--background, --card, --muted, --border) stay put because a
+   way is a change of accent, not a re-skin — and the semantic tokens
+   (--destructive, --success, --warning, --weekend, --holiday, --mercantile,
+   the --tag-* and --event-* ramps, --chart-*) stay put because they MEAN
+   something. A theme picker that repaints "at risk" is not a theme picker.
+
+   HUE ONLY. Every value below is the audited pine value with its hue rotated:
+   the same L, the same C. That is the same move --holiday and --warning made
+   when they went orange-to-purple, and for the same reason — L and C are what
+   the contrast ratios were measured against, so rotating the hue alone keeps
+   the audit valid instead of requiring a fresh one per way. It also stops any
+   one way from shouting louder than the others, which is what happens the
+   moment somebody "just bumps the chroma a little" on their favourite.
+
+   MEASURED, all six ways x both modes, floors 4.5:1 for text and 3:1 for the
+   focus ring (computed OKLCH -> linear sRGB -> WCAG luminance, not eyeballed;
+   the method reproduces the ratios already recorded above this block to
+   within 0.05). Worst case in each column:
+
+     light  primary/bg 6.93  primary/card 7.41  primary/sidebar 6.50
+            primary-fg/primary 6.99  accent-fg/accent 11.25  ring/bg 4.18
+     dark   primary/bg 9.11  primary/card 8.43  primary/sidebar 9.32
+            primary-fg/primary 9.04  accent-fg/accent 11.82  ring/bg 6.37
+
+   Nothing clips the sRGB gamut, so no browser is silently rendering a
+   different colour than the one audited.
+
+   WHAT EACH WAY COLLIDES WITH, because this palette is already dense and
+   pretending otherwise is how two tokens end up indistinguishable:
+     ember  (55)     15deg from --chart-4, the data-viz amber
+     moss   (118)    8deg from --tag-action, 2deg from --event-8
+     ocean  (250)    0deg from --event-1, 15deg from --mercantile
+     purple (293.61) 0deg from --warning / --holiday / --chart-1
+     rose   (350)    0deg from --tag-term, 10deg from --event-6
+   The event and tag ramps are identity and taxonomy colours that always ship
+   with a name or an icon beside them, so a shared hue costs nothing there.
+   PURPLE IS THE ONE THAT COSTS SOMETHING: on that way the working colour and
+   the attention colour are the same hue, told apart only by lightness and
+   chroma — exactly the narrowing the --warning comment above warns about. It
+   is shipped anyway because the alternative was a second, different purple in
+   an app that already has one, and because every --warning surface carries
+   its own word ("Owed", "Near capacity") rather than relying on hue (WCAG
+   1.4.1). Anyone tuning --warning later should move it AWAY from 293.61.
+
+   WHY THESE SELECTORS. `:root` and `.dark` are both one class-worth of
+   specificity, so a bare [data-accent] block would beat `:root` and `.dark`
+   alike — repainting dark mode with light-mode values. Pairing the attribute
+   with the mode gives both blocks the same weight as each other and one more
+   than the block they override, and makes them mutually exclusive rather than
+   order-dependent.
+
+   The mode half is `:is(.dark, .dark *)` — an ANCESTOR-or-self test — rather
+   than plain `.dark`, and that is what lets these rules paint the theme
+   picker as well as the theme. Each swatch in settings carries its own
+   data-accent and asks for `bg-primary`; custom properties inherit, so the
+   swatch subtree resolves --primary to the way it names while the rest of the
+   page keeps the way that is actually on. The picker is therefore not a
+   hardcoded row of six hex values that can drift from these blocks — it is
+   these blocks, rendered small.
+
+   PINE HAS NO BLOCK. It is what :root and .dark already say; a way that
+   restated those values would be a second copy to keep in step. The attribute
+   is still written to the DOM for it (see theme-provider.tsx) so the picker
+   and any test can read the current way without inferring it from absence.
+   =========================================================================== */
+
+[data-accent='ember']:not(:is(.dark, .dark *)) {
+  --primary: oklch(0.44 0.09 55);
+  --accent: oklch(0.94 0.015 55);
+  --accent-foreground: oklch(0.3 0.05 55);
+  --ring: oklch(0.56 0.08 55);
+  --sidebar-primary: oklch(0.44 0.09 55);
+  --sidebar-accent: oklch(0.915 0.012 55);
+  --sidebar-accent-foreground: oklch(0.26 0.04 55);
+  --sidebar-ring: oklch(0.56 0.08 55);
+}
+:is(.dark, .dark *)[data-accent='ember'] {
+  --primary: oklch(0.78 0.1 55);
+  --primary-foreground: oklch(0.18 0.03 55);
+  --accent: oklch(0.28 0.02 55);
+  --accent-foreground: oklch(0.93 0.01 55);
+  --ring: oklch(0.68 0.08 55);
+  --sidebar-primary: oklch(0.78 0.1 55);
+  --sidebar-primary-foreground: oklch(0.18 0.03 55);
+  --sidebar-accent: oklch(0.24 0.016 55);
+  --sidebar-accent-foreground: oklch(0.94 0.01 55);
+  --sidebar-ring: oklch(0.68 0.08 55);
+}
+
+[data-accent='moss']:not(:is(.dark, .dark *)) {
+  --primary: oklch(0.44 0.09 118);
+  --accent: oklch(0.94 0.015 118);
+  --accent-foreground: oklch(0.3 0.05 118);
+  --ring: oklch(0.56 0.08 118);
+  --sidebar-primary: oklch(0.44 0.09 118);
+  --sidebar-accent: oklch(0.915 0.012 118);
+  --sidebar-accent-foreground: oklch(0.26 0.04 118);
+  --sidebar-ring: oklch(0.56 0.08 118);
+}
+:is(.dark, .dark *)[data-accent='moss'] {
+  --primary: oklch(0.78 0.1 118);
+  --primary-foreground: oklch(0.18 0.03 118);
+  --accent: oklch(0.28 0.02 118);
+  --accent-foreground: oklch(0.93 0.01 118);
+  --ring: oklch(0.68 0.08 118);
+  --sidebar-primary: oklch(0.78 0.1 118);
+  --sidebar-primary-foreground: oklch(0.18 0.03 118);
+  --sidebar-accent: oklch(0.24 0.016 118);
+  --sidebar-accent-foreground: oklch(0.94 0.01 118);
+  --sidebar-ring: oklch(0.68 0.08 118);
+}
+
+[data-accent='ocean']:not(:is(.dark, .dark *)) {
+  --primary: oklch(0.44 0.09 250);
+  --accent: oklch(0.94 0.015 250);
+  --accent-foreground: oklch(0.3 0.05 250);
+  --ring: oklch(0.56 0.08 250);
+  --sidebar-primary: oklch(0.44 0.09 250);
+  --sidebar-accent: oklch(0.915 0.012 250);
+  --sidebar-accent-foreground: oklch(0.26 0.04 250);
+  --sidebar-ring: oklch(0.56 0.08 250);
+}
+:is(.dark, .dark *)[data-accent='ocean'] {
+  --primary: oklch(0.78 0.1 250);
+  --primary-foreground: oklch(0.18 0.03 250);
+  --accent: oklch(0.28 0.02 250);
+  --accent-foreground: oklch(0.93 0.01 250);
+  --ring: oklch(0.68 0.08 250);
+  --sidebar-primary: oklch(0.78 0.1 250);
+  --sidebar-primary-foreground: oklch(0.18 0.03 250);
+  --sidebar-accent: oklch(0.24 0.016 250);
+  --sidebar-accent-foreground: oklch(0.94 0.01 250);
+  --sidebar-ring: oklch(0.68 0.08 250);
+}
+
+[data-accent='purple']:not(:is(.dark, .dark *)) {
+  --primary: oklch(0.44 0.09 293.61);
+  --accent: oklch(0.94 0.015 293.61);
+  --accent-foreground: oklch(0.3 0.05 293.61);
+  --ring: oklch(0.56 0.08 293.61);
+  --sidebar-primary: oklch(0.44 0.09 293.61);
+  --sidebar-accent: oklch(0.915 0.012 293.61);
+  --sidebar-accent-foreground: oklch(0.26 0.04 293.61);
+  --sidebar-ring: oklch(0.56 0.08 293.61);
+}
+:is(.dark, .dark *)[data-accent='purple'] {
+  --primary: oklch(0.78 0.1 293.61);
+  --primary-foreground: oklch(0.18 0.03 293.61);
+  --accent: oklch(0.28 0.02 293.61);
+  --accent-foreground: oklch(0.93 0.01 293.61);
+  --ring: oklch(0.68 0.08 293.61);
+  --sidebar-primary: oklch(0.78 0.1 293.61);
+  --sidebar-primary-foreground: oklch(0.18 0.03 293.61);
+  --sidebar-accent: oklch(0.24 0.016 293.61);
+  --sidebar-accent-foreground: oklch(0.94 0.01 293.61);
+  --sidebar-ring: oklch(0.68 0.08 293.61);
+}
+
+[data-accent='rose']:not(:is(.dark, .dark *)) {
+  --primary: oklch(0.44 0.09 350);
+  --accent: oklch(0.94 0.015 350);
+  --accent-foreground: oklch(0.3 0.05 350);
+  --ring: oklch(0.56 0.08 350);
+  --sidebar-primary: oklch(0.44 0.09 350);
+  --sidebar-accent: oklch(0.915 0.012 350);
+  --sidebar-accent-foreground: oklch(0.26 0.04 350);
+  --sidebar-ring: oklch(0.56 0.08 350);
+}
+:is(.dark, .dark *)[data-accent='rose'] {
+  --primary: oklch(0.78 0.1 350);
+  --primary-foreground: oklch(0.18 0.03 350);
+  --accent: oklch(0.28 0.02 350);
+  --accent-foreground: oklch(0.93 0.01 350);
+  --ring: oklch(0.68 0.08 350);
+  --sidebar-primary: oklch(0.78 0.1 350);
+  --sidebar-primary-foreground: oklch(0.18 0.03 350);
+  --sidebar-accent: oklch(0.24 0.016 350);
+  --sidebar-accent-foreground: oklch(0.94 0.01 350);
+  --sidebar-ring: oklch(0.68 0.08 350);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -513,6 +700,113 @@
 @media (prefers-reduced-motion: reduce) {
   .ring-breathe {
     animation: none;
+  }
+}
+
+/* --- The live AI border ------------------------------------------------
+   Worn by a meter card in the AI dock for exactly as long as its call is in
+   flight, and by nothing else in the app.
+
+   WHY THIS EARNS ITS GLOW, when the studio's craft rules ban glow outright.
+   The objection to a glow is that it borrows emphasis instead of earning it —
+   a halo added to make something "pop". This one carries state: it is on if
+   and only if a Gemini call is running, it leaves the instant the call
+   settles, and it is the only thing in the dock that moves on its own. A
+   reader who learns it once can tell across the room whether the workspace is
+   still waiting on a model. That is a status light, not decoration.
+
+   WHAT IT MUST NOT IMPLY. It is a sweep, never a fill: it circles, it does not
+   progress from one end to the other. There is no denominator here — a bar
+   crossing this card would claim a completion fraction the meter's own module
+   exists to refuse (see ai-meter.ts). Motion around the edge says "working";
+   motion across it would say "72% done", which is a different and unsupported
+   sentence. The STEPS bar inside the card is the only thing allowed to fill,
+   because it alone counts against a real total.
+
+   Both halves are pseudo-elements, for two unrelated reasons that happen to
+   agree. The card is `overflow-hidden`, so an outer halo would be clipped —
+   an INSET shadow is the one that survives. And Tailwind's utilities sit in
+   `@layer utilities`, which outranks unlayered rules whatever their
+   specificity (see the hit-slop note above), so a plain `.ai-working` could
+   never override the card's own `shadow-lg`. Painting into ::before/::after
+   sidesteps that fight instead of trying to win it. */
+@property --ai-sweep-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes logpup-ai-sweep {
+  to {
+    --ai-sweep-angle: 1turn;
+  }
+}
+
+.ai-working {
+  position: relative;
+  /* R6: the ring and the glow index against this card and nothing else. */
+  isolation: isolate;
+}
+
+/* The travelling band, masked to the 1px border so the card's own surface is
+   never tinted — the numbers underneath have to stay as legible as they are
+   on a settled card. */
+.ai-working::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--ai-sweep-angle),
+    transparent 0deg,
+    color-mix(in oklch, var(--primary) 100%, transparent) 26deg,
+    color-mix(in oklch, var(--primary) 38%, transparent) 68deg,
+    color-mix(in oklch, var(--primary) 10%, transparent) 118deg,
+    transparent 168deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+}
+
+/* The glow, inset and low-alpha: light gathering at the edge rather than a
+   neon rim. It reads on both themes because it is mixed from --primary, which
+   is defined per theme, rather than from a fixed colour. */
+.ai-working::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  /* Tight and negative-spread ON PURPOSE. The first pass used a 14px blur at
+     -4px, and it bled roughly twenty pixels into the card — the token counts
+     were sitting in fog. The glow's job is to make the EDGE look lit, not to
+     tint the surface the numbers are read off. */
+  box-shadow: inset 0 0 8px -5px color-mix(in oklch, var(--primary) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-working::before {
+    animation: logpup-ai-sweep 2.6s linear infinite;
+  }
+}
+
+/* A DESIGNED reduced state, not a switched-off one — the same rule the dock's
+   flight already follows. The band becomes an even ring at the sweep's own
+   mid-weight, so the card still reads as live; what it loses is the travel. */
+@media (prefers-reduced-motion: reduce) {
+  .ai-working::before {
+    background: color-mix(in oklch, var(--primary) 45%, transparent);
   }
 }
 

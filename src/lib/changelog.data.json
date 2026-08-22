@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.454",
+  "current": "v0.0.505",
   "versions": [
     {
       "version": "v0.0.1",
@@ -3632,6 +3632,414 @@
       "hash": "1eedff1",
       "kind": "feat",
       "change": "a project's team as a file, without the private half"
+    },
+    {
+      "version": "v0.0.455",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:50:46+05:30",
+      "hash": "de4812e",
+      "kind": "feat",
+      "change": "commits become worklog evidence, inert until the App exists"
+    },
+    {
+      "version": "v0.0.456",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:54:14+05:30",
+      "hash": "0a2e8bb",
+      "kind": "feat",
+      "change": "ask Google what models exist, instead of remembering to"
+    },
+    {
+      "version": "v0.0.457",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:56:34+05:30",
+      "hash": "2bd871d",
+      "kind": "feat",
+      "change": "download the team, names and work addresses"
+    },
+    {
+      "version": "v0.0.458",
+      "date": "2026-08-22",
+      "at": "2026-08-22T09:06:44+05:30",
+      "hash": "cdc541d",
+      "kind": "feat",
+      "change": "let a PM upload the plan, and check it first"
+    },
+    {
+      "version": "v0.0.459",
+      "date": "2026-08-22",
+      "at": "2026-08-22T09:08:27+05:30",
+      "hash": "4d94451",
+      "kind": "feat",
+      "change": "a recurrence rule, and the dates it actually means"
+    },
+    {
+      "version": "v0.0.460",
+      "date": "2026-08-22",
+      "at": "2026-08-22T09:09:15+05:30",
+      "hash": "966d695",
+      "kind": "feat",
+      "change": "the briefing uses its width instead of being stretched by it"
+    },
+    {
+      "version": "v0.0.461",
+      "date": "2026-08-22",
+      "at": "2026-08-22T09:09:52+05:30",
+      "hash": "9ac3705",
+      "kind": "feat",
+      "change": "run the cross-check that was written and never called"
+    },
+    {
+      "version": "v0.0.462",
+      "date": "2026-08-22",
+      "at": "2026-08-22T09:15:02+05:30",
+      "hash": "72473a0",
+      "kind": "feat",
+      "change": "alt-drag a block to copy it, decided at the drop"
+    },
+    {
+      "version": "v0.0.463",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:37:10+05:30",
+      "hash": "e8b2ac2",
+      "kind": "feat",
+      "change": "hours you logged stop counting as nothing logged"
+    },
+    {
+      "version": "v0.0.464",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:37:59+05:30",
+      "hash": "49350d6",
+      "kind": "feat",
+      "change": "\"Copy here\" — the keyboard route to the alt-drag copy"
+    },
+    {
+      "version": "v0.0.465",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:40:04+05:30",
+      "hash": "24fb822",
+      "kind": "fix",
+      "change": "two absence writes that quietly discarded somebody's decision"
+    },
+    {
+      "version": "v0.0.466",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:40:29+05:30",
+      "hash": "7d54694",
+      "kind": "feat",
+      "change": "the work substrate, and the index the bell never had"
+    },
+    {
+      "version": "v0.0.467",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:42:09+05:30",
+      "hash": "ce0fabf",
+      "kind": "feat",
+      "change": "a refused day off now reaches the person who filed it"
+    },
+    {
+      "version": "v0.0.468",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:44:32+05:30",
+      "hash": "09468aa",
+      "kind": "feat",
+      "change": "the team view can finally show the people who are behind"
+    },
+    {
+      "version": "v0.0.469",
+      "date": "2026-08-22",
+      "at": "2026-08-22T10:45:47+05:30",
+      "hash": "d33e084",
+      "kind": "feat",
+      "change": "give the cost module a surface, after shipping without one"
+    },
+    {
+      "version": "v0.0.470",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:04:23+05:30",
+      "hash": "58b4984",
+      "kind": "fix",
+      "change": "the team grid stops leaving screen-high holes, and the legend fits one line"
+    },
+    {
+      "version": "v0.0.471",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:04:37+05:30",
+      "hash": "695a047",
+      "kind": "fix",
+      "change": "one fill button, and a day panel that fits on a laptop"
+    },
+    {
+      "version": "v0.0.472",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:05:52+05:30",
+      "hash": "c032099",
+      "kind": "fix",
+      "change": "the Save button says what it is waiting for"
+    },
+    {
+      "version": "v0.0.473",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:06:47+05:30",
+      "hash": "8e831ec",
+      "kind": "feat",
+      "change": "the catch-up ledger says which gaps already have hours in them"
+    },
+    {
+      "version": "v0.0.474",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:08:08+05:30",
+      "hash": "104afee",
+      "kind": "feat",
+      "change": "the dashboard is a list of zones, not a chain of ternaries"
+    },
+    {
+      "version": "v0.0.475",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:08:21+05:30",
+      "hash": "e5f8bbf",
+      "kind": "feat",
+      "change": "one door for task status, so completed_at cannot lie"
+    },
+    {
+      "version": "v0.0.476",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:08:32+05:30",
+      "hash": "8d28f33",
+      "kind": "feat",
+      "change": "dedupe, a daily cap, and nobody notified about themselves"
+    },
+    {
+      "version": "v0.0.477",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:08:44+05:30",
+      "hash": "c93474b",
+      "kind": "feat",
+      "change": "a scheduled tick that prunes what nobody will read"
+    },
+    {
+      "version": "v0.0.478",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:08:54+05:30",
+      "hash": "364f1af",
+      "kind": "fix",
+      "change": "⌘K was handing every seat rows it had no grant on"
+    },
+    {
+      "version": "v0.0.479",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:10:12+05:30",
+      "hash": "11575db",
+      "kind": "fix",
+      "change": "project chips can be clicked off again"
+    },
+    {
+      "version": "v0.0.480",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:11:19+05:30",
+      "hash": "77dfc15",
+      "kind": "fix",
+      "change": "no task entry could be saved, at all"
+    },
+    {
+      "version": "v0.0.481",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:15:43+05:30",
+      "hash": "8e5308d",
+      "kind": "feat",
+      "change": "one grammar for a logged hour, in plain English"
+    },
+    {
+      "version": "v0.0.482",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:19:47+05:30",
+      "hash": "1b4f4ee",
+      "kind": "feat",
+      "change": "log an hour by writing one sentence"
+    },
+    {
+      "version": "v0.0.483",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:21:19+05:30",
+      "hash": "c4994ff",
+      "kind": "feat",
+      "change": "your own row on the team view opens straight into the editor"
+    },
+    {
+      "version": "v0.0.484",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:27:12+05:30",
+      "hash": "bee388b",
+      "kind": "feat",
+      "change": "fold the page into the bubble, behind one arrow"
+    },
+    {
+      "version": "v0.0.485",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:31:14+05:30",
+      "hash": "8fa8f26",
+      "kind": "feat",
+      "change": "the whole day in one field, showing what it heard as you type"
+    },
+    {
+      "version": "v0.0.486",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:40:13+05:30",
+      "hash": "6c9beed",
+      "kind": "test",
+      "change": "the github feature is evidence plumbing, not a palette row"
+    },
+    {
+      "version": "v0.0.487",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:40:36+05:30",
+      "hash": "047a7e7",
+      "kind": "feat",
+      "change": "change someone's workload from their own page"
+    },
+    {
+      "version": "v0.0.488",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:40:46+05:30",
+      "hash": "e890757",
+      "kind": "test",
+      "change": "and it is not searchable either — check 4's half of the answer"
+    },
+    {
+      "version": "v0.0.489",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:43:58+05:30",
+      "hash": "d5b6409",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.490",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:52:01+05:30",
+      "hash": "3e134d4",
+      "kind": "fix",
+      "change": "project cost counted only task hours, so almost none of it"
+    },
+    {
+      "version": "v0.0.491",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:52:52+05:30",
+      "hash": "3ba31df",
+      "kind": "feat",
+      "change": "every admin section in the sidebar, and a count on Approvals"
+    },
+    {
+      "version": "v0.0.492",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:54:58+05:30",
+      "hash": "5718264",
+      "kind": "feat",
+      "change": "overview answers \"what needs me\", then \"where is everything\""
+    },
+    {
+      "version": "v0.0.493",
+      "date": "2026-08-22",
+      "at": "2026-08-22T11:59:20+05:30",
+      "hash": "f8a9b00",
+      "kind": "feat",
+      "change": "the meter learns the two percentages it may honestly show"
+    },
+    {
+      "version": "v0.0.494",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:00:13+05:30",
+      "hash": "717069e",
+      "kind": "feat",
+      "change": "the page that says where the studio's time and money went"
+    },
+    {
+      "version": "v0.0.495",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:04:18+05:30",
+      "hash": "0caca2e",
+      "kind": "feat",
+      "change": "who may review somebody's day, and the table to put it in"
+    },
+    {
+      "version": "v0.0.496",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:04:57+05:30",
+      "hash": "a34ddfb",
+      "kind": "fix",
+      "change": "the review rule referenced an id AppRef does not have"
+    },
+    {
+      "version": "v0.0.497",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:06:23+05:30",
+      "hash": "a974c38",
+      "kind": "feat",
+      "change": "hours beside days, and a cell that shows it can be hovered"
+    },
+    {
+      "version": "v0.0.498",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:06:46+05:30",
+      "hash": "056203d",
+      "kind": "fix",
+      "change": "stop printing the grammar legend twice on one screen"
+    },
+    {
+      "version": "v0.0.499",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:11:40+05:30",
+      "hash": "ac3c551",
+      "kind": "fix",
+      "change": "usage_duration takes slot 0059 — its journal entry raced two sessions"
+    },
+    {
+      "version": "v0.0.500",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:12:53+05:30",
+      "hash": "5e32b09",
+      "kind": "fix",
+      "change": "Fill my day ignored the day a developer actually had"
+    },
+    {
+      "version": "v0.0.501",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:15:02+05:30",
+      "hash": "00d6621",
+      "kind": "fix",
+      "change": "one hung Gemini call froze both panels, forever"
+    },
+    {
+      "version": "v0.0.502",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:17:43+05:30",
+      "hash": "c5251d4",
+      "kind": "fix",
+      "change": "six holes an adversarial review shot in the meter, closed"
+    },
+    {
+      "version": "v0.0.503",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:17:44+05:30",
+      "hash": "3ed16a6",
+      "kind": "feat",
+      "change": "fix an entry's kind and project without deleting it"
+    },
+    {
+      "version": "v0.0.504",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:32:30+05:30",
+      "hash": "95b092e",
+      "kind": "feat",
+      "change": "quick note and new meeting share one split pill in the header"
+    },
+    {
+      "version": "v0.0.505",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:41:29+05:30",
+      "hash": "702dd68",
+      "kind": "feat",
+      "change": "takes become a thing the database knows about"
     }
   ]
 }

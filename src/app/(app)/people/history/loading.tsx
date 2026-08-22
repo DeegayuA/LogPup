@@ -20,6 +20,13 @@ import {
 export default function LoadingCapacityHistory() {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
+      {/* The route change itself is silent to a screen reader — the URL moves
+          and the old page's DOM is replaced with placeholders that are all
+          aria-hidden. This is the announcement. Same wording pattern as the
+          other loading routes so the app says one thing, one way. */}
+      <span className="sr-only" role="status">
+        Loading capacity history…
+      </span>
       <HistoryShellSkeleton />
       <HistoryDataSkeleton />
     </div>

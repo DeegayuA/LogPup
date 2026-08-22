@@ -144,6 +144,10 @@ import {
   type SegmentPhase,
 } from '@/features/meetings/segment-queue'
 import {
+  formatRemaining,
+  observedMsPerSegment,
+} from '@/features/meetings/recording-progress'
+import {
   loadParkedSegments,
   parkSegment,
   releaseSegment,
@@ -342,6 +346,18 @@ type RecordingSegment = {
    *  than cut by the recorder in this page load (see segment-store.ts). Only
    *  affects wording — the retry path is identical. */
   recovered?: boolean
+  /**
+   * How long this segment's transcription actually took, in milliseconds, set
+   * once it lands. THE ONLY input to the time estimate — see
+   * recording-progress.ts, which models nothing about how long a segment
+   * "should" take and quotes only the rate this run has been achieving.
+   *
+   * Measured across the whole retry sequence on purpose: a segment that
+   * needed three attempts genuinely cost the user that wait, and an estimate
+   * built from the successful attempt alone would promise a finish the queue
+   * cannot reach.
+   */
+  tookMs?: number
 }
 
 // The separate things that can be written about one follow-up. They are
@@ -1824,6 +1840,9 @@ export function MeetingIntelPanel({
     // the meeting can do exactly nothing useful about any of it. Only a
     // failure that survives every attempt (or is permanent by construction,
     // see isRetriableSegmentError) is worth interrupting them for.
+    // Before the retry loop, not inside it: what the user waits through is the
+    // whole sequence, backoff included.
+    const startedAt = Date.now()
     for (let attempt = 1; attempt <= SEGMENT_UPLOAD_ATTEMPTS; attempt += 1) {
       upsertSegment({ index, status: 'uploading', blob, attempt: attempt - 1, recovered })
       let error: string
@@ -1838,7 +1857,7 @@ export function MeetingIntelPanel({
         if (hint) formData.append('liveTranscriptHint', hint)
         const res = await transcribeSegment(meetingId, index, formData)
         if (res.ok) {
-          upsertSegment({ index, status: 'done', blob, recovered })
+          upsertSegment({ index, status: 'done', blob, recovered, tookMs: Date.now() - startedAt })
           // The transcript is in the database now — that's the durable copy
           // from here on, so the parked audio has done its job. This is the
           // only place parked audio is ever dropped.
@@ -2735,6 +2754,23 @@ export function MeetingIntelPanel({
   const segmentProgress = queueProgress(segments.map(toQueued))
   const failedSegments = segments.filter((s) => s.status === 'failed')
 
+  /* HOW LONG IS LEFT, from the rate THIS run is achieving.
+     The meter's PACE estimate exempts meeting analysis, and rightly: a meeting
+     runs five minutes to three hours, so the median past analysis describes no
+     meeting anybody had. Segments are different — they are cut to a fixed
+     target length, so they are near-uniform units of work, and the honest
+     estimate is outstanding x the median segment this machine, this network
+     and this model have actually managed. Null until two segments have landed
+     (one sample carries the model warm-up), and null once nothing is left to
+     wait for. See recording-progress.ts for both rules and their tests. */
+  const msPerSegment = observedMsPerSegment(
+    segments.map((s) => s.tookMs).filter((d): d is number => d !== undefined),
+  )
+  const remainingLabel =
+    msPerSegment === null || segmentProgress.outstanding === 0
+      ? null
+      : formatRemaining(segmentProgress.outstanding * msPerSegment)
+
   // Mirror the queue into the write-up's meter card, whenever one is live —
   // FENCED to the finalize pass's own snapshot. Same source as the chips
   // above for the segments it covers, but a new take's cuts stay out: they
@@ -3102,6 +3138,11 @@ export function MeetingIntelPanel({
                     </span>{' '}
                     transcribed · <span className="font-mono">{segmentProgress.percent}%</span>
                   </MetaChip>
+                  {/* Rendered only when there IS an estimate. No placeholder,
+                      no "calculating…" — an empty slot is honest, and a
+                      countdown that appears before the rate exists is one this
+                      app would have had to invent. */}
+                  {remainingLabel ? <MetaChip>{remainingLabel}</MetaChip> : null}
                   {sendingSegment ? (
                     <MetaChip>
                       uploading <span className="font-mono">{sendingSegment.index + 1}</span>

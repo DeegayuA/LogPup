@@ -5,6 +5,8 @@ import { Header } from '@/components/shell/header'
 import { AccountMenu } from '@/components/shell/account-menu'
 import { CommandCenterProvider } from '@/features/search/components/command-center'
 import { AiMeterProvider } from '@/features/gemini/components/ai-meter-provider'
+import { MotionProvider } from '@/components/motion/motion-provider'
+import { RouteTransition } from '@/components/motion/route-transition'
 import { AskBubble } from '@/features/intel/components/ask-bubble'
 import { askAvailable } from '@/features/intel/actions'
 import { getOwnTitle } from '@/features/auth/queries'
@@ -94,44 +96,58 @@ export default async function AppLayout({
        "admin or the person themselves" cannot be recovered once the session
        has been flattened to one boolean on the way in. */
     <CommandCenterProvider user={session.user}>
-      {/* Wraps the whole authed shell because every AI trigger in the app sits
-          inside it, and a meter that covered only some of them would leave the
-          corner empty during the calls nobody wrapped — which reads as
-          "nothing is running". Renders no chrome until a task starts. */}
-      <AiMeterProvider>
-        <div className="flex min-h-full flex-1">
-          {/* AccountMenu is a server component (its sign-out is an inline server
-              action), so it is rendered here and threaded into the client
-              Sidebar as a slot rather than imported by it. */}
-          <Sidebar
-            isAdmin={isAdmin}
-            canSeeProgress={canSeeProgress}
-            adminSections={adminSections}
-            approvals={approvals}
-            account={<AccountMenu user={user} role={session.user.role} variant="sidebar" />}
-          />
-          <div className="flex flex-1 flex-col">
-            <Header
-              user={user}
-              role={session.user.role}
+      {/* The animation runtime, mounted once for the authed shell rather than
+          per route — see the note in motion-provider.tsx on why this is
+          LazyMotion and not the plain `motion` import. Deliberately NOT in
+          app/layout.tsx: the sign-in screen and the public pages animate with
+          CSS only, and they should not pay for a library to do it. */}
+      <MotionProvider>
+        {/* Wraps the whole authed shell because every AI trigger in the app
+            sits inside it, and a meter that covered only some of them would
+            leave the corner empty during the calls nobody wrapped — which
+            reads as "nothing is running". Renders no chrome until a task
+            starts. */}
+        <AiMeterProvider>
+          <div className="flex min-h-full flex-1">
+            {/* AccountMenu is a server component (its sign-out is an inline server
+                action), so it is rendered here and threaded into the client
+                Sidebar as a slot rather than imported by it. */}
+            <Sidebar
               isAdmin={isAdmin}
               canSeeProgress={canSeeProgress}
+              adminSections={adminSections}
+              approvals={approvals}
+              account={<AccountMenu user={user} role={session.user.role} variant="sidebar" />}
             />
-            <main className="flex flex-1 flex-col">{children}</main>
-            {/* Mounted once, outside <main>, so it floats over every page
-                without entering any page's document flow or heading outline.
+            <div className="flex flex-1 flex-col">
+              <Header
+                user={user}
+                role={session.user.role}
+                isAdmin={isAdmin}
+                canSeeProgress={canSeeProgress}
+              />
+              {/* Inside <main>, so the arrival wraps the page and not the
+                  shell — the sidebar and header stay put across navigations,
+                  which is what makes them read as the frame rather than part of
+                  the page. */}
+              <main className="flex flex-1 flex-col">
+                <RouteTransition>{children}</RouteTransition>
+              </main>
+              {/* Mounted once, outside <main>, so it floats over every page
+                  without entering any page's document flow or heading outline.
 
-                ALWAYS MOUNTED since /intel was removed. It used to be gated on
-                canAsk, on the rule that a bubble which then refuses to answer
-                is worse than none. But it is now the only way to reach the
-                signals, and signals are computed WITHOUT a model precisely so
-                that a reader with AI off still learns what needs them — gating
-                it here would have hidden that list from exactly those readers.
-                canAsk is passed in instead, and the bubble decides what it is. */}
-            <AskBubble canAsk={canAsk} />
+                  ALWAYS MOUNTED since /intel was removed. It used to be gated on
+                  canAsk, on the rule that a bubble which then refuses to answer
+                  is worse than none. But it is now the only way to reach the
+                  signals, and signals are computed WITHOUT a model precisely so
+                  that a reader with AI off still learns what needs them — gating
+                  it here would have hidden that list from exactly those readers.
+                  canAsk is passed in instead, and the bubble decides what it is. */}
+              <AskBubble canAsk={canAsk} />
+            </div>
           </div>
-        </div>
-      </AiMeterProvider>
+        </AiMeterProvider>
+      </MotionProvider>
     </CommandCenterProvider>
   )
 }

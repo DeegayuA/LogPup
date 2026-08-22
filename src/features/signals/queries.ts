@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm'
+import { and, eq, gte, isNotNull, lte, sql } from 'drizzle-orm'
 
 import { db } from '@/db'
 import {
@@ -6,11 +6,9 @@ import {
   appRoleHistory,
   assignments,
   dailyWorklogs,
-  meetingNoteSegments,
-  meetings,
   users,
-  worklogEntries,
 } from '@/db/schema'
+import { liveNoteSegments, liveTasks, liveWorklogEntries } from '@/db/live'
 import { can, type Actor } from '@/features/auth/capabilities'
 import { commitEvidenceFor } from '@/features/github/evidence'
 import { githubConfigured } from '@/features/github/config'
@@ -106,14 +104,13 @@ export async function getPersonSignals(
 
   const [minutes, scores, activity, absent, allocation, voice, commits] = await Promise.all([
     db
-      .select({ day: worklogEntries.day, minutes: worklogEntries.minutes })
-      .from(worklogEntries)
+      .select({ day: liveWorklogEntries.day, minutes: liveWorklogEntries.minutes })
+      .from(liveWorklogEntries)
       .where(
         and(
-          eq(worklogEntries.userId, userId),
-          gte(worklogEntries.day, from),
-          lte(worklogEntries.day, to),
-          isNull(worklogEntries.deletedAt),
+          eq(liveWorklogEntries.userId, userId),
+          gte(liveWorklogEntries.day, from),
+          lte(liveWorklogEntries.day, to),
         ),
       ),
     db
@@ -146,15 +143,14 @@ export async function getPersonSignals(
     // row on the meeting's note timeline, and it is the single strongest
     // evidence this app holds of a working day that closes nothing.
     db
-      .select({ at: meetingNoteSegments.createdAt })
-      .from(meetingNoteSegments)
+      .select({ at: liveNoteSegments.createdAt })
+      .from(liveNoteSegments)
       .where(
         and(
-          eq(meetingNoteSegments.speakerId, userId),
-          eq(meetingNoteSegments.source, 'voice'),
-          isNull(meetingNoteSegments.deletedAt),
-          gte(meetingNoteSegments.createdAt, new Date(`${from}T00:00:00+05:30`)),
-          lte(meetingNoteSegments.createdAt, new Date(`${to}T23:59:59.999+05:30`)),
+          eq(liveNoteSegments.speakerId, userId),
+          eq(liveNoteSegments.source, 'voice'),
+          gte(liveNoteSegments.createdAt, new Date(`${from}T00:00:00+05:30`)),
+          lte(liveNoteSegments.createdAt, new Date(`${to}T23:59:59.999+05:30`)),
         ),
       ),
     commitEvidenceFor(userId, new Date(`${from}T00:00:00+05:30`), new Date(`${to}T23:59:59.999+05:30`)),
@@ -301,29 +297,36 @@ export async function getMemberScorecard(
     .where(eq(users.id, userId))
 
   const [completions, categories, allocation, commits] = await Promise.all([
+    /* liveTasks, not a hand-written `from(sql\`tasks t\`)`. The soft-delete
+       guard in live.test.ts flagged the raw read, and it was right to: a
+       string predicate carries its own `deleted_at is null` that nothing
+       enforces, which is precisely the drift the live_* subqueries exist to
+       make impossible. */
     db
-      .select({ createdAt: sql<Date>`t.created_at`, completedAt: sql<Date>`t.completed_at` })
-      .from(sql`tasks t`)
+      .select({ createdAt: liveTasks.createdAt, completedAt: liveTasks.completedAt })
+      .from(liveTasks)
       .where(
-        sql`t.assignee_id = ${userId} and t.deleted_at is null and t.completed_at is not null
-            and t.completed_at >= ${new Date(`${from}T00:00:00+05:30`)}
-            and t.completed_at <= ${new Date(`${to}T23:59:59.999+05:30`)}`,
+        and(
+          eq(liveTasks.assigneeId, userId),
+          isNotNull(liveTasks.completedAt),
+          gte(liveTasks.completedAt, new Date(`${from}T00:00:00+05:30`)),
+          lte(liveTasks.completedAt, new Date(`${to}T23:59:59.999+05:30`)),
+        ),
       ),
     db
       .select({
-        category: worklogEntries.category,
-        minutes: sql<number>`sum(${worklogEntries.minutes})::int`,
+        category: liveWorklogEntries.category,
+        minutes: sql<number>`sum(${liveWorklogEntries.minutes})::int`,
       })
-      .from(worklogEntries)
+      .from(liveWorklogEntries)
       .where(
         and(
-          eq(worklogEntries.userId, userId),
-          gte(worklogEntries.day, from),
-          lte(worklogEntries.day, to),
-          isNull(worklogEntries.deletedAt),
+          eq(liveWorklogEntries.userId, userId),
+          gte(liveWorklogEntries.day, from),
+          lte(liveWorklogEntries.day, to),
         ),
       )
-      .groupBy(worklogEntries.category),
+      .groupBy(liveWorklogEntries.category),
     db.select({ pct: assignments.allocationPct }).from(assignments).where(eq(assignments.userId, userId)),
     commitEvidenceFor(userId, new Date(`${from}T00:00:00+05:30`), new Date(`${to}T23:59:59.999+05:30`)),
   ])
@@ -338,10 +341,12 @@ export async function getMemberScorecard(
   return memberScorecard({
     userId,
     window: signals.window,
-    completions: completions.map((c) => ({
-      createdAt: new Date(c.createdAt),
-      completedAt: new Date(c.completedAt),
-    })),
+    completions: completions
+      // isNotNull in the WHERE cannot narrow the column's type, and an `!`
+      // here would be an assertion about the database rather than a check of
+      // it. Filtering costs nothing and cannot be wrong.
+      .filter((c): c is { createdAt: Date; completedAt: Date } => c.completedAt !== null)
+      .map((c) => ({ createdAt: new Date(c.createdAt), completedAt: new Date(c.completedAt) })),
     commits: canSeeCommits ? commits.length : null,
     commitsUnavailable: canSeeCommits
       ? null
@@ -354,7 +359,3 @@ export async function getMemberScorecard(
     allocationPct: allocation.reduce((sum, a) => sum + a.pct, 0),
   })
 }
-
-/** Unused-import guard for tables referenced only through raw SQL above. */
-void meetings
-void inArray

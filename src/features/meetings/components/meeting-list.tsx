@@ -14,6 +14,7 @@ import {
   TriangleAlertIcon,
   UserCheckIcon,
 } from 'lucide-react'
+import { Stagger, StaggerItem } from '@/components/motion/stagger'
 import { MeetingRsvp } from '@/features/meetings/components/meeting-rsvp'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import {
@@ -166,7 +167,10 @@ export function MeetingList({
   }
 
   return (
-    <ul className="flex flex-col gap-2.5">
+    /* The whole day's meetings arrive as one movement, top to bottom. `count`
+       keeps a heavy day inside the same ~480ms budget a light one gets — see
+       components/motion/stagger.tsx. */
+    <Stagger as="ul" count={meetings.length} className="flex flex-col gap-2.5">
       {meetings.map((meeting) => (
         <MeetingRow
           key={meeting.id}
@@ -182,7 +186,7 @@ export function MeetingList({
           onGlance={onGlance}
         />
       ))}
-    </ul>
+    </Stagger>
   )
 }
 
@@ -327,7 +331,7 @@ function MeetingRow({
   }
 
   return (
-    <li>
+    <StaggerItem as="li">
       <article
         aria-labelledby={headingId}
         className={cn(
@@ -529,6 +533,6 @@ function MeetingRow({
           autoOpen={autoOpen}
         />
       </article>
-    </li>
+    </StaggerItem>
   )
 }

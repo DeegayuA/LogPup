@@ -1,0 +1,101 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import { ACCENTS, DEFAULT_ACCENT } from './theme-provider'
+
+/**
+ * The colourway contract, enforced.
+ *
+ * ACCENTS decides what the picker offers and what the pre-paint script will
+ * accept out of localStorage. globals.css decides what those names actually
+ * paint. Nothing in the type system connects the two: add a way to the list
+ * and forget the CSS and you ship a picker option that changes nothing, which
+ * looks like a broken control rather than a missing stylesheet. Add the CSS
+ * and forget the list and the way is unreachable and unpersistable.
+ *
+ * These tests are the connection.
+ */
+
+const css = readFileSync(
+  fileURLToPath(new URL('../../app/globals.css', import.meta.url)),
+  'utf8',
+)
+
+/** Every way that has CSS behind it, in either mode. */
+function declaredWays(): Set<string> {
+  const found = new Set<string>()
+  for (const match of css.matchAll(/\[data-accent='([a-z]+)'\]/g)) found.add(match[1])
+  return found
+}
+
+/** The custom properties one selector block sets. */
+function propsOf(selector: string): string[] {
+  const start = css.indexOf(selector)
+  if (start === -1) return []
+  const open = css.indexOf('{', start)
+  const close = css.indexOf('}', open)
+  return [...css.slice(open, close).matchAll(/(--[\w-]+):/g)].map((m) => m[1]).sort()
+}
+
+const lightSelector = (way: string) => `[data-accent='${way}']:not(:is(.dark, .dark *))`
+const darkSelector = (way: string) => `:is(.dark, .dark *)[data-accent='${way}']`
+
+const NON_DEFAULT = ACCENTS.filter((way) => way !== DEFAULT_ACCENT)
+
+describe('colourways', () => {
+  it.each(NON_DEFAULT)('%s has a light block and a dark block', (way) => {
+    expect(propsOf(lightSelector(way)).length).toBeGreaterThan(0)
+    expect(propsOf(darkSelector(way)).length).toBeGreaterThan(0)
+  })
+
+  it('the default way has no block of its own', () => {
+    // Pine is what :root and .dark already declare. A block for it would be a
+    // second copy of those values, free to drift from them.
+    expect(declaredWays().has(DEFAULT_ACCENT)).toBe(false)
+  })
+
+  it('every way declared in CSS is offered by the picker', () => {
+    const orphans = [...declaredWays()].filter(
+      (way) => !(ACCENTS as readonly string[]).includes(way),
+    )
+    expect(orphans).toEqual([])
+  })
+
+  it('every way overrides the same tokens as its siblings', () => {
+    // A way that sets nine of the ten is not a subtler way, it is a way with a
+    // hole in it — one surface still wearing pine.
+    const lightShapes = new Set(NON_DEFAULT.map((w) => propsOf(lightSelector(w)).join(',')))
+    const darkShapes = new Set(NON_DEFAULT.map((w) => propsOf(darkSelector(w)).join(',')))
+    expect(lightShapes.size).toBe(1)
+    expect(darkShapes.size).toBe(1)
+  })
+
+  it('no way touches a surface or a semantic token', () => {
+    /* The whole promise of the feature: a colourway moves the working colour
+       and nothing else. If --destructive or --background ever appears in one
+       of these blocks, "at risk" has started meaning something different
+       depending on which colour somebody likes. */
+    const forbidden = [
+      '--background',
+      '--foreground',
+      '--card',
+      '--popover',
+      '--border',
+      '--input',
+      '--muted',
+      '--secondary',
+      '--destructive',
+      '--success',
+      '--warning',
+      '--weekend',
+      '--holiday',
+      '--mercantile',
+      '--chart-1',
+      '--overlay',
+    ]
+    for (const way of NON_DEFAULT) {
+      const touched = [...propsOf(lightSelector(way)), ...propsOf(darkSelector(way))]
+      expect(touched.filter((prop) => forbidden.includes(prop))).toEqual([])
+    }
+  })
+})

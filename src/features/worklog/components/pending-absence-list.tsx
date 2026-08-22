@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, useTransition } from 'react'
 import { Loader2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { PresenceList } from '@/components/motion/presence-list'
+import { Reveal } from '@/components/motion/reveal'
 import { cn } from '@/lib/utils'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { withdrawAbsence } from '@/features/worklog/absence-actions'
@@ -29,9 +31,16 @@ import type { MyAbsence } from '@/features/worklog/queries'
 export function PendingAbsenceList({ absences }: { absences: MyAbsence[] }) {
   return (
     <ul className="flex flex-col divide-y rounded-xl border bg-card">
-      {absences.map((absence) => (
-        <PendingAbsenceRow key={absence.id} absence={absence} />
-      ))}
+      {/* Withdraw removes a row from under the reader's cursor, and a row that
+          vanishes between frames leaves them checking whether they withdrew
+          the one they meant to. The 120ms exit is the whole answer: long
+          enough to see WHICH row left, short enough not to be a ceremony.
+          Rows added by a new filing animate in for the same reason. */}
+      <PresenceList>
+        {absences.map((absence) => (
+          <PendingAbsenceRow key={absence.id} absence={absence} />
+        ))}
+      </PresenceList>
     </ul>
   )
 }
@@ -88,7 +97,8 @@ function PendingAbsenceRow({ absence }: { absence: MyAbsence }) {
   }
 
   return (
-    <li
+    <Reveal
+      as="li"
       className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2"
       onKeyDown={(event) => {
         if (event.key === 'Escape' && armed) {
@@ -125,9 +135,16 @@ function PendingAbsenceRow({ absence }: { absence: MyAbsence }) {
             size="sm"
             onClick={handleWithdraw}
             disabled={withdrawing}
+            aria-busy={withdrawing}
           >
-            {withdrawing ? <Loader2Icon className="animate-spin" aria-hidden /> : null}
-            Withdraw
+            {withdrawing ? (
+              <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : null}
+            {/* The label changes with the state rather than the spinner being
+                the only signal: a disabled button with a spinning icon is
+                silent to a screen reader, and aria-busy alone is not
+                universally announced. */}
+            {withdrawing ? 'Withdrawing…' : 'Withdraw'}
           </Button>
           <Button
             type="button"
@@ -153,6 +170,6 @@ function PendingAbsenceRow({ absence }: { absence: MyAbsence }) {
           Withdraw
         </Button>
       )}
-    </li>
+    </Reveal>
   )
 }

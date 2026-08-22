@@ -1,3 +1,9 @@
+'use client';
+
+/* Imports `useInView` from motion/react, which is browser-only. It has always
+   been reached from client components ('use client' in counting-number.tsx),
+   so this changes nothing today — it stops the day a Server Component imports
+   it and the build fails several files away from the mistake. */
 import * as React from 'react';
 import { useInView, type UseInViewOptions } from 'motion/react';
 

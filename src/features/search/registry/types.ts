@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import type { Session } from 'next-auth'
-import type { Theme } from '@/components/shell/theme-provider'
+import type { Accent, Theme } from '@/components/shell/theme-provider'
 
 /**
  * The shapes every feature fills in to appear in the command center.
@@ -33,6 +33,8 @@ export type SearchContext = {
  */
 export type PaletteContext = SearchContext & {
   theme: Theme
+  /** Which colourway is on, so the row for it can hide itself. */
+  accent: Accent
   goShortcutsOn: boolean
 }
 
@@ -62,6 +64,7 @@ export type CommandApi = {
   close: () => void
   /** The shell's own switches, so appearance rows are feature-owned like the rest. */
   setTheme: (theme: Theme) => void
+  setAccent: (accent: Accent) => void
   setGoShortcuts: (on: boolean) => void
   /**
    * Drops every retained search answer. Any command that WRITES must call

@@ -1,3 +1,4 @@
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   ActivityControlsSkeleton,
   ActivityTrailSkeleton,
@@ -21,9 +22,16 @@ import {
 export default function LoadingActivity() {
   return (
     <div className="flex flex-1 flex-col gap-6 p-6 md:p-8">
+      {/* The route change itself is silent to a screen reader — the URL moves
+          and the old page's DOM is replaced with placeholders that are all
+          aria-hidden. This is the announcement. Same wording pattern as the
+          other loading routes so the app says one thing, one way. */}
+      <span className="sr-only" role="status">
+        Loading the activity trail…
+      </span>
       <header className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold tracking-tight">Activity</h1>
-        <div className="h-5 w-80 max-w-full animate-pulse rounded bg-muted motion-reduce:animate-none" />
+        <Skeleton className="h-5 w-80 max-w-full" />
       </header>
       <ActivityControlsSkeleton />
       <ActivityTrailSkeleton />

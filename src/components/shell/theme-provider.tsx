@@ -16,6 +16,34 @@ export type Theme = 'light' | 'dark' | 'system'
 export type ResolvedTheme = 'light' | 'dark'
 
 /**
+ * Which hue the product wears. Orthogonal to light/dark on purpose: a way
+ * moves --primary/--accent/--ring and nothing else, so the six of them
+ * multiply with the two modes instead of forking them. See the COLOURWAYS
+ * block in app/globals.css for the token contract and the contrast audit.
+ */
+export type Accent = 'pine' | 'ember' | 'moss' | 'ocean' | 'purple' | 'rose'
+
+/**
+ * The list, in picker order, and the only thing that decides what is a valid
+ * way. The pre-hydration script below reads it too, so a way added here shows
+ * up in both readers or in neither.
+ */
+export const ACCENTS: readonly Accent[] = [
+  'pine',
+  'ember',
+  'moss',
+  'ocean',
+  'purple',
+  'rose',
+]
+
+/**
+ * Pine is the studio's own colour and the one :root already declares, so it
+ * is both the default and the way with no CSS block of its own.
+ */
+export const DEFAULT_ACCENT: Accent = 'pine'
+
+/**
  * The one place the storage key is written down.
  *
  * The pre-hydration script in app/layout.tsx and this provider MUST agree on
@@ -25,6 +53,16 @@ export type ResolvedTheme = 'light' | 'dark'
  * which was the standing objection to hand-rolling this at all.
  */
 export const THEME_STORAGE_KEY = 'logpup.theme'
+
+/**
+ * Separate key from the theme's, not a merged object.
+ *
+ * The two choices are independent — someone on dark + ocean who switches to
+ * light keeps ocean — and a single JSON blob would mean the pre-paint script
+ * has to parse before it can apply, plus a migration the first time either
+ * half's shape changes. Two scalar reads cost the same and can fail apart.
+ */
+export const ACCENT_STORAGE_KEY = 'logpup.accent'
 
 const MEDIA = '(prefers-color-scheme: dark)'
 
@@ -40,6 +78,10 @@ const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : us
 
 function isTheme(value: unknown): value is Theme {
   return value === 'light' || value === 'dark' || value === 'system'
+}
+
+function isAccent(value: unknown): value is Accent {
+  return ACCENTS.includes(value as Accent)
 }
 
 /**
@@ -58,15 +100,28 @@ function isTheme(value: unknown): value is Theme {
  * so a throw here is a blank screen. Private-mode `localStorage` access
  * throws on read, hence the try/catch, and the fallback is the system
  * preference rather than a hardcoded light.
+ *
+ * THE ACCENT IS READ HERE, not in the provider, for exactly the reason the
+ * theme is. A way is a set of custom-property overrides on <html>; applied a
+ * tick after hydration instead of before first paint, every load would show
+ * pine and then flip to the reader's actual colour — the same flash this
+ * script exists to prevent, in a different token. It is validated against
+ * ACCENTS rather than written through, so a stale or hand-edited storage
+ * value lands on a way that has CSS behind it instead of an attribute
+ * nothing matches.
  */
 export const themeInitScript = `
 (function() {
   try {
+    var root = document.documentElement;
     var stored = localStorage.getItem('${THEME_STORAGE_KEY}');
     var theme = stored === 'light' || stored === 'dark' ? stored
       : (window.matchMedia('${MEDIA}').matches ? 'dark' : 'light');
-    document.documentElement.classList.add(theme);
-    document.documentElement.style.colorScheme = theme;
+    root.classList.add(theme);
+    root.style.colorScheme = theme;
+    var ways = ${JSON.stringify(ACCENTS)};
+    var accent = localStorage.getItem('${ACCENT_STORAGE_KEY}');
+    root.setAttribute('data-accent', ways.indexOf(accent) > -1 ? accent : '${DEFAULT_ACCENT}');
   } catch (e) {}
 })();
 `
@@ -77,6 +132,15 @@ type ThemeContextValue = {
   /** What that currently means on screen. `null` until mounted. */
   resolvedTheme: ResolvedTheme | null
   setTheme: (theme: Theme) => void
+  /**
+   * Which way is on. Never null, unlike `resolvedTheme`: the server and the
+   * first client render both answer DEFAULT_ACCENT, which is exactly what the
+   * markup they produce is styled as, and the layout effect below corrects it
+   * before paint. So a consumer can render a checked radio from this without
+   * the two-render dance the theme needs.
+   */
+  accent: Accent
+  setAccent: (accent: Accent) => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -103,6 +167,16 @@ function applyTheme(resolved: ResolvedTheme) {
 }
 
 /**
+ * Written as an attribute rather than a class so the way and the mode occupy
+ * different namespaces on <html> — `.dark[data-accent='ocean']` reads as the
+ * two independent axes it is, where a second class would leave the CSS
+ * guessing which of two class names meant what.
+ */
+function applyAccent(accent: Accent) {
+  document.documentElement.setAttribute('data-accent', accent)
+}
+
+/**
  * Theme state for the app: the user's choice, what it resolves to, and the
  * DOM side effects that make it visible.
  *
@@ -121,6 +195,7 @@ function applyTheme(resolved: ResolvedTheme) {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>('system')
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme | null>(null)
+  const [accent, setAccentState] = useState<Accent>(DEFAULT_ACCENT)
 
   // Adopt whatever the pre-hydration script already decided — and re-apply it.
   //
@@ -143,6 +218,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const resolved = next === 'system' ? systemTheme() : next
     setResolvedTheme(resolved)
     applyTheme(resolved)
+
+    // Same adopt-and-re-apply for the way, and in the same effect rather than
+    // a second one: they are read from the same storage at the same moment,
+    // and splitting them would let a future edit reorder them relative to
+    // paint. The Strict Mode remount that drops the theme class drops this
+    // attribute too — <html> is rendered from JSX in app/layout.tsx, so React
+    // owns its attributes on remount.
+    let storedAccent: string | null = null
+    try {
+      storedAccent = localStorage.getItem(ACCENT_STORAGE_KEY)
+    } catch {
+      // Same private-mode case as the theme above: fall through to the default.
+    }
+    const nextAccent = isAccent(storedAccent) ? storedAccent : DEFAULT_ACCENT
+    setAccentState(nextAccent)
+    applyAccent(nextAccent)
   }, [])
 
   // Follow the OS while (and only while) the choice is 'system'.
@@ -171,7 +262,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     applyTheme(resolved)
   }, [])
 
-  const value = useMemo(() => ({ theme, resolvedTheme, setTheme }), [theme, resolvedTheme, setTheme])
+  const setAccent = useCallback((next: Accent) => {
+    setAccentState(next)
+    try {
+      localStorage.setItem(ACCENT_STORAGE_KEY, next)
+    } catch {
+      // The way still applies for this session; it just won't survive a
+      // reload. Same trade the theme makes directly above.
+    }
+    applyAccent(next)
+  }, [])
+
+  const value = useMemo(
+    () => ({ theme, resolvedTheme, setTheme, accent, setAccent }),
+    [theme, resolvedTheme, setTheme, accent, setAccent],
+  )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }

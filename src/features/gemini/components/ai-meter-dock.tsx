@@ -35,7 +35,12 @@
  */
 
 import * as React from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+/* `m`, not `motion`: this file renders inside the shell's <LazyMotion strict>
+   (see components/motion/motion-provider.tsx), where the full `motion` import
+   throws rather than quietly re-bundling the library it was told not to. The
+   two are the same component with the same props — `m` just expects its
+   features to have been provided from above. */
+import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import {
   AudioLines,
   Check,
@@ -162,7 +167,7 @@ export function AiMeterDock({
           ),
         )}
         {view.hiddenCount > 0 ? (
-          <motion.p
+          <m.p
             key="overflow"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -173,7 +178,7 @@ export function AiMeterDock({
             {/* Counted, never dropped: three cards and silence would
                 under-report how much of this workspace's quota is in flight. */}
             +{view.hiddenCount} more AI {view.hiddenCount === 1 ? 'task' : 'tasks'}
-          </motion.p>
+          </m.p>
         ) : null}
       </AnimatePresence>
     </div>
@@ -259,7 +264,7 @@ function MeterCard({
     : null
 
   return (
-    <motion.div
+    <m.div
       ref={rootRef}
       tabIndex={-1}
       layout={!reduced}
@@ -440,7 +445,7 @@ function MeterCard({
 
         <AnimatePresence initial={false}>
           {open ? (
-            <motion.div
+            <m.div
               key="details"
               initial={reduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
               animate={reduced ? { opacity: 1 } : { opacity: 1, height: 'auto' }}
@@ -510,11 +515,11 @@ function MeterCard({
                 The figures above are what LogPup itself recorded, priced at list rates. They are
                 never a bill.
               </p>
-            </motion.div>
+            </m.div>
           ) : null}
         </AnimatePresence>
       </div>
-    </motion.div>
+    </m.div>
   )
 }
 
@@ -712,7 +717,7 @@ function MeterStripRow({
     task.steps.done + task.steps.failed < task.steps.total
   const percent = stepsAlive && task.steps ? `${stepPercent(task.steps)}%` : null
   return (
-    <motion.div
+    <m.div
       layout={!reduced}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -765,7 +770,7 @@ function MeterStripRow({
           <X className="size-3.5" />
         </button>
       ) : null}
-    </motion.div>
+    </m.div>
   )
 }
 

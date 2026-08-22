@@ -1,5 +1,5 @@
-import { Keyboard, Monitor, Moon, Sun } from 'lucide-react'
-import type { Theme } from '@/components/shell/theme-provider'
+import { Keyboard, Monitor, Moon, Palette, Sun } from 'lucide-react'
+import { ACCENTS, type Accent, type Theme } from '@/components/shell/theme-provider'
 import type { CommandDescriptor } from '@/features/search/registry/types'
 
 /**
@@ -18,7 +18,31 @@ const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: 'system', label: 'Theme: system', icon: Monitor },
 ]
 
+/**
+ * Title-case for the label, from the way's own id. Six hand-written strings
+ * would be a second list to keep in step with ACCENTS, and the one thing that
+ * list must never do is disagree with the CSS.
+ */
+const accentLabel = (accent: Accent) => accent[0].toUpperCase() + accent.slice(1)
+
 export const commands: CommandDescriptor[] = [
+  ...ACCENTS.map(
+    (accent): CommandDescriptor => ({
+      id: `settings.accent.${accent}`,
+      label: `Colour: ${accentLabel(accent)}`,
+      keywords: ['colour', 'color', 'accent', 'theme', 'palette', 'appearance'],
+      group: 'command',
+      icon: Palette,
+      run: ({ setAccent, close }) => {
+        setAccent(accent)
+        close()
+      },
+      /* Same rule the theme rows follow: the way you are already on is the
+         status quo, not a command, and hiding it keeps the other five one
+         keystroke closer. */
+      visible: (ctx) => ctx.accent !== accent,
+    }),
+  ),
   ...THEMES.map(
     (theme): CommandDescriptor => ({
       id: `settings.theme.${theme.value}`,
