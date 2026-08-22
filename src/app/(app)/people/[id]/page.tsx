@@ -9,6 +9,8 @@ import { PersonFollowupsCard } from '@/features/people/components/person-followu
 import { PersonHeader } from '@/features/people/components/person-header'
 import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
 import { PersonStatRow } from '@/features/people/components/person-stat-row'
+import { PersonSummaryCard } from '@/features/people/components/person-summary-card'
+import { derivePersonSummary, factsFromPersonViews } from '@/features/people/summary'
 import { PersonTasksCard } from '@/features/people/components/person-tasks-card'
 import { buildPersonStats } from '@/features/people/person-stats'
 import {
@@ -119,6 +121,21 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
       <PersonHeader overview={overview} />
 
       <PersonStatRow stats={stats} />
+
+      {/* Server-derived first paint: the same four views feed the fact sheet,
+          so this costs no extra query and no skeleton. The card itself asks
+          once for the AI rewrite and swaps it in when one exists. */}
+      <PersonSummaryCard
+        personId={userId}
+        initial={{
+          text: derivePersonSummary(
+            factsFromPersonViews({ overview, workload, followups, meetings }),
+          ),
+          source: 'derived',
+          model: null,
+          generatedAtIso: new Date().toISOString(),
+        }}
+      />
 
       {/*
         One flat grid, not two hand-built columns. DOM order IS the mobile

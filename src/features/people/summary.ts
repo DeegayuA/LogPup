@@ -38,6 +38,38 @@ export type PersonSummary = {
   generatedAtIso: string
 }
 
+/**
+ * One mapping from the person page's four views to the fact sheet, shared by
+ * the page (instant derived first paint) and the action (AI upgrade) so the
+ * two can never disagree about what a number means. Structurally typed on
+ * purpose: it names only the fields it reads, so it neither imports the
+ * query layer nor breaks when unrelated view fields move.
+ */
+export function factsFromPersonViews(views: {
+  overview: {
+    user: { name: string; title: string | null }
+    totalPct: number
+    assignments: { appName: string; isLead: boolean }[]
+  }
+  workload: { load: { open: number; overdue: number }; doneCount: number }
+  followups: { owed: unknown[]; oldestOwedDays: number | null }
+  meetings: { attendedRecently: number; attendedWindowDays: number }
+}): PersonSummaryFacts {
+  return {
+    name: views.overview.user.name,
+    title: views.overview.user.title,
+    apps: views.overview.assignments.map((a) => ({ name: a.appName, isLead: a.isLead })),
+    totalPct: views.overview.totalPct,
+    activeTaskCount: views.workload.load.open,
+    doneTaskCount: views.workload.doneCount,
+    overdueTaskCount: views.workload.load.overdue,
+    meetingsAttended: views.meetings.attendedRecently,
+    meetingsWindowDays: views.meetings.attendedWindowDays,
+    followupsOwed: views.followups.owed.length,
+    followupsOldestOwedDays: views.followups.oldestOwedDays,
+  }
+}
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 /**
