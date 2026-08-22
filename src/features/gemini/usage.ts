@@ -2,6 +2,7 @@ import { after } from 'next/server'
 import { db } from '@/db'
 import { aiUsageEvents } from '@/db/schema'
 import type { AiCallSlug } from '@/features/gemini/ai-features'
+import { notifyBudgetThreshold } from '@/features/gemini/budget-notify'
 
 export type AiUsageEventInput = {
   userId: string
@@ -54,11 +55,24 @@ export function recordAiUsage(event: AiUsageEventInput): void {
         console.error('[ai-usage] ledger write failed (ignored):', error)
       })
 
+  /*
+   * The budget check rides the same deferred slot as the ledger write, and
+   * AFTER it — the threshold is derived from rows including this one, so
+   * running it first would notify a call late by exactly one call.
+   *
+   * Only for calls that actually spent something. A failed call cost no tokens
+   * and must not be what tips somebody over their cap.
+   */
+  const writeThenCheck = async () => {
+    await write()
+    if (event.status === 'ok') await notifyBudgetThreshold(event.userId)
+  }
+
   try {
-    after(write)
+    after(writeThenCheck)
   } catch {
     // No request scope (a script, a test, a background job): fall back to
     // the original detached write rather than losing the row.
-    void write()
+    void writeThenCheck()
   }
 }

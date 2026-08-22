@@ -126,6 +126,20 @@ export const users = pgTable('users', {
   // commits are these" without per-user OAuth tokens.
   githubLogin: text('github_login'),
   role: userRole('role').notNull().default('member'),
+  /**
+   * What this seat may spend on AI per calendar month, in USD.
+   *
+   * NUMERIC, NOT a float, and read back as a string by the driver for that
+   * reason: money compared against a threshold must not carry binary rounding
+   * error, and this is the one comparison in the product that decides whether
+   * somebody is allowed to work.
+   *
+   * ZERO MEANS NO AI, never unlimited — see budgetState(), which refuses the
+   * division that would otherwise turn a cap of nothing into a cap of
+   * everything. Defaults to DEFAULT_AI_BUDGET_USD; an admin raises it per
+   * person.
+   */
+  aiBudgetUsd: numeric('ai_budget_usd', { precision: 10, scale: 2 }).notNull().default('10.00'),
   active: boolean('active').notNull().default(true),
   // Admin-approval gate for self-signup (see src/lib/auth.ts signIn callback).
   // Every row inserted by an admin (createUser) or by a provider that already
@@ -564,6 +578,17 @@ export const meetings = pgTable('meetings', {
   endsAt: timestamp('ends_at').notNull(),
   agenda: text('agenda'),
   notes: text('notes'),
+  // Who may SEE this meeting outside its own attendee list. 'workspace' is
+  // every signed-in teammate (the pre-0062 behaviour, and the default);
+  // 'attendees' hides it from every list, calendar, search index and AI
+  // grounding pack for anyone not on it — a quick note is 'attendees' from
+  // birth. Enforced at the read layer through meetingVisibleTo
+  // (src/features/meetings/visibility.ts); visibility.test.ts enumerates the
+  // readers the way live.test.ts enumerates raw reads, so a new query cannot
+  // skip the check silently.
+  visibility: text('visibility', { enum: ['workspace', 'attendees'] })
+    .notNull()
+    .default('workspace'),
   // Video-call link (Meet/Zoom/etc.) for one-click join. Optional.
   meetingUrl: text('meeting_url'),
   googleEventId: text('google_event_id'),

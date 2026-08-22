@@ -428,6 +428,20 @@
       "when": 1787157600000,
       "tag": "0061_mentions",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1787157700000,
+      "tag": "0062_meeting_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1787157800000,
+      "tag": "0063_ai_budget",
+      "breakpoints": true
     }
   ]
 }

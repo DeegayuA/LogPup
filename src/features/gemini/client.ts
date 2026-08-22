@@ -6,6 +6,8 @@ import { MAX_ATTEMPTS, backoffDelayMs, shouldRetry, sleep } from '@/features/gem
 import { shouldUseInlineAudio } from '@/features/gemini/audio-strategy'
 import { orderKeysForRotation } from '@/features/gemini/rotation'
 import { recordAiUsage } from '@/features/gemini/usage'
+import { getAiBudget } from '@/features/gemini/budget-queries'
+import { isOverBudget, overBudgetMessage } from '@/features/gemini/budget'
 import type { AiCallSlug } from '@/features/gemini/ai-features'
 
 // Pinned to an explicit version rather than a moving "-latest" alias so model
@@ -24,6 +26,8 @@ export const GEMINI_MODEL_FALLBACK_ORDER: readonly string[] = [
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
 export type GeminiErrorCode =
+  /** The month's assigned AI budget is spent. Not transient, not retryable. */
+  | 'OVER_BUDGET'
   | 'NO_KEYS'
   | 'TRANSIENT_BUSY'
   | 'AUTH_FAILED'
@@ -355,6 +359,35 @@ async function callGeminiCore<T>(
   // fallback models, retries, upload included. This is the number "usually
   // ~40s" is computed from, so it must be the caller's wait, nothing shorter.
   const calledAt = Date.now()
+  /*
+   * THE MONTHLY CAP, CHECKED HERE AND NOWHERE ELSE.
+   *
+   * Same reasoning as createNotifications' single door: enforcement that lives
+   * at each call site is enforcement that the next feature forgets. Every AI
+   * call in the product funnels through this function, so this is the only
+   * place a budget check cannot be bypassed by adding a feature.
+   *
+   * BEFORE the keys are loaded and before anything is spent — a refused call
+   * must cost nothing, including the round trip that would discover it has no
+   * key either.
+   *
+   * The warning at 90% is deliberately NOT sent from here. This path is
+   * latency-sensitive and runs on every call; the notification is written by
+   * the ledger write that follows a call (see recordAiUsage), which is where
+   * the number actually changes.
+   */
+  // calledAt is a stopwatch reading (a number); the budget window wants a date.
+  const budget = await getAiBudget(userId, new Date(calledAt))
+  if (isOverBudget(budget)) {
+    throw recordFailure(
+      feature,
+      userId,
+      models,
+      new GeminiError('OVER_BUDGET', overBudgetMessage(budget)),
+      calledAt,
+    )
+  }
+
   const rows = await db
     .select()
     .from(geminiKeys)
