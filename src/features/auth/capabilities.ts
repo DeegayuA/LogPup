@@ -125,6 +125,20 @@ export const ROLE_GRANTS = {
   'worklog.write.own':          { superadmin: O, admin: O, manager: O, editor: O, member: O, stakeholder: N, auditor: N },
   'worklog.backfill':           { superadmin: O, admin: O, manager: O, editor: O, member: O, stakeholder: N, auditor: N },
   'worklog.correct.request':    { superadmin: A, admin: A, manager: S, editor: S, member: N, stakeholder: N, auditor: N },
+  // Commenting ON somebody's day, which is NOT writing it. The log stays a
+  // first-person statement — there is still no worklog.write.any — and a
+  // review is a second, separately attributed statement about it.
+  //
+  // SCOPED for manager, editor and member, and the scope SOURCE does the real
+  // work: a manager's scope comes from app_role_history (the pm/lead roles),
+  // an editor's and a member's from assignments. So "a lead or PM of that
+  // project, or somebody working on it" falls out of the existing machinery
+  // rather than needing a rule of its own.
+  //
+  // Auditor is 'none' on purpose: they read everything and change nothing, and
+  // a review is a change. Stakeholder likewise — a client seat commenting on
+  // an employee's day is a conversation that does not belong in this product.
+  'worklog.review':             { superadmin: A, admin: A, manager: S, editor: S, member: S, stakeholder: N, auditor: N },
   'coverage.view':              { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: A },
   // Tasks and sprints
   'task.create':                { superadmin: A, admin: A, manager: S, editor: S, member: S, stakeholder: N, auditor: N },
