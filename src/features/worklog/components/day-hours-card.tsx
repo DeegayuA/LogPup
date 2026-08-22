@@ -18,14 +18,26 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { SearchSelect } from '@/components/ui/search-select'
 import {
   ENTRY_CATEGORIES,
+  accountedFraction,
   formatHours,
   totalMinutes,
   type EntryCategory,
 } from '@/features/worklog/entries'
+import type { Observation } from '@/features/worklog/entry-check'
 import { buildEntryPayload, entryFormProblem } from '@/features/worklog/entry-form'
 import { createWorklogEntry, deleteWorklogEntry } from '@/features/worklog/entry-actions'
-import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
+import {
+  checkWorklogEntries,
+  draftWorklogEntries,
+  type DraftedEntry,
+} from '@/features/worklog/entry-ai-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
+import { cn } from '@/lib/utils'
 
 /**
  * Where the day's hours are recorded — one row per piece of work.
@@ -54,6 +66,27 @@ const CATEGORY_LABEL: Record<EntryCategory, string> = {
 }
 
 const NO_APP = '__none__'
+
+/** Shared empty set, so the derivation below returns a stable reference. */
+const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
+
+/**
+ * A stable identity for one observation, so dismissing it dismisses THAT one.
+ *
+ * Keyed on kind plus the facts it was computed from rather than on the
+ * message, because the message may be reworded by a model between two runs of
+ * the same check — dismiss "you logged 9h against a 8h day", get it back
+ * phrased differently, and the dismissal would look broken. The facts are what
+ * findDiscrepancies actually decided on, and they only change when the day
+ * does, which is exactly when the note should return.
+ */
+function observationKey(observation: { kind: string; facts: Record<string, unknown> }): string {
+  const facts = Object.keys(observation.facts)
+    .sort()
+    .map((name) => `${name}=${String(observation.facts[name])}`)
+    .join('|')
+  return `${observation.kind}::${facts}`
+}
 
 /**
  * "1.5", "90m", "1h30", "2h" all mean the same thing to somebody logging a
@@ -119,6 +152,55 @@ export function DayHoursCard({
   evidence?: number
 }) {
   const [pending, startTransition] = React.useTransition()
+  /*
+   * What the cross-check noticed, and which of those the person has waved
+   * away. Both are per-day and deliberately NOT persisted: an observation is
+   * derived from the entries as they stand, so it comes back on its own the
+   * moment the day still warrants it, and a dismissal stored in a table would
+   * be a second thing that can disagree with the first.
+   */
+  /*
+   * TAGGED WITH THE DAY IT DESCRIBES, rather than reset by an effect when the
+   * day changes. Both are derived below by comparing that tag against the
+   * current `day`, so yesterday's "two entries against the same task" cannot
+   * survive onto a different date — and no setState-in-effect cascade is
+   * needed to make that true.
+   */
+  const [checked, setChecked] = React.useState<{
+    day: string
+    observations: Observation[]
+    hidden: ReadonlySet<string>
+  }>({ day, observations: [], hidden: new Set() })
+
+  const observations = checked.day === day ? checked.observations : []
+  const hiddenNotes = checked.day === day ? checked.hidden : EMPTY_HIDDEN
+
+  /**
+   * The cross-check, run after a save changed the day.
+   *
+   * FIRE AND FORGET, deliberately outside the save transition. The entry is
+   * already written and the toast has already said so; a check that made the
+   * form sit pending would turn "log 90 minutes" into a round trip to Gemini,
+   * and a check that FAILED would then look like the save failing.
+   *
+   * A failure is silence. checkWorklogEntries returns `err` when AI is off,
+   * when the key is spent, or when the day is not a day — none of which is
+   * something the person logging their hours needs to hear about.
+   */
+  const runCheck = React.useCallback(() => {
+    if (!canEdit) return
+    void checkWorklogEntries(day)
+      .then((res) => {
+        if (!res.ok) return
+        // Stamped with the day it was asked about: a slow check that lands
+        // after the reader has moved on must not paint yesterday's notes onto
+        // today. The derivation above then ignores it.
+        setChecked({ day, observations: res.data.observations, hidden: new Set() })
+      })
+      .catch(() => {
+        /* Offline, or the action threw. The day is saved either way. */
+      })
+  }, [canEdit, day])
   const [duration, setDuration] = React.useState('')
   // Opens on the kind this person can actually submit. 'task' is the right
   // default for almost everybody and the wrong one for a lead with nothing
@@ -187,11 +269,15 @@ export function DayHoursCard({
     [tasks],
   )
   const [drafting, setDrafting] = React.useState(false)
+  const meter = useAiMeter()
 
-  async function handleDraft() {
+  async function handleDraft(source?: MeterOriginSource) {
+    const origin = meterOrigin(source)
     setDrafting(true)
     try {
-      const res = await draftWorklogEntries(day)
+      const res = await meter.track('worklog-entries-draft', origin, () =>
+        draftWorklogEntries(day),
+      )
       if (!res.ok) {
         toast.error(res.error)
         return
@@ -233,13 +319,25 @@ export function DayHoursCard({
         }
         dismissAt(index)
         toast.success(`Logged ${formatHours(entry.minutes)}h`)
+        // An accepted draft is a save like any other, and the drafts are the
+        // rows most worth cross-checking: they were proposed from evidence
+        // rather than typed from memory.
+        runCheck()
       } catch {
         toast.error('Could not log that — try again')
       }
     })
   }
 
+
   const logged = totalMinutes(entries)
+  /* null when nothing is scheduled — a person with no work pattern that day
+     has no denominator, and 0/0 rendered as 0% would read as "logged nothing"
+     rather than "nothing was owed". */
+  const accounted = accountedFraction(logged, scheduledMinutes ?? 0)
+  const openObservations = observations.filter(
+    (observation) => !hiddenNotes.has(observationKey(observation)),
+  )
   const isTask = category === 'task'
   // ONE description of the form's state, shared by the payload, the disabled
   // button and the hint under it — so the reason Add is unavailable is always
@@ -270,6 +368,7 @@ export function DayHoursCard({
         setDuration('')
         setNote('')
         toast.success(`Logged ${formatHours(payload.minutes)}h`)
+        runCheck()
       } catch {
         toast.error('Could not log that — try again')
       }
@@ -282,7 +381,13 @@ export function DayHoursCard({
       try {
         const res = await deleteWorklogEntry({ id })
         if (!res.ok) toast.error(res.error)
-        else toast.success(`Removed ${formatHours(mins)}h`)
+        else {
+          toast.success(`Removed ${formatHours(mins)}h`)
+          // Removing an entry can RESOLVE an observation as easily as create
+          // one — the duplicate that was flagged is gone — so the check has to
+          // re-run on delete too, not only on add.
+          runCheck()
+        }
       } catch {
         toast.error('Could not remove that — try again')
       } finally {
@@ -322,6 +427,85 @@ export function DayHoursCard({
           {scheduledMinutes ? ` of ${formatHours(scheduledMinutes)}h scheduled` : ''}
         </p>
       </header>
+
+      {/* The same coverage as a bar. Rendered only when there IS a
+          denominator — accountedFraction returns null for a day nothing was
+          scheduled on, and a 0% bar there would read as "logged nothing"
+          rather than "nothing was owed".
+
+          The fill is capped at 100% while the LABEL is not: an eleven-hour day
+          against eight scheduled is a real thing that happened, and a bar that
+          silently clipped it would hide exactly the day worth noticing. */}
+      {accounted !== null ? (
+        <div className="flex items-center gap-2">
+          <div
+            className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-valuenow={Math.round(accounted * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Hours accounted for against hours scheduled"
+          >
+            <div
+              className={cn(
+                'h-full rounded-full transition-[width] duration-(--dur-base) ease-out motion-reduce:transition-none',
+                accounted >= 1 ? 'bg-primary' : 'bg-chart-1',
+              )}
+              style={{ width: `${Math.min(accounted * 100, 100)}%` }}
+            />
+          </div>
+          <span className="w-10 shrink-0 text-right font-mono text-2xs tabular-nums text-muted-foreground">
+            {Math.round(accounted * 100)}%
+          </span>
+        </div>
+      ) : null}
+
+      {/* What the cross-check noticed. EMPTY IS THE COMMON CASE and renders as
+          nothing at all — a quiet check reads as success, and a panel saying
+          "no problems found" would turn every ordinary day into a report. */}
+      {openObservations.length > 0 ? (
+        <ul aria-label="What LogPup noticed about this day" className="flex flex-col gap-1.5">
+          {openObservations.map((observation) => {
+            const key = observationKey(observation)
+            return (
+              <li
+                key={key}
+                className="flex items-start gap-2 rounded-xl border border-border/70 bg-muted/40 p-2.5"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'mt-1.5 size-1.5 shrink-0 rounded-full',
+                    observation.severity === 'question' ? 'bg-chart-1' : 'bg-muted-foreground/60',
+                  )}
+                />
+                <p className="flex-1 text-xs text-foreground">
+                  {/* Severity is carried by the word as well as the dot —
+                      never hue alone (WCAG 1.4.1). */}
+                  <span className="sr-only">
+                    {observation.severity === 'question' ? 'Worth a look: ' : 'Note: '}
+                  </span>
+                  {observation.message}
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  aria-label="Dismiss this note"
+                  onClick={() =>
+                    setChecked((prev) => ({
+                      ...prev,
+                      hidden: new Set(prev.hidden).add(key),
+                    }))
+                  }
+                >
+                  <X aria-hidden />
+                </Button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
 
       {sourceDrafts && visibleCount > 0 ? (
         <div className="flex flex-col gap-1.5 rounded-xl border border-primary/30 bg-primary/5 p-2.5">
