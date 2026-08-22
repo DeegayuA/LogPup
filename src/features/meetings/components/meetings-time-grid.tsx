@@ -123,7 +123,7 @@ import { isoDayInstant, isoToDisplayDate } from '@/features/meetings/calendar-vi
 import { chipTone } from '@/features/meetings/components/meetings-month-calendar'
 import { meetingColorKey } from '@/features/meetings/event-color'
 import { formatAppNames } from '@/features/meetings/app-labels'
-import { rescheduleMeeting } from '@/features/meetings/actions'
+import { deleteMeeting, duplicateMeeting, rescheduleMeeting } from '@/features/meetings/actions'
 import {
   dragCreateRange,
   draggedMinutes,
@@ -134,7 +134,10 @@ import {
   resizeMeetingStartByDrag,
 } from '@/features/meetings/time-drag'
 import { durationLabel, meetingTiming } from '@/features/meetings/components/meeting-glance'
-import { formatBusinessTime } from '@/features/people/format-instant'
+import {
+  formatBusinessTime,
+  formatBusinessWeekdayDayMonth,
+} from '@/features/people/format-instant'
 import type { MeetingSummary } from '@/features/meetings/queries'
 
 /** Width of the sticky hour gutter. Wide enough for "00:00" at `text-2xs`
@@ -364,6 +367,18 @@ export function MeetingsTimeGrid({
      already snap to SNAP_MINUTES, the bail-out in the setter means the grid
      re-renders once per snap-boundary crossing, not once per pixel. */
   const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
+  /* ALT/OPTION HELD = copy instead of move, decided at DROP rather than at
+     grab. Reading it from the pointerdown would freeze the choice before the
+     person has seen where the block is going; every calendar that has this
+     gesture lets you change your mind mid-drag, so the modifier is tracked
+     live for as long as a move gesture is running.
+
+     Only 'move' arms it. Alt-resizing a meeting has no meaning — there is no
+     second window to copy into — and alt+WHEEL is already the grid's zoom,
+     which cannot collide because a wheel and a pointer drag are different
+     gestures. */
+  const [copyIntent, setCopyIntent] = useState(false)
+  const [movingMeetingId, setMovingMeetingId] = useState<string | null>(null)
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -371,6 +386,14 @@ export function MeetingsTimeGrid({
       if (!data?.meetingId || !data.sourceIso || !data.kind) return
       const meeting = visibleMeetings.find((m) => m.id === data.meetingId)
       if (!meeting) return
+      if (data.kind === 'move') {
+        setMovingMeetingId(meeting.id)
+        // Seeded from the pointerdown so a drag STARTED with alt already down
+        // is a copy from its first frame; the listeners below take over from
+        // there.
+        const activator = event.activatorEvent
+        setCopyIntent(activator instanceof MouseEvent ? activator.altKey : false)
+      }
       // The chip appears the moment the gesture activates, showing the
       // CURRENT window — the first drag-move replaces it as soon as the
       // pointer crosses a snap boundary.
@@ -430,7 +453,35 @@ export function MeetingsTimeGrid({
     [days, pxPerHour, visibleMeetings],
   )
 
-  const handleDragCancel = useCallback(() => setDragPreview(null), [])
+  const endGesture = useCallback(() => {
+    setDragPreview(null)
+    setMovingMeetingId(null)
+    setCopyIntent(false)
+  }, [])
+
+  const handleDragCancel = useCallback(() => endGesture(), [endGesture])
+
+  /* Alt tracked for the life of a move gesture. `event.altKey` on the drop is
+     not available — dnd-kit's DragEndEvent carries the activator, not the
+     final modifier state — so the key is watched directly while a move is in
+     flight and nowhere else.
+
+     A blur clears the intent: alt-tabbing away is exactly how a person ends
+     up holding a modifier the browser never sees released, and a stale one
+     here turns their next drop into a meeting they did not ask for. */
+  useEffect(() => {
+    if (!movingMeetingId) return
+    const sync = (event: KeyboardEvent) => setCopyIntent(event.altKey)
+    const clear = () => setCopyIntent(false)
+    window.addEventListener('keydown', sync)
+    window.addEventListener('keyup', sync)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', sync)
+      window.removeEventListener('keyup', sync)
+      window.removeEventListener('blur', clear)
+    }
+  }, [movingMeetingId])
 
   /* The write path for BOTH gestures — a moved block and a resized edge both
      end as "this meeting's window is now X" — so there is exactly one place
@@ -464,11 +515,53 @@ export function MeetingsTimeGrid({
     [applyOptimisticMove],
   )
 
+  /* The copy path. No optimistic patch: the source meeting is not changing,
+     and the copy has no id until the server gives it one, so there is nothing
+     to show early that would not be a lie about which row exists.
+
+     The toast is not decoration. An alt-drag creates a real meeting and, when
+     the organiser's calendar is connected, sends real invitations the instant
+     it lands — so it says so, and it offers the way back in the same breath.
+     Hunting for a block you did not mean to create is not an undo. */
+  const commitDuplicate = useCallback((meetingId: string, startsAt: Date) => {
+    startTransition(async () => {
+      try {
+        const res = await duplicateMeeting(meetingId, startsAt.toISOString())
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        if (res.data?.calendarWarning) toast.warning(res.data.calendarWarning)
+        const copyId = res.data.meetingId
+        toast.success(
+          `Copied to ${formatBusinessWeekdayDayMonth(startsAt)} · ${formatBusinessTime(startsAt)}`,
+          {
+            description: res.data?.calendarWarning
+              ? undefined
+              : 'Attendees carried over as invited — nobody is marked as accepted.',
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                startTransition(async () => {
+                  const undone = await deleteMeeting(copyId)
+                  if (!undone.ok) toast.error(undone.error)
+                })
+              },
+            },
+          },
+        )
+      } catch {
+        toast.error('Could not copy that meeting — try again')
+      }
+    })
+  }, [])
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       // Cleared unconditionally, before any early return below: whatever the
       // drop decides, the gesture is over and the preview must not outlive it.
-      setDragPreview(null)
+      const copying = copyIntent
+      endGesture()
       const data = event.active.data.current as Partial<DragData> | undefined
       const sourceIso = data?.sourceIso
       const meetingId = data?.meetingId
@@ -513,9 +606,16 @@ export function MeetingsTimeGrid({
         gridStartHour: GRID_START_HOUR,
         gridEndHour: GRID_END_HOUR,
       })
+      // A copy onto the block's own slot is held to the same isRealMove guard
+      // as a move: alt held during a click that never travelled is not a
+      // request for a second meeting on top of the first.
+      if (copying) {
+        commitDuplicate(meetingId, next.startsAt)
+        return
+      }
       commitReschedule(meetingId, next)
     },
-    [days, pxPerHour, visibleMeetings, commitReschedule],
+    [days, pxPerHour, visibleMeetings, commitReschedule, commitDuplicate, copyIntent, endGesture],
   )
 
   /* ── DRAG TO CREATE ──────────────────────────────────────────────────────
@@ -921,6 +1021,7 @@ export function MeetingsTimeGrid({
                       ? buildBlockPreview(dragPreview, column.window, pxPerHour)
                       : null
                   }
+                  copying={copyIntent && movingMeetingId === block.slice.meeting.id}
                 />
               )
             })}
@@ -1268,6 +1369,7 @@ const TimeGridEvent = memo(function TimeGridEvent({
   scrollMarginTop,
   onOpen,
   preview,
+  copying,
 }: {
   block: TimedBlock
   /** `Wed 12 Aug` — the column's day, so a block announced on its own says
@@ -1282,6 +1384,10 @@ const TimeGridEvent = memo(function TimeGridEvent({
   /** Non-null only while THIS block is the one being dragged — the live
    *  would-be window, chip and (for a resize) geometry. See `DragPreview`. */
   preview: BlockPreview | null
+  /** True while THIS block is mid-drag with alt held: the drop will copy it
+   *  rather than move it. Drives the badge and the cursor, which are the only
+   *  warning a person gets before a second meeting exists. */
+  copying: boolean
 }) {
   const { slice } = block
   const { meeting, continuesBefore, continuesAfter } = slice
@@ -1332,6 +1438,11 @@ const TimeGridEvent = memo(function TimeGridEvent({
         /* Dragging is a pointer gesture; without this the browser claims the
            vertical drag for scrolling on touch and the block never moves. */
         touchAction: 'none',
+        /* The pointer says what the drop will do before it happens. Paired
+           with the badge below rather than relied on alone — a cursor is not
+           available to a person who cannot see it, and it is the badge that
+           carries the sr-only sentence. */
+        cursor: copying ? 'copy' : undefined,
         /* Focus scrolls a block into view flush with the scrollport edge —
            which is exactly where the sticky header, the all-day strip and the
            hour gutter sit, so a tabbed-to block landed behind them with its
@@ -1423,6 +1534,17 @@ const TimeGridEvent = memo(function TimeGridEvent({
       </span>
       {!continuesAfter ? <ResizeHandle meetingId={meeting.id} dayIso={dayIso} edge="end" /> : null}
       {preview ? <TimeRangeChip label={preview.label} edge={preview.edge} /> : null}
+      {/* Never the plus glyph alone: shape-and-colour is not a status anyone
+          can be required to read (WCAG 1.4.1), so the badge carries the
+          sentence and the icon is decoration on top of it. */}
+      {copying ? (
+        <span
+          className="pointer-events-none absolute -top-2 -right-2 z-40 flex size-5 items-center justify-center rounded-full border border-primary/40 bg-primary text-primary-foreground shadow-xs"
+        >
+          <PlusIcon aria-hidden className="size-3" />
+          <span className="sr-only">Release to copy this meeting</span>
+        </span>
+      ) : null}
     </button>
   )
 })

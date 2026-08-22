@@ -664,6 +664,87 @@ export async function rescheduleMeeting(
   return ok({ calendarWarning })
 }
 
+const duplicateInput = z.object({
+  meetingId: z.uuid(),
+  startsAt: z.iso.datetime(),
+})
+
+/**
+ * Copy a meeting to another slot — the alt-drag gesture on the calendar, and
+ * the "Duplicate to…" item that gives the same thing a keyboard route.
+ *
+ * DELEGATES TO createMeeting rather than reimplementing it. That is the whole
+ * design: a copy then takes exactly the path a hand-made meeting takes —
+ * project links, the calendar event, the invite notifications, the auto-title
+ * pass — so there is no second implementation to drift. Reimplementing it
+ * here would mean a copy that quietly skips whatever createMeeting grows next.
+ *
+ * WHAT DELIBERATELY DOES NOT COME ACROSS:
+ *
+ * - RSVPs. Attendees arrive as ids, and createMeeting inserts them at the
+ *   'pending' default. Carrying a response over would make the new meeting
+ *   assert that five people accepted an invitation they have never seen.
+ * - The Google event. createMeeting makes a new one; sharing an event id
+ *   would let an edit to either meeting rewrite the other.
+ * - Everything a meeting ACCUMULATES rather than is scheduled with: notes, AI
+ *   notes, recordings, keyframes, tasks, follow-ups. Those are the record of
+ *   a meeting that happened, and a copy has not happened yet.
+ *
+ * The duration is carried, not the end time, so a copy of a 90-minute review
+ * is 90 minutes wherever it lands.
+ *
+ * `withMeet` is false and `meetingUrl` is copied verbatim: both meetings point
+ * at the same room, which is what duplicating in Google Calendar does too.
+ * Minting a fresh Meet room on a drag would be a surprising side effect of a
+ * gesture the person may be about to undo.
+ *
+ * Permission is `canManageMeeting` — the same gate rescheduleMeeting uses,
+ * because this sits on the same surface as the drag that calls it.
+ */
+export async function duplicateMeeting(
+  meetingId: string,
+  startsAt: string,
+): Promise<ActionResult<{ meetingId: string; calendarWarning?: string }>> {
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
+
+  const parsed = duplicateInput.safeParse({ meetingId, startsAt })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const source = await meetingById(parsed.data.meetingId)
+  if (!source) return err('Meeting not found')
+  if (!(await canManageMeeting(session, source))) return err('Not allowed')
+
+  const attendeeRows = await db
+    .select({ userId: meetingAttendees.userId })
+    .from(meetingAttendees)
+    .where(eq(meetingAttendees.meetingId, source.id))
+  const attendeeIds = attendeeRows.map((row) => row.userId)
+  if (attendeeIds.length === 0) {
+    // createMeeting requires at least one attendee, and a copy that silently
+    // dropped to zero would fail validation with a message about a form the
+    // person never opened.
+    return err('That meeting has no attendees to copy')
+  }
+
+  const nextStart = new Date(parsed.data.startsAt)
+  const durationMs = source.endsAt.getTime() - source.startsAt.getTime()
+
+  const created = await createMeeting({
+    appIds: source.appIds,
+    title: source.title,
+    startsAt: nextStart.toISOString(),
+    endsAt: new Date(nextStart.getTime() + durationMs).toISOString(),
+    agenda: source.agenda ?? undefined,
+    meetingUrl: source.meetingUrl ?? undefined,
+    attendeeIds,
+    withMeet: false,
+  })
+  if (!created.ok) return created
+
+  return ok({ meetingId: created.data.meetingId, calendarWarning: created.data.calendarWarning })
+}
+
 /**
  * Edit a meeting in full — title, app, agenda, link, time and attendee list.
  *
