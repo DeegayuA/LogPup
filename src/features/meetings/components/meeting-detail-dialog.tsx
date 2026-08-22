@@ -8,6 +8,7 @@ import {
   CalendarCheckIcon,
   CalendarOffIcon,
   ClipboardListIcon,
+  CopyIcon,
   FileTextIcon,
   ListIcon,
   PencilIcon,
@@ -39,7 +40,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { deleteMeeting, rescheduleMeeting } from '@/features/meetings/actions'
+import { deleteMeeting, duplicateMeeting, rescheduleMeeting } from '@/features/meetings/actions'
+import {
+  formatBusinessTime,
+  formatBusinessWeekdayDayMonth,
+} from '@/features/people/format-instant'
 import { AddToCalendarMenu } from '@/features/meetings/components/add-to-calendar'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
 import { MeetingProjectSelect } from '@/features/meetings/components/meeting-project-select'
@@ -291,6 +296,56 @@ function MeetingDetailBody({
     })
   }
 
+  /**
+   * The keyboard route to the calendar's alt-drag copy.
+   *
+   * Deliberately the SAME form, not a second dialog with its own date picker:
+   * the person has already said when they want it, and "move it there" and
+   * "put another one there" differ only in the verb. A separate Duplicate
+   * dialog would ask the same question twice and give the two answers a way
+   * to disagree.
+   *
+   * Held to the same `moved` guard as the move button. Copying a meeting onto
+   * its own slot stacks a duplicate on top of the original, which is never
+   * what someone pressing a button labelled "Copy here" meant.
+   */
+  function handleDuplicate() {
+    if (endBeforeStart || !moved) return
+    startTransition(async () => {
+      try {
+        const res = await duplicateMeeting(meeting.id, start.toISOString())
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        if (res.data.calendarWarning) toast.warning(res.data.calendarWarning)
+        const copyId = res.data.meetingId
+        /* Same sentence as the alt-drag toast, deliberately — one product
+           should make one promise about what a copy did to everyone's
+           calendar. */
+        toast.success(
+          `Copied to ${formatBusinessWeekdayDayMonth(start)} · ${formatBusinessTime(start)}`,
+          {
+            description: res.data.calendarWarning
+              ? undefined
+              : 'Attendees carried over as invited — nobody is marked as accepted.',
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                startTransition(async () => {
+                  const undone = await deleteMeeting(copyId)
+                  if (!undone.ok) toast.error(undone.error)
+                })
+              },
+            },
+          },
+        )
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
   function handleDelete() {
     startTransition(async () => {
       try {
@@ -505,7 +560,7 @@ function MeetingDetailBody({
           className="flex flex-col gap-3 rounded-lg border border-border p-3"
         >
           <h3 className="font-heading text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-            Move this meeting
+            Move or copy this meeting
           </h3>
           <div className="grid gap-3 sm:grid-cols-2">
             <DateTimeWheelField
@@ -529,8 +584,9 @@ function MeetingDetailBody({
             </p>
           ) : (
             <p className="text-xs text-muted-foreground">
-              Changing the start keeps the meeting {durationLabel(start, end)} long. Attendees are
-              notified, and a sent calendar invite is updated.
+              Changing the start keeps the meeting {durationLabel(start, end)} long. Moving it
+              notifies attendees and updates a sent calendar invite; copying leaves this meeting
+              where it is and invites everyone to the new one.
             </p>
           )}
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -545,6 +601,20 @@ function MeetingDetailBody({
               }}
             >
               Reset
+            </Button>
+            {/* The keyboard equivalent of alt-dragging a block on the
+                calendar. Same target time, different verb — so it sits beside
+                Move rather than behind a menu the drag gesture has no
+                counterpart in. */}
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={handleDuplicate}
+              disabled={!moved || endBeforeStart || isPending}
+            >
+              <CopyIcon aria-hidden />
+              Copy here
             </Button>
             <Button size="sm" type="submit" disabled={!moved || endBeforeStart || isPending}>
               {isPending ? 'Moving…' : 'Move meeting'}
