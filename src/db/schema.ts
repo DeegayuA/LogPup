@@ -1061,6 +1061,64 @@ export const notifications = pgTable('notifications', {
     .where(sql`not ${t.dedupePermanent} and ${t.read} = false and ${t.dismissedAt} is null`),
 ])
 
+/**
+ * Who was named, where, and whether it reached them.
+ *
+ * APPEND-ONLY, AND DELIBERATELY WITHOUT `deletedAt`. src/db/live.test.ts
+ * reflects over this schema and fails the build for any table carrying that
+ * column without a SOFT_TABLES registration — this table belongs in neither.
+ * It is an index of things that were said, not trashable user content: a
+ * mention is evidence, and evidence that can be deleted by the person it
+ * incriminates is not evidence. The column's ABSENCE is the decision.
+ */
+export const mentions = pgTable('mentions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  // MENTION_SOURCES in features/notifications/entity-kinds.ts, which also owns
+  // the total mapping from a source to the entity it is about. Three tables
+  // inventing three vocabularies is how a per-entity join silently returns
+  // nothing — and "nothing" here reads as "nobody has mentioned you".
+  sourceType: text('source_type').notNull(),
+  // NO `.references()`, matching activity_log.entityId's posture and for its
+  // reason: a mention must outlive a trashed or purged source. "You told me in
+  // that comment" stays true after the comment is gone. Visibility is enforced
+  // at READ time by joining the live view for the source's type.
+  sourceId: uuid('source_id').notNull(),
+  // Denormalised so an orphaned row still reads as a sentence rather than as a
+  // link to nothing.
+  sourceLabel: text('source_label').notNull(),
+  mentionedUserId: uuid('mentioned_user_id').notNull().references(() => users.id),
+  actorId: uuid('actor_id').notNull().references(() => users.id),
+  // Nullable: a worklog mention belongs to no project, and forcing one would
+  // file it under a project it has nothing to do with.
+  appId: uuid('app_id'),
+  /** Whether a bell row was actually created. False is the interesting case. */
+  notified: boolean('notified').notNull().default(false),
+  /**
+   * `no_access` | `inactive` | `self` | `assignment_supersedes`, or null when it
+   * was delivered.
+   *
+   * THE ROW IS WRITTEN EITHER WAY. A mention that could not be delivered is
+   * recorded and reported back to the author, never silently dropped —
+   * otherwise half the org spends six months believing they told somebody.
+   */
+  suppressedReason: text('suppressed_reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  // THE ANTI-SPAM MECHANISM, and the reason this table exists at all. It sits
+  // at the storage layer precisely so the several call sites that extract
+  // mentions cannot each get it wrong: re-running extraction over an edited
+  // body inserts nothing, so a mention notifies EXACTLY ONCE, EVER.
+  //
+  // A DIFFERENT GUARANTEE from notifications' collapsing dedupe index, and both
+  // are needed. That one resets once the reader catches up, by design; under it
+  // alone, editing a body after they read the mention would notify them again.
+  // Under this one alone, three genuinely different mentions would be three
+  // bell rows. Deleting either is the obvious future "simplification" and is
+  // wrong both times.
+  uniqueIndex('mentions_source_user_idx').on(t.sourceType, t.sourceId, t.mentionedUserId),
+  index('mentions_of_me_idx').on(t.mentionedUserId, t.createdAt.desc()),
+])
+
 // Discussion thread on an app's overview. @mentions in the body notify the
 // mentioned users via the notifications table (see app comment actions).
 export const appComments = pgTable('app_comments', {

@@ -1,7 +1,7 @@
 import { and, eq, gte, inArray, isNull, lt, ne, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveApps, liveBugReports, liveMeetings, liveSprints, liveTasks } from '@/db/live'
-import { appGrants, appRoleHistory, assignments, notifications, users } from '@/db/schema'
+import { appGrants, appRoleHistory, assignments, mentions, notifications, users } from '@/db/schema'
 import {
   scopeSourceFor,
   type Actor,
@@ -9,6 +9,13 @@ import {
   type UserRole,
 } from '@/features/auth/capabilities'
 import { isoDayOf } from '@/features/people/iso-day'
+import { entityKindForSource, type MentionSource } from '@/features/notifications/entity-kinds'
+import {
+  classifyMention,
+  mentionAdvisory,
+  type SuppressedMention,
+  type SuppressedReason,
+} from '@/features/notifications/mention-rules'
 import {
   OVERFLOW_HREF,
   OVERFLOW_KIND,
@@ -612,4 +619,188 @@ export function extractMentionedUserIds(
     if (re.test(text)) matched.add(user.id)
   }
   return [...matched]
+}
+
+// ---------------------------------------------------------------------------
+// Mentions
+// ---------------------------------------------------------------------------
+
+/** One person named in a body of text. */
+export type MentionTarget = { userId: string; name: string }
+
+export type RecordMentionsInput = {
+  source: MentionSource
+  sourceId: string
+  /** Denormalised onto the row so an orphaned mention still reads as a sentence. */
+  sourceLabel: string
+  actorId: string
+  /** Null for a source that belongs to no project, e.g. a worklog note. */
+  appId: string | null
+  mentioned: readonly MentionTarget[]
+  /** Where the bell row points. */
+  link: string | null
+  /** Ids this action is also OFFERING the task to — see 'assignment_supersedes'. */
+  assignedTo?: readonly string[]
+}
+
+export type RecordMentionsResult = {
+  /** Names that got a bell row. */
+  notified: string[]
+  suppressed: SuppressedMention[]
+  /** One sentence for the author, or null. Non-fatal — show it beside success. */
+  advisory: string | null
+}
+
+const NO_MENTIONS: RecordMentionsResult = { notified: [], suppressed: [], advisory: null }
+
+/**
+ * Record who was named, and notify the ones it can reach.
+ *
+ * NOTIFIES EXACTLY ONCE, EVER, and the guarantee is the unique index rather
+ * than anything in this function. The insert is `onConflictDoNothing().
+ * returning()`, so a row already present comes back as NOTHING — and only rows
+ * that came back are notified. Re-running extraction over an edited body
+ * therefore notifies nobody, however many times it runs, and no caller has to
+ * remember that.
+ *
+ * That is a DIFFERENT guarantee from the collapsing dedupe on notifications,
+ * and both are load-bearing: see the comment on `mentions_source_user_idx`.
+ *
+ * EVERY NAMED PERSON GETS A ROW, delivered or not. A suppressed mention is
+ * recorded with its reason and reported back to the author — the row is the
+ * record that they said it, and the advisory is what stops them believing it
+ * arrived.
+ *
+ * Failures are swallowed and logged, like `createNotifications` above: a
+ * mention that could not be recorded must not fail the comment it was written
+ * in. The caller has already saved.
+ */
+export async function recordMentions(
+  input: RecordMentionsInput,
+): Promise<RecordMentionsResult> {
+  if (input.mentioned.length === 0) return NO_MENTIONS
+
+  try {
+    // Deduped by id first: the same person named twice in one body is one
+    // mention, and without this the insert would conflict with itself.
+    const targets = [...new Map(input.mentioned.map((m) => [m.userId, m])).values()]
+    const assigned = new Set(input.assignedTo ?? [])
+
+    const people = await db
+      .select({
+        id: users.id,
+        role: users.role,
+        employmentType: users.employmentType,
+        active: users.active,
+        status: users.status,
+      })
+      .from(users)
+      .where(inArray(users.id, targets.map((target) => target.userId)))
+
+    const byId = new Map(people.map((person) => [person.id, person]))
+
+    // Scope is only a question when the source belongs to a project. A worklog
+    // note is nobody's project, and treating "no project" as "no access" would
+    // suppress every mention written outside one.
+    const scopes = input.appId
+      ? await loadScopes(
+          people.map((person) => ({
+            id: person.id,
+            role: person.role,
+            employmentType: person.employmentType,
+            active: person.active,
+            approved: person.status === 'approved',
+          })),
+        )
+      : new Map<string, Set<string>>()
+
+    const rows = targets.map((target) => {
+      const person = byId.get(target.userId)
+      const reason = classifyMention({
+        isSelf: target.userId === input.actorId,
+        // A person the read did not return is not a person: unknown id, or a
+        // row removed between the mention being typed and this running.
+        isActive: person?.active ?? false,
+        isApproved: person?.status === 'approved',
+        hasAccess:
+          input.appId === null
+          || (scopes.get(target.userId)?.has(input.appId) ?? false)
+          // No scope entry at all means the seat is not scope-limited, which
+          // loadScopes expresses by omission rather than by a full set.
+          || !scopes.has(target.userId),
+        supersededByAssignment: assigned.has(target.userId),
+      })
+      return { target, reason }
+    })
+
+    const inserted = await db
+      .insert(mentions)
+      .values(
+        rows.map(({ target, reason }) => ({
+          sourceType: input.source,
+          sourceId: input.sourceId,
+          sourceLabel: input.sourceLabel,
+          mentionedUserId: target.userId,
+          actorId: input.actorId,
+          appId: input.appId,
+          notified: reason === null,
+          suppressedReason: reason,
+        })),
+      )
+      // THE ANTI-SPAM MECHANISM, exercised. A body edited four times inserts
+      // once; the other three return no rows and notify nobody.
+      .onConflictDoNothing()
+      .returning({ mentionedUserId: mentions.mentionedUserId })
+
+    const freshlyRecorded = new Set(inserted.map((row) => row.mentionedUserId))
+    const deliverable = rows.filter(
+      (row) => row.reason === null && freshlyRecorded.has(row.target.userId),
+    )
+
+    if (deliverable.length > 0) {
+      await createNotifications(
+        deliverable.map(({ target }) => ({
+          userId: target.userId,
+          actorId: input.actorId,
+          type: 'mention' as const,
+          kind: 'mention',
+          title: `${input.sourceLabel}`,
+          link: input.link,
+          entity: { type: entityKindForSource(input.source), id: input.sourceId },
+          // Collapsing rather than a ladder: three mentions across one app's
+          // comments are one bell row reading "3 mentions", and the next one
+          // after they read it opens a fresh row.
+          dedupe: {
+            mode: 'entity' as const,
+            entityType: entityKindForSource(input.source),
+            entityId: input.sourceId,
+            event: 'mention',
+          },
+          // The capability that gates the SOURCE, so a bell row can never open
+          // a page its reader may not see. Null when the source belongs to no
+          // project — there is nothing to be scoped out of.
+          visibility: input.appId ? { action: 'app.view' as const, resource: { appId: input.appId } } : null,
+        })),
+      )
+    }
+
+    // Reported on EVERY run, not only the first. Somebody who fixes a typo and
+    // saves again should be told again that Nuwan still cannot see it — the
+    // once-ever rule is about notifying the recipient, not about informing the
+    // author.
+    const suppressed = rows
+      .filter((row) => row.reason !== null)
+      .map((row) => ({ name: row.target.name, reason: row.reason as SuppressedReason }))
+
+    return {
+      notified: deliverable.map(({ target }) => target.name),
+      suppressed,
+      advisory: mentionAdvisory(suppressed, input.sourceLabel),
+    }
+  } catch (error) {
+    // A mention that could not be recorded must not fail the comment it was
+    // written in — the caller has already saved.
+    console.error('[notifications] recordMentions failed:', error)
+    return NO_MENTIONS
+  }
 }
