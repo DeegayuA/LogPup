@@ -1,6 +1,6 @@
-import { and, asc, eq, gte, inArray, lte, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, lt, lte, ne } from 'drizzle-orm'
 import { db } from '@/db'
-import { activityLog, meetingApps, meetingAttendees } from '@/db/schema'
+import { activityLog, assignments, meetingApps, meetingAttendees, users } from '@/db/schema'
 import { liveApps, liveMeetings, liveTasks, liveWorklogEntries } from '@/db/live'
 import { isoDayAdd } from '@/features/people/iso-day'
 import { isMercantileHoliday, LK_TIMEZONE } from '@/lib/lk-holidays'
@@ -349,4 +349,123 @@ export async function getMyDayEntries(userId: string, day: string): Promise<DayE
     .where(and(eq(liveWorklogEntries.userId, userId), eq(liveWorklogEntries.day, day)))
     .orderBy(asc(liveWorklogEntries.createdAt))
   return rows
+}
+
+// ---------------------------------------------------------------------------
+// Who is logging, and what their days usually look like
+// ---------------------------------------------------------------------------
+
+/** How many earlier logged days to show the model as a pattern. */
+const RECENT_DAY_LIMIT = 5
+
+export type DrafterContext = {
+  /** users.title. Null when nobody has set one. */
+  title: string | null
+  /**
+   * The permission seat. Read HERE rather than off the caller's actor because
+   * the worklog actions carry only an id and a name — and the seat is the
+   * single strongest hint about what a normal day looks like for somebody.
+   */
+  role: string
+  projects: { name: string; allocationPct: number }[]
+  /** Most recent first. Categories and totals only — never the note text. */
+  recentDays: { day: string; summary: string }[]
+}
+
+/**
+ * The context around the day: who this person is, what they are assigned to,
+ * and the shape of the days they have already logged.
+ *
+ * NOT EVIDENCE, and the prompt says so in as many words. None of it is proof
+ * that anything happened on the day being drafted — it is what makes the
+ * proposal read like THEIR day rather than a generic one. The no-invention
+ * rules are unchanged: a day with no evidence still returns an empty list,
+ * however much context sits around it.
+ *
+ * SELF-ONLY, like the rest of this module. Every predicate below is scoped to
+ * `userId`; there is no argument that could widen it.
+ *
+ * SUMMARIES RATHER THAN NOTES for the recent days. The shape of a day is
+ * learnable from categories and totals, and feeding old notes back would have
+ * the model paraphrasing last Tuesday into today — which would look exactly
+ * like a real memory and be entirely invented.
+ */
+export async function loadDrafterContext(userId: string, day: string): Promise<DrafterContext> {
+  const [userRow, projectRows, recentRows] = await Promise.all([
+    db
+      .select({ title: users.title, role: users.role })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1),
+    db
+      .select({ name: liveApps.name, allocationPct: assignments.allocationPct })
+      .from(assignments)
+      .innerJoin(liveApps, eq(liveApps.id, assignments.appId))
+      .where(eq(assignments.userId, userId))
+      .orderBy(desc(assignments.allocationPct))
+      .limit(MAX_TASKS),
+    // Strictly BEFORE the day being drafted: a day already partly logged is
+    // handled by alreadyLoggedMinutes, and including it here would show the
+    // model its own earlier suggestions as though they were a habit.
+    db
+      .select({
+        day: liveWorklogEntries.day,
+        minutes: liveWorklogEntries.minutes,
+        category: liveWorklogEntries.category,
+      })
+      .from(liveWorklogEntries)
+      .where(and(eq(liveWorklogEntries.userId, userId), lt(liveWorklogEntries.day, day)))
+      .orderBy(desc(liveWorklogEntries.day))
+      // Enough rows to cover RECENT_DAY_LIMIT days even when a day has several
+      // entries. Bounded either way.
+      .limit(RECENT_DAY_LIMIT * 8),
+  ])
+
+  return {
+    title: userRow[0]?.title ?? null,
+    role: userRow[0]?.role ?? 'member',
+    projects: projectRows,
+    recentDays: summariseRecentDays(recentRows),
+  }
+}
+
+/**
+ * Rows to "3h task · 1h meeting", one line per day, newest first.
+ *
+ * Exported and pure so the shape can be tested by value — the rounding and the
+ * ordering are the whole content of this function, and both are easy to get
+ * subtly wrong in a way no integration test would notice.
+ */
+export function summariseRecentDays(
+  rows: readonly { day: string; minutes: number; category: string }[],
+  limit = RECENT_DAY_LIMIT,
+): { day: string; summary: string }[] {
+  const byDay = new Map<string, Map<string, number>>()
+  for (const row of rows) {
+    const categories = byDay.get(row.day) ?? new Map<string, number>()
+    categories.set(row.category, (categories.get(row.category) ?? 0) + row.minutes)
+    byDay.set(row.day, categories)
+  }
+
+  return [...byDay.entries()]
+    // Days arrive newest-first from the query, but a Map preserves INSERTION
+    // order rather than key order — sorting here is what makes this function
+    // correct on its own rather than only when fed a sorted read.
+    .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+    .slice(0, limit)
+    .map(([day, categories]) => ({
+      day,
+      summary: [...categories.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([category, minutes]) => `${formatMinutes(minutes)} ${category}`)
+        .join(' · '),
+    }))
+}
+
+/** "3h" / "1h30" / "45m" — compact, because this is a pattern not a figure. */
+function formatMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest === 0 ? `${hours}h` : `${hours}h${String(rest).padStart(2, '0')}`
 }

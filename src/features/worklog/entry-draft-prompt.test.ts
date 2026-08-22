@@ -219,3 +219,86 @@ describe('parseDraftedEntries', () => {
     expect(parseDraftedEntries(reply([]), allowed)).toEqual([])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Who is logging, and what their days usually look like
+// ---------------------------------------------------------------------------
+
+describe('the context around the day', () => {
+  const base = {
+    name: 'Ama',
+    day: '2026-08-20',
+    scheduledMinutes: 480,
+    onApprovedAbsence: false,
+    alreadyLoggedMinutes: 0,
+    meetings: [],
+    activity: [],
+    tasks: [],
+    commits: [],
+  }
+
+  it('says nothing about who they are when nobody said', () => {
+    // The optional blocks must be ABSENT rather than empty-but-present: a line
+    // reading "Who they are: Ama — seat" asserts something nobody supplied.
+    const prompt = buildEntryDraftPrompt(base)
+    expect(prompt).not.toContain('Who they are')
+    expect(prompt).not.toContain('Projects they are assigned to')
+    expect(prompt).not.toContain('as a pattern only')
+  })
+
+  it('names the seat and the job title, as context and not as a target', () => {
+    const prompt = buildEntryDraftPrompt({
+      ...base,
+      person: { name: 'Ama', title: 'Project Manager', role: 'manager', isAdmin: false },
+    })
+    expect(prompt).toContain('Ama, Project Manager — manager seat')
+    // The whole risk of handing over a role: the model reasoning "a PM does
+    // six hours of meetings" and producing six hours of meetings.
+    expect(prompt).toContain('never how many hours you propose')
+  })
+
+  it('says so when they are an admin, and does not when they are not', () => {
+    const admin = buildEntryDraftPrompt({
+      ...base,
+      person: { name: 'Ama', title: null, role: 'admin', isAdmin: true },
+    })
+    expect(admin).toContain('workspace admin')
+    const member = buildEntryDraftPrompt({
+      ...base,
+      person: { name: 'Ama', title: null, role: 'member', isAdmin: false },
+    })
+    expect(member).not.toContain('workspace admin')
+  })
+
+  it('fences attribution to the projects they are actually on', () => {
+    const prompt = buildEntryDraftPrompt({
+      ...base,
+      projects: [{ name: 'SCADA', allocationPct: 60 }, { name: 'Unilever', allocationPct: 40 }],
+    })
+    expect(prompt).toContain('- SCADA (60%)')
+    expect(prompt).toContain('Attribute time only to a project on this list.')
+  })
+
+  it('gives recent days as a shape, and forbids copying them into today', () => {
+    const prompt = buildEntryDraftPrompt({
+      ...base,
+      recentDays: [{ day: '2026-08-19', summary: '6h task · 1h meeting' }],
+    })
+    expect(prompt).toContain('- 2026-08-19: 6h task · 1h meeting')
+    // Without this the pattern reads as evidence, and the model fills a blank
+    // day with a copy of yesterday.
+    expect(prompt).toContain('It is not evidence about this day')
+    expect(prompt).toContain('must never be copied into it')
+  })
+
+  it('still refuses to invent, however much context it is given', () => {
+    const prompt = buildEntryDraftPrompt({
+      ...base,
+      person: { name: 'Ama', title: 'Engineer', role: 'editor', isAdmin: false },
+      projects: [{ name: 'SCADA', allocationPct: 100 }],
+      recentDays: [{ day: '2026-08-19', summary: '8h task' }],
+    })
+    expect(prompt).toContain('If there is no evidence at all, return an empty list.')
+    expect(prompt).toContain('do not invent work to reach it')
+  })
+})

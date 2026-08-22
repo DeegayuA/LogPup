@@ -116,8 +116,48 @@ function meetingLine(meeting: DraftMeeting): string {
  * day proposes the REMAINDER instead of a duplicate set. A draft that silently
  * doubled somebody's Tuesday would be worse than no draft.
  */
+/** Who is logging, so the draft reads like their day rather than anyone's. */
+export type DraftPerson = {
+  name: string
+  /** users.title — "Senior Engineer", "Project Manager". Null when unset. */
+  title: string | null
+  /** The seat, which shapes what a normal day looks like more than anything else. */
+  role: string
+  isAdmin: boolean
+}
+
+/** One earlier day, as the shape of what this person actually logs. */
+export type DraftRecentDay = {
+  day: string
+  /** "3h task · 1h meeting" — categories and totals, never the note text. */
+  summary: string
+}
+
 export function buildEntryDraftPrompt(input: {
   name: string
+  /**
+   * Who they are. OPTIONAL so the existing callers and their tests keep their
+   * meaning — a missing person block simply omits those lines rather than
+   * asserting anything about them.
+   */
+  person?: DraftPerson
+  /**
+   * Projects they are assigned to, with their share. Gives the model somewhere
+   * to attribute time when a commit or a meeting names a project obliquely,
+   * and stops it attributing to a project they are not on.
+   */
+  projects?: readonly { name: string; allocationPct: number }[]
+  /**
+   * The last few days they logged, as a PATTERN rather than as content. A
+   * person who logs 6h task and 1h meeting most days is describing what a
+   * normal day looks like for them, which is the single most useful prior for
+   * splitting a day the evidence only partly covers.
+   *
+   * SUMMARIES, NOT NOTES. The note text is theirs and is not needed to learn
+   * the shape — and feeding old notes back would have the model paraphrasing
+   * last Tuesday into today.
+   */
+  recentDays?: readonly DraftRecentDay[]
   day: string
   scheduledMinutes: number | null
   onApprovedAbsence: boolean
@@ -165,6 +205,36 @@ export function buildEntryDraftPrompt(input: {
       + 'shows; a day of leave with nothing recorded should come back as an empty list.\n'
     : ''
 
+  /* Who they are. Their seat and job title shape what a normal day looks like
+     more than anything else in this pack: a PM's day is meetings and admin, an
+     engineer's is task time. Stated as CONTEXT, never as a target — the rules
+     below still forbid inventing work to match it. */
+  const person = input.person
+    ? `Who they are: ${input.person.name}`
+      + `${input.person.title ? `, ${input.person.title}` : ''}`
+      + ` — ${input.person.role} seat${input.person.isAdmin ? ', workspace admin' : ''}. `
+      + 'Let that shape which categories are plausible, never how many hours you propose.\n'
+    : ''
+
+  const projects = input.projects && input.projects.length > 0
+    ? 'Projects they are assigned to, with their share of the week:\n'
+      + input.projects
+        .map((project) => `- ${project.name} (${project.allocationPct}%)`)
+        .join('\n')
+      + '\nAttribute time only to a project on this list.\n'
+    : ''
+
+  /* What their days usually look like. The strongest prior available for
+     splitting a day the evidence only partly covers — and deliberately only
+     shapes and totals, so the model cannot paraphrase last Tuesday into
+     today. */
+  const recent = input.recentDays && input.recentDays.length > 0
+    ? 'How they have logged recent days, as a pattern only:\n'
+      + input.recentDays.map((entry) => `- ${entry.day}: ${entry.summary}`).join('\n')
+      + '\nThis is the SHAPE of a normal day for them. It is not evidence about '
+      + 'this day and must never be copied into it.\n'
+    : ''
+
   const already = input.alreadyLoggedMinutes > 0
     ? `They have already logged ${input.alreadyLoggedMinutes} minutes for this day. Propose only what is `
       + 'MISSING on top of that, never a replacement for it.\n'
@@ -172,6 +242,7 @@ export function buildEntryDraftPrompt(input: {
 
   return `You are proposing how ${input.name} spent ${input.day}, for them to correct before they save it. These are suggestions they will edit, not a record of anything.
 
+${person}${projects}${recent}
 ${meetings}
 
 ${activity}

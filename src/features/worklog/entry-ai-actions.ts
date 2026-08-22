@@ -16,7 +16,13 @@ import {
   type ProposedEntry,
 } from '@/features/worklog/entry-draft-prompt'
 import { commitPromptLines } from '@/features/github/commits'
-import { getMyDayEntries, loadDayEvidence, toCheckEvidence } from '@/features/worklog/entry-evidence'
+import {
+  getMyDayEntries,
+  loadDayEvidence,
+  loadDrafterContext,
+  toCheckEvidence,
+} from '@/features/worklog/entry-evidence'
+import { isAdminRole, type UserRole } from '@/features/auth/capabilities'
 import { WORK_DAY_PATTERN, isFutureWorkDay } from '@/features/worklog/worklog-day'
 
 /**
@@ -110,13 +116,22 @@ export async function draftWorklogEntries(
   const now = new Date()
   if (isFutureWorkDay(day, now)) return err('That day has not happened yet')
 
-  const [evidence, existing] = await Promise.all([
+  const [evidence, existing, context] = await Promise.all([
     loadDayEvidence(actor.id, day, now),
     getMyDayEntries(actor.id, day),
+    loadDrafterContext(actor.id, day),
   ])
 
   const alreadyLoggedMinutes = totalMinutes(existing)
-  const evidenceCount = evidence.meetings.length + evidence.activity.length
+  /*
+   * COMMITS COUNT. They were gathered, passed to the prompt, and then left out
+   * of this total — so a day spent writing code, with no meeting and no card
+   * moved, came back "LogPup recorded nothing for that day" without ever
+   * asking the model. That is the developer's ordinary day, and it was the one
+   * day Fill-my-day refused to help with.
+   */
+  const evidenceCount =
+    evidence.meetings.length + evidence.activity.length + evidence.commits.length
   const empty: WorklogEntriesDraft = {
     entries: [],
     alreadyLoggedMinutes,
@@ -133,6 +148,20 @@ export async function draftWorklogEntries(
 
   const prompt = buildEntryDraftPrompt({
     name: actor.name ?? 'this engineer',
+    // Who they are, what they are on, and what their days usually look like.
+    // The evidence says what happened; this says whose day it was, which is
+    // what makes a PM's draft read like a PM's day rather than an engineer's.
+    person: {
+      name: actor.name ?? 'this engineer',
+      title: context.title,
+      // The seat comes from the context read, not from `actor`: writer() hands
+      // back only an id and a name, and widening it would put a permissions
+      // object where a prompt input belongs.
+      role: context.role,
+      isAdmin: isAdminRole(context.role as UserRole),
+    },
+    projects: context.projects,
+    recentDays: context.recentDays,
     day,
     scheduledMinutes: evidence.scheduledMinutes,
     onApprovedAbsence: evidence.onApprovedAbsence,
