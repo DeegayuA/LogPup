@@ -233,6 +233,61 @@ describe('check 4: every feature declares whether it is searchable', () => {
   }
 })
 
+// --- Check 4b: a provider must narrow by the searcher's grant -------------
+
+/**
+ * The bug this exists to stop, which had already shipped: the registry threads
+ * a SearchContext to every provider and NOT ONE read it. All of them declared
+ * `search: async (query) =>` and dropped the caller on the floor, so ⌘K
+ * answered out of the whole workspace whoever was typing — a stakeholder seat
+ * holding a grant on one project got rows from every other, two characters at
+ * a time.
+ *
+ * A source scan rather than a behavioural test, for the same reason checks 1-5
+ * are: a provider reaches the database, and what must not regress is that the
+ * query consults the matrix AT ALL. Naming `effectiveGrant` is what a provider
+ * cannot do by accident. It cannot catch a provider that asks the matrix the
+ * wrong question — that is what review is for — but it does catch the one that
+ * forgets to ask, which is the shape this failure actually took.
+ *
+ * WHY NOT a `search.length === 2` check on ALL_PROVIDERS instead: a provider
+ * whose every identity-dependent arm refuses (sprints — a sprint has no owner,
+ * so there is no such thing as your own one) correctly takes no ctx, and a
+ * check on the arity would push it into taking a parameter it must not use.
+ */
+const GATE_PENDING: Readonly<Record<string, string>> = {
+  // Being converted by a change in flight on the same checkout. The hygiene
+  // test in check 7 deletes this entry the moment that lands, so it cannot
+  // decay into a standing exemption — which is the failure mode the NO_SEARCH
+  // allowlist above is written to avoid.
+  meetings: 'its provider is mid-conversion in a parallel change; check 7 expires this entry the moment it gates',
+}
+
+describe('check 4b: every search provider narrows by the searcher grant', () => {
+  const offenders = FEATURES.filter((feature) => {
+    const file = path.join(FEATURES_DIR, feature, 'search-providers.ts')
+    if (!existsSync(file) || feature in GATE_PENDING) return false
+    return !readFileSync(file, 'utf8').includes('effectiveGrant')
+  })
+
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders).toEqual([])
+    })
+  } else {
+    it.each(offenders)('src/features/%s/search-providers.ts', (feature) => {
+      throw new Error(
+        `src/features/${feature}/search-providers.ts never asks how far its searcher reaches, so `
+        + 'every seat gets the whole workspace. Resolve the actor, take the grant for the action '
+        + "that governs these rows (effectiveGrant(actor.role, actor.employmentType, '<action>')), "
+        + 'and put the narrowing in the WHERE — a LIMIT applied ahead of an authorisation filter '
+        + 'returns a short page of rows the person may not see, which reads as "no results" rather '
+        + 'than as a bug.',
+      )
+    })
+  }
+})
+
 // --- Check 5: commands.ts must stay on the client side of the boundary ----
 
 /**
@@ -385,6 +440,18 @@ describe('check 7: allowlist hygiene', () => {
     const stale = Object.keys(NO_SEARCH).filter((feature) =>
       existsSync(path.join(FEATURES_DIR, feature, 'search-providers.ts')),
     )
+    expect(stale).toEqual([])
+  })
+
+  it('a provider that gained its grant gate is no longer exempt', () => {
+    // GATE_PENDING is a waiting room, not a wing. An entry survives only while
+    // the provider it names still fails check 4b — the moment it gates (or the
+    // file goes away) this test fails and the entry has to be deleted, which is
+    // the only thing keeping a temporary exemption temporary.
+    const stale = Object.keys(GATE_PENDING).filter((feature) => {
+      const file = path.join(FEATURES_DIR, feature, 'search-providers.ts')
+      return !existsSync(file) || readFileSync(file, 'utf8').includes('effectiveGrant')
+    })
     expect(stale).toEqual([])
   })
 })
