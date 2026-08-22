@@ -28,19 +28,24 @@ export function BriefingCardSkeleton() {
             <Skeleton className="h-7 w-16 rounded-[min(var(--radius-md),12px)]" />
           </div>
         </div>
-        <Skeleton className="h-7 w-3/4" />
-        <div className="flex flex-col gap-2">
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-4/5" />
-        </div>
-        <div className="flex flex-col gap-2 border-t border-border/50 pt-3.5">
-          {['one', 'two', 'three'].map((row) => (
-            <div key={row} className="flex items-center gap-2.5">
-              <Skeleton className="size-4 rounded" />
-              <Skeleton className="h-4 w-2/3" />
+        {/* Same two-column shape as BriefingCard's body, for the same reason:
+            a skeleton in the old single-column layout reflows the whole card
+            the instant the briefing lands. */}
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-8">
+          <div className="flex flex-col gap-3">
+            <Skeleton className="h-8 w-3/4" />
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-4/5" />
             </div>
-          ))}
+          </div>
+          <div className="flex flex-col gap-2.5 border-t border-border/50 pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-8">
+            <Skeleton className="h-3 w-16" />
+            {['one', 'two', 'three'].map((row) => (
+              <Skeleton key={row} className="h-11 w-full rounded-lg" />
+            ))}
+          </div>
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SpotlightCard } from '@/components/ui/spotlight-card'
 import { getBriefing, type Briefing } from '@/features/intel/actions'
+import { useAiMeter } from '@/features/gemini/components/ai-meter-provider'
 import { parsePriority, type ParsedPriority } from '@/features/intel/prompt'
 import { splitAnswerLinks } from '@/features/intel/answer-links'
 import {
@@ -33,6 +34,7 @@ export function BriefingCard({
   initial: Briefing
   className?: string
 }) {
+  const meter = useAiMeter()
   const [briefing, setBriefing] = React.useState(initial)
   const [refreshing, setRefreshing] = React.useState(false)
   /* Inline, not a toast: the reader is looking at the briefing, and a failed
@@ -58,7 +60,9 @@ export function BriefingCard({
     setRefreshing(true)
     setError(null)
     try {
-      const res = await getBriefing()
+      /* refreshRef, not an event: `refresh` is also reachable from the
+         keyboard, and the button is the honest origin either way. */
+      const res = await meter.track('daily-briefing', refreshRef.current, () => getBriefing())
       if (!res.ok) {
         setError(res.error)
         return
@@ -131,90 +135,131 @@ export function BriefingCard({
           <BriefingBodyPending priorities={briefing.priorities.length} />
         ) : (
           <>
-            <h2 className="font-heading text-xl font-bold tracking-tight text-balance text-foreground sm:text-2xl">
-              {briefing.headline}
-            </h2>
+            {/* Two columns from lg. The card is the only full-bleed element on
+                this page — everything below it sits in the 1.65fr/1fr grid — so
+                at a wide viewport it was a letterbox: prose capped at max-w-prose
+                on the left, dead space to the right, and `justify-between` on the
+                priority rows throwing "Open" nearly two thousand pixels from the
+                label it belonged to. Splitting it uses the width instead of
+                capping it, and the priorities column being narrow is what makes
+                the row layout correct again rather than merely tolerable. */}
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-8">
+              <div className="flex flex-col gap-3">
+                <h2 className="font-heading text-xl font-bold tracking-tight text-balance text-foreground sm:text-2xl lg:text-3xl">
+                  {briefing.headline}
+                </h2>
 
-            {briefing.body ? (
-              /* The body is the one paragraph anybody reads on this card, so it
-                 is foreground text. It was muted, which put the actual briefing
-                 a shade below the priorities listed under it and made the most
-                 important sentence the faintest thing here. The footer stays
-                 muted — that is where "quieter than the content" is right. */
-              <p className="max-w-prose text-sm leading-relaxed text-foreground/90">
-                {/* Routes are INLINE in the prose — "…across the last 14 days
-                    [/worklog]" — and were printing as literal brackets, with a
-                    raw UUID sitting in the middle of the meetings one. Same fix
-                    as the answer panel: resolve each to a link, and refuse
-                    anything that is not an in-app route, because this text is
-                    written by a model reading user-authored task and meeting
-                    titles and a planted title is enough to steer it. */}
-                {splitAnswerLinks(briefing.body, []).map((segment, i) =>
-                  segment.kind === 'text' ? (
-                    <React.Fragment key={i}>{segment.text}</React.Fragment>
-                  ) : (
+                {briefing.body ? (
+                  /* The body is the one paragraph anybody reads on this card, so it
+                     is foreground text. It was muted, which put the actual briefing
+                     a shade below the priorities listed under it and made the most
+                     important sentence the faintest thing here. The footer stays
+                     muted — that is where "quieter than the content" is right. */
+                  <p className="max-w-prose text-sm leading-relaxed text-foreground/90">
+                    {/* Routes are INLINE in the prose — "…across the last 14 days
+                        [/worklog]" — and were printing as literal brackets, with a
+                        raw UUID sitting in the middle of the meetings one. Same fix
+                        as the answer panel: resolve each to a link, and refuse
+                        anything that is not an in-app route, because this text is
+                        written by a model reading user-authored task and meeting
+                        titles and a planted title is enough to steer it. */}
+                    {splitAnswerLinks(briefing.body, []).map((segment, i) =>
+                      segment.kind === 'text' ? (
+                        <React.Fragment key={i}>{segment.text}</React.Fragment>
+                      ) : (
+                        <Link
+                          key={i}
+                          href={segment.href}
+                          className="rounded-sm font-medium text-primary underline decoration-primary/30 underline-offset-2 outline-none hover:decoration-primary focus-visible:ring-2 focus-visible:ring-ring/50"
+                        >
+                          {segment.label}
+                        </Link>
+                      ),
+                    )}
+                  </p>
+                ) : null}
+              </div>
+
+              {/* The divider is the column rule at lg and the old horizontal rule
+                  below it on narrow screens — one border that changes edge, rather
+                  than two that have to be kept in agreement. */}
+              <div className="flex flex-col gap-2.5 border-t border-border/50 pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-8">
+                <h3 className="font-mono text-2xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                  Do next
+                </h3>
+                {briefing.priorities.length > 0 ? (
+                  <ol className="flex flex-col gap-2">
+                    {briefing.priorities.map((rawPriority, index) => {
+                      const { text, href } = parsePriority(rawPriority)
+                      const num = String(index + 1).padStart(2, '0')
+
+                      if (href) {
+                        return (
+                          <li key={rawPriority}>
+                            {/* Named properties, never `transition-all`: this row was
+                                animating border, background, shadow, colour and a
+                                transform together on every hover. */}
+                            <Link
+                              href={href}
+                              className="group flex items-start gap-2.5 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-sm text-foreground outline-none transition-[background-color,border-color] duration-150 ease-out hover:border-primary/40 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <span
+                                aria-hidden
+                                className="mt-px shrink-0 font-mono text-2xs font-bold tabular-nums text-primary"
+                              >
+                                {num}
+                              </span>
+                              <span className="min-w-0 flex-1 font-medium text-foreground transition-colors duration-150 ease-out group-hover:text-primary">
+                                {text}
+                              </span>
+                              {/* The arrow alone, beside the label. The row IS a
+                                  link, so an "Open" chip repeated the row's own
+                                  nature three times and put the affordance as far
+                                  from the text as the container allowed. */}
+                              <ArrowUpRight
+                                aria-hidden
+                                className="mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-[transform,color] duration-150 ease-out group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-primary"
+                              />
+                            </Link>
+                          </li>
+                        )
+                      }
+
+                      return (
+                        <li
+                          key={rawPriority}
+                          className="flex items-start gap-2.5 px-3 py-1.5 text-sm"
+                        >
+                          <span
+                            aria-hidden
+                            className="mt-px shrink-0 font-mono text-2xs font-bold tabular-nums text-primary"
+                          >
+                            {num}
+                          </span>
+                          <span className="min-w-0 text-foreground">{text}</span>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                ) : (
+                  /* A designed empty state, not an absent section. This case is
+                     reachable today — a briefing whose own body says "0 open tasks
+                     and 0 open follow-ups" rendered nothing here at all, which
+                     reads as a component that failed rather than a clear day. */
+                  <p className="rounded-lg border border-dashed border-border/60 px-3 py-4 text-sm text-muted-foreground">
+                    Nothing owed — no tasks, follow-ups or write-ups are waiting on
+                    you.{' '}
                     <Link
-                      key={i}
-                      href={segment.href}
+                      href="/worklog"
                       className="rounded-sm font-medium text-primary underline decoration-primary/30 underline-offset-2 outline-none hover:decoration-primary focus-visible:ring-2 focus-visible:ring-ring/50"
                     >
-                      {segment.label}
-                    </Link>
-                  ),
+                      Log today&rsquo;s hours
+                    </Link>{' '}
+                    to keep the week straight.
+                  </p>
                 )}
-              </p>
-            ) : null}
-
-            {briefing.priorities.length > 0 ? (
-              <ol className="flex flex-col gap-2 border-t border-border/50 pt-3.5">
-                {briefing.priorities.map((rawPriority, index) => {
-                  const { text, href } = parsePriority(rawPriority)
-                  const num = String(index + 1).padStart(2, '0')
-
-                  if (href) {
-                    return (
-                      <li key={rawPriority}>
-                        <Link
-                          href={href}
-                          className="group flex items-center justify-between gap-3 rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm text-foreground transition-all hover:border-primary/40 hover:bg-muted/50 hover:shadow-xs focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
-                        >
-                          <div className="flex items-baseline gap-2.5 min-w-0">
-                            <span
-                              aria-hidden
-                              className="font-mono text-2xs font-bold tabular-nums text-primary shrink-0"
-                            >
-                              {num}
-                            </span>
-                            <span className="min-w-0 font-medium text-foreground group-hover:text-primary transition-colors">
-                              {text}
-                            </span>
-                          </div>
-                          <span className="shrink-0 flex items-center gap-1 font-mono text-[11px] font-medium text-muted-foreground group-hover:text-primary bg-background/80 px-2 py-0.5 rounded-md border border-border/50 transition-colors">
-                            <span>Open</span>
-                            <ArrowUpRight
-                              aria-hidden
-                              className="size-3 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
-                            />
-                          </span>
-                        </Link>
-                      </li>
-                    )
-                  }
-
-                  return (
-                    <li key={rawPriority} className="flex items-baseline gap-2.5 text-sm px-3 py-1">
-                      <span
-                        aria-hidden
-                        className="font-mono text-2xs font-bold tabular-nums text-primary shrink-0"
-                      >
-                        {num}
-                      </span>
-                      <span className="min-w-0 text-foreground">{text}</span>
-                    </li>
-                  )
-                })}
-              </ol>
-            ) : null}
+              </div>
+            </div>
           </>
         )}
 
@@ -266,19 +311,23 @@ function BriefingBodyPending({ priorities }: { priorities: number }) {
       <span className="sr-only" role="status">
         Refreshing your briefing
       </span>
-      <Skeleton className="h-7 w-3/4" />
-      <div className="flex flex-col gap-2">
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-4/5" />
-      </div>
-      <div className="flex flex-col gap-2 border-t border-border/50 pt-3.5">
-        {Array.from({ length: Math.max(priorities, 1) }, (_, index) => (
-          <div key={index} className="flex items-center gap-2.5">
-            <Skeleton className="size-4 rounded" />
-            <Skeleton className="h-4 w-2/3" />
+      {/* Mirrors the two-column body above. A skeleton that keeps the old
+          single-column shape makes every refresh a visible jump. */}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:gap-8">
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-8 w-3/4" />
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-4/5" />
           </div>
-        ))}
+        </div>
+        <div className="flex flex-col gap-2.5 border-t border-border/50 pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-8">
+          <Skeleton className="h-3 w-16" />
+          {Array.from({ length: Math.max(priorities, 1) }, (_, index) => (
+            <Skeleton key={index} className="h-11 w-full rounded-lg" />
+          ))}
+        </div>
       </div>
     </div>
   )
