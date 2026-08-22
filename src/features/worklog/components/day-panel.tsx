@@ -9,7 +9,7 @@ import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
-import type { WorklogEntryRow } from '@/features/worklog/entry-queries'
+import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
 import type { UserAssignedApp } from '@/features/worklog/queries'
 
 /**
@@ -43,6 +43,7 @@ export function DayPanel({
   entries,
   scheduledMinutes,
   assignedApps,
+  tasks,
   canEdit,
   noteAiEnabled,
   entriesAiEnabled,
@@ -52,6 +53,8 @@ export function DayPanel({
   entries: WorklogEntryRow[]
   scheduledMinutes: number | null
   assignedApps: UserAssignedApp[]
+  /** Tasks a task entry may name — passed straight through to the hours card. */
+  tasks: LoggableTask[]
   canEdit: boolean
   noteAiEnabled: boolean
   entriesAiEnabled: boolean
@@ -162,6 +165,7 @@ export function DayPanel({
         entries={entries}
         scheduledMinutes={scheduledMinutes}
         apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
+        tasks={tasks}
         canEdit={canEdit}
         aiDraftEnabled={entriesAiEnabled}
         // null until the first fill, so the card keeps its own button for

@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 
 import { db } from '@/db'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
@@ -79,4 +79,57 @@ export async function listDayEntriesForDisplay(
     .orderBy(asc(liveWorklogEntries.createdAt))
 
   return rows as WorklogEntryRow[]
+}
+
+/**
+ * The tasks this person can book hours to, for the picker on the day card.
+ *
+ * WHY DONE TASKS ARE IN HERE. The commonest reason to log task hours is
+ * having just finished the thing, and `tasks` has no `updated_at` — there is
+ * no column that could say "done recently", so a filter on status would
+ * silently make the most ordinary case impossible. They are ordered last
+ * instead, and carry their status as a hint so a finished task is visibly
+ * finished before it is chosen.
+ *
+ * IN PROGRESS FIRST, not the enum's own order. `asc(status)` would sort
+ * todo → in_progress → done, and the task somebody is logging against is
+ * overwhelmingly the one they are in the middle of.
+ *
+ * ASSIGNED TO THEM, but that is a convenience and not a permission: the save
+ * path accepts any live task id and derives the project from it. This list is
+ * "what you are likely to want", not "what you are allowed to say".
+ *
+ * Through liveTasks and liveApps, so a trashed task is never offered — the
+ * same rule resolveEntryAppId enforces one step later, applied here so the
+ * refusal never has to happen.
+ */
+export type LoggableTask = {
+  id: string
+  title: string
+  appName: string
+  status: 'todo' | 'in_progress' | 'done'
+}
+
+/** Enough to cover a real backlog, small enough that one read stays cheap. */
+const MAX_LOGGABLE_TASKS = 200
+
+export async function listLoggableTasks(userId: string): Promise<LoggableTask[]> {
+  const rows = await db
+    .select({
+      id: liveTasks.id,
+      title: liveTasks.title,
+      appName: liveApps.name,
+      status: liveTasks.status,
+    })
+    .from(liveTasks)
+    .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
+    .where(eq(liveTasks.assigneeId, userId))
+    .orderBy(
+      sql`case ${liveTasks.status} when 'in_progress' then 0 when 'todo' then 1 else 2 end`,
+      asc(liveApps.name),
+      asc(liveTasks.title),
+    )
+    .limit(MAX_LOGGABLE_TASKS)
+
+  return rows as LoggableTask[]
 }

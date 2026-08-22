@@ -14,7 +14,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { DayPanel } from '@/features/worklog/components/day-panel'
-import { listDayEntriesForDisplay } from '@/features/worklog/entry-queries'
+import { listDayEntriesForDisplay, listLoggableTasks } from '@/features/worklog/entry-queries'
 import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
 import {
   WorklogCalendar,
@@ -513,7 +513,14 @@ async function CalendarZone({
     // Suspense: it is one indexed read on (user_id, day) and the panel it
     // feeds sits beside the form, so a second boundary would flash an empty
     // card next to a full one.
-    const dayEntries = await listDayEntriesForDisplay(userId, selectedDay)
+    // Batched with the task picker's list: both feed the same panel, and the
+    // task read does not depend on which day is selected — a task entry names
+    // work, not a date. Awaiting them in sequence would add a round trip to
+    // every day you page to for a list that does not change between them.
+    const [dayEntries, loggableTasks] = await Promise.all([
+      listDayEntriesForDisplay(userId, selectedDay),
+      listLoggableTasks(userId),
+    ])
 
     // Scheduled minutes for the selected day, taken from the coverage pass
     // already computed above rather than re-derived: that fraction is
@@ -529,6 +536,7 @@ async function CalendarZone({
 
     return {
       dayEntries,
+      loggableTasks,
       scheduledMinutes,
       canLogHours,
       // A SEPARATE pref from 'worklog-draft': that one drafts the day's NOTE,
@@ -560,6 +568,7 @@ async function CalendarZone({
 
   const {
     dayEntries,
+    loggableTasks,
     scheduledMinutes,
     canLogHours,
     entriesAiEnabled,
@@ -645,6 +654,7 @@ async function CalendarZone({
           day={selectedDay}
           initial={selectedRow ? { percent: selectedRow.percent, note: selectedRow.note } : null}
           entries={dayEntries}
+          tasks={loggableTasks}
           scheduledMinutes={scheduledMinutes}
           assignedApps={assignedApps}
           canEdit={canLogHours}

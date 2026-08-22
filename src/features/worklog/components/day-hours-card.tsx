@@ -15,16 +15,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { EmptyState } from '@/components/ui/empty-state'
+import { SearchSelect } from '@/components/ui/search-select'
 import {
   ENTRY_CATEGORIES,
-  ENTRY_MINUTES_MAX,
   formatHours,
   totalMinutes,
   type EntryCategory,
 } from '@/features/worklog/entries'
+import { buildEntryPayload, entryFormProblem } from '@/features/worklog/entry-form'
 import { createWorklogEntry, deleteWorklogEntry } from '@/features/worklog/entry-actions'
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
-import type { WorklogEntryRow } from '@/features/worklog/entry-queries'
+import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
 
 /**
  * Where the day's hours are recorded — one row per piece of work.
@@ -86,6 +87,7 @@ export function DayHoursCard({
   entries,
   scheduledMinutes,
   apps,
+  tasks,
   canEdit,
   aiDraftEnabled = false,
   suggestions = null,
@@ -96,6 +98,12 @@ export function DayHoursCard({
   /** Minutes this person was scheduled to work, or null when unknown. */
   scheduledMinutes: number | null
   apps: { id: string; name: string }[]
+  /**
+   * The tasks a task entry may name. Empty is a real state — somebody with no
+   * assigned tasks logs meetings, review and admin, and the form says so
+   * rather than offering a picker with nothing in it.
+   */
+  tasks: LoggableTask[]
   /** False for a future day, which cannot be logged against. */
   canEdit: boolean
   /** Whether the per-entry AI draft is switched on for this person. */
@@ -112,8 +120,15 @@ export function DayHoursCard({
 }) {
   const [pending, startTransition] = React.useTransition()
   const [duration, setDuration] = React.useState('')
-  const [category, setCategory] = React.useState<EntryCategory>('task')
+  // Opens on the kind this person can actually submit. 'task' is the right
+  // default for almost everybody and the wrong one for a lead with nothing
+  // assigned to them — for whom the form would open already unsubmittable,
+  // which is the shape of the bug this card just had.
+  const [category, setCategory] = React.useState<EntryCategory>(
+    tasks.length > 0 ? 'task' : 'meeting',
+  )
   const [appId, setAppId] = React.useState<string>(NO_APP)
+  const [taskId, setTaskId] = React.useState<string>('')
   const [note, setNote] = React.useState('')
   const [busyId, setBusyId] = React.useState<string | null>(null)
   // Proposals live HERE, not in the entries list, and are never written until
@@ -156,6 +171,21 @@ export function DayHoursCard({
   const dismissAll = React.useCallback(() => {
     setDismissed(new Set(sourceDrafts?.map((_, i) => i) ?? []))
   }, [sourceDrafts])
+
+  // The project rides in the HINT rather than the label, which is what makes
+  // it searchable: SearchSelect matches on label + hint together, so typing a
+  // project name narrows to that project's tasks, and typing "done" finds the
+  // finished ones. A done task says so before it is picked — hours booked to
+  // a task somebody closed last month are usually a misclick, not a decision.
+  const taskOptions = React.useMemo(
+    () =>
+      tasks.map((task) => ({
+        value: task.id,
+        label: task.title,
+        hint: task.status === 'done' ? `${task.appName} · Done` : task.appName,
+      })),
+    [tasks],
+  )
   const [drafting, setDrafting] = React.useState(false)
 
   async function handleDraft() {
@@ -210,32 +240,36 @@ export function DayHoursCard({
   }
 
   const logged = totalMinutes(entries)
-  const minutes = parseDuration(duration)
-  const canSubmit = minutes !== null && minutes > 0 && minutes <= ENTRY_MINUTES_MAX && !pending
+  const isTask = category === 'task'
+  // ONE description of the form's state, shared by the payload, the disabled
+  // button and the hint under it — so the reason Add is unavailable is always
+  // the reason the server would have given, in the same words.
+  const formFields = {
+    minutes: parseDuration(duration),
+    category,
+    taskId: taskId || null,
+    appId: appId === NO_APP ? null : appId,
+    note,
+  }
+  const problem = entryFormProblem(formFields)
+  const canSubmit = problem === null && !pending
 
   function handleAdd() {
-    if (minutes === null) {
-      toast.error('Enter a time — "1.5", "90m" and "1h30" all work')
+    const payload = buildEntryPayload(formFields)
+    if (!payload || problem) {
+      toast.error(problem ?? 'Enter a time — "1.5", "90m" and "1h30" all work')
       return
     }
     startTransition(async () => {
       try {
-        const res = await createWorklogEntry({
-          day,
-          minutes,
-          category,
-          // The server DERIVES a task entry's project from the task itself, so
-          // this is only consulted for the categories that carry one.
-          appId: appId === NO_APP ? null : appId,
-          note: note.trim() || null,
-        })
+        const res = await createWorklogEntry({ day, ...payload })
         if (!res.ok) {
           toast.error(res.error)
           return
         }
         setDuration('')
         setNote('')
-        toast.success(`Logged ${formatHours(minutes)}h`)
+        toast.success(`Logged ${formatHours(payload.minutes)}h`)
       } catch {
         toast.error('Could not log that — try again')
       }
@@ -460,7 +494,31 @@ export function DayHoursCard({
               </Select>
             </div>
 
-            {apps.length > 0 ? (
+            {/* A task entry names a TASK; every other kind names a project.
+                Never both, and never the wrong one: resolveEntryAppId derives
+                a task entry's project FROM the task and ignores whatever appId
+                the client sent, so the Project select that used to sit here on
+                task entries was a control whose answer was thrown away. */}
+            {isTask ? (
+              <div className="flex min-w-0 flex-col gap-1">
+                <Label htmlFor="entry-task" className="text-xs">
+                  Task
+                </Label>
+                <SearchSelect
+                  id="entry-task"
+                  size="sm"
+                  value={taskId}
+                  onValueChange={setTaskId}
+                  options={taskOptions}
+                  placeholder={tasks.length === 0 ? 'No tasks assigned' : 'Pick a task'}
+                  searchPlaceholder="Type a task or project…"
+                  emptyText="No task matches that."
+                  disabled={tasks.length === 0}
+                  aria-describedby="entry-duration-hint"
+                  className="w-56"
+                />
+              </div>
+            ) : apps.length > 0 ? (
               <div className="flex min-w-0 flex-col gap-1">
                 <Label htmlFor="entry-app" className="text-xs">
                   Project
@@ -508,10 +566,25 @@ export function DayHoursCard({
             className="text-xs"
           />
 
-          <p id="entry-duration-hint" className="text-2xs text-muted-foreground">
-            &ldquo;1.5&rdquo;, &ldquo;90m&rdquo; and &ldquo;1h30&rdquo; all mean the same thing. A
-            bare number is hours.
-          </p>
+          {/* THE HINT SAYS WHAT IS ACTUALLY STOPPING THE ADD, in the server's
+              own words, and only once something is half-typed. Silent until
+              then, because "Pick the task that time went to" on an untouched
+              form is a complaint about a mistake nobody has made yet — and
+              that sentence used to arrive from the server AFTER the click,
+              naming a control this card did not have. */}
+          {problem && (duration.trim() !== '' || taskId !== '') ? (
+            <p id="entry-duration-hint" className="text-2xs text-amber-600 dark:text-amber-400">
+              {problem}
+            </p>
+          ) : (
+            <p id="entry-duration-hint" className="text-2xs text-muted-foreground">
+              &ldquo;1.5&rdquo;, &ldquo;90m&rdquo; and &ldquo;1h30&rdquo; all mean the same thing.
+              A bare number is hours.
+              {isTask && tasks.length === 0
+                ? ' You have no tasks assigned — log this as a meeting, review or admin instead.'
+                : ''}
+            </p>
+          )}
         </div>
       ) : null}
     </section>
