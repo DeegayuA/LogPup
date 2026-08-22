@@ -449,6 +449,80 @@ export const tasks = pgTable('tasks', {
   index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder).where(sql`${t.deletedAt} is null`),
 ])
 
+/**
+ * A recurring meeting's RULE, and the standing template its occurrences are
+ * stamped from.
+ *
+ * Occurrences are REAL `meetings` rows, materialised ahead of time and linked
+ * back here by `meetings.series_id`. They are not computed at read time, and
+ * that is the load-bearing decision of this whole feature: fourteen tables
+ * reference `meetings.id` — notes, recordings, keyframes, tasks, attendance —
+ * and there is nowhere to attach a recording to a row that does not exist.
+ * Materialising means moving one occurrence is `updateMeeting` and cancelling
+ * one is the soft delete that already exists, rather than an exception model
+ * invented for the purpose.
+ *
+ * The rule itself lives in `features/meetings/recurrence.ts`, which is pure
+ * and tested; this table is only its storage.
+ */
+export const meetingSeries = pgTable('meeting_series', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** Title every new occurrence is created with. Renaming ONE occurrence does
+   *  not come back here — that edit is about that meeting, not the rule. */
+  title: text('title').notNull(),
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'set null' }),
+  agenda: text('agenda'),
+  meetingUrl: text('meeting_url'),
+  freq: text('freq').$type<'daily' | 'weekly' | 'monthly'>().notNull(),
+  /** Every N days/weeks/months. */
+  interval: integer('interval').notNull().default(1),
+  /** Weekly only. 0 = Sunday. Empty means "the anchor's own weekday". */
+  byWeekday: integer('by_weekday').array().notNull().default([]),
+  monthlyMode: text('monthly_mode').$type<'day-of-month' | 'nth-weekday'>(),
+  /**
+   * The zone the wall clock below is expressed in.
+   *
+   * Stored as minutes-past-local-midnight PLUS a zone, never as an instant. A
+   * 09:00 standup kept as a UTC instant drifts an hour the moment anyone
+   * crosses a DST boundary. Colombo has no DST, which is exactly why that bug
+   * would ship silently and surface only when someone travels.
+   */
+  timeZone: text('time_zone').notNull().default('Asia/Colombo'),
+  startMinutes: integer('start_minutes').notNull(),
+  durationMinutes: integer('duration_minutes').notNull(),
+  /** First candidate day, local. Also fixes the phase of every interval, and
+   *  for monthly rules it is what decides WHICH day of the month is meant. */
+  anchorDate: date('anchor_date').notNull(),
+  /** Inclusive last day, local. Null is open-ended — the horizon top-up keeps
+   *  it filled rather than the series ever running dry. */
+  untilDate: date('until_date'),
+  calendarOrganiserId: uuid('calendar_organiser_id').notNull().references(() => users.id),
+  googleCalendarId: text('google_calendar_id').notNull().default('primary'),
+  autoAssignTasks: boolean('auto_assign_tasks').notNull().default(true),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  // Soft delete: reads go through src/db/live.ts; enforcement is src/db/live.test.ts.
+  // Trashing a series does NOT trash the meetings it created — see
+  // meetings.seriesId, which is `set null` for the same reason.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+})
+
+/**
+ * The STANDING invite list — who is on the series, as opposed to who is on
+ * one occurrence of it.
+ *
+ * Not derivable from "whoever was on the last occurrence". That reading makes
+ * a one-off guest permanent and makes removing someone from a single week
+ * silently remove them from every week after it. Editing an occurrence's
+ * attendees stays local to that meeting; editing the series edits this.
+ */
+export const meetingSeriesAttendees = pgTable('meeting_series_attendees', {
+  seriesId: uuid('series_id').notNull().references(() => meetingSeries.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  optional: boolean('optional').notNull().default(false),
+}, (t) => [primaryKey({ columns: [t.seriesId, t.userId] })])
+
 export const meetings = pgTable('meetings', {
   id: uuid('id').primaryKey().defaultRandom(),
   // DEPRECATED as the answer to "which projects is this meeting on" — that is
@@ -530,6 +604,11 @@ export const meetings = pgTable('meetings', {
   // (derived, no columns).
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   deletedBy: uuid('deleted_by').references(() => users.id),
+  // RECURRENCE COLUMNS (series_id, occurrence_key) ARE HELD BACK until
+  // drizzle/0056_recurring_meetings.sql has been applied. Drizzle selects every
+  // declared column, so declaring them against a database that lacks them
+  // breaks EVERY meetings read for every session sharing this tree. Restore
+  // from the scratchpad patch the moment `npm run db:migrate` has run.
 }, (t) => [
   index('meetings_starts_live_idx').on(t.startsAt).where(sql`${t.deletedAt} is null`),
 ])

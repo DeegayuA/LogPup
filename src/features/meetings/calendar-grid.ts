@@ -172,7 +172,11 @@ function offsetFormatter(timeZone: string): Intl.DateTimeFormat {
   return formatter
 }
 
-function zoneOffsetMs(instantMs: number, timeZone: string): number {
+/** Exported for recurrence.ts, which needs the same two-pass offset trick to
+ *  place a WALL CLOCK (not a midnight) in a zone. A second hand-rolled copy of
+ *  this is how two halves of the calendar end up disagreeing by an hour on the
+ *  two days a year it matters. */
+export function zoneOffsetMs(instantMs: number, timeZone: string): number {
   const parts = offsetFormatter(timeZone).formatToParts(new Date(instantMs))
 
   const at = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? '0')

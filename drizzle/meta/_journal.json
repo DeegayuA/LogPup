@@ -386,6 +386,13 @@
       "when": 1787157000000,
       "tag": "0055_github_login",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1787157100000,
+      "tag": "0056_recurring_meetings",
+      "breakpoints": true
     }
   ]
 }
