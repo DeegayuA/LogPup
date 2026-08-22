@@ -37,6 +37,7 @@ import { TaskSplitBar } from '@/features/apps/components/task-split-bar'
 import { getTeamForApp, listActiveUsers, listAssignableApps } from '@/features/people/queries'
 import { getAppContributions } from '@/features/apps/contribution-queries'
 import { AppContributions } from '@/features/apps/components/app-contributions'
+import { ProjectFinanceCard } from '@/features/finance/components/project-finance-card'
 import { TeamPanel } from '@/features/people/components/team-panel'
 import { LazyDisclosure } from '@/components/shared/lazy-disclosure'
 import {
@@ -518,6 +519,15 @@ export default async function AppDetailPage(props: {
           {/* Directly under Team on purpose: Team is the plan (who is on this,
               at what allocation), this is the record of what came of it. */}
           <AppContributions contributions={contributions} appName={app.name} />
+
+          {/* Under the record of what was done, because it prices exactly
+              that. Its own Suspense: three gated money queries behind one
+              boundary must not hold up the contributions above them, and the
+              card renders NOTHING for a reader without finance.view — so for
+              most people this boundary resolves to empty and costs nothing. */}
+          <Suspense fallback={null}>
+            <ProjectFinanceCard appId={app.id} todayIso={today} />
+          </Suspense>
 
           <section className="flex flex-col gap-3">
             <div className="flex items-baseline justify-between gap-3">
