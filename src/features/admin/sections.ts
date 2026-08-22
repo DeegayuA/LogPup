@@ -36,6 +36,16 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     capability: 'user.view.detail',
   },
   {
+    href: '/admin/insights',
+    label: 'Insights',
+    description: 'Cost per project, hours, and who is behind',
+    // finance.view, not admin.view: this page renders money, and the
+    // capability that governs money is the one that should decide whether the
+    // door is visible. Superadmin and admin hold it; every other seat is
+    // 'none', so the section simply does not appear for them.
+    capability: 'finance.view',
+  },
+  {
     href: '/admin/approvals',
     label: 'Approvals',
     description: 'Signups, change requests and leave, in one queue',
