@@ -33,7 +33,11 @@ import {
 // drifted — "90m" parsed in one and returned null in the other — and one
 // grammar cannot disagree with itself. Re-exported so existing importers
 // are unaffected.
-import { parseDuration } from '@/features/worklog/entry-language'
+import {
+  describeGrammar,
+  parseDuration,
+  parseEntryLine,
+} from '@/features/worklog/entry-language'
 export { parseDuration }
 import {
   createWorklogEntry,
@@ -80,6 +84,9 @@ const CATEGORY_LABEL: Record<EntryCategory, string> = {
 }
 
 const NO_APP = '__none__'
+
+/** Generated once from the parser's own tables — see entry-language.ts. */
+const grammar = describeGrammar()
 
 /** Shared empty set, so the derivation below returns a stable reference. */
 const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
@@ -246,7 +253,23 @@ export function DayHoursCard({
         /* Offline, or the action threw. The day is saved either way. */
       })
   }, [canEdit, day])
-  const [duration, setDuration] = React.useState('')
+  /**
+   * THE WHOLE ENTRY, AS ONE SENTENCE. "2h reviewed the feeder model for CEB"
+   * carries the duration, the kind, the project and the note — the four things
+   * four separate controls used to ask for, under a note field that had
+   * already asked what you did.
+   */
+  const [line, setLine] = React.useState('')
+  /**
+   * Which fields the person corrected by hand in Adjust.
+   *
+   * Without this, re-parsing on the next keystroke would silently undo their
+   * correction — they pick "Review", type one more word, and the sentence puts
+   * "Meeting" back. Cleared whenever the line is rewritten, because a new
+   * sentence is a new statement and should be read afresh.
+   */
+  const [touched, setTouched] = React.useState<Set<'category' | 'app' | 'task'>>(new Set())
+  const [showAdjust, setShowAdjust] = React.useState(false)
   // Opens on the kind this person can actually submit. 'task' is the right
   // default for almost everybody and the wrong one for a lead with nothing
   // assigned to them — for whom the form would open already unsubmittable,
@@ -256,7 +279,6 @@ export function DayHoursCard({
   )
   const [appId, setAppId] = React.useState<string>(NO_APP)
   const [taskId, setTaskId] = React.useState<string>('')
-  const [note, setNote] = React.useState('')
   const [busyId, setBusyId] = React.useState<string | null>(null)
   /*
    * The row being corrected, and the draft in its two boxes.
@@ -426,19 +448,38 @@ export function DayHoursCard({
   const openObservations = observations.filter(
     (observation) => !hiddenNotes.has(observationKey(observation)),
   )
-  const isTask = category === 'task'
+  // The sentence is read on every keystroke; a hand-correction in Adjust wins
+  // over what it understood, for that field only.
+  const parsed = parseEntryLine(line, {
+    apps: apps.map((app) => ({ id: app.id, name: app.name })),
+    tasks: tasks.map((task) => ({ id: task.id, name: task.title })),
+  })
+  const effCategory = touched.has('category') ? category : parsed.category
+  const effTaskId = touched.has('task') ? taskId : (parsed.taskId ?? '')
+  const effAppId = touched.has('app') ? appId : (parsed.appId ?? NO_APP)
+  const isTask = effCategory === 'task'
+
   // ONE description of the form's state, shared by the payload, the disabled
   // button and the hint under it — so the reason Add is unavailable is always
   // the reason the server would have given, in the same words.
   const formFields = {
-    minutes: parseDuration(duration),
-    category,
-    taskId: taskId || null,
-    appId: appId === NO_APP ? null : appId,
-    note,
+    minutes: parsed.minutes,
+    category: effCategory,
+    taskId: effTaskId || null,
+    appId: effAppId === NO_APP ? null : effAppId,
+    note: parsed.note,
   }
   const problem = entryFormProblem(formFields)
   const canSubmit = problem === null && !pending
+
+  function rewriteLine(next: string) {
+    setLine(next)
+    setTouched(new Set())
+  }
+
+  function override(field: 'category' | 'app' | 'task') {
+    setTouched((prev) => new Set(prev).add(field))
+  }
 
   function handleAdd() {
     const payload = buildEntryPayload(formFields)
@@ -453,8 +494,8 @@ export function DayHoursCard({
           toast.error(res.error)
           return
         }
-        setDuration('')
-        setNote('')
+        rewriteLine('')
+        setShowAdjust(false)
         toast.success(`Logged ${formatHours(payload.minutes)}h`)
         runCheck()
       } catch {
@@ -926,112 +967,30 @@ export function DayHoursCard({
 
       {canEdit ? (
         <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex min-w-0 flex-col gap-1">
-              <Label htmlFor="entry-duration" className="text-xs">
-                Hours
-              </Label>
-              <Input
-                id="entry-duration"
-                value={duration}
-                onChange={(e) => setDuration(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && canSubmit) {
-                    e.preventDefault()
-                    handleAdd()
-                  }
-                }}
-                placeholder="1.5"
-                inputMode="decimal"
-                aria-describedby="entry-duration-hint"
-                className="w-24"
-              />
-            </div>
-
-            <div className="flex min-w-0 flex-col gap-1">
-              <Label htmlFor="entry-category" className="text-xs">
-                Kind
-              </Label>
-              <Select
-                value={category}
-                onValueChange={(value) => setCategory(value as EntryCategory)}
-              >
-                <SelectTrigger id="entry-category" size="sm" className="w-32">
-                  {/* Function child, NOT a bare <SelectValue />. Base UI renders
-                      String(value) without one, so the closed trigger showed
-                      "task" rather than "Task" — and for the project select
-                      below it showed the raw "__none__" sentinel. This repo
-                      has now hit that default four times. */}
-                  <SelectValue>
-                    {(value: string) =>
-                      CATEGORY_LABEL[value as EntryCategory] ?? 'Kind'
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {ENTRY_CATEGORIES.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {CATEGORY_LABEL[c]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* A task entry names a TASK; every other kind names a project.
-                Never both, and never the wrong one: resolveEntryAppId derives
-                a task entry's project FROM the task and ignores whatever appId
-                the client sent, so the Project select that used to sit here on
-                task entries was a control whose answer was thrown away. */}
-            {isTask ? (
-              <div className="flex min-w-0 flex-col gap-1">
-                <Label htmlFor="entry-task" className="text-xs">
-                  Task
-                </Label>
-                <SearchSelect
-                  id="entry-task"
-                  size="sm"
-                  value={taskId}
-                  onValueChange={setTaskId}
-                  options={taskOptions}
-                  placeholder={tasks.length === 0 ? 'No tasks assigned' : 'Pick a task'}
-                  searchPlaceholder="Type a task or project…"
-                  emptyText="No task matches that."
-                  disabled={tasks.length === 0}
-                  aria-describedby="entry-duration-hint"
-                  className="w-56"
-                />
-              </div>
-            ) : apps.length > 0 ? (
-              <div className="flex min-w-0 flex-col gap-1">
-                <Label htmlFor="entry-app" className="text-xs">
-                  Project
-                </Label>
-                <Select
-                  value={appId}
-                  onValueChange={(value) => setAppId(value ?? NO_APP)}
-                >
-                  <SelectTrigger id="entry-app" size="sm" className="w-40">
-                    <SelectValue>
-                      {(value: string) =>
-                        value === NO_APP
-                          ? 'No project'
-                          : (apps.find((a) => a.id === value)?.name ?? 'No project')
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_APP}>No project</SelectItem>
-                    {apps.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : null}
-
+          {/* ONE BOX. The duration, the kind, the project and the note used to
+              be four controls sitting under a note field that had already
+              asked what you did — and in a workspace with zero hour entries
+              ever recorded, that was the cost of the first one. The sentence
+              is read live and what it understood is shown BELOW rather than
+              written into controls, so nothing is silently decided: the person
+              sees "2h · Review · SCADA" before they commit, and Adjust is
+              there when the reading is wrong. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              id="entry-line"
+              value={line}
+              onChange={(e) => rewriteLine(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && canSubmit) {
+                  e.preventDefault()
+                  handleAdd()
+                }
+              }}
+              placeholder="2h reviewed the feeder model for SCADA"
+              aria-label="What you did, with how long it took"
+              aria-describedby="entry-line-hint"
+              className="min-w-56 flex-1 text-xs"
+            />
             <Button type="button" size="sm" disabled={!canSubmit} onClick={handleAdd}>
               {pending ? (
                 <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
@@ -1042,33 +1001,172 @@ export function DayHoursCard({
             </Button>
           </div>
 
-          <Input
-            aria-label="What was it"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="What was it? (optional)"
-            className="text-xs"
-          />
+          {/* WHAT IT UNDERSTOOD, before anything is written. A parser that
+              acts without showing its reading is a parser people stop
+              trusting the first time it is wrong. */}
+          {line.trim() !== '' ? (
+            <div className="flex flex-wrap items-center gap-1.5 text-2xs">
+              {parsed.minutes !== null ? (
+                <span className="rounded bg-primary/15 px-1.5 py-0.5 font-mono font-semibold text-primary">
+                  {formatHours(parsed.minutes)}h
+                </span>
+              ) : (
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono font-semibold text-amber-600 dark:text-amber-400">
+                  no time yet
+                </span>
+              )}
+              <span className="rounded bg-muted px-1.5 py-0.5 font-medium text-muted-foreground">
+                {CATEGORY_LABEL[effCategory]}
+              </span>
+              {effTaskId ? (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+                  {tasks.find((task) => task.id === effTaskId)?.title ?? 'Task'}
+                </span>
+              ) : effAppId !== NO_APP ? (
+                <span className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+                  {apps.find((app) => app.id === effAppId)?.name ?? 'Project'}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setShowAdjust((open) => !open)}
+                aria-expanded={showAdjust}
+                className="rounded px-1.5 py-0.5 font-medium text-primary hover:underline cursor-pointer"
+              >
+                {showAdjust ? 'Done adjusting' : 'Adjust'}
+              </button>
+            </div>
+          ) : null}
 
-          {/* THE HINT SAYS WHAT IS ACTUALLY STOPPING THE ADD, in the server's
-              own words, and only once something is half-typed. Silent until
-              then, because "Pick the task that time went to" on an untouched
-              form is a complaint about a mistake nobody has made yet — and
-              that sentence used to arrive from the server AFTER the click,
-              naming a control this card did not have. */}
-          {problem && (duration.trim() !== '' || taskId !== '') ? (
-            <p id="entry-duration-hint" className="text-2xs text-amber-600 dark:text-amber-400">
+          {/* Every field still reachable — just not occupying the screen until
+              the reading is actually wrong. */}
+          {showAdjust ? (
+            <div className="flex flex-wrap items-end gap-2 rounded-xl border border-border/50 bg-background/40 p-2.5">
+              <div className="flex min-w-0 flex-col gap-1">
+                <Label htmlFor="entry-category" className="text-xs">
+                  Kind
+                </Label>
+                <Select
+                  value={effCategory}
+                  onValueChange={(value) => {
+                    override('category')
+                    setCategory(value as EntryCategory)
+                  }}
+                >
+                  <SelectTrigger id="entry-category" size="sm" className="w-32">
+                    {/* Function child, NOT a bare <SelectValue />. Base UI
+                        renders String(value) without one — the closed trigger
+                        showed "task" and the raw "__none__" sentinel. */}
+                    <SelectValue>
+                      {(value: string) => CATEGORY_LABEL[value as EntryCategory] ?? 'Kind'}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ENTRY_CATEGORIES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {CATEGORY_LABEL[c]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {isTask ? (
+                <div className="flex min-w-0 flex-col gap-1">
+                  <Label htmlFor="entry-task" className="text-xs">
+                    Task
+                  </Label>
+                  <SearchSelect
+                    id="entry-task"
+                    size="sm"
+                    value={effTaskId}
+                    onValueChange={(value) => {
+                      override('task')
+                      setTaskId(value)
+                    }}
+                    options={taskOptions}
+                    placeholder={tasks.length === 0 ? 'No tasks assigned' : 'Pick a task'}
+                    searchPlaceholder="Type a task or project…"
+                    emptyText="No task matches that."
+                    disabled={tasks.length === 0}
+                    className="w-56"
+                  />
+                </div>
+              ) : apps.length > 0 ? (
+                <div className="flex min-w-0 flex-col gap-1">
+                  <Label htmlFor="entry-app" className="text-xs">
+                    Project
+                  </Label>
+                  <Select
+                    value={effAppId}
+                    onValueChange={(value) => {
+                      override('app')
+                      setAppId(value ?? NO_APP)
+                    }}
+                  >
+                    <SelectTrigger id="entry-app" size="sm" className="w-40">
+                      <SelectValue>
+                        {(value: string) =>
+                          value === NO_APP
+                            ? 'No project'
+                            : (apps.find((a) => a.id === value)?.name ?? 'No project')
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NO_APP}>No project</SelectItem>
+                      {apps.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {problem && line.trim() !== '' ? (
+            <p id="entry-line-hint" className="text-2xs text-amber-600 dark:text-amber-400">
               {problem}
             </p>
           ) : (
-            <p id="entry-duration-hint" className="text-2xs text-muted-foreground">
-              &ldquo;1.5&rdquo;, &ldquo;90m&rdquo; and &ldquo;1h30&rdquo; all mean the same thing.
-              A bare number is hours.
+            <p id="entry-line-hint" className="text-2xs text-muted-foreground">
+              Write it how you would say it — &ldquo;2h reviewed the feeder model for SCADA&rdquo;.
               {isTask && tasks.length === 0
-                ? ' You have no tasks assigned — log this as a meeting, review or admin instead.'
+                ? ' You have no tasks assigned — say meeting, review or admin instead.'
                 : ''}
             </p>
           )}
+
+          {/* THE SUPPORTED TERMS, generated from the arrays the parser runs on
+              — so a word added to the grammar is documented for free, and one
+              removed cannot linger here promising something that no longer
+              works. The model is handed this same text. */}
+          <details className="group">
+            <summary className="w-fit cursor-pointer text-2xs text-muted-foreground hover:text-foreground">
+              What it understands
+            </summary>
+            <div className="mt-1.5 flex flex-col gap-1.5 rounded-xl border border-border/50 bg-background/40 p-2.5">
+              <p className="text-2xs text-muted-foreground">
+                <span className="font-medium text-foreground">Time:</span>{' '}
+                <span className="font-mono">{grammar.durations.join('  ·  ')}</span>
+              </p>
+              {grammar.kinds.map((kind) => (
+                <p key={kind.label} className="text-2xs text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {CATEGORY_LABEL[kind.label as EntryCategory]}:
+                  </span>{' '}
+                  <span className="font-mono">{kind.words}</span>
+                </p>
+              ))}
+              <p className="text-2xs text-muted-foreground">
+                Naming a project attributes the time to it; naming a task makes it a task entry.
+                The first matching word wins, so a &ldquo;review meeting&rdquo; is a meeting.
+              </p>
+            </div>
+          </details>
         </div>
       ) : null}
     </section>

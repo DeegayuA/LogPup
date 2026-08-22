@@ -1,3 +1,4 @@
+import { grammarForPrompt } from '@/features/worklog/entry-language'
 import {
   ENTRY_CATEGORIES,
   ENTRY_MINUTES_MAX,
@@ -190,6 +191,9 @@ Rules:
 - If there is no evidence at all, return an empty list. Do not guess what they did.
 - Notes are at most ${ENTRY_NOTE_MAX} characters, factual, and in the first person as ${input.name}.
 - This is a Sri Lankan team that code-switches between Sinhala and English. Write notes in English and keep task, project and meeting names exactly as they appear above.
+- Choose the category the way the person's own typing is read, so a proposal and a hand-typed line
+  never come back as different kinds of the same work:
+${grammarForPrompt()}
 
 Respond as JSON, exactly this shape: {"entries": [{"minutes": number, "category": string, "taskId": string | null, "note": string | null}]}`
 }
