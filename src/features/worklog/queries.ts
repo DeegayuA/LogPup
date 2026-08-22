@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
 import { absences, assignments, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
 import { liveApps } from '@/db/live'
@@ -179,6 +179,23 @@ export type MyAbsence = {
   reason: string | null
 }
 
+/**
+ * A decided absence, as the PERSON WHO FILED IT needs to see it.
+ *
+ * Rejection was invisible. `reviewNote` is written by review()
+ * (absence-actions.ts) and, until this type existed, read by nothing in the
+ * entire app: a refusal reached the filer as their request simply no longer
+ * being listed, with the reviewer's typed reason sitting unread in the row.
+ * Somebody would take leave they had been refused, or chase a decision that
+ * had already been made and explained.
+ */
+export type MyDecidedAbsence = MyAbsence & {
+  status: 'approved' | 'rejected'
+  reviewedAt: Date | null
+  /** The reviewer's own sentence. The whole point of surfacing this. */
+  reviewNote: string | null
+}
+
 const absenceColumns = {
   id: absences.id,
   startDate: absences.startDate,
@@ -202,6 +219,38 @@ export async function getMyPendingAbsences(userId: string): Promise<MyAbsence[]>
     .from(absences)
     .where(and(eq(absences.userId, userId), eq(absences.status, 'pending')))
     .orderBy(absences.startDate)
+}
+
+/**
+ * The person's recently DECIDED absences — approved and rejected alike.
+ *
+ * Bounded by decision time, not by the viewed month: a refusal is news about
+ * the filer, not about whichever month they happen to be looking at, and
+ * scoping it to the calendar window is how a rejection for next month becomes
+ * invisible the moment somebody pages back.
+ */
+export async function getMyDecidedAbsences(
+  userId: string,
+  since: Date,
+): Promise<MyDecidedAbsence[]> {
+  const rows = await db
+    .select({
+      ...absenceColumns,
+      status: absences.status,
+      reviewedAt: absences.reviewedAt,
+      reviewNote: absences.reviewNote,
+    })
+    .from(absences)
+    .where(
+      and(
+        eq(absences.userId, userId),
+        inArray(absences.status, ['approved', 'rejected']),
+        gte(absences.reviewedAt, since),
+      ),
+    )
+    .orderBy(desc(absences.reviewedAt))
+
+  return rows as MyDecidedAbsence[]
 }
 
 /**

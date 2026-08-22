@@ -28,6 +28,7 @@ import {
 import { MonthSummary } from '@/features/worklog/components/month-summary'
 import { CatchUpPanel, type CatchUpGap } from '@/features/worklog/components/catch-up-panel'
 import {
+  ABSENCE_KIND_LABELS,
   DeclareAbsenceDialog,
   type FiledAbsence,
 } from '@/features/worklog/components/declare-absence-dialog'
@@ -45,6 +46,7 @@ import {
   countMyWorklogDays,
   getMyApprovedAbsences,
   getMyAssignedApps,
+  getMyDecidedAbsences,
   getMyPendingAbsences,
   getMyWorkSchedule,
   getMyWorklogsInRange,
@@ -742,12 +744,26 @@ async function CatchUpZone({
   const to = shiftDay(today, 1)
 
   const load = async () => {
-    const [actor, joinedOn, rows, pending, approved, schedule, orgRows, aiPrefs, assignedApps] =
-      await Promise.all([
+    const [
+      actor,
+      joinedOn,
+      rows,
+      pending,
+      decided,
+      approved,
+      schedule,
+      orgRows,
+      aiPrefs,
+      assignedApps,
+    ] = await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
         getMyWorklogsInRange(userId, from, today),
         getMyPendingAbsences(userId),
+        // Decided absences are bounded by DECISION time, not by the calendar
+        // window: a refusal is news about the person, and scoping it to the
+        // viewed month is how a rejection for next month goes unseen.
+        getMyDecidedAbsences(userId, new Date(`${from}T00:00:00Z`)),
         getMyApprovedAbsences(userId, from, today),
         getMyWorkSchedule(userId),
         listOrgHolidays(),
@@ -805,6 +821,7 @@ async function CatchUpZone({
     return {
       gaps,
       pending,
+      decided,
       canDeclare,
       filed,
       owedDays,
@@ -823,8 +840,11 @@ async function CatchUpZone({
     return <ZoneError title="The catch-up list could not be read." retryHref={retryHref} />
   if (data === null) return null
 
-  const { gaps, pending, canDeclare, filed, owedDays, aiDraftEnabled, assignedApps } = data
-  if (gaps.length === 0 && pending.length === 0) return null
+  const { gaps, pending, decided, canDeclare, filed, owedDays, aiDraftEnabled, assignedApps } =
+    data
+  // A decision keeps this section alive on its own. Somebody with no gaps and
+  // nothing pending still has to be told their leave was refused.
+  if (gaps.length === 0 && pending.length === 0 && decided.length === 0) return null
 
   return (
     <section className="flex flex-col gap-4">
@@ -851,6 +871,66 @@ async function CatchUpZone({
             </p>
           </div>
           <PendingAbsenceList absences={pending} />
+        </div>
+      ) : null}
+
+      {/* THE DECISION REACHES THE PERSON WHO FILED IT.
+          review() has always written reviewNote (absence-actions.ts), and
+          until now nothing in the app read it. A refusal arrived as the
+          request quietly no longer being listed — so somebody could take
+          leave they had been refused, or chase a decision already made and
+          explained. The reviewer's own sentence is the whole point. */}
+      {decided.length > 0 ? (
+        <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
+          <div className="flex flex-col gap-0.5">
+            <h2 className="font-heading text-sm font-semibold">Decided</h2>
+            <p className="text-2xs text-muted-foreground">
+              What came back on the time off you filed. An approved range stops counting
+              against you; a refused one does not, so those days are still yours to log.
+            </p>
+          </div>
+          <ul className="flex flex-col gap-2">
+            {decided.map((row) => (
+              <li
+                key={row.id}
+                className="flex flex-col gap-1 rounded-xl border border-border/50 bg-background/40 px-3 py-2"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={cn(
+                      'rounded px-1.5 py-0.5 font-sans text-2xs font-semibold',
+                      row.status === 'approved'
+                        ? 'bg-primary/15 text-primary'
+                        : 'bg-destructive/15 text-destructive',
+                    )}
+                  >
+                    {row.status === 'approved' ? 'Approved' : 'Not approved'}
+                  </span>
+                  <span className="font-heading text-xs font-semibold">
+                    {ABSENCE_KIND_LABELS[row.kind]}
+                  </span>
+                  <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+                    {row.startDate === row.endDate
+                      ? format(new Date(`${row.startDate}T12:00:00`), 'EEE, MMM d')
+                      : `${format(new Date(`${row.startDate}T12:00:00`), 'MMM d')} – ${format(
+                          new Date(`${row.endDate}T12:00:00`),
+                          'MMM d',
+                        )}`}
+                  </span>
+                </div>
+                {/* The reviewer's words, verbatim, never paraphrased into a
+                    status. "Not approved" without the reason is the same dead
+                    end this section exists to remove. */}
+                {row.reviewNote ? (
+                  <p className="text-2xs text-muted-foreground">{row.reviewNote}</p>
+                ) : row.status === 'rejected' ? (
+                  <p className="text-2xs text-muted-foreground italic">
+                    No reason was given — ask whoever reviewed it.
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
     </section>
