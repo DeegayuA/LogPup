@@ -749,6 +749,7 @@ async function CatchUpZone({
       actor,
       joinedOn,
       rows,
+      hourDays,
       pending,
       decided,
       approved,
@@ -760,6 +761,7 @@ async function CatchUpZone({
         loadActor(),
         getUserJoinDay(userId),
         getMyWorklogsInRange(userId, from, today),
+        getMyEntryDaysInRange(userId, from, today),
         getMyPendingAbsences(userId),
         // Decided absences are bounded by DECISION time, not by the calendar
         // window: a refusal is news about the person, and scoping it to the
@@ -797,7 +799,7 @@ async function CatchUpZone({
       // The most recent MAX_BACKFILL_DAYS, oldest first — an unclearable
       // backlog is indistinguishable from disengagement.
       .slice(-MAX_BACKFILL_DAYS)
-      .map(({ day, fraction }) => ({ day, fraction }))
+      .map(({ day, fraction }) => ({ day, fraction, hasHours: hourDays.has(day) }))
 
     const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
     const filed: FiledAbsence[] = [

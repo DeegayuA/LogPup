@@ -17,12 +17,26 @@ import {
 } from '@/features/worklog/components/declare-absence-dialog'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import type { UserAssignedApp } from '@/features/worklog/queries'
 
 export type CatchUpGap = {
   day: string
   /** The day's owed fraction from coverage — 0.5 names a half Saturday. */
   fraction: number
+  /**
+   * Whether hours are already recorded against this day.
+   *
+   * It is STILL a gap — coverage counts a day missing until it has a score,
+   * and that is right: the score is the day record. But "Full day (100%)" on
+   * a day somebody has already itemised reads as though their work went
+   * nowhere, which is how a person concludes the page lost it.
+   */
+  hasHours?: boolean
 }
 
 /**
@@ -55,9 +69,11 @@ export function CatchUpPanel({
   const seqRef = useRef(0)
   const [draftingDay, setDraftingDay] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const meter = useAiMeter()
   const [activeDay, setActiveDay] = useState<string>(gaps[0]?.day ?? '')
 
-  async function draftAll() {
+  async function draftAll(source?: MeterOriginSource) {
+    const origin = meterOrigin(source)
     if (running) return
     setRunning(true)
     try {
@@ -69,7 +85,14 @@ export function CatchUpPanel({
       for (const gap of gaps) {
         setDraftingDay(gap.day)
         try {
-          const res = await draftWorklogNote(gap.day)
+          /* One meter PER DAY, not one for the run. Each day is its own
+             Gemini call with its own ledger row, and the feature's published
+             estimate is "per draft" — a single card spanning five days would
+             quote a fifth of what the run actually costs. The dock stacks and
+             counts the overflow, which is what it is for. */
+          const res = await meter.track('worklog-draft', origin, () =>
+            draftWorklogNote(gap.day),
+          )
           if (!res.ok) {
             toast.error(res.error)
             break
@@ -148,7 +171,7 @@ export function CatchUpPanel({
           Select Day to Log:
         </span>
         <div className="flex flex-wrap items-center gap-2">
-          {gaps.map(({ day, fraction }) => {
+          {gaps.map(({ day, fraction, hasHours }) => {
             const isSelected = day === currentGap.day
             const hasDraft = Boolean(drafts[day])
             const isDrafting = draftingDay === day
@@ -169,8 +192,17 @@ export function CatchUpPanel({
                   <span className="font-heading text-xs font-bold text-foreground">
                     {format(new Date(`${day}T12:00:00`), 'EEE, MMM d')}
                   </span>
-                  <span className="font-mono text-2xs text-muted-foreground">
-                    {fraction === 0.5 ? 'Half day (50%)' : 'Full day (100%)'}
+                  <span
+                    className={cn(
+                      'font-mono text-2xs',
+                      hasHours ? 'text-chart-1' : 'text-muted-foreground',
+                    )}
+                  >
+                    {hasHours
+                      ? 'Hours in — needs a score'
+                      : fraction === 0.5
+                        ? 'Half day (50%)'
+                        : 'Full day (100%)'}
                   </span>
                 </div>
 
