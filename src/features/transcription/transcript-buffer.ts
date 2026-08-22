@@ -20,21 +20,29 @@ export const EMPTY_TRANSCRIPT: TranscriptState = { committed: '', interim: '' }
 export const MAX_OVERLAP_SCAN = 400
 
 /**
- * Appends a fragment to the in-flight turn, tolerating replay.
+ * Appends a fragment to the in-flight turn, tolerating replay — but ONLY when
+ * the caller says this frame may be one.
  *
- * Why this is not just `interim + fragment`: after a socket drop we reconnect
- * with a session-resumption handle, and the server may re-send part of the turn
- * we already displayed. Naive concatenation would duplicate it ("hello hello
+ * Why dedup exists at all: after a socket drop we reconnect with a
+ * session-resumption handle, and the server may re-send part of the turn we
+ * already displayed. Naive concatenation would duplicate it ("hello hello
  * world"), which looks like a stutter and, worse, gets fed into the meeting
  * minutes as if it were actually said twice.
  *
- * So: if the fragment starts with text we already have at the tail of `interim`,
- * only the genuinely new remainder is appended. An exact repeat is dropped
- * entirely.
+ * Why it must not run on every frame: a speaker who actually repeats a word —
+ * "නෑ නෑ", "very very good" — produces a fragment whose prefix matches the
+ * interim's tail, and overlap-dedup on a healthy session silently ate the
+ * repetition. Only the first frame after a resumed connection can be a replay,
+ * so only that frame gets the overlap treatment (live-client arms it).
  */
-export function appendFragment(state: TranscriptState, fragment: string): TranscriptState {
+export function appendFragment(
+  state: TranscriptState,
+  fragment: string,
+  opts?: { replay?: boolean },
+): TranscriptState {
   if (fragment.length === 0) return state
   if (state.interim.length === 0) return { ...state, interim: fragment }
+  if (!opts?.replay) return { ...state, interim: state.interim + fragment }
 
   const overlap = longestSuffixPrefixOverlap(state.interim, fragment)
   const addition = fragment.slice(overlap)

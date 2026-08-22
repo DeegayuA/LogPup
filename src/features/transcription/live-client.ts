@@ -83,6 +83,13 @@ export class LiveTranscriptionSession {
   private transcript: TranscriptState = EMPTY_TRANSCRIPT
   private statusValue: LiveStatus = 'idle'
   private resumptionHandle: string | null = null
+  /**
+   * True from a resumed reconnect until its first transcript frame: only that
+   * frame can be a server replay of the in-flight turn, so only it gets
+   * overlap-dedup — running dedup on every frame ate genuinely repeated words
+   * ("නෑ නෑ") from healthy sessions.
+   */
+  private replayPossible = false
 
   private startedAt = 0
   private lastTranscriptAt = 0
@@ -231,6 +238,9 @@ export class LiveTranscriptionSession {
     switch (event.type) {
       case 'setupComplete':
         this.reconnectAttempts = 0
+        // A connection opened with a resumption handle may replay part of the
+        // turn we already hold; a fresh session cannot.
+        this.replayPossible = this.resumptionHandle !== null
         this.startAudio()
         // Not 'live' yet — nothing has been transcribed, so saying "live" here
         // would be a claim we haven't earned.
@@ -239,7 +249,10 @@ export class LiveTranscriptionSession {
 
       case 'transcript':
         this.lastTranscriptAt = this.now()
-        this.transcript = appendFragment(this.transcript, event.text)
+        this.transcript = appendFragment(this.transcript, event.text, {
+          replay: this.replayPossible,
+        })
+        this.replayPossible = false
         // A frame that both delivers text and closes the turn must do both,
         // or the turn stays in flight forever and nothing is ever committed.
         if (event.endsTurn) this.transcript = commitTurn(this.transcript)

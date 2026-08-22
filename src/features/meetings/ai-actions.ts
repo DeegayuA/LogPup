@@ -61,6 +61,7 @@ import {
   summaryDepthInstruction,
 } from '@/features/meetings/summary-length'
 import { ok, err, type ActionResult } from '@/lib/action-result'
+import { truncateAtWordBoundary } from '@/lib/prompt-truncate'
 import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { updateMeetingNotes } from '@/features/meetings/actions'
 import { logActivity } from '@/features/activity/log'
@@ -1006,7 +1007,7 @@ follow-up items — questions or action items owed by specific people from earli
 addressed in THIS meeting's discussion (answered, completed, or otherwise resolved).
 
 ${summary ? `Meeting summary:\n${summary}\n` : ''}
-${transcript ? `Meeting transcript (may be long, use as needed):\n${transcript.slice(0, 50_000)}\n` : ''}
+${transcript ? `Meeting transcript (may be long, use as needed):\n${truncateAtWordBoundary(transcript, 50_000)}\n` : ''}
 
 Open follow-up items (each has a stable id — use it exactly as given):
 ${items.map((item) => `- id="${item.id}" person="${item.person}": ${item.text}`).join('\n')}
@@ -1394,9 +1395,16 @@ export async function transcribeSegment(
   meetingId: string,
   index: number,
   formData: FormData,
+  /**
+   * Which TAKE this segment came from. Optional, and null is a real answer —
+   * a client that predates takes, or one whose openRecordingTake failed, still
+   * gets its audio transcribed. A recording nobody could group is worth far
+   * more than a recording refused for want of a grouping.
+   */
+  recordingId?: string | null,
 ): Promise<ActionResult<TranscribeSegmentResult>> {
   try {
-    return await transcribeSegmentInner(meetingId, index, formData)
+    return await transcribeSegmentInner(meetingId, index, formData, recordingId ?? null)
   } catch (error) {
     return recordingFailure(`Transcribing segment ${index + 1}`, error)
   }
@@ -1406,6 +1414,7 @@ async function transcribeSegmentInner(
   meetingId: string,
   index: number,
   formData: FormData,
+  recordingId: string | null,
 ): Promise<ActionResult<TranscribeSegmentResult>> {
   const parsed = transcribeSegmentInput.safeParse({ meetingId, index })
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -1492,10 +1501,20 @@ across segments; a later pass reconciles identity across the whole meeting.`
 
   await db
     .insert(meetingRecordingSegments)
-    .values({ meetingId: id, index: parsed.data.index, transcript, model: modelUsed, createdBy: session.user.id })
+    .values({
+      meetingId: id,
+      index: parsed.data.index,
+      transcript,
+      model: modelUsed,
+      createdBy: session.user.id,
+      recordingId,
+    })
     .onConflictDoUpdate({
       target: [meetingRecordingSegments.meetingId, meetingRecordingSegments.index],
-      set: { transcript, model: modelUsed, createdBy: session.user.id },
+      // recordingId rides the update too: a retry of a segment whose first
+      // attempt landed before the take was opened must end up grouped, or one
+      // transient failure would leave a hole in the take it belongs to.
+      set: { transcript, model: modelUsed, createdBy: session.user.id, recordingId },
     })
 
   return ok({ index: parsed.data.index, transcript })
@@ -1646,7 +1665,7 @@ async function finalizeMeetingRecordingInner(
 
   // Depth target for the summary — here the assembled transcript itself is
   // the best signal for how much was actually said.
-  const summaryDepth = summaryDepthInstruction({ transcriptChars: combinedTranscript.length })
+  const summaryDepth = summaryDepthInstruction({ transcript: combinedTranscript })
 
   const prompt = `You are LogPup's meeting analyst for a software team. Below is the FULL transcript of
 the meeting "${meeting.title}"${meeting.agenda ? ` (agenda: ${meeting.agenda})` : ''}, assembled from
@@ -1682,7 +1701,7 @@ at 5:02"). Don't narrate every screenshot — only mention one when it actually 
 }
 Transcript:
 """
-${combinedTranscript.slice(0, 200_000)}
+${truncateAtWordBoundary(combinedTranscript, 200_000)}
 """
 
 Return STRICT JSON only, matching exactly:

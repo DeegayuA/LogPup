@@ -21,8 +21,20 @@ const TRANSCRIPT_CHARS_PER_MINUTE = 900
  */
 const AUDIO_BYTES_PER_MINUTE = (32_000 / 8) * 60
 
-export function estimateMinutesFromTranscript(chars: number): number {
-  return chars / TRANSCRIPT_CHARS_PER_MINUTE
+/**
+ * The ~900 chars/minute calibration above is English. The same speech written
+ * in Sinhala script is systematically SHORTER in code units (~0.6x — see the
+ * measured ratios in language-switch.ts), so an unweighted estimate reads a
+ * 60-minute Sinhala meeting as ~37 minutes and hands the very meetings this
+ * bilingual pipeline was built for a shallower summary bucket. Weighting
+ * Sinhala units 1.6x makes the estimate script-fair.
+ */
+export function estimateMinutesFromTranscript(text: string): number {
+  let sinhala = 0
+  for (let i = 0; i < text.length; i += 1) {
+    if (/[඀-෿]/.test(text[i])) sinhala += 1
+  }
+  return (text.length + 0.6 * sinhala) / TRANSCRIPT_CHARS_PER_MINUTE
 }
 
 export function estimateMinutesFromAudioBytes(bytes: number): number {
@@ -40,12 +52,12 @@ const SCALE_RULE =
  * depth signal than how long the room was booked.
  */
 export function summaryDepthInstruction(input: {
-  transcriptChars?: number | null
+  transcript?: string | null
   minutes?: number | null
 }): string {
   const fromText =
-    input.transcriptChars && input.transcriptChars > 0
-      ? estimateMinutesFromTranscript(input.transcriptChars)
+    input.transcript && input.transcript.length > 0
+      ? estimateMinutesFromTranscript(input.transcript)
       : null
   const minutes = fromText ?? (input.minutes && input.minutes > 0 ? input.minutes : null)
 

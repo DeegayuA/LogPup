@@ -22,15 +22,24 @@ describe('appendFragment', () => {
     expect(appendFragment(state, '')).toBe(state)
   })
 
-  it('drops a fragment that exactly repeats what we already have', () => {
+  it('keeps a genuinely repeated word — dedup only ever arms for replays', () => {
+    // "නෑ නෑ" — emphatic repetition is ordinary Sinhala and English speech.
+    // Overlap-dedup on a healthy session silently ate the second word.
+    const state = appendFragment(EMPTY_TRANSCRIPT, 'නෑ ')
+    expect(appendFragment(state, 'නෑ ').interim).toBe('නෑ නෑ ')
+  })
+
+  it('drops an exact repeat when the frame may be a post-resume replay', () => {
     // Session resumption after a dropped socket can replay the current turn.
     const state = appendFragment(EMPTY_TRANSCRIPT, 'api eka deploy karanna')
-    expect(appendFragment(state, 'api eka deploy karanna')).toBe(state)
+    expect(appendFragment(state, 'api eka deploy karanna', { replay: true })).toBe(state)
   })
 
   it('appends only the new tail when a replay partially overlaps', () => {
     const state = appendFragment(EMPTY_TRANSCRIPT, 'sprint eka')
-    expect(appendFragment(state, 'eka ivara una').interim).toBe('sprint eka ivara una')
+    expect(appendFragment(state, 'eka ivara una', { replay: true }).interim).toBe(
+      'sprint eka ivara una',
+    )
   })
 
   it('keeps code-switched Sinhala and Latin text in one line, unmodified', () => {
