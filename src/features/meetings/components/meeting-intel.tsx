@@ -574,6 +574,12 @@ export function MeetingIntelPanel({
    *  queue's counts flow through so the dock's card and the panel above can
    *  never disagree about the same numbers. Null outside a finalize. */
   const finalizeMeterRef = useRef<MeterTaskHandle | null>(null)
+  /** WHICH segments that meter task is about: the finalize pass's `consumed`
+   *  snapshot. Recording can restart mid-write-up, and without this fence the
+   *  mirror below would count the NEW take's cuts into the old task's bar —
+   *  total growing, percent walking backwards, a resurrected bar over work
+   *  the write-up will never consume. Frozen and cleared with the handle. */
+  const finalizeScopeRef = useRef<Set<number> | null>(null)
   const [finalizeError, setFinalizeError] = useState<string | null>(null)
   /**
    * A line the planner panel wants appended to the note composer below it —
@@ -2064,7 +2070,10 @@ export function MeetingIntelPanel({
            opaque synthesis call (meterView's exhausted-steps rule). */
         const res = await meter.track('meeting-intel', origin, async (meterTask) => {
           finalizeMeterRef.current = meterTask
-          const initial = queueProgress(segmentsRef.current.map(toQueued))
+          finalizeScopeRef.current = consumed
+          const initial = queueProgress(
+            segmentsRef.current.filter((s) => consumed.has(s.index)).map(toQueued),
+          )
           meterTask.steps({
             done: initial.done,
             total: initial.total,
@@ -2075,6 +2084,7 @@ export function MeetingIntelPanel({
             return await finalizeMeetingRecording(meetingId, transcript)
           } finally {
             finalizeMeterRef.current = null
+            finalizeScopeRef.current = null
           }
         })
         if (!res.ok) {
@@ -2725,16 +2735,22 @@ export function MeetingIntelPanel({
   const segmentProgress = queueProgress(segments.map(toQueued))
   const failedSegments = segments.filter((s) => s.status === 'failed')
 
-  // Mirror the queue into the write-up's meter card, whenever one is live.
-  // Same source as the chips above — the dock must never contradict the
-  // panel about how many segments are safe.
+  // Mirror the queue into the write-up's meter card, whenever one is live —
+  // FENCED to the finalize pass's own snapshot. Same source as the chips
+  // above for the segments it covers, but a new take's cuts stay out: they
+  // were never in this write-up, so they must never be in its bar.
   useEffect(() => {
-    finalizeMeterRef.current?.steps({
-      done: segmentProgress.done,
-      total: segmentProgress.total,
-      failed: segmentProgress.failed,
+    const scope = finalizeScopeRef.current
+    if (!finalizeMeterRef.current || !scope) return
+    const scoped = queueProgress(
+      segments.filter((s) => scope.has(s.index)).map(toQueued),
+    )
+    finalizeMeterRef.current.steps({
+      done: scoped.done,
+      total: scoped.total,
+      failed: scoped.failed,
     })
-  }, [segmentProgress.done, segmentProgress.total, segmentProgress.failed])
+  }, [segments])
   const sendingSegment = segments.find((s) => s.status === 'uploading' || s.status === 'retrying')
   const waitingSegmentCount = segments.filter((s) => s.status === 'queued').length
 

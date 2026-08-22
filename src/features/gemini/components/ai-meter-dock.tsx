@@ -52,7 +52,7 @@ import {
 import { formatUsd } from '@/features/gemini/pricing'
 import { AI_FEATURES, estimatePerUseCostUsd } from '@/features/gemini/ai-features'
 import { formatElapsed, meterView, type MeterView } from '@/features/gemini/ai-meter'
-import { dockView, type MeterTask } from '@/features/gemini/meter-tasks'
+import { dockView, stepPercent, type MeterTask } from '@/features/gemini/meter-tasks'
 import type { MeterContext } from '@/features/gemini/meter-actions'
 import { cn } from '@/lib/utils'
 
@@ -74,6 +74,7 @@ export function AiMeterDock({
   anchorRef,
   onDismiss,
   onHoverChange,
+  onFlightConsumed,
 }: {
   tasks: MeterTask[]
   now: number
@@ -81,6 +82,7 @@ export function AiMeterDock({
   anchorRef: React.RefObject<HTMLDivElement | null>
   onDismiss: (id: string) => void
   onHoverChange: (hovered: boolean) => void
+  onFlightConsumed: (id: string) => void
 }) {
   const view = dockView(tasks)
   /* A person's click outranks the default until the task it points at leaves
@@ -142,6 +144,12 @@ export function AiMeterDock({
               now={now}
               context={context}
               onDismiss={onDismiss}
+              onFlightConsumed={onFlightConsumed}
+              /* Only a click's expansion moves focus — the clicked row is
+                 about to unmount, and focus falling to <body> strands a
+                 keyboard user (WCAG 2.4.3). A default expansion (a failure
+                 re-sorting to front) steals nothing: nobody asked for it. */
+              focusOnMount={task.id === expandedOverride}
             />
           ) : (
             <MeterStripRow
@@ -177,14 +185,39 @@ function MeterCard({
   now,
   context,
   onDismiss,
+  onFlightConsumed,
+  focusOnMount = false,
 }: {
   task: MeterTask
   now: number
   context: MeterContext | null
   onDismiss: (id: string) => void
+  onFlightConsumed: (id: string) => void
+  focusOnMount?: boolean
 }) {
   const reduced = useReducedMotion()
   const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+
+  /* THE FLIGHT IS ONE-SHOT. The stack swaps a task between row and card under
+     the same key, and a swap is a remount — so without this, a card promoted
+     back from a row would replay its fly-in from a button position that
+     stopped existing minutes and one scroll ago. Consuming the flight on the
+     first mount (patchTask flight->null in the provider) makes every later
+     mount take the designed in-place fade instead. Idempotent, so listing the
+     full deps is safe: once consumed, the guard never fires again. */
+  React.useEffect(() => {
+    if (task.flight) onFlightConsumed(task.id)
+  }, [task.flight, task.id, onFlightConsumed])
+
+  /* Focus the card when a click on the strip row expanded it — that click
+     destroyed the button that held focus. tabIndex -1: focusable by script,
+     never added to the tab order. */
+  React.useEffect(() => {
+    if (focusOnMount) rootRef.current?.focus()
+    // Mount-only by intent; focusOnMount changing later must not re-steal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /* Measured in the click handler that created this task, not here: the
      flight describes where the card CAME FROM, which is a fact about one
@@ -227,6 +260,8 @@ function MeterCard({
 
   return (
     <motion.div
+      ref={rootRef}
+      tabIndex={-1}
       layout={!reduced}
       /* Reduced motion gets a DESIGNED state, not a disabled one: the card
          still arrives, still fades in, still says everything. What it loses is
@@ -243,6 +278,10 @@ function MeterCard({
       className={cn(
         'pointer-events-auto overflow-hidden rounded-xl bg-popover text-popover-foreground shadow-lg ring-1',
         failed ? 'ring-destructive/40' : 'ring-foreground/10',
+        /* Worn only while the call is actually in flight — see .ai-working in
+           globals.css. It is a status light, so it has to leave the moment the
+           status does. */
+        (running || settling) && 'ai-working',
       )}
     >
       <div className="flex items-start gap-2 px-3 pt-3">
@@ -412,6 +451,7 @@ function MeterCard({
               <Row label="Chain" value={task.chain} />
               {task.typical ? (
                 <Row
+                  wrap
                   label="Typical"
                   /* The denominator confesses where it came from. "This
                      browser" is load-bearing: the median is this device's own
@@ -478,11 +518,22 @@ function MeterCard({
   )
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+function Row({
+  label,
+  value,
+  wrap = false,
+}: {
+  label: string
+  value: React.ReactNode
+  /** Rows whose tail carries meaning (the Typical row's "(this browser)")
+   *  wrap to a second line — truncation would eat exactly the qualifier the
+   *  number depends on, on every card width this dock renders at. */
+  wrap?: boolean
+}) {
   return (
     <p className="flex items-baseline justify-between gap-3">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right">{value}</span>
+      <span className={cn('min-w-0 text-right', wrap ? 'break-words' : 'truncate')}>{value}</span>
     </p>
   )
 }
@@ -650,10 +701,16 @@ function MeterStripRow({
   const running = task.phase === 'running' || task.phase === 'settling'
   const failed = task.phase === 'failed'
   const Glyph = CHAIN_GLYPH[task.chain] ?? Zap
-  const percent =
-    task.phase === 'running' && task.steps && task.steps.total > 0
-      ? `${Math.min(Math.floor((task.steps.done / task.steps.total) * 100), 99)}%`
-      : null
+  // The SAME two rules the card's line obeys — stepPercent for the number and
+  // the exhausted-steps gate for whether to speak at all. A row printing
+  // "99%" through a whole synthesis while the expanded card shows a plain
+  // spinner would be the dock disagreeing with itself about one task.
+  const stepsAlive =
+    task.phase === 'running' &&
+    task.steps !== null &&
+    task.steps.total > 0 &&
+    task.steps.done + task.steps.failed < task.steps.total
+  const percent = stepsAlive && task.steps ? `${stepPercent(task.steps)}%` : null
   return (
     <motion.div
       layout={!reduced}
@@ -664,12 +721,17 @@ function MeterStripRow({
       className={cn(
         'pointer-events-auto flex h-10 items-center gap-2 overflow-hidden rounded-lg bg-popover px-3 text-popover-foreground shadow-md ring-1',
         failed ? 'ring-destructive/40' : 'ring-foreground/10',
+        // `running` here already folds in 'settling' — see its definition above.
+        running && 'ai-working',
       )}
     >
+      {/* NOT aria-expanded: pressing this replaces the row with the card and
+          moves focus there — a navigation, not a disclosure toggle, and an
+          aria-expanded that could never read true would be a lie to exactly
+          the users who rely on it. */}
       <button
         type="button"
         onClick={onExpand}
-        aria-expanded={false}
         className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         aria-label={`Show details for ${task.featureLabel}`}
       >

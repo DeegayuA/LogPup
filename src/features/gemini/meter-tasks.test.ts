@@ -170,12 +170,13 @@ describe('reportSteps', () => {
     expect(next.find((t) => t.id === 'b')?.steps).toBeNull()
   })
 
-  it('keeps the same task objects when the numbers have not moved', () => {
-    // Reporters fire from render-adjacent effects; identical numbers must not
-    // become a re-render of every card in the dock.
+  it('returns the SAME ARRAY when the numbers have not moved', () => {
+    // Reporters fire from render-adjacent effects, and React's setState bails
+    // out only on reference equality — element identity is not enough, which
+    // is exactly the bug the first version of this test failed to catch.
     const tasks = [task({ id: 'a', steps: { done: 3, total: 10, failed: 0 } })]
-    const next = reportSteps(tasks, 'a', { done: 3, total: 10, failed: 0 })
-    expect(next[0]).toBe(tasks[0])
+    expect(reportSteps(tasks, 'a', { done: 3, total: 10, failed: 0 })).toBe(tasks)
+    expect(reportSteps(tasks, 'missing', { done: 1, total: 2, failed: 0 })).toBe(tasks)
   })
 })
 

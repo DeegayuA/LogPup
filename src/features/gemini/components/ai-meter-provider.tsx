@@ -254,6 +254,14 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
     setTasks((current) => dropTask(current, id))
   }, [])
 
+  /* The flight is one-shot: the card consumes it on its first mount, so a
+     later remount (the stack demoting and re-promoting a task) falls into the
+     designed in-place fade instead of replaying a fly-in from a button
+     position that no longer exists. */
+  const consumeFlight = React.useCallback((id: string) => {
+    setTasks((current) => patchTask(current, id, { flight: null }))
+  }, [])
+
   /**
    * Asks the ledger for this task's rows until they arrive or the window
    * closes.
@@ -360,10 +368,18 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
          watcher when a concurrent same-feature task lands; per-model because a
          pinned Pro's typical is severalfold Flash's. Exempt features (meeting
          write-ups, live sessions) get none — their duration tracks the
-         meeting, not the model. */
-      const typical = PACE_EXEMPT.has(featureId)
-        ? null
-        : typicalMs(getHistory(), paceKey(featureId, contextRef.current?.models[featureId] ?? null))
+         meeting, not the model.
+
+         NO CONTEXT, NO TYPICAL. Until meterContext has resolved, which model
+         this user pinned is unknowable, so the pace key is unknowable — and
+         reading the ':default' bucket would show a Flash-era typical beside a
+         pinned-Pro run, the exact mislabel per-model keying exists to prevent.
+         The first tracked call of a fresh tab shows elapsed only; the fetch it
+         itself kicks off (below) makes every later call keyed correctly. */
+      const typical =
+        PACE_EXEMPT.has(featureId) || !contextRef.current
+          ? null
+          : typicalMs(getHistory(), paceKey(featureId, contextRef.current.models[featureId] ?? null))
       const task: MeterTask = {
         id: nextTaskId(),
         featureId,
@@ -417,11 +433,24 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         if (!alive.current) return
         const endedAt = Date.now()
         /* Only a task that DID ITS WORK teaches the typical. Failures measure
-           the error path; exempt features have no typical to teach. Storage is
-           best-effort — a private window losing the history costs a pace line,
-           never a meter. */
-        if (patch.phase !== 'failed' && !PACE_EXEMPT.has(featureId)) {
-          const key = paceKey(featureId, contextRef.current?.models[featureId] ?? null)
+           the error path; exempt features have no typical to teach; and a call
+           whose pinned-model context never resolved has no honest key to file
+           under, so it teaches nothing (one lost sample per fresh tab).
+           Storage is best-effort — a private window losing the history costs a
+           pace line, never a meter. */
+        if (patch.phase !== 'failed' && !PACE_EXEMPT.has(featureId) && contextRef.current) {
+          const key = paceKey(featureId, contextRef.current.models[featureId] ?? null)
+          /* Re-read before writing, so two tabs teaching at once merge instead
+             of the slower tab clobbering the faster one's samples with its own
+             stale cache. Failure to read just means this tab's view wins —
+             the pre-existing behaviour, now the fallback. */
+          try {
+            historyRef.current = durationStorage.parse(
+              window.localStorage.getItem(durationStorage.key),
+            )
+          } catch {
+            // Keep the cached copy; see above.
+          }
           historyRef.current = recordDuration(getHistory(), key, endedAt - startedAt)
           try {
             window.localStorage.setItem(durationStorage.key, durationStorage.serialize(historyRef.current))
@@ -468,6 +497,7 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         anchorRef={dockAnchor}
         onDismiss={dismiss}
         onHoverChange={setPaused}
+        onFlightConsumed={consumeFlight}
       />
     </AiMeterContext.Provider>
   )

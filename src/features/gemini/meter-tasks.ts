@@ -186,7 +186,11 @@ export function reportSteps(
   steps: MeterSteps,
 ): MeterTask[] {
   const task = tasks.find((t) => t.id === id)
-  if (!task) return [...tasks]
+  // THE SAME ARRAY, not a copy: React's setState bails out only on reference
+  // equality, so `[...tasks]` here would have been a re-render of every card
+  // per identical report — the exact thing this branch exists to prevent.
+  // (The cast is safe: the array is returned unmodified.)
+  if (!task) return tasks as MeterTask[]
   const current = task.steps
   if (
     current &&
@@ -194,7 +198,7 @@ export function reportSteps(
     current.total === steps.total &&
     current.failed === steps.failed
   ) {
-    return [...tasks]
+    return tasks as MeterTask[]
   }
   return patchTask(tasks, id, { steps })
 }
