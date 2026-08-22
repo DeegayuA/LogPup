@@ -112,6 +112,45 @@ export function buildSetupMessage(opts: SetupOptions = {}): Record<string, unkno
   return { setup }
 }
 
+export type AuthTokenRequestOptions = {
+  model: string
+  /** Clock injected by the caller so this stays pure and testable. */
+  nowMs: number
+  tokenTtlMs: number
+  newSessionTtlMs: number
+  /**
+   * Handle from the session being resumed, if this mint is for a reconnect.
+   * MUST match what the client's setup frame will carry: the pinned config and
+   * the frame are compared server-side, and tokens are re-minted per socket,
+   * so there is never a reason for them to differ.
+   */
+  resumptionHandle?: string | null
+}
+
+/**
+ * Builds the POST body for `v1beta/auth_tokens` (ephemeral token mint).
+ *
+ * The constraint field is `bidiGenerateContentSetup` — the raw REST name. The
+ * @google/genai SDK spells the same thing `liveConnectConstraints`, but that
+ * name exists only inside the SDK; the endpoint rejects it with
+ * 400 `Unknown name "liveConnectConstraints" at 'auth_token'` BEFORE validating
+ * the API key, so using it reads as "no key's project has Live access" when in
+ * fact no request was ever considered. Pinning the exact setup message the
+ * socket will send is what makes the token safe to hand to a browser: it can
+ * open precisely the transcription session we designed and nothing else.
+ */
+export function buildAuthTokenRequest(opts: AuthTokenRequestOptions): Record<string, unknown> {
+  return {
+    uses: 1,
+    expireTime: new Date(opts.nowMs + opts.tokenTtlMs).toISOString(),
+    newSessionExpireTime: new Date(opts.nowMs + opts.newSessionTtlMs).toISOString(),
+    bidiGenerateContentSetup: buildSetupMessage({
+      model: opts.model,
+      resumptionHandle: opts.resumptionHandle,
+    }).setup,
+  }
+}
+
 /** Wraps a base64 PCM chunk in the realtimeInput envelope Live expects. */
 export function buildAudioMessage(base64Pcm: string, mimeType: string): Record<string, unknown> {
   return { realtimeInput: { audio: { data: base64Pcm, mimeType } } }

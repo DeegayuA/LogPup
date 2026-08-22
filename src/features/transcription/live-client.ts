@@ -55,8 +55,12 @@ export type LiveSessionOptions = {
    * fail outright.
    */
   stream: MediaStream
-  /** Mints a fresh single-use token. Called once per connection attempt. */
-  requestToken: () => Promise<{ token: string; model: string }>
+  /**
+   * Mints a fresh single-use token. Called once per connection attempt, with
+   * the resumption handle this connection will present (null on first connect)
+   * so the token's pinned setup matches the setup frame exactly.
+   */
+  requestToken: (resumptionHandle: string | null) => Promise<{ token: string; model: string }>
   callbacks?: LiveCallbacks
   /** Samples per audio callback. 4096 ≈ 85ms at 48kHz — a good latency/CPU balance. */
   bufferSize?: number
@@ -143,7 +147,7 @@ export class LiveTranscriptionSession {
 
     let minted: { token: string; model: string }
     try {
-      minted = await this.opts.requestToken()
+      minted = await this.opts.requestToken(this.resumptionHandle)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not get a Live token'
       // Fail STRAIGHT to the caller's fallback rather than through the

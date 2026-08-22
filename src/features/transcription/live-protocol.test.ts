@@ -3,6 +3,7 @@ import {
   DEFAULT_LIVE_MODEL,
   TRANSCRIPTION_SYSTEM_INSTRUCTION,
   buildAudioMessage,
+  buildAuthTokenRequest,
   buildSetupMessage,
   liveSocketUrl,
   parseDurationMs,
@@ -71,6 +72,55 @@ describe('buildSetupMessage', () => {
   it('honours a model override', () => {
     const custom = buildSetupMessage({ model: 'other-model' }).setup as Record<string, unknown>
     expect(custom.model).toBe('models/other-model')
+  })
+})
+
+describe('buildAuthTokenRequest', () => {
+  const NOW = Date.parse('2026-08-22T10:00:00.000Z')
+  const request = () =>
+    buildAuthTokenRequest({
+      model: 'gemini-3.1-flash-live-preview',
+      nowMs: NOW,
+      tokenTtlMs: 600_000,
+      newSessionTtlMs: 120_000,
+    })
+
+  it('pins the setup under bidiGenerateContentSetup — the REST field name', () => {
+    // The SDK spells this `liveConnectConstraints`, but that name exists only
+    // inside @google/genai: the raw v1beta/auth_tokens endpoint rejects it with
+    // 400 `Unknown name "liveConnectConstraints"` before even checking the API
+    // key, which took Live down for every key and every model at once.
+    const body = request()
+    expect(body.bidiGenerateContentSetup).toBeDefined()
+    expect(body).not.toHaveProperty('liveConnectConstraints')
+  })
+
+  it('pins the exact setup message the socket will send', () => {
+    expect(request().bidiGenerateContentSetup).toEqual(
+      buildSetupMessage({ model: 'gemini-3.1-flash-live-preview' }).setup,
+    )
+  })
+
+  it('is single-use with both expiry horizons as RFC 3339 timestamps', () => {
+    const body = request()
+    expect(body.uses).toBe(1)
+    expect(body.expireTime).toBe('2026-08-22T10:10:00.000Z')
+    expect(body.newSessionExpireTime).toBe('2026-08-22T10:02:00.000Z')
+  })
+
+  it('pins the resumption handle so a reconnect mint matches the frame the client sends', () => {
+    // Tokens are re-minted per socket. On reconnect the client's setup frame
+    // carries the resumption handle — the pinned config must say the same
+    // thing, or a strict constraint check would kill every ~10-minute rollover.
+    const body = buildAuthTokenRequest({
+      model: 'm',
+      nowMs: NOW,
+      tokenTtlMs: 600_000,
+      newSessionTtlMs: 120_000,
+      resumptionHandle: 'h-9',
+    })
+    const setup = body.bidiGenerateContentSetup as Record<string, unknown>
+    expect(setup.sessionResumption).toEqual({ handle: 'h-9' })
   })
 })
 

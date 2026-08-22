@@ -88,9 +88,9 @@ export function useLiveTranscription(meetingId: string): LiveTranscriptionHandle
 
            No origin: this runs after getUserMedia resolved, long past any
            click. The dock's designed answer to that is to appear in place. */
-        requestToken: async () => {
+        requestToken: async (resumptionHandle) => {
           const result = await meter.track('live-captions', null, () =>
-            requestLiveToken(meetingId),
+            requestLiveToken(meetingId, resumptionHandle),
           )
           if (!result.ok) throw new Error(result.error)
           return { token: result.data.token, model: result.data.model }

@@ -9,7 +9,13 @@ import { canManageMeeting } from '@/features/meetings/ai-actions'
 import { isLiveTranscriptionEnabled } from './flag'
 import { type MintedLiveToken, mintLiveToken } from './live-token'
 
-const requestTokenInput = z.object({ meetingId: z.uuid() })
+const requestTokenInput = z.object({
+  meetingId: z.uuid(),
+  // Opaque resumption handle from a previous ~10-minute socket, echoed into the
+  // token's pinned setup on reconnect. Bounded because it goes straight into a
+  // request body; real handles are far shorter.
+  resumptionHandle: z.string().min(1).max(4096).nullish(),
+})
 
 export type LiveTokenResult = MintedLiveToken
 
@@ -24,12 +30,15 @@ export type LiveTokenResult = MintedLiveToken
  * same `canManageMeeting` check every other recording action uses — so this
  * cannot become a way to spend another user's Gemini quota.
  */
-export async function requestLiveToken(meetingId: string): Promise<ActionResult<LiveTokenResult>> {
+export async function requestLiveToken(
+  meetingId: string,
+  resumptionHandle?: string | null,
+): Promise<ActionResult<LiveTokenResult>> {
   if (!isLiveTranscriptionEnabled()) {
     return err('Live transcription is not enabled.')
   }
 
-  const parsed = requestTokenInput.safeParse({ meetingId })
+  const parsed = requestTokenInput.safeParse({ meetingId, resumptionHandle })
   if (!parsed.success) return err('Invalid meeting.')
 
   const allowed = await canManageMeeting(parsed.data.meetingId)
@@ -42,6 +51,7 @@ export async function requestLiveToken(meetingId: string): Promise<ActionResult<
     const prefs = await getAiPrefs(allowed.session.user.id)
     const minted = await mintLiveToken(allowed.session.user.id, {
       models: resolveChain('live-captions', prefs['live-captions'].model),
+      resumptionHandle: parsed.data.resumptionHandle,
     })
     return ok(minted)
   } catch (error) {

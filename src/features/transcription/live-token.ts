@@ -3,8 +3,8 @@
 // SECURITY: this module is the only place a user's decrypted Gemini key touches
 // the Live feature, and the key never leaves this process. The browser receives
 // an ephemeral token instead: single-use, short-lived, and pinned by
-// `liveConnectConstraints` to one model and one config, so it cannot be replayed
-// against generateContent to spend the rest of the user's quota.
+// `bidiGenerateContentSetup` to one model and one config, so it cannot be
+// replayed against generateContent to spend the rest of the user's quota.
 //
 // Must only ever be imported from server code (`actions.ts`). There is no
 // `server-only` package in this project to enforce that at build time, so the
@@ -19,7 +19,7 @@ import { orderKeysForRotation } from '@/features/gemini/rotation'
 import { recordAiUsage } from '@/features/gemini/usage'
 import { MAX_ATTEMPTS, backoffDelayMs, shouldRetry, sleep } from '@/features/gemini/retry'
 import { AUDIO_TOKENS_PER_SECOND } from '@/features/transcription/session-budget'
-import { LIVE_MODEL_FALLBACK_ORDER, buildSetupMessage } from './live-protocol'
+import { LIVE_MODEL_FALLBACK_ORDER, buildAuthTokenRequest } from './live-protocol'
 
 const AUTH_TOKENS_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/auth_tokens'
 
@@ -53,28 +53,30 @@ async function mintWithKey(
   apiKey: string,
   keyLabel: string,
   model: string,
+  resumptionHandle?: string | null,
 ): Promise<MintAttempt> {
-  const setup = buildSetupMessage({ model }).setup as Record<string, unknown>
   let attempt = 0
 
   while (true) {
     attempt += 1
-    const now = Date.now()
 
     let res: Response
     try {
       res = await fetch(AUTH_TOKENS_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
-        body: JSON.stringify({
-          uses: 1,
-          expireTime: new Date(now + TOKEN_TTL_MS).toISOString(),
-          newSessionExpireTime: new Date(now + NEW_SESSION_TTL_MS).toISOString(),
-          // Pinning model + config is what makes the token safe to hand to a
-          // browser: it can open exactly the transcription session we designed
-          // and nothing else.
-          liveConnectConstraints: { model: setup.model, config: setup },
-        }),
+        // Pinning model + config (buildAuthTokenRequest) is what makes the
+        // token safe to hand to a browser: it can open exactly the
+        // transcription session we designed and nothing else.
+        body: JSON.stringify(
+          buildAuthTokenRequest({
+            model,
+            nowMs: Date.now(),
+            tokenTtlMs: TOKEN_TTL_MS,
+            newSessionTtlMs: NEW_SESSION_TTL_MS,
+            resumptionHandle,
+          }),
+        ),
       })
     } catch (networkError) {
       const message = networkError instanceof Error ? networkError.message : 'network error'
@@ -163,7 +165,13 @@ function recordFailure(
  */
 export async function mintLiveToken(
   userId: string,
-  opts?: { model?: string; models?: readonly string[] },
+  opts?: {
+    model?: string
+    models?: readonly string[]
+    /** Present when this mint is for a reconnect — pinned into the token so the
+     * constrained setup matches the frame the client will send. */
+    resumptionHandle?: string | null
+  },
 ): Promise<MintedLiveToken> {
   const models =
     opts?.models && opts.models.length > 0
@@ -213,7 +221,7 @@ export async function mintLiveToken(
     }
 
     for (const model of models) {
-      const result = await mintWithKey(apiKey, key.label, model)
+      const result = await mintWithKey(apiKey, key.label, model, opts?.resumptionHandle)
 
       if (result.ok) {
         await db
