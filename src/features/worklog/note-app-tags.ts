@@ -53,3 +53,56 @@ export function splitNoteAppTags(note: string | null, apps: readonly AppRef[]): 
 function normalise(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
+
+/**
+ * Whether the note already tags this project.
+ *
+ * CASE-INSENSITIVE, and that matters: the chip's own "Logged / Unfilled"
+ * reading has always been case-insensitive while the tagging handler tested
+ * `note.includes('[Exact Case]')`. A note carrying `[unilever project]`
+ * therefore showed as Logged AND accepted a second `[Unilever Project]` on
+ * top of it. One rule now answers both questions.
+ */
+export function noteHasAppTag(note: string, appName: string): boolean {
+  return note.toLowerCase().includes(`[${appName.toLowerCase()}]`)
+}
+
+/**
+ * Add the project's tag to the note, or take it back out.
+ *
+ * THE CHIPS COULD ONLY EVER BE TURNED ON. Clicking a tagged project said
+ * "already tagged in this work log" and did nothing, so the only way to undo a
+ * misclick was to find the bracketed text in your own prose and delete it by
+ * hand — on a control that otherwise looks and behaves exactly like a toggle.
+ *
+ * Removal takes out EVERY occurrence, not the first: a note that ended up with
+ * the tag twice (which the case-sensitivity bug above could produce) must come
+ * back clean in one click rather than needing two, the second of which would
+ * look like the toggle failing.
+ *
+ * Whitespace is repaired rather than left behind — a removed tag must not
+ * leave a hanging blank line or a double space in the middle of a sentence
+ * somebody wrote. Trailing space is preserved on ADD, because the caret lands
+ * after it and the person keeps typing.
+ */
+export function toggleNoteAppTag(note: string, appName: string): string {
+  const tag = `[${appName}]`
+
+  if (!noteHasAppTag(note, appName)) {
+    const trimmed = note.trim()
+    return trimmed ? `${trimmed}\n${tag} ` : `${tag} `
+  }
+
+  // Escaped: project names legitimately contain regex metacharacters — this
+  // studio has one called "SCADA | CEB Assist", whose bare pipe would make the
+  // pattern an alternation matching almost anything.
+  const escaped = appName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return note
+    .replace(new RegExp(`\\[${escaped}\\]`, 'gi'), '')
+    // Collapse the run of spaces/tabs a removed mid-sentence tag leaves.
+    .replace(/[ \t]{2,}/g, ' ')
+    // …and the blank line a removed tag-on-its-own-line leaves.
+    .replace(/\n[ \t]*\n+/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim()
+}

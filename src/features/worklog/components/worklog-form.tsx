@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { dayFormProblem } from '@/features/worklog/day-form'
+import { noteHasAppTag, toggleNoteAppTag } from '@/features/worklog/note-app-tags'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { upsertDailyWorklog } from '@/features/worklog/actions'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
@@ -85,24 +86,22 @@ export function WorklogForm({
   // as filled and "split across unfilled projects" silently skipped it. The
   // tag is what the reader and the splitter both write, so it is the only
   // thing that should count as one.
-  const getAppFillStatus = (appName: string) => {
-    return note.toLowerCase().includes(`[${appName.toLowerCase()}]`)
-  }
+  const getAppFillStatus = (appName: string) => noteHasAppTag(note, appName)
 
-  // Insert or toggle a project tag into the note textarea
+  /**
+   * Tag the project, or take the tag back off.
+   *
+   * IT USED TO ONLY GO ONE WAY: a second click on a tagged chip toasted
+   * "already tagged in this work log" and did nothing, so undoing a misclick
+   * meant hunting the brackets down in your own prose — on a control that
+   * reads as a toggle and shows a checkmark when it is on.
+   *
+   * The rule lives in note-app-tags.ts beside splitNoteAppTags, so the
+   * function that WRITES a tag and the one that READS it back out of the note
+   * cannot disagree about what a tag is.
+   */
   const handleTagProject = (appName: string) => {
-    const tag = `[${appName}]`
-    if (note.includes(tag)) {
-      toast.info(`${appName} is already tagged in this work log.`)
-      return
-    }
-
-    setNote((prev) => {
-      const trimmed = prev.trim()
-      if (!trimmed) return `${tag} `
-      return `${trimmed}\n${tag} `
-    })
-
+    setNote((prev) => toggleNoteAppTag(prev, appName))
     setTimeout(() => {
       textareaRef.current?.focus()
     }, 50)
@@ -353,19 +352,30 @@ export function WorklogForm({
                 Auto-Selected
               </span>
             </div>
-            {!note.includes(`[${singleProject.name}]`) ? (
-              <button
-                type="button"
-                onClick={() => handleTagProject(singleProject.name)}
-                className="font-mono text-2xs text-primary hover:underline cursor-pointer font-medium"
-              >
-                + Insert [{singleProject.name}] tag
-              </button>
-            ) : (
-              <span className="flex items-center gap-1 font-mono text-2xs text-primary font-medium">
-                <CheckCircle2 className="size-3" /> Tagged in note
-              </span>
-            )}
+            {/* ONE control in both states. Tagged used to render a static
+                span, so the single-project case had no way back at all — and
+                it tested `note.includes` case-sensitively while the chip
+                beside it read the note case-insensitively, so the two could
+                disagree about the same note. getAppFillStatus answers both. */}
+            <button
+              type="button"
+              aria-pressed={getAppFillStatus(singleProject.name)}
+              onClick={() => handleTagProject(singleProject.name)}
+              title={
+                getAppFillStatus(singleProject.name)
+                  ? `Remove the [${singleProject.name}] tag from this day's note`
+                  : `Tag [${singleProject.name}] in this day's note`
+              }
+              className="flex items-center gap-1 font-mono text-2xs font-medium text-primary hover:underline cursor-pointer"
+            >
+              {getAppFillStatus(singleProject.name) ? (
+                <>
+                  <CheckCircle2 className="size-3" /> Tagged in note
+                </>
+              ) : (
+                <>+ Insert [{singleProject.name}] tag</>
+              )}
+            </button>
           </div>
         ) : null}
 
@@ -387,10 +397,14 @@ export function WorklogForm({
                         ? 'border-primary/40 bg-primary/10 text-foreground font-medium shadow-xs'
                         : 'border-border/60 bg-card/60 text-muted-foreground hover:border-primary/50 hover:bg-card hover:text-foreground',
                     )}
+                    /* aria-pressed, because this IS a toggle and always was
+                       meant to be — the checkmark says so visually and the
+                       accessibility tree said nothing. */
+                    aria-pressed={isFilled}
                     title={
                       isFilled
-                        ? `${app.name} is included in this day's work log`
-                        : `Click to add [${app.name}] tag to this day's note`
+                        ? `Remove the [${app.name}] tag from this day's note`
+                        : `Tag [${app.name}] in this day's note`
                     }
                   >
                     {isFilled ? (
@@ -427,17 +441,38 @@ export function WorklogForm({
         {/* Case 3: No specific assignments -> Studio project chips */}
         {!singleProject && !hasMultipleProjects && assignedApps.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5">
-            {assignedApps.map((app) => (
-              <button
-                key={app.id}
-                type="button"
-                onClick={() => handleTagProject(app.name)}
-                className="flex items-center gap-1 rounded-md border border-border/60 bg-card px-2 py-1 text-2xs text-muted-foreground hover:border-primary hover:text-foreground cursor-pointer"
-              >
-                <Compass className="size-3 text-primary" />
-                <span>+ [{app.name}]</span>
-              </button>
-            ))}
+            {assignedApps.map((app) => {
+              const isFilled = getAppFillStatus(app.name)
+              return (
+                <button
+                  key={app.id}
+                  type="button"
+                  aria-pressed={isFilled}
+                  onClick={() => handleTagProject(app.name)}
+                  title={
+                    isFilled
+                      ? `Remove the [${app.name}] tag from this day's note`
+                      : `Tag [${app.name}] in this day's note`
+                  }
+                  className={cn(
+                    'flex items-center gap-1 rounded-md border px-2 py-1 text-2xs cursor-pointer',
+                    isFilled
+                      ? 'border-primary/40 bg-primary/10 text-foreground'
+                      : 'border-border/60 bg-card text-muted-foreground hover:border-primary hover:text-foreground',
+                  )}
+                >
+                  {isFilled ? (
+                    <CheckCircle2 className="size-3 text-primary" />
+                  ) : (
+                    <Compass className="size-3 text-primary" />
+                  )}
+                  {/* The leading "+" is dropped once it is on: a chip that
+                      still says "add" while showing a checkmark is the reason
+                      nobody tried clicking it again. */}
+                  <span>{isFilled ? `[${app.name}]` : `+ [${app.name}]`}</span>
+                </button>
+              )
+            })}
           </div>
         ) : null}
       </div>
