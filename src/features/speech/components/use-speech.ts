@@ -7,7 +7,7 @@ import {
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
 import { synthesizeSpeech } from '../actions'
-import { toSpokenText } from '../spoken-text'
+import { sinhalaFraction, toSpokenText } from '../spoken-text'
 import { base64ToBytes, parsePcmRate, pcmToWav } from '../wav'
 
 /**
@@ -88,23 +88,50 @@ export function useSpeech(): SpeechHandle {
     }
   }, [])
 
-  const speakInBrowser = useCallback((text: string): boolean => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.onend = () => {
-      setSpeaking(false)
-      setEngine(null)
-    }
-    utterance.onerror = () => {
-      setSpeaking(false)
-      setEngine(null)
-    }
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
-    setEngine('browser')
-    setSpeaking(true)
-    return true
-  }, [])
+  const speakInBrowser = useCallback(
+    (text: string): 'spoken' | 'no-sinhala-voice' | 'unavailable' => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return 'unavailable'
+      const utterance = new SpeechSynthesisUtterance(text)
+      // speechSynthesis.speak() accepts ANY text and fires onend normally even
+      // when the chosen voice skips every character it cannot render — so for
+      // Sinhala the language must be asked for explicitly, and a reading that
+      // would silently drop most of the content must be refused instead:
+      // rung 3 of the ladder is an honest error, never silence.
+      const sinhala = sinhalaFraction(text)
+      if (sinhala > 0) {
+        const voice = window.speechSynthesis
+          .getVoices()
+          .find((v) => v.lang.toLowerCase().startsWith('si'))
+        if (voice) {
+          utterance.voice = voice
+          utterance.lang = voice.lang
+        } else if (sinhala > 0.3) {
+          // Mostly Sinhala with no Sinhala voice installed: the default
+          // (page-language, i.e. English) voice would skip the Sinhala and
+          // report success. Refuse rather than claim the device is reading it.
+          return 'no-sinhala-voice'
+        } else {
+          // Mostly English with scattered Sinhala: still worth hearing, but
+          // ask for si-LK so a capable engine can render the Sinhala runs.
+          utterance.lang = 'si-LK'
+        }
+      }
+      utterance.onend = () => {
+        setSpeaking(false)
+        setEngine(null)
+      }
+      utterance.onerror = () => {
+        setSpeaking(false)
+        setEngine(null)
+      }
+      window.speechSynthesis.cancel()
+      window.speechSynthesis.speak(utterance)
+      setEngine('browser')
+      setSpeaking(true)
+      return 'spoken'
+    },
+    [],
+  )
 
   const meterApi = useAiMeter()
   const speak = useCallback(
@@ -228,9 +255,18 @@ export function useSpeech(): SpeechHandle {
         }
         // Gemini refused (no key, quota, model gone). The browser voice is a
         // worse voice, not a worse outcome — say which one is talking.
-        if (genRef.current === gen && speakInBrowser(trimmed)) {
-          played = true
-          setError(`${res.error} Using this device's voice instead.`)
+        if (genRef.current === gen) {
+          const rung = speakInBrowser(trimmed)
+          if (rung === 'spoken') {
+            played = true
+            setError(`${res.error} Using this device's voice instead.`)
+            return
+          }
+          setError(
+            rung === 'no-sinhala-voice'
+              ? `${res.error} This device has no Sinhala voice, so the reading stopped rather than skip the Sinhala parts.`
+              : res.error,
+          )
           return
         }
         setError(res.error)
@@ -239,12 +275,17 @@ export function useSpeech(): SpeechHandle {
         // the element and its object URL must go either way.
         cleanupAudio()
         if (genRef.current !== gen) return
-        if (speakInBrowser(trimmed)) {
+        const rung = speakInBrowser(trimmed)
+        if (rung === 'spoken') {
           played = true
           setError("Could not reach the speech service — using this device's voice.")
           return
         }
-        setError('Could not read that aloud')
+        setError(
+          rung === 'no-sinhala-voice'
+            ? 'Could not reach the speech service, and this device has no Sinhala voice to fall back to.'
+            : 'Could not read that aloud',
+        )
       } finally {
         setLoading(false)
         if (!played) {

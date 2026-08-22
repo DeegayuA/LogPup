@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { HEAD_CHUNK_CHARS, MAX_SPEECH_CHUNKS, TAIL_CHUNK_CHARS, chunkForSpeech } from './chunk-speech'
+import {
+  HEAD_CHUNK_CHARS,
+  MAX_SPEECH_CHUNKS,
+  TAIL_CHUNK_CHARS,
+  chunkForSpeech,
+  effectiveSpeechLength,
+} from './chunk-speech'
+
+describe('effectiveSpeechLength', () => {
+  it('counts a Sinhala code unit as two effective characters', () => {
+    // Sinhala packs roughly twice the speech into each UTF-16 code unit that
+    // English does (the byte budgets were calibrated on English), so budget
+    // math weights Sinhala units double.
+    expect(effectiveSpeechLength('abcd')).toBe(4)
+    expect(effectiveSpeechLength('අපි')).toBe(6)
+    expect(effectiveSpeechLength('අපි ok')).toBe(9)
+  })
+})
 
 describe('chunkForSpeech', () => {
   it('returns a single chunk for text that already fits', () => {
@@ -52,5 +69,18 @@ describe('chunkForSpeech', () => {
     const chunks = chunkForSpeech(text)
     expect(chunks.length).toBeGreaterThan(1)
     for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(TAIL_CHUNK_CHARS)
+  })
+
+  it('keeps every chunk inside the audio budget for Sinhala-heavy text', () => {
+    // A pure-Sinhala tail chunk at the full English character budget carries
+    // roughly twice the speech, which blows the ~4.5MB response ceiling the
+    // chunking exists to stay under — budgets are effective units, not .length.
+    const text = 'අපි ලබන සතියේ API එක deploy කරන්න තීරණය කළා. QA team එකට කිව්වා. '.repeat(60)
+    const chunks = chunkForSpeech(text)
+    expect(chunks.length).toBeGreaterThan(1)
+    chunks.forEach((chunk, i) => {
+      const limit = i === 0 ? HEAD_CHUNK_CHARS : TAIL_CHUNK_CHARS
+      expect(effectiveSpeechLength(chunk)).toBeLessThanOrEqual(limit)
+    })
   })
 })

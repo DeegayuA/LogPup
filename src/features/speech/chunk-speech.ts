@@ -32,11 +32,44 @@
 export const HEAD_CHUNK_CHARS = 450
 
 /**
- * Later chunks are larger (fewer requests, and nobody is waiting on them),
- * but still far below the response ceiling — ~900 characters is roughly
- * 1.1MB of base64 audio, about a quarter of the limit.
+ * Later chunks are larger (fewer requests, and nobody is waiting on them).
+ * Per the measurements in the header (~4KB of base64 per English character),
+ * ~900 effective characters is roughly 3.6MB of audio — about 80% of the
+ * ~4.5MB ceiling, which is the real margin. There is no room for a script
+ * that speaks slower per character, hence the effective-length weighting.
  */
 export const TAIL_CHUNK_CHARS = 900
+
+/**
+ * Sinhala packs roughly TWICE the speech into each UTF-16 code unit that
+ * English does (aksharas ~1.7-2.2 units per spoken syllable vs ~3.9-4.0 for
+ * English under the header's own calibration), so a pure-Sinhala chunk sized
+ * by .length would carry ~2x the audio and blow the response ceiling the
+ * chunking exists to stay under. All budget math therefore runs on an
+ * effective length that counts Sinhala-block units double.
+ */
+const SINHALA_UNIT = /[඀-෿]/
+
+export function effectiveSpeechLength(text: string): number {
+  let extra = 0
+  for (let i = 0; i < text.length; i += 1) {
+    if (SINHALA_UNIT.test(text[i])) extra += 1
+  }
+  return text.length + extra
+}
+
+/**
+ * The largest raw slice length of `text` whose effective length stays within
+ * `effectiveLimit` — the bridge from audio budgets to string offsets.
+ */
+export function rawLimitFor(text: string, effectiveLimit: number): number {
+  let weight = 0
+  for (let i = 0; i < text.length; i += 1) {
+    weight += SINHALA_UNIT.test(text[i]) ? 2 : 1
+    if (weight > effectiveLimit) return i
+  }
+  return text.length
+}
 
 /**
  * Hard cap. Every chunk is a separate billed request against the caller's
@@ -85,18 +118,21 @@ function cutAt(text: string, limit: number): number {
 export function chunkForSpeech(text: string): string[] {
   const trimmed = text.trim().replace(/\s+/g, ' ')
   if (!trimmed) return []
-  if (trimmed.length <= HEAD_CHUNK_CHARS) return [trimmed]
+  if (effectiveSpeechLength(trimmed) <= HEAD_CHUNK_CHARS) return [trimmed]
 
   const chunks: string[] = []
   let rest = trimmed
 
   while (rest.length > 0 && chunks.length < MAX_SPEECH_CHUNKS) {
     const limit = chunks.length === 0 ? HEAD_CHUNK_CHARS : TAIL_CHUNK_CHARS
-    if (rest.length <= limit) {
+    // Budgets are effective (audio-weighted) units; cutAt works in raw string
+    // offsets, so translate first.
+    const rawLimit = rawLimitFor(rest, limit)
+    if (rest.length <= rawLimit) {
       chunks.push(rest)
       break
     }
-    const cut = cutAt(rest, limit)
+    const cut = cutAt(rest, rawLimit)
     chunks.push(rest.slice(0, cut).trim())
     rest = rest.slice(cut).trim()
   }
