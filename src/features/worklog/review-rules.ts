@@ -1,5 +1,5 @@
 import { can, type Actor } from '@/features/auth/capabilities'
-import { splitNoteAppTags, type AppRef } from '@/features/worklog/note-app-tags'
+import { splitNoteAppTags } from '@/features/worklog/note-app-tags'
 
 /**
  * Who may leave a review on somebody else's day.
@@ -29,10 +29,18 @@ import { splitNoteAppTags, type AppRef } from '@/features/worklog/note-app-tags'
  * has still told you the day was about Falcon, and Falcon's lead should be
  * able to answer it.
  */
+/**
+ * A project as this rule needs it. WIDER than note-app-tags' AppRef, which is
+ * {name, slug} — that module resolves a tag to a link and never needs an id,
+ * while a permission decision needs the id and nothing else. Structurally
+ * compatible, so the same array satisfies both.
+ */
+export type ReviewableApp = { id: string; name: string; slug: string }
+
 export function worklogDayAppIds(
   entries: readonly { appId: string | null }[],
   note: string | null,
-  apps: readonly AppRef[],
+  apps: readonly ReviewableApp[],
 ): string[] {
   const ids = new Set<string>()
   for (const entry of entries) if (entry.appId) ids.add(entry.appId)
