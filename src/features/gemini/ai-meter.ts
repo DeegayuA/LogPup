@@ -44,8 +44,17 @@ export type MeterInput = {
   estimateLabel: string | null
   /** Present only once the response has returned. */
   usage?: MeterUsage
-  /** From gemini_keys.tier. There is no "unlimited": a paid key is metered. */
-  keyTier: 'free' | 'paid'
+  /**
+   * From gemini_keys.tier. There is no "unlimited": a paid key is metered and
+   * bills its owner.
+   *
+   * 'unknown' is a real third answer, not padding. A call that failed before
+   * it reached any key writes a ledger row with a null key_id (recordFailure
+   * in client.ts), and a key deleted since the call leaves the same null
+   * behind. Folding either into 'free' would print "nothing charged" over a
+   * call whose billing this app genuinely cannot see.
+   */
+  keyTier: 'free' | 'paid' | 'unknown'
   /** When to price against — rates are effective-dated and promos expire. */
   at: Date
 }
@@ -70,8 +79,11 @@ export type MeterView = {
   costUsd: number | null
   /** True whenever a number on screen is inferred rather than measured. */
   indicative: boolean
-  /** Who pays. Free-tier keys are not billed; paid keys bill their owner. */
-  billing: 'free-tier' | 'billed-to-key-owner'
+  /**
+   * Who pays. Free-tier keys are not billed; paid keys bill their owner; and
+   * 'unknown' says so rather than defaulting to the reassuring one.
+   */
+  billing: 'free-tier' | 'billed-to-key-owner' | 'unknown'
 }
 
 /**
@@ -132,7 +144,12 @@ export function meterView(input: MeterInput): MeterView {
     // carrying one is indicative, and a running view is indicative because the
     // estimate is.
     indicative: costUsd !== null || input.phase === 'running',
-    billing: input.keyTier === 'free' ? 'free-tier' : 'billed-to-key-owner',
+    billing:
+      input.keyTier === 'free'
+        ? 'free-tier'
+        : input.keyTier === 'paid'
+          ? 'billed-to-key-owner'
+          : 'unknown',
   }
 }
 

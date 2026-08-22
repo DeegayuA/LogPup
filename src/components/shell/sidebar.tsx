@@ -110,7 +110,10 @@ export function Sidebar({
           </span>
           <div className="flex flex-col">
             <span className="font-heading text-sm font-bold tracking-tight">LogPup</span>
-            <span className="font-mono text-2xs text-sidebar-foreground/60 leading-none">LogPup 🐾 Ops</span>
+            {/* The DESCRIPTOR, not the name. It sits directly under the
+                wordmark and beside the paw badge, so repeating either here
+                renders the brand three times in a 60px column. */}
+            <span className="font-mono text-2xs text-sidebar-foreground/60 leading-none">Ops</span>
           </div>
         </Link>
         <a

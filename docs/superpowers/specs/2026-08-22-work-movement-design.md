@@ -1,6 +1,6 @@
 # Work movement, role KPIs, and three intake fixes
 
-**Status:** design, not started. Phase 2 (implementation) is gated on written approval.
+**Status:** design approved 2026-08-22, decisions in §6 answered, implementation in progress.
 **Date:** 2026-08-22
 
 ---
@@ -71,7 +71,8 @@ Two consequences the design must respect:
 1. **There is no architect role.** `app_role_kind` is `('pm','lead')` and nothing else.
    An architect today is either a `users.title` string or an `assignments.role` string —
    neither of which is a closed set, neither of which is interval-tracked, and neither of
-   which can be trusted to spell the same word twice. **This is an open decision, see §6.**
+   which can be trusted to spell the same word twice. **Decided: derive from `users.title`
+   through a tested normaliser, and accept that the panel has no history — see §6.1.**
 
 2. **`logging_expectation = 'none'` exists precisely for supervisory seats.** A PM or lead
    who only assigns and monitors produces no `daily_worklogs` rows at all. Any KPI that
@@ -156,8 +157,8 @@ action is unambiguous: go unstick it. It cannot be read as an accusation because
 subject is not a person.
 
 **What it does NOT mean.** A long, genuinely hard task is indistinguishable from an
-abandoned one. `STALL_DAYS` is therefore a threshold for *asking*, not for *concluding*.
-Proposed default: **5 working days**, tunable, stated in the UI.
+abandoned one. `STALL_DAYS` is therefore a threshold for *asking*, not for *concluding* — and at 3 days it asks early on purpose.
+Default: **3 working days** (decided, see §6.2), stated in the UI.
 
 #### M3 · Throughput, per project per week
 
@@ -233,8 +234,8 @@ computed over four rows is worse than no KPI. **Build Part 4 before this panel s
 
 #### Architect
 
-**Blocked on a decision — see §6.** LogPup has no architect role. The figures an architect
-panel would want, once a role exists to attach them to:
+**Membership comes from `users.title`, normalised — see §6.1.** LogPup has no architect role, so this panel has no history and states that. The figures it carries:
+
 
 | Figure | Source |
 |---|---|
@@ -457,19 +458,30 @@ repo is a future divergence.
 
 ---
 
-## Part 6 — Open decisions *(need your answer before Phase 2)*
+## Part 6 — Decisions *(answered 2026-08-22)*
 
-1. **Architect role.** Three options: **(a)** extend `app_role_kind` to
-   `('pm','lead','architect')` — clean, interval-tracked, but a **schema change plus
-   hand-written migration**, which the working agreement says I stop and ask about;
-   **(b)** derive it from `users.title` — no migration, but free text that will be spelled
-   three ways; **(c)** ship without an architect panel for now. **Recommendation: (a).** The
-   whole value of a role KPI is that the role is a closed set with a history.
-2. **`STALL_DAYS`.** Proposed 5 working days.
-3. **Minimum denominator.** Proposed 5 observations before any ratio renders.
-4. **Auditor seat and the team CSV** — does the existing audit policy grant bulk email
-   export? Confirming rather than assuming.
-5. **Part 2 secondary (pasted-template stripping)** — in scope, or example-row drop only?
+1. **Architect role — derive from `users.title`.** No migration. The consequences are real
+   and are handled rather than ignored:
+   - Titles are matched through a **normaliser**: lowercased, punctuation and whitespace
+     collapsed, then tested against a known alias set (`architect`, `solution architect`,
+     `software architect`, `technical architect`, `principal architect`, `system architect`,
+     …). The alias list is a pure, tested constant — not a regex buried in a query.
+   - A title that normalises to nothing recognised is **not** an architect. Silent misses
+     are the accepted cost of this option, so the panel states its own membership rule and
+     lists who it matched, letting a wrong answer be seen rather than guessed at.
+   - **There is no history.** `users.title` is current state with no interval, so architect
+     figures are *as-of-now over the whole window*, not scoped to when the person held the
+     title — unlike PM and lead, which are interval-scoped via `app_role_history`. The
+     panel says so. If the role ever needs history, that is when it earns an enum.
+2. **`STALL_DAYS` = 3 working days.** Saturday counts 0.5. Stricter than the proposed 5:
+   catches a stall sooner, at the cost of more rows that turn out to be "it is just a hard
+   task". The threshold is stated in the UI so a reader can discount accordingly.
+3. **Minimum denominator = 5 observations** before any ratio renders a percentage.
+4. **Auditor seat and the team CSV** — still to confirm against the existing audit policy.
+   Until confirmed, `auditor` is treated as **not granted** bulk email export: the
+   restrictive default is the recoverable one.
+5. **Part 2 — both strippers in scope.** The CSV example-row drop *and* the pasted
+   issue-template cleaner.
 
 ---
 
@@ -519,5 +531,5 @@ reasons for any new feature directory).
 6. **Part 1 queries** — batched reads, `live*` throughout.
 7. **Part 5 surfaces** — `/intel` signal first, then the role panels.
 
-Parts 2–4 are independent of the §6 decisions and can start on approval alone. Part 1 needs
-answers to §6.1–6.3.
+All §6 decisions are answered, so every part below is unblocked.
+

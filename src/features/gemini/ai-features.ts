@@ -21,6 +21,7 @@ export type AiCallSlug =
   | 'live.session'
   | 'workspace.ask'
   | 'workspace.briefing'
+  | 'person.summary'
   | 'audit.filter'
 
 /**
@@ -263,6 +264,21 @@ export const AI_FEATURES = [
       // briefing is a headline, a short paragraph and up to three priorities
       // rather than one spoken sentence.
       tokens: { model: 'gemini-3.6-flash', inputTokens: 8_000, outputTokens: 400 },
+    },
+  },
+  {
+    id: 'person-summary',
+    label: 'Person summary',
+    description: 'Writes the short read on a person’s recent work from their page’s own numbers.',
+    chain: 'Analysis',
+    kind: 'text',
+    slugs: ['person.summary'],
+    estimate: {
+      label: 'per summary',
+      // The prompt is the same compact fact sheet the stat strip renders —
+      // counts and names, never raw rows — so input stays small; the output
+      // is two to three sentences.
+      tokens: { model: 'gemini-3.6-flash', inputTokens: 1_500, outputTokens: 150 },
     },
   },
   {

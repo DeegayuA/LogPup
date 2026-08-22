@@ -178,6 +178,61 @@ export const BUG_CSV_EXAMPLE_ROW: readonly string[] = [
   '/apps/logpup?tab=board',
 ]
 
+/**
+ * The example row keyed by column, so the "is this the template's own example"
+ * test cannot drift out of step with the row it is testing against. Built by
+ * INDEX against BUG_CSV_COLUMNS rather than restated: reorder the columns and
+ * this reorders with them, which a second hand-written literal would not.
+ *
+ * Folded once, here, rather than on every comparison.
+ */
+const EXAMPLE_BY_COLUMN: ReadonlyMap<BugCsvColumn, string> = new Map(
+  BUG_CSV_COLUMNS.map((column, index) => [
+    column.key,
+    (BUG_CSV_EXAMPLE_ROW[index] ?? '').trim().toLowerCase(),
+  ]),
+)
+
+/**
+ * Is this row the template's own example, left where it was?
+ *
+ * The comment on BUG_CSV_EXAMPLE_ROW used to argue that the preview step was
+ * enough to stop the example being imported by accident — "it is right there
+ * in the table with its title, waiting to be looked at". That is a HUMAN
+ * safeguard, and it does not hold: people open the template, type their bugs
+ * into the rows underneath, and upload the file whole. "Sprint switcher
+ * forgets the backlog" then gets filed against their project, by them, every
+ * time.
+ *
+ * EVERY POPULATED CELL must match — deliberately not "any":
+ *
+ *   - untouched example                → every cell matches → dropped
+ *   - title rewritten, rest left as-is → title differs      → KEPT, because
+ *     somebody filling the template in place is filing a real bug
+ *   - a real bug that happens to reuse the example's title  → other cells
+ *     differ → kept
+ *
+ * A half-cleared example (some cells blanked, the rest original) is still an
+ * example and still drops. The cost of that rule is one marginal case: a real
+ * bug whose title is exactly the example's AND whose every other cell is empty
+ * drops rather than being reported as missing a description. It fails
+ * validation either way; only the wording the reporter sees changes.
+ */
+export function isTemplateExampleRow(cells: Partial<Record<BugCsvColumn, string>>): boolean {
+  let populated = 0
+  for (const [key, example] of EXAMPLE_BY_COLUMN) {
+    const value = (cells[key] ?? '').trim()
+    // An empty cell is evidence of nothing — the example's own assignee_email
+    // is empty, and so is most of what people leave alone.
+    if (value === '') continue
+    populated += 1
+    if (value.toLowerCase() !== example) return false
+  }
+  // A wholly blank row is dropped upstream as blank, not here as a template:
+  // `populated === 0` must never come back as "matches".
+  return populated > 0
+}
+
 /** Names the downloaded file. Shared so the dialog cannot drift from the test. */
 export const BUG_CSV_TEMPLATE_PREFIX = 'bug-import-template'
 
@@ -360,6 +415,13 @@ export type BugCsvParse =
       invalid: InvalidBugCsvRow[]
       /** Extra headers that were ignored. Reported, never fatal. */
       ignoredColumns: string[]
+      /**
+       * How many rows were the template's own example row, left in place.
+       * Dropped rather than imported (see isTemplateExampleRow), and COUNTED
+       * rather than silently vanished: a row that disappears with no
+       * explanation is how somebody concludes the importer ate a real bug.
+       */
+      ignoredExampleRows: number
     }
 
 // ---------------------------------------------------------------------------
@@ -527,18 +589,13 @@ export function parseBugCsv(text: string): BugCsvParse {
     .map((cells, offset) => ({ rowNumber: headerIndex + offset + 2, cells }))
     .filter((entry) => !isBlank(entry.cells))
 
-  if (bodyRows.length === 0) {
-    return { ok: false, error: 'That file has a header row but no bugs under it' }
-  }
-  if (bodyRows.length > BUG_CSV_ROW_LIMIT) {
-    return {
-      ok: false,
-      error: `That file has ${bodyRows.length} rows — ${BUG_CSV_ROW_LIMIT} is the most one import can take`,
-    }
-  }
-
-  const valid: ValidBugCsvRow[] = []
-  const invalid: InvalidBugCsvRow[] = []
+  // Rows are mapped onto their columns BEFORE anything counts them, because
+  // the template's own example row has to come out of the count first: it is
+  // not a bug anybody filed, and both the "no bugs here" message and the row
+  // limit below would otherwise be answering for a row about to be dropped.
+  // (500 real rows plus the example is a 500-row import, not a rejected one.)
+  const bugRows: { rowNumber: number; byColumn: Partial<Record<BugCsvColumn, string>> }[] = []
+  let ignoredExampleRows = 0
 
   for (const { rowNumber, cells } of bodyRows) {
     const byColumn: Partial<Record<BugCsvColumn, string>> = {}
@@ -548,12 +605,42 @@ export function parseBugCsv(text: string): BugCsvParse {
       // the rest stops typing, and the file simply ends the line early.
       if (key) byColumn[key] = cells[position] ?? ''
     }
+    if (isTemplateExampleRow(byColumn)) {
+      ignoredExampleRows += 1
+      continue
+    }
+    bugRows.push({ rowNumber, byColumn })
+  }
+
+  if (bugRows.length === 0) {
+    return {
+      ok: false,
+      // Two different mistakes, so two different sentences. "No bugs under it"
+      // sends somebody looking for a missing row; the template message tells
+      // them the file is the one they downloaded and never added to.
+      error:
+        ignoredExampleRows > 0
+          ? 'That file is still the blank import template — add your bugs under the header row'
+          : 'That file has a header row but no bugs under it',
+    }
+  }
+  if (bugRows.length > BUG_CSV_ROW_LIMIT) {
+    return {
+      ok: false,
+      error: `That file has ${bugRows.length} rows — ${BUG_CSV_ROW_LIMIT} is the most one import can take`,
+    }
+  }
+
+  const valid: ValidBugCsvRow[] = []
+  const invalid: InvalidBugCsvRow[] = []
+
+  for (const { rowNumber, byColumn } of bugRows) {
     const result = validateBugCsvRow(rowNumber, byColumn)
     if (result.ok) valid.push(result.row)
     else invalid.push(result.row)
   }
 
-  return { ok: true, valid, invalid, ignoredColumns }
+  return { ok: true, valid, invalid, ignoredColumns, ignoredExampleRows }
 }
 
 /**

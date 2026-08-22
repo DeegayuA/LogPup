@@ -110,6 +110,27 @@ describe('elapsed time', () => {
   })
 })
 
+describe('who pays', () => {
+  it('reports a free key as charging nothing', () => {
+    expect(meterView(input({ keyTier: 'free' })).billing).toBe('free-tier')
+  })
+
+  it('reports a paid key as billing its owner, never as unlimited', () => {
+    // There is no "unlimited" tier anywhere in this product. A paid key is
+    // metered and invoiced to whoever owns it, which is a different promise
+    // from "spend freely" and has to read as one.
+    expect(meterView(input({ keyTier: 'paid' })).billing).toBe('billed-to-key-owner')
+  })
+
+  it('says unknown when no key can be attributed, rather than defaulting to free', () => {
+    // A call that failed before reaching a key records a null key_id
+    // (recordFailure in client.ts), and a key deleted since the call leaves
+    // the same null behind. "free-tier" here would print "nothing charged"
+    // over a call whose billing this app cannot actually see.
+    expect(meterView(input({ keyTier: 'unknown' })).billing).toBe('unknown')
+  })
+})
+
 describe('local spend', () => {
   it('sums calls and tokens actually recorded here', () => {
     expect(
