@@ -3,7 +3,7 @@ import {
   AI_FEATURES,
   estimatePerUseCostUsd,
   featureForSlug,
-  MODEL_CHOICES,
+  FALLBACK_MODEL_CHOICES,
   type AiFeatureEstimate,
   type FeatureKind,
 } from '@/features/gemini/ai-features'
@@ -12,7 +12,7 @@ import { estimateCostUsd, priceForModel } from '@/features/gemini/pricing'
 
 // Google's catalog marks these shut down. Offering one in a picker offers a
 // guaranteed, undiagnosable permanent failure — they must never appear in
-// AI_FEATURES estimates or in any MODEL_CHOICES list.
+// AI_FEATURES estimates or in any FALLBACK_MODEL_CHOICES list.
 const SHUT_DOWN_MODEL_IDS = [
   'gemini-3.1-flash-lite-preview',
   'gemini-3-pro-preview',
@@ -125,26 +125,26 @@ describe('estimatePerUseCostUsd', () => {
   })
 })
 
-describe('MODEL_CHOICES', () => {
+describe('FALLBACK_MODEL_CHOICES', () => {
   const KINDS: FeatureKind[] = ['text', 'tts', 'live']
 
   it('has a non-empty list for every kind', () => {
     for (const kind of KINDS) {
-      expect(MODEL_CHOICES[kind].length).toBeGreaterThan(0)
+      expect(FALLBACK_MODEL_CHOICES[kind].length).toBeGreaterThan(0)
     }
   })
 
   it('has a non-empty list for every kind a feature actually uses', () => {
     const kindsInUse = new Set(AI_FEATURES.map((f) => f.kind))
     for (const kind of kindsInUse) {
-      expect(MODEL_CHOICES[kind].length).toBeGreaterThan(0)
+      expect(FALLBACK_MODEL_CHOICES[kind].length).toBeGreaterThan(0)
     }
   })
 
   it('never lists the same model id under two different kinds', () => {
     const seen = new Map<string, FeatureKind>()
     for (const kind of KINDS) {
-      for (const choice of MODEL_CHOICES[kind]) {
+      for (const choice of FALLBACK_MODEL_CHOICES[kind]) {
         expect(seen.has(choice.id), `"${choice.id}" appears in both ${seen.get(choice.id)} and ${kind}`).toBe(
           false,
         )
@@ -155,7 +155,7 @@ describe('MODEL_CHOICES', () => {
 
   it('never lists a shut-down model', () => {
     for (const kind of KINDS) {
-      for (const choice of MODEL_CHOICES[kind]) {
+      for (const choice of FALLBACK_MODEL_CHOICES[kind]) {
         expect(SHUT_DOWN_MODEL_IDS, `${kind} lists shut-down model "${choice.id}"`).not.toContain(choice.id)
       }
     }
@@ -173,7 +173,7 @@ describe('MODEL_CHOICES', () => {
 
   it('prices every model, or names it as deliberately unpriced', () => {
     for (const kind of KINDS) {
-      for (const choice of MODEL_CHOICES[kind]) {
+      for (const choice of FALLBACK_MODEL_CHOICES[kind]) {
         const priced = priceForModel(choice.id, new Date('2026-08-19')) !== null
         expect(
           priced || DELIBERATELY_UNPRICED.has(choice.id),

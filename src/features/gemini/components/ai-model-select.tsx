@@ -11,7 +11,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { setAiFeatureModel } from '@/features/gemini/actions'
-import { MODEL_CHOICES, type AiFeatureId, type FeatureKind } from '@/features/gemini/ai-features'
+import {
+  FALLBACK_MODEL_CHOICES,
+  type AiFeatureId,
+  type FeatureKind,
+  type ModelChoice,
+} from '@/features/gemini/ai-features'
 import { priceForModel } from '@/features/gemini/pricing'
 
 const DEFAULT_VALUE = '__default__'
@@ -36,7 +41,7 @@ export type ModelSuggestion = {
 
 /**
  * Per-row model picker beside the feature's on/off Switch. Options come from
- * MODEL_CHOICES[kind] — the curated list valid for this feature's endpoint —
+ * FALLBACK_MODEL_CHOICES[kind] — the curated list valid for this feature's endpoint —
  * plus a "Default (recommended)" entry mapping to `null`, which leaves the
  * feature on its own fallback chain (see resolveChain).
  */
@@ -48,6 +53,7 @@ export function AiModelSelect({
   enabled,
   hasPaidKey,
   suggestion = null,
+  choices,
 }: {
   feature: AiFeatureId
   label: string
@@ -56,15 +62,24 @@ export function AiModelSelect({
   enabled: boolean
   hasPaidKey: boolean
   suggestion?: ModelSuggestion | null
+  /**
+   * What Google says exists, discovered on the server and passed down.
+   *
+   * A prop rather than a module read, because discovery needs an API key and
+   * a key may not reach the browser. Optional so a caller that has not been
+   * given a catalog still renders a working picker off the static fallback
+   * rather than an empty one.
+   */
+  choices?: readonly ModelChoice[]
 }) {
   const [isPending, startTransition] = useTransition()
   const [value, setValue] = useState(model ?? DEFAULT_VALUE)
 
-  const choices = MODEL_CHOICES[kind]
+  const availableChoices = choices ?? FALLBACK_MODEL_CHOICES[kind]
   const labels: Record<string, string> = { [DEFAULT_VALUE]: 'Default (recommended)' }
-  for (const c of choices) labels[c.id] = c.label
+  for (const c of availableChoices) labels[c.id] = c.label
 
-  const selected = choices.find((c) => c.id === value)
+  const selected = availableChoices.find((c) => c.id === value)
   const needsPaidWarning = !!selected && !selected.freeTier && !hasPaidKey
   const showSuggestion = !!suggestion && enabled && suggestion.id !== value
 
@@ -113,7 +128,7 @@ export function AiModelSelect({
               </span>
             </div>
           </SelectItem>
-          {choices.map((c) => (
+          {availableChoices.map((c) => (
             <SelectItem key={c.id} value={c.id}>
               <div className="flex flex-col gap-1 py-1">
                 <div className="flex items-center gap-1.5 flex-wrap">

@@ -43,7 +43,7 @@ const PRICE_TABLE: Record<string, PriceRow[]> = {
 }
 
 /**
- * Deliberately absent from PRICE_TABLE, even though MODEL_CHOICES
+ * Deliberately absent from PRICE_TABLE, even though FALLBACK_MODEL_CHOICES
  * (ai-features.ts) offers them as selectable models: no published figure
  * covers BOTH input and output for these ids, so priceForModel legitimately
  * returns null and the UI shows "price unknown" rather than a guess.
@@ -57,7 +57,7 @@ const PRICE_TABLE: Record<string, PriceRow[]> = {
  * from a sibling model's ratio.
  *
  * gemini-omni-flash and gemini-3-flash-preview used to be here too, but were
- * removed from MODEL_CHOICES entirely (see the comment there): "price
+ * removed from FALLBACK_MODEL_CHOICES entirely (see the comment there): "price
  * unknown" is an honest state for a model whose failure modes are known,
  * but these two also lacked the 404-fallback safety net resolveChain relies
  * on, so unpriced was not the real problem with offering them.

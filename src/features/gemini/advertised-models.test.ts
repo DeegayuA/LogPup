@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { priceForModel } from './pricing'
-import { MODEL_CHOICES } from './ai-features'
+import { FALLBACK_MODEL_CHOICES } from './ai-features'
 import {
   ANALYSIS_MODELS,
   ASSISTANT_MODELS,
@@ -233,7 +233,7 @@ describe('a promotional rate has a successor, so no model expires into "price un
 
   const known = [
     ...new Set([
-      ...Object.values(MODEL_CHOICES).flatMap((choices) => choices.map((c) => c.id)),
+      ...Object.values(FALLBACK_MODEL_CHOICES).flatMap((choices) => choices.map((c) => c.id)),
       ...ANALYSIS_MODELS,
       ...ASSISTANT_MODELS,
       ...QUICK_MODELS,

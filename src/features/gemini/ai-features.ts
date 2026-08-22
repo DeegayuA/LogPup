@@ -374,32 +374,42 @@ export type ModelChoice = {
 }
 
 /**
- * The curated, per-kind model catalog offered by each feature's model
- * picker — never the full Gemini catalog (which also lists image, video,
- * music, embedding, robotics and computer-use models no LogPup feature
- * calls). Shut-down models (gemini-3.1-flash-lite-preview,
- * gemini-3-pro-preview, gemini-2.0-flash, gemini-2.0-flash-lite) are
- * deliberately absent: offering one would offer a guaranteed, undiagnosable
- * permanent failure. Do not add them back.
+ * The catalog to use WHEN GOOGLE CANNOT BE ASKED — no key on file, no
+ * network, or a response we could not read.
+ *
+ * This used to be the catalog itself, hand-written and hand-maintained.
+ * Shipping a new model meant editing this array; retiring one meant
+ * remembering to delete it, and forgetting left a choice that fails
+ * permanently and undiagnosably for whoever picked it. Both halves were a
+ * person's job. model-discovery.ts asks `GET /v1beta/models` instead, so a
+ * model that exists is offered and a model that has been shut down is not,
+ * with no edit either way.
+ *
+ * What survives here is a floor, not a source of truth. Read
+ * `getModelCatalog()` — never this constant — anywhere a person is choosing.
+ *
+ * It is still CURATED rather than complete: the full Gemini catalog also
+ * lists image, video, music, embedding, robotics and computer-use models that
+ * no LogPup feature calls, and discovery applies the same capability filter
+ * (see model-catalog.ts's classifyModel) rather than a list of known names.
+ *
+ * GEMINI 2.5 IS GONE from `text`: the workspace has moved on, and four newer
+ * stable flash models sit above it. The two 2.5 entries left under `tts` and
+ * `live` are there because they are the ONLY fallback beneath a 3.x preview —
+ * removing them would mean that when discovery is unavailable and the preview
+ * is not on a key, spoken output has nothing at all to fall back to. Discovery
+ * supersedes both the moment it works.
  *
  * Also absent from `text`, on purpose: gemini-omni-flash and
  * gemini-3-flash-preview. resolveChain (model-choice.ts) prepends a user's
- * pinned model in front of the default chain so a model that later
- * disappears (404) quietly falls through — but that guarantee does NOT
- * cover HTTP 400, which client.ts classifies as `kind: 'bad'` and aborts
- * the whole call with no fallback. Both ids are undocumented enough that no
- * published price could be found for either (pricing.ts), and three `text`
- * features (app.metadata, sprint.draft, meeting.synthesis) send
- * responseMimeType: 'application/json' — if either model rejects JSON mode,
- * it does so with a 400, not a 404, turning that feature into a permanent
- * raw error for anyone who pinned it. A model we can neither price nor
- * guarantee a fallback for isn't a choice worth offering. This is unlike
- * the three other deliberately-unpriced models kept below
- * (gemini-3.1-flash-lite, gemini-2.5-pro-preview-tts,
- * gemini-3.5-live-translate-preview): those are documented models whose
- * failure modes are known — only the price is missing.
+ * pinned model in front of the default chain so a model that later disappears
+ * (404) quietly falls through — but that guarantee does NOT cover HTTP 400,
+ * which client.ts classifies as `kind: 'bad'` and aborts the whole call with
+ * no fallback. Three `text` features send responseMimeType 'application/json';
+ * a model that rejects JSON mode does so with a 400, turning that feature into
+ * a permanent raw error for anyone who pinned it.
  */
-export const MODEL_CHOICES: Record<FeatureKind, readonly ModelChoice[]> = {
+export const FALLBACK_MODEL_CHOICES: Record<FeatureKind, readonly ModelChoice[]> = {
   text: [
     { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', stability: 'stable', freeTier: true },
     { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', stability: 'stable', freeTier: true },
@@ -407,9 +417,6 @@ export const MODEL_CHOICES: Record<FeatureKind, readonly ModelChoice[]> = {
     { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite', stability: 'stable', freeTier: true },
     { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite', stability: 'stable', freeTier: true },
     { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', stability: 'preview', freeTier: true },
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', stability: 'stable', freeTier: true },
-    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', stability: 'stable', freeTier: true },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', stability: 'stable', freeTier: true },
     { id: 'gemini-flash-latest', label: 'Gemini Flash (latest)', stability: 'alias', freeTier: true },
   ],
   tts: [

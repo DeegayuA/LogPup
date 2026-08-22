@@ -12,7 +12,7 @@
 
 import {
   AI_FEATURES,
-  MODEL_CHOICES,
+  FALLBACK_MODEL_CHOICES,
   estimatePerUseCostUsd,
   type AiFeatureId,
 } from '@/features/gemini/ai-features'
@@ -22,7 +22,7 @@ import { priceForModel, type ModelPrice } from '@/features/gemini/pricing'
 import type { FeatureUsageSummary } from '@/features/gemini/usage-summary'
 
 /**
- * What kind of promise a model id carries, straight from MODEL_CHOICES.
+ * What kind of promise a model id carries, straight from FALLBACK_MODEL_CHOICES.
  *
  * `unlisted` is the fourth state and it is not a bug: a feature's DEFAULT
  * chain may lead with a model the per-feature picker does not offer (the
@@ -38,7 +38,7 @@ type ModelFacts = { label: string; stability: ModelStability }
  * kinds — a model id means the same thing whichever feature reached it.
  */
 const MODEL_FACTS = new Map<string, ModelFacts>(
-  Object.values(MODEL_CHOICES).flatMap((choices) =>
+  Object.values(FALLBACK_MODEL_CHOICES).flatMap((choices) =>
     choices.map((c) => [c.id, { label: c.label, stability: c.stability as ModelStability }] as const),
   ),
 )

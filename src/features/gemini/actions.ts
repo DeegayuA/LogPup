@@ -10,7 +10,8 @@ import { encryptSecret } from '@/lib/crypto'
 import { validateGeminiKey } from '@/features/gemini/client'
 import { assessRecordingReadiness, type RecordingReadiness } from '@/features/gemini/readiness'
 import { listPoolKeyHealth } from '@/features/gemini/queries'
-import { AI_FEATURES, MODEL_CHOICES, type AiFeatureId } from '@/features/gemini/ai-features'
+import { AI_FEATURES, type AiFeatureId } from '@/features/gemini/ai-features'
+import { isSelectableModel } from '@/features/gemini/model-discovery'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 
 const MAX_KEYS_PER_USER = 5
@@ -182,7 +183,11 @@ export async function setAiFeatureModel(
   if (!session?.user) return err('Not signed in')
   const def = AI_FEATURES.find((f) => f.id === feature)
   if (!def) return err('Unknown AI feature')
-  if (model !== null && !MODEL_CHOICES[def.kind].some((c) => c.id === model)) {
+  // Checked against what Google says exists RIGHT NOW, not against the static
+  // fallback: a model that has just shipped is visible in the picker, and
+  // rejecting it here the moment somebody chooses it would make discovery
+  // worse than the hand-written list it replaced.
+  if (model !== null && !(await isSelectableModel(session.user.id, def.kind, model))) {
     return err('That model cannot serve this feature')
   }
   await db

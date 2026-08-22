@@ -2,10 +2,10 @@ import { Sparkles } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   AI_FEATURES,
-  MODEL_CHOICES,
   estimatePerUseCostUsd,
   type AiFeatureEstimate,
   type FeatureKind,
+  type ModelChoice,
 } from '@/features/gemini/ai-features'
 import { isFeatureRouted } from '@/features/gemini/model-choice'
 import { getAiPrefs } from '@/features/gemini/prefs'
@@ -17,6 +17,7 @@ import {
   type FeatureUsageSummary,
 } from '@/features/gemini/usage-summary'
 import { AiFeatureToggle } from '@/features/gemini/components/ai-feature-toggle'
+import { getModelCatalog } from '@/features/gemini/model-discovery'
 import {
   AiModelSelect,
   type ModelSuggestion,
@@ -77,12 +78,15 @@ function suggestModelFor(
   used: FeatureUsageSummary | undefined,
   hasPaidKey: boolean,
   now: Date,
+  /** The discovered catalog for this kind — never the static fallback, or a
+   *  cheaper-model nudge could point at a model that no longer exists. */
+  choices: readonly ModelChoice[],
 ): ModelSuggestion | null {
   if (!used || used.calls === 0) return null
   const currentCost = estimatePerUseCostUsd(estimate, chosenModel, now)
   if (currentCost === null) return null
   let best: { id: string; label: string; cost: number } | null = null
-  for (const c of MODEL_CHOICES[kind]) {
+  for (const c of choices) {
     if (c.stability !== 'stable') continue
     if (!c.freeTier && !hasPaidKey) continue
     if (c.id === chosenModel) continue
@@ -99,10 +103,16 @@ function suggestModelFor(
 export async function AiFeaturesCard({ userId }: { userId: string }) {
   const now = new Date()
   const since = new Date(now.getTime() - WINDOW_MS)
-  const [prefs, aggRows, keys] = await Promise.all([
+  const [prefs, aggRows, keys, catalog] = await Promise.all([
     getAiPrefs(userId),
     aggregateAiUsage(userId, since),
     listGeminiKeys(userId),
+    // What Google says exists right now. Fetched HERE, on the server, because
+    // discovery needs an API key — and answered from a shared 15-minute cache,
+    // so opening Settings does not spend a request from anybody's free tier.
+    // Falls back to the static list on its own when it cannot reach Google, so
+    // there is no failure branch to handle at this call site.
+    getModelCatalog(userId),
   ])
   const summaries = summarizeUsage(aggRows, now)
   const totals = totalsFor(summaries)
@@ -239,7 +249,7 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
             // is usually a brand-new feature with no history — but the ordering
             // is not guaranteed, and the suggestion points at the wrong lever.
             const suggestion = routed
-              ? suggestModelFor(f.kind, estimate, chosenModel, used, hasPaidKey, now)
+              ? suggestModelFor(f.kind, estimate, chosenModel, used, hasPaidKey, now, catalog[f.kind])
               : null
             return (
               <li key={f.id} className="flex flex-col gap-2 py-3">
@@ -295,6 +305,7 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
                   feature={f.id}
                   label={f.label}
                   kind={f.kind}
+                  choices={catalog[f.kind]}
                   model={chosenModel}
                   // `&& routed`: a select SOLICITS action in a way a static
                   // badge does not. An unrouted row that says "cannot run" and
