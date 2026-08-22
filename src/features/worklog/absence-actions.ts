@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { and, eq, inArray, ne } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { absences } from '@/db/schema'
@@ -132,7 +132,15 @@ async function review(
       : can(actor, 'absence.approve', { ownerId: row.userId })
     if (!permitted) return err('Not allowed')
 
-    await db
+    // COMPARE-AND-SET, AND THE RESULT IS READ. The predicate was always right;
+    // nothing checked whether it matched. Two reviewers opening the same
+    // pending row both pass the `row.status !== 'pending'` guard above — that
+    // check runs against a SELECT taken before either of them decided — so the
+    // loser's UPDATE touched zero rows while this function went on to write an
+    // 'approved' activity row and return ok. The reviewer saw a success toast,
+    // the audit trail gained a decision nobody made, and the actual decision
+    // was somebody else's.
+    const updated = await db
       .update(absences)
       .set({
         status: decision,
@@ -142,6 +150,10 @@ async function review(
         updatedAt: new Date(),
       })
       .where(and(eq(absences.id, row.id), eq(absences.status, 'pending')))
+      .returning({ id: absences.id })
+
+    // Nothing is logged and nothing is claimed when nothing changed.
+    if (updated.length === 0) return err('Somebody already decided that one')
 
     await logActivity({
       actorId: actor.id,
@@ -180,10 +192,24 @@ export async function withdrawAbsence(raw: { id: string }): Promise<ActionResult
     if (row.userId !== actor.id) return err('Not allowed')
     if (row.status !== 'pending') return err('That absence has already been reviewed')
 
-    await db
+    // `eq(status, 'pending')`, NOT `ne(status, 'approved')`.
+    //
+    // The old predicate matched anything that was not approved — including
+    // 'rejected'. A reviewer who rejected this absence in the window between
+    // the SELECT above and this UPDATE had their decision silently rewritten
+    // to 'withdrawn', taking reviewerId, reviewedAt and the reason they typed
+    // with it. The person withdrew a request that had already been refused and
+    // the refusal simply vanished.
+    //
+    // The set of states this may leave is exactly one: pending. Saying that
+    // directly is also what makes the zero-row case meaningful below.
+    const updated = await db
       .update(absences)
       .set({ status: 'withdrawn', updatedAt: new Date() })
-      .where(and(eq(absences.id, row.id), ne(absences.status, 'approved')))
+      .where(and(eq(absences.id, row.id), eq(absences.status, 'pending')))
+      .returning({ id: absences.id })
+
+    if (updated.length === 0) return err('That absence has already been reviewed')
 
     revalidatePath('/worklog')
     revalidatePath('/admin', 'layout')
