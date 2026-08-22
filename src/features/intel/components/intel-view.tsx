@@ -20,15 +20,22 @@ import { SignalBoard } from '@/features/intel/components/signal-board'
  * TWO READS, TWO STATES, ON PURPOSE. The page split these across two Suspense
  * boundaries because they cost very different things: signals are a batched
  * database read, the briefing is a Gemini call that can take seconds. That
- * split is preserved here as two independent loads rather than one combined
- * await, so the board — the one thing here that must be readable immediately,
- * and the one that works with AI switched off entirely — never waits on the
- * model.
+ * split is preserved here as two separate states, so the board — the one thing
+ * here that must be readable immediately, and the one that works with AI
+ * switched off entirely — never waits on the model.
+ *
+ * SEQUENCED, NOT RACED. This said "two independent loads" and fired them
+ * together, which the transport does not honour: Next serialises server
+ * actions from one client. The briefing went first, hung on a Gemini call that
+ * had no timeout, and the fast signals read queued behind it never ran — two
+ * panels frozen on their loading state with nothing rejecting, so neither
+ * error branch fired. Signals is awaited first now, which is what "the board
+ * never waits on the model" actually requires.
  *
  * CLIENT-SIDE, unlike the page, and that is forced rather than chosen: a dialog
  * body cannot be a server component. The cost is a spinner on first open; the
- * mitigation is that both reads start the moment this mounts, and the signals
- * half typically lands first.
+ * mitigation is that the cheap half is asked for first and lands in a couple of
+ * hundred milliseconds.
  *
  * FETCHED ONCE PER MOUNT. The bubble discards this on close, so reopening
  * re-reads — right for a surface whose whole claim is "what is true now", and
@@ -47,25 +54,44 @@ export function IntelView({ region }: { region?: 'briefing' | 'signals' }) {
   React.useEffect(() => {
     let live = true
 
-    void getSignals()
-      .then((res) => {
-        if (!live) return
-        setSignals(res.ok ? { state: 'ok', data: res.data } : { state: 'error', message: res.error })
-      })
-      .catch(() => {
+    // SEQUENCED, NOT RACED — and that is a correction, not a preference.
+    //
+    // These were fired together on the belief that they were independent
+    // boundaries: signals a batched database read, the briefing a Gemini call
+    // that can take seconds. Next serialises server actions from one client,
+    // so they were never independent. The briefing went first, hung on a
+    // Gemini request that had no timeout, and the 200ms signals read queued
+    // behind it never ran — one stuck upstream call, two panels frozen on
+    // their loading state, and neither .catch fired because nothing rejected.
+    //
+    // Signals first, therefore: the fast, always-available half renders while
+    // the slow, externally-dependent half is still working, which is what the
+    // two separate boundaries were for in the first place.
+    void (async () => {
+      try {
+        const res = await getSignals()
+        if (live) {
+          setSignals(
+            res.ok ? { state: 'ok', data: res.data } : { state: 'error', message: res.error },
+          )
+        }
+      } catch {
         if (live) setSignals({ state: 'error', message: 'Could not reach the signals.' })
-      })
+      }
 
-    void getBriefing()
-      .then((res) => {
-        if (!live) return
-        setBriefing(
-          res.ok ? { state: 'ok', data: res.data } : { state: 'error', message: res.error },
-        )
-      })
-      .catch(() => {
+      // Started only once signals has landed. Awaiting it here costs nothing
+      // that the transport was not already charging silently.
+      try {
+        const res = await getBriefing()
+        if (live) {
+          setBriefing(
+            res.ok ? { state: 'ok', data: res.data } : { state: 'error', message: res.error },
+          )
+        }
+      } catch {
         if (live) setBriefing({ state: 'error', message: 'Could not reach the briefing.' })
-      })
+      }
+    })()
 
     return () => {
       live = false

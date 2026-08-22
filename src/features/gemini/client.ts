@@ -60,11 +60,34 @@ export async function hasGeminiKeys(userId: string): Promise<boolean> {
   return Boolean(row)
 }
 
+/**
+ * How long one Gemini request may hang before it is abandoned.
+ *
+ * THERE WAS NO TIMEOUT AT ALL, and fetch has none by default — a request the
+ * upstream never answers never settles, so the server action awaiting it never
+ * returns and the caller's .catch never fires. The briefing panel sat on
+ * "Writing today's briefing…" forever, and because Next serialises server
+ * actions from one client, the signals read queued behind it never ran either:
+ * one hung call, two dead panels, no error anywhere.
+ *
+ * The retry policy has always listed "network/timeout" as retriable
+ * (retry.ts). This is the timeout that policy was written for and never had —
+ * an abort lands in the same catch as any other network failure and is retried
+ * on the same terms.
+ *
+ * Generous rather than tight: a long briefing over a thinking model is
+ * legitimately slow, and the failure this guards against is a socket that
+ * answers nothing, not one that answers late. Three attempts stay inside
+ * Vercel's 300s function ceiling.
+ */
+const GEMINI_REQUEST_TIMEOUT_MS = 60_000
+
 /** Cheap credential check — lists one model, costs no tokens. */
 export async function validateGeminiKey(apiKey: string): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/models?pageSize=1`, {
       headers: { 'X-goog-api-key': apiKey },
+      signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
     })
     return res.ok
   } catch {
@@ -147,6 +170,10 @@ async function callModelWithRetry<T>(
     try {
       res = await fetch(`${API_BASE}/models/${model}:generateContent`, {
         method: 'POST',
+        // Per ATTEMPT, not per call: the retry loop is what decides whether a
+        // timed-out attempt is worth repeating, and a signal shared across
+        // attempts would abort the retries too.
+        signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
         headers: { 'Content-Type': 'application/json', 'X-goog-api-key': apiKey },
         body: JSON.stringify({
           contents: [{ parts }],
