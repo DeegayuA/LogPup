@@ -59,6 +59,12 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   // Everything else here is a metric you read, and its one interactive control
   // (accept/dismiss) needs a suggestion selected.
   'meeting-load': 'its route is already a palette row under meetings; the rest is metrics you read and a decision that needs a suggestion selected',
+  // Server-side evidence plumbing for the worklog draft: a JWT signer, a
+  // commit reader and one profile column. Its only user-facing surface is the
+  // GitHub card on /profile, and /profile is already a palette row. RETIRE
+  // THIS if a commit-history page or a per-person commits card ever ships —
+  // that route would deserve a row.
+  github: 'evidence plumbing with no route of its own; its one surface lives on /profile, which already has a row',
   // Both its actions need an appId AND a file the person has already chosen
   // in a picker. A palette row for "import deadlines" could only ever open the
   // dialog it is already one click from, on a project the palette cannot know.
@@ -103,6 +109,11 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   pwa: 'no tables of its own',
   search: 'owns the registry itself',
   settings: 'no tables of its own',
+  // Same shape argument finance makes, and the same privacy one. These are
+  // figures you read ON a person over a window, not rows you jump TO — and
+  // per-person output data is the last thing that belongs in an index
+  // anybody can type a colleague's name into.
+  signals: 'figures you read on a person over a window rather than rows you jump to, and per-person output data does not belong in a workspace-wide index',
   speech: 'no tables of its own',
   transcription: 'transcripts hang off a meeting, which is already searchable',
   worklog: "a person's own log, read on their own page",
