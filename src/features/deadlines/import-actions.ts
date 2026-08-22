@@ -6,7 +6,7 @@ import { revalidatePath } from 'next/cache'
 
 import { db } from '@/db'
 import { liveApps, liveTasks } from '@/db/live'
-import { apps, tasks } from '@/db/schema'
+import { tasks } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
 import { logActivity } from '@/features/activity/log'
 import { applyDueDate, DueDateError, type DueState } from '@/features/sprints/due-date'
@@ -93,10 +93,12 @@ async function requireDeadlineImporter(appId: string) {
   const actor = await requireCapability('task.edit', { appId })
   if (!actor) return null
 
+  // liveApps carries pmId/leadId itself — joining the raw table to reach them
+  // would read a soft-deleted project's roles, which is the whole thing the
+  // live_* subqueries exist to prevent.
   const [row] = await db
-    .select({ pmId: apps.pmId, leadId: apps.leadId })
+    .select({ pmId: liveApps.pmId, leadId: liveApps.leadId })
     .from(liveApps)
-    .innerJoin(apps, eq(apps.id, liveApps.id))
     .where(eq(liveApps.id, appId))
     .limit(1)
   if (!row) return null

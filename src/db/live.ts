@@ -2,7 +2,7 @@ import { QueryBuilder } from 'drizzle-orm/pg-core'
 import { isNull } from 'drizzle-orm'
 import {
   apps, bugReports, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
-  worklogEntries,
+  worklogEntries, meetingSeries,
 } from './schema'
 
 // Connection-free: QueryBuilder builds SQL without a client, so importing
@@ -34,6 +34,8 @@ export const liveScreenshotsAs = (name: string) =>
   qb.select().from(meetingScreenshots).where(isNull(meetingScreenshots.deletedAt)).as(name)
 export const liveWorklogEntriesAs = (name: string) =>
   qb.select().from(worklogEntries).where(isNull(worklogEntries.deletedAt)).as(name)
+export const liveMeetingSeriesAs = (name: string) =>
+  qb.select().from(meetingSeries).where(isNull(meetingSeries.deletedAt)).as(name)
 
 export const liveApps = liveAppsAs('live_apps')
 export const liveBugReports = liveBugReportsAs('live_bug_reports')
@@ -43,6 +45,7 @@ export const liveSprints = liveSprintsAs('live_sprints')
 export const liveNoteSegments = liveNoteSegmentsAs('live_note_segments')
 export const liveScreenshots = liveScreenshotsAs('live_screenshots')
 export const liveWorklogEntries = liveWorklogEntriesAs('live_worklog_entries')
+export const liveMeetingSeries = liveMeetingSeriesAs('live_meeting_series')
 
 /**
  * Every column of `apps`, taken from the LIVE subquery.
@@ -62,6 +65,9 @@ export const liveAppColumns = {
   id: liveApps.id,
   name: liveApps.name,
   slug: liveApps.slug,
+  // Carried here rather than left to callers: AppPortfolioEntry is inferred
+  // from this set, so a column absent from it is a column no live read can see.
+  internal: liveApps.internal,
   description: liveApps.description,
   status: liveApps.status,
   repoUrl: liveApps.repoUrl,
@@ -95,6 +101,13 @@ export const SOFT_TABLES = [
   // deleted one reappearing in a total is the app contradicting them about
   // their own hours.
   { table: worklogEntries, sqlName: 'worklog_entries', live: liveWorklogEntries, liveAs: liveWorklogEntriesAs },
+  // The table landed in 4d94451 carrying deleted_at but never reached this
+  // list, so the guard went red the moment it was declared — which is the
+  // guard doing precisely its job. Registered here BEFORE the series UI has a
+  // reader, per the rule the entries above state: adding a soft table after
+  // its readers exist means the guard was blind for exactly as long as it
+  // mattered. A cancelled series must not keep materialising occurrences.
+  { table: meetingSeries, sqlName: 'meeting_series', live: liveMeetingSeries, liveAs: liveMeetingSeriesAs },
 ] as const
 
 // Registered BEFORE anything reads them. Both tables arrived with later

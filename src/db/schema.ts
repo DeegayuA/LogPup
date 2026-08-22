@@ -200,6 +200,11 @@ export const apps = pgTable('apps', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
   slug: text('slug').notNull().unique(),
+  // Ours rather than a client's. Defaults to false, which describes every
+  // existing row correctly: a project nobody has marked internal is a client
+  // project, and that is what all of them are today. Read by the cost and
+  // worth surfaces, which must not bill an internal project to anybody.
+  internal: boolean('internal').notNull().default(false),
   description: text('description'),
   status: appStatus('status').notNull().default('active'),
   repoUrl: text('repo_url'),
@@ -440,6 +445,18 @@ export const tasks = pgTable('tasks', {
   // disagree, activity_log wins. Increments only on non-null -> DIFFERENT
   // non-null, so first-set and clear both leave it alone.
   dueChangedCount: integer('due_changed_count').notNull().default(0),
+  // WHEN it was finished, as opposed to `status` saying THAT it is.
+  //
+  // NULL on every row that predates this column, and that is the honest value:
+  // nothing recorded when those tasks were completed, and backfilling from
+  // `updated_at` would invent a completion time indistinguishable from a real
+  // one ever after. For anything older, activity_log's 'completed' verb
+  // remains the answer — and stays the authority where the two disagree, the
+  // same precedence rule due_changed_count already documents.
+  //
+  // Set on entry to 'done' and CLEARED on reopen, by transitionTaskStatus and
+  // nothing else. A status write that bypasses it leaves this column lying.
+  completedAt: timestamp('completed_at', { withTimezone: true }),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   deletedBy: uuid('deleted_by').references(() => users.id),
@@ -447,6 +464,12 @@ export const tasks = pgTable('tasks', {
   // Covers the board's only read: filter (app_id, sprint_id), order by rank.
   // `tasks` had no index at all, so every board render was a full scan + sort.
   index('tasks_app_sprint_sort_idx').on(t.appId, t.sprintId, t.sortOrder).where(sql`${t.deletedAt} is null`),
+  // "What is on this person's plate, soonest first" — the read behind every
+  // deadline surface in the product, and it had nothing. Partial on the two
+  // conditions every one of those reads already carries.
+  index('tasks_assignee_due_idx')
+    .on(t.assigneeId, t.dueDate)
+    .where(sql`${t.deletedAt} is null and ${t.status} <> 'done'`),
 ])
 
 /**
@@ -975,14 +998,62 @@ export const notifications = pgTable('notifications', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+  // The LEGACY discriminator, and deliberately still an enum. `kind` below
+  // supersedes it — the design's whole complaint was that a new kind of
+  // notification needed a migration, and a free-text `kind` fixes that without
+  // converting a live column on a database several sessions share.
   type: notificationType('type').notNull(),
+  // Fallbacks, not the record. A row written before title_key existed renders
+  // from these; a row written after renders from title_key + params, so a
+  // person's name is resolved at READ time and a renamed user is not left
+  // frozen in somebody's inbox under their old name.
   title: text('title').notNull(),
   body: text('body'),
   link: text('link'),
   meetingId: uuid('meeting_id').references(() => meetings.id, { onDelete: 'cascade' }),
   read: boolean('read').notNull().default(false),
+  // What kind of thing happened, as a string. 'legacy' for every row written
+  // before this column existed, then backfilled from `type` by migration 0057.
+  kind: text('kind').notNull().default('legacy'),
+  // The i18n key and its parameter bag. params carries IDS, NOT NAMES —
+  // actorId, appId, taskId — because freezing actorName into jsonb at write
+  // time is how an inbox ends up asserting something that stopped being true.
+  titleKey: text('title_key'),
+  params: jsonb('params').$type<Record<string, unknown>>(),
+  // NO FOREIGN KEY on either, matching activity_log's posture and for its
+  // reason: a notification about a task must survive that task being trashed.
+  // The click-through resolves at read time and degrades to "no longer
+  // available" rather than the row vanishing from somebody's inbox.
+  entityType: text('entity_type'),
+  entityId: uuid('entity_id'),
+  dedupeKey: text('dedupe_key'),
+  // Which of the two dedupe rules applies. true is an escalation ladder — one
+  // row per (person, key), ever. false collapses only while unread, so the
+  // count resets once they have seen it.
+  dedupePermanent: boolean('dedupe_permanent').notNull().default(false),
+  collapseCount: integer('collapse_count').notNull().default(1),
+  // NOT `deletedAt`, on purpose. This table is not part of the five-table
+  // soft-delete contract and must not be pulled into it by naming: dismissing
+  // a notification is somebody clearing their own inbox, not an admin trashing
+  // a record, and no Trash bin should ever list one.
+  dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+  digestState: text('digest_state').notNull().default('none'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
-})
+}, (t) => [
+  // The bell, which polls every 20 seconds and until now had no index at all.
+  index('notifications_bell_idx')
+    .on(t.userId, t.read, t.createdAt.desc())
+    .where(sql`${t.dismissedAt} is null`),
+  index('notifications_inbox_idx').on(t.userId, t.createdAt.desc()),
+  // Cascade on trash: "everything pointing at this entity".
+  index('notifications_entity_idx').on(t.entityType, t.entityId),
+  uniqueIndex('notifications_dedupe_permanent_idx')
+    .on(t.userId, t.dedupeKey)
+    .where(sql`${t.dedupePermanent}`),
+  uniqueIndex('notifications_dedupe_collapse_idx')
+    .on(t.userId, t.dedupeKey)
+    .where(sql`not ${t.dedupePermanent} and ${t.read} = false and ${t.dismissedAt} is null`),
+])
 
 // Discussion thread on an app's overview. @mentions in the body notify the
 // mentioned users via the notifications table (see app comment actions).
