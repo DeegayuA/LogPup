@@ -192,3 +192,107 @@ export function csvFilename(prefix: string, at: Date): string {
   const iso = at.toISOString().slice(0, 10)
   return `${prefix}-${iso}.csv`
 }
+
+// ---------------------------------------------------------------------------
+// Reading a CSV back in
+// ---------------------------------------------------------------------------
+//
+// The other direction, kept beside `toCsv` so the two halves of the format
+// cannot drift. Lifted out of features/bugs/bug-csv.ts when a second importer
+// needed it: two hand-rolled RFC 4180 parsers in one repo is a future
+// divergence, and the awkward cases below are awkward for every importer, not
+// just that one.
+
+/**
+ * RFC 4180, as actually emitted rather than as specified.
+ *
+ * Written by hand rather than pulled in, because the awkward cases are few and
+ * every one of them is a case Excel produces on an ordinary Tuesday: a
+ * description with a comma in it, a description with a NEWLINE in it (Alt+Enter
+ * inside a cell), `""` for a literal quote, CRLF endings, and a UTF-8 BOM on
+ * every "CSV UTF-8" save. A parser that splits on `,` and `\n` breaks on the
+ * first real bug report somebody writes.
+ *
+ * Returns raw cells; blank lines are dropped by the caller, not here, so the
+ * row numbering stays honest.
+ */
+export function splitCsvRows(text: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let inQuotes = false
+
+  // The BOM. Left in place it becomes part of the first header name, so
+  // `title` stops matching, and every row in the file is reported as missing
+  // a title — the single most confusing way this feature could fail.
+  let index = text.charCodeAt(0) === 0xfeff ? 1 : 0
+
+  for (; index < text.length; index += 1) {
+    const char = text[index]
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[index + 1] === '"') {
+          field += '"'
+          index += 1
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += char
+      }
+      continue
+    }
+
+    if (char === '"' && field === '') {
+      // A quote only opens a quoted field at the START of one. Mid-field it is
+      // data — `5" screen` is a size, not a delimiter.
+      inQuotes = true
+      continue
+    }
+
+    if (char === ',') {
+      row.push(field)
+      field = ''
+      continue
+    }
+
+    if (char === '\r' || char === '\n') {
+      // CRLF, LF and lone CR all end a row. The lone CR matters: it is what a
+      // spreadsheet exported on an old Mac still produces.
+      if (char === '\r' && text[index + 1] === '\n') index += 1
+      row.push(field)
+      field = ''
+      rows.push(row)
+      row = []
+      continue
+    }
+
+    field += char
+  }
+
+  // Only reached when the file does not end in a newline — most do.
+  if (field !== '' || row.length > 0) {
+    row.push(field)
+    rows.push(row)
+  }
+  return rows
+}
+
+/**
+ * `  Assignee Email ` and `assignee-email` are the same column.
+ *
+ * Also strips a BOM that survived onto a header (a file concatenated from two
+ * exports can carry one mid-stream) and drops surrounding quotes a
+ * hand-written header sometimes keeps.
+ */
+export function normalizeHeader(raw: string): string {
+  return raw
+    .replace(/﻿/g, '')
+    .trim()
+    // `[\s\S]` rather than `.` with the `s` flag: tsconfig targets ES2017,
+    // where dotAll does not exist, and tsc rejects the flag outright.
+    .replace(/^"([\s\S]*)"$/, '$1')
+    .toLowerCase()
+    .replace(/[\s.\-]+/g, '_')
+}

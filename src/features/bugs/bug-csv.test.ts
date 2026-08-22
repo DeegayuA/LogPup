@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { normalizeHeader, splitCsvRows } from '@/features/admin/bulk-logic'
 import {
   BUG_CSV_COLUMNS,
   BUG_CSV_EXAMPLE_ROW,
@@ -8,9 +9,7 @@ import {
   bugCsvTemplateFilename,
   describeBugImport,
   isTemplateExampleRow,
-  normalizeHeader,
   parseBugCsv,
-  splitCsvRows,
   validateBugCsvRow,
 } from './bug-csv'
 import { BUG_SEVERITIES, BUG_STATUSES } from './bug-display'
