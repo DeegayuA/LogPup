@@ -59,6 +59,10 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   // Everything else here is a metric you read, and its one interactive control
   // (accept/dismiss) needs a suggestion selected.
   'meeting-load': 'its route is already a palette row under meetings; the rest is metrics you read and a decision that needs a suggestion selected',
+  // Both its actions need an appId AND a file the person has already chosen
+  // in a picker. A palette row for "import deadlines" could only ever open the
+  // dialog it is already one click from, on a project the palette cannot know.
+  deadlines: 'its two actions need a project and an uploaded file, neither of which a bare query can supply',
   notion: 'its one action needs a sprintId',
   onboarding: 'renders only on /pending, where the palette does not exist',
   pwa: 'its affordances are components wired to browser events, not callables',
@@ -89,6 +93,10 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   // for — and a dismissed suggestion is the last thing that should be findable
   // by typing somebody's series name.
   'meeting-load': 'series are inferred rather than stored, and its one table holds dismissals nobody should be able to search for',
+  // It owns no tables. It WRITES to tasks.due_date, and tasks are already
+  // searchable from the sprints feature — a second provider over the same rows
+  // would put every task in the palette twice.
+  deadlines: 'owns no tables; it writes deadlines onto tasks, which sprints already makes searchable',
   notifications: 'a personal inbox, not a workspace index',
   notion: 'no tables of its own',
   onboarding: 'no tables of its own',
