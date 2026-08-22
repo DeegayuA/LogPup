@@ -81,6 +81,11 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
 /** Features with nothing searchable. Same rule: say why. */
 const NO_SEARCH: Readonly<Record<string, string>> = {
   activity: 'activity is a feed to scroll, not a set of things to jump to',
+  // Its one table column is users.github_login, and the people provider
+  // already indexes people; commits live on GitHub, not in a table ⌘K could
+  // read. Same retirement condition as its NO_COMMANDS entry: a
+  // commit-history page would change this answer.
+  github: 'no searchable rows of its own — its column hangs off users, which the people provider indexes',
   admin: 'it administers users, which the people provider already indexes',
   auth: 'own-account data only',
   calendar: 'no tables of its own',
