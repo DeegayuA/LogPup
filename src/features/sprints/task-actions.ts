@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { applyDueDate } from '@/features/sprints/due-date'
+import { transitionTaskStatus } from '@/features/sprints/task-status'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { meetingFollowups, tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
@@ -331,7 +332,12 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
         description: description || null,
         assigneeId,
         priority,
-        status,
+        // Through transitionTaskStatus for the same reason the due date goes
+        // through applyDueDate: a task created AS 'done' — the ⌘K "log the
+        // thing I just finished" path — is an entry into done and must carry
+        // its completed_at. `null` is the honest current status here; there is
+        // no row yet to have had one.
+        ...transitionTaskStatus(null, status, new Date()),
         sortOrder,
         // Through applyDueDate rather than writing dueDate straight: a task
         // created WITH a date is a first null -> non-null transition and must
@@ -424,6 +430,15 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     }
   }
 
+  // The status the caller sent never reaches the UPDATE on its own: it is
+  // replaced by the helper's patch, which also decides completed_at. The
+  // dialog re-sends `status` on every save, so most trips through here are
+  // done -> done or todo -> todo, where the patch deliberately omits
+  // completed_at and the column is left exactly as it was.
+  if (parsed.data.status !== undefined) {
+    Object.assign(set, transitionTaskStatus(existing.status, parsed.data.status, new Date()))
+  }
+
   try {
     await db.update(tasks).set(set).where(eq(tasks.id, taskId))
   } catch (error) {
@@ -504,7 +519,12 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
   }
 
   const set: Record<string, unknown> = { sortOrder }
-  if (status !== undefined) set.status = status
+  // A drop into the 'Done' column is a completion, and it is the path most
+  // completions actually take — so it goes through the same door as the
+  // dialog's save rather than assigning `status` directly.
+  if (status !== undefined) {
+    Object.assign(set, transitionTaskStatus(existing.status, status, new Date()))
+  }
   if (assigneeId !== undefined) set.assigneeId = assigneeId
   if (priority !== undefined) set.priority = priority
 
@@ -627,6 +647,10 @@ export async function bulkUpdateTasks(
       appId: liveTasks.appId,
       assigneeId: liveTasks.assigneeId,
       title: liveTasks.title,
+      // Needed by transitionTaskStatus below: the completed_at a bulk status
+      // change writes depends on where each row is coming FROM, which one
+      // patch for the whole selection cannot know.
+      status: liveTasks.status,
     })
     .from(liveTasks)
     .where(inArray(liveTasks.id, taskIds))
@@ -653,13 +677,40 @@ export async function bulkUpdateTasks(
     if (allowed.length === 0) return err('That sprint belongs to a different app')
   }
 
+  // A BULK STATUS CHANGE IS N TRANSITIONS, NOT ONE. Two cards sent to 'Done'
+  // where one was already done must end with two DIFFERENT completed_at
+  // values — the old stamp left standing, the new one written — and a single
+  // `set completed_at = $now` over the whole selection cannot say that; it
+  // would rewrite the completion time of every card that was already finished.
+  // So the rows are grouped by their CURRENT status, each group gets the patch
+  // transitionTaskStatus decided for it, and the (at most three) statements go
+  // out as one batch. A patch with no status stays a single statement.
+  const now = new Date()
+  const groups = new Map<string, { set: Record<string, unknown>; ids: string[] }>()
+  for (const row of allowed) {
+    const key = patch.status === undefined ? 'no-status-change' : row.status
+    const existingGroup = groups.get(key)
+    if (existingGroup) {
+      existingGroup.ids.push(row.id)
+      continue
+    }
+    groups.set(key, {
+      set:
+        patch.status === undefined
+          ? { ...patch }
+          : { ...patch, ...transitionTaskStatus(row.status, patch.status, now) },
+      ids: [row.id],
+    })
+  }
+
   try {
-    await db.update(tasks).set(patch).where(
-      inArray(
-        tasks.id,
-        allowed.map((row) => row.id),
-      ),
+    // `allowed` is non-empty by the guards above, so there is always a first.
+    const [first, ...rest] = [...groups.values()].map((group) =>
+      db.update(tasks).set(group.set).where(inArray(tasks.id, group.ids)),
     )
+    // db.batch needs a statically non-empty tuple; neon-http has no
+    // transaction to wrap these in either way.
+    await (rest.length === 0 ? first : db.batch([first, ...rest]))
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid sprint or assignee')
     return unexpected('bulkUpdateTasks', error)

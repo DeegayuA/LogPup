@@ -1,7 +1,9 @@
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { dailyWorklogs, meetings, sprints, tasks } from '@/db/schema'
+import type { TaskStatus } from '@/features/sprints/board-view'
 import { applyDueDate, type DueKind, type DueState } from '@/features/sprints/due-date'
+import { transitionTaskStatus } from '@/features/sprints/task-status'
 
 /**
  * Applying an approved change request.
@@ -114,6 +116,51 @@ export function buildTaskDeadlineSet(
   return { ...rest, ...patch }
 }
 
+/**
+ * A task's status and `completed_at`, rebuilt through the one helper that owns
+ * them — the other half of the same argument buildTaskDeadlineSet makes.
+ *
+ * THIS IS THE FOURTH WRITER OF tasks.status, and the one nobody remembers.
+ * createTask, updateTask, moveTaskOnBoard and bulkUpdateTasks all route
+ * through `transitionTaskStatus`; an approved change request reached the row
+ * through the generic spread below instead, writing `status: 'done'` and
+ * leaving `completed_at` NULL. That is worse than a missing value: the row
+ * then reads "finished" while answering "never completed", and every
+ * throughput and cycle-time reader believes the timestamp. It arrived, of all
+ * the ways it could, through the one door with a reviewer's name attached.
+ *
+ * `now` is a parameter for the same reason it is one in the helper — the
+ * completion time belongs to the approval, not to whenever this function
+ * happens to run.
+ */
+export function buildTaskStatusSet(
+  after: Record<string, unknown>,
+  current: Record<string, unknown> | null,
+  now: Date,
+): Record<string, unknown> {
+  // Only a request that actually moves the status. An edit that never
+  // mentions it must not restate the current status, because a restated
+  // 'done' is still a transition as far as anything downstream can tell.
+  if (!('status' in after) || current === null) return after
+
+  const next = asTaskStatus(after.status)
+  // A payload whose status is not one of the three is left exactly as it was
+  // so it still reaches the DB and is refused by the enum column. Deriving a
+  // completion time from a value we cannot read would be inventing one.
+  if (next === null) return after
+
+  return { ...after, ...transitionTaskStatus(asTaskStatus(current.status), next, now) }
+}
+
+const TASK_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'done']
+
+/** jsonb carries whatever was filed; the enum column is the only guarantee. */
+function asTaskStatus(value: unknown): TaskStatus | null {
+  return typeof value === 'string' && (TASK_STATUSES as readonly string[]).includes(value)
+    ? (value as TaskStatus)
+    : null
+}
+
 /** jsonb hands back strings, the driver hands back Date. Both mean a day. */
 function asIsoDate(value: unknown): string | null {
   if (value instanceof Date) return value.toISOString().slice(0, 10)
@@ -126,10 +173,16 @@ export function buildApplyStatement(
   entityId: string,
   after: Record<string, unknown>,
   current: Record<string, unknown> | null = null,
+  now: Date = new Date(),
 ) {
   const table = TABLES[entityType]
-  // Task deadlines are the only fields in any supported entity with invariants
-  // across columns; everything else is a faithful spread of what was approved.
-  const set = entityType === 'task' ? buildTaskDeadlineSet(after, current) : after
+  // `task` is the only supported entity whose columns carry invariants across
+  // each other — deadlines and completion — so it is the only one that does
+  // not go out as a faithful spread of what was approved. Both halves compose:
+  // a request may move the date, the status, or both.
+  const set =
+    entityType === 'task'
+      ? buildTaskStatusSet(buildTaskDeadlineSet(after, current), current, now)
+      : after
   return db.update(table).set(set).where(eq(table.id, entityId))
 }
