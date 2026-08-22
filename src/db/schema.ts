@@ -119,6 +119,12 @@ export const users = pgTable('users', {
   // up `email` and only `email`, so nothing stored here can become a second
   // way into an account.
   personalEmail: text('personal_email'),
+  // Their GitHub username, self-set from /profile. Same class as phone and
+  // personalEmail: contact/profile metadata, NEVER identity — no sign-in path
+  // reads it, so nothing stored here can become a way into an account. It
+  // exists so the GitHub App integration (src/features/github) can ask "whose
+  // commits are these" without per-user OAuth tokens.
+  githubLogin: text('github_login'),
   role: userRole('role').notNull().default('member'),
   active: boolean('active').notNull().default(true),
   // Admin-approval gate for self-signup (see src/lib/auth.ts signIn callback).

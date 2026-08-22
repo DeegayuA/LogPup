@@ -50,6 +50,9 @@ import {
  * - daily-briefing    -> ANALYSIS_MODELS    (registry chain: 'Analysis' — same
  *                         pack, longer output; NOT Synthesis, which stays
  *                         reserved for the one Pro pass per meeting)
+ * - person-summary    -> ANALYSIS_MODELS    (registry chain: 'Analysis' — one
+ *                         short rewrite of a person page's fact sheet,
+ *                         summary-actions.ts in features/people)
  */
 const DEFAULT_CHAIN: Record<AiFeatureId, readonly string[]> = {
   'meeting-intel': SYNTHESIS_MODELS,
@@ -134,7 +137,7 @@ export function isFeatureRouted(featureId: AiFeatureId): boolean {
  * outright with a raw upstream error, for as long as the choice is set.
  *
  * The exposure was narrowed rather than left open: `gemini-omni-flash` and
- * `gemini-3-flash-preview` were REMOVED from MODEL_CHOICES for exactly this
+ * `gemini-3-flash-preview` were REMOVED from FALLBACK_MODEL_CHOICES for exactly this
  * reason — no published rate existed for either, so they could not be priced
  * honestly, AND nothing guaranteed they would fall through. Either flaw alone
  * would have been tolerable; together they made a choice not worth offering.

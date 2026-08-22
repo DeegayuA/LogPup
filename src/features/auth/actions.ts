@@ -76,6 +76,49 @@ export async function setOwnPhone(phone: string): Promise<ActionResult> {
   return ok(undefined)
 }
 
+/**
+ * GitHub usernames: 1–39 chars, alphanumeric and single hyphens, no leading
+ * or trailing hyphen — GitHub's own rule, checked here so a pasted email or
+ * sentence never lands in a column the commit reader will query by.
+ */
+const GITHUB_LOGIN_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/
+
+/**
+ * Self-serve GitHub username — SELF ONLY, like the phone number above, and
+ * for a sharper reason: this name decides whose commits appear as worklog
+ * evidence for this account, and a worklog is a first-person statement.
+ * Profile metadata, never identity — no sign-in path reads it.
+ */
+export async function setOwnGithubLogin(login: string): Promise<ActionResult> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  // People paste what they have: "@name" or a profile URL both mean name.
+  const trimmed = login
+    .trim()
+    .replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+    .replace(/^@/, '')
+    .replace(/\/+$/, '')
+  const value = trimmed === '' ? null : trimmed
+  if (value !== null && !GITHUB_LOGIN_PATTERN.test(value)) {
+    return err('That does not look like a GitHub username')
+  }
+
+  await db.update(users).set({ githubLogin: value }).where(eq(users.id, session.user.id))
+  await logActivity({
+    actorId: session.user.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: session.user.id,
+    entityLabel: session.user.name ?? session.user.email,
+    pagePath: `/people/${session.user.id}`,
+    detail: value === null ? 'clearing their GitHub username' : 'their GitHub username',
+    metadata: { githubLogin: { to: value } },
+  })
+  revalidatePath('/profile')
+  return ok(undefined)
+}
+
 // There is deliberately no self-serve job-role action here. users.title is
 // admin-only — see setUserTitle in features/admin/actions.ts. A server action
 // exported from this file would keep a stable, callable endpoint even with no

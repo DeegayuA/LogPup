@@ -16,6 +16,15 @@ export async function getOwnPhone(userId: string): Promise<string | null> {
  * carries whatever the picture was when the token was minted, so an upload
  * would keep showing the old image until the next sign-in.
  */
+/** The signed-in user's own GitHub username — profile metadata, never identity. */
+export async function getOwnGithubLogin(userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ githubLogin: users.githubLogin })
+    .from(users)
+    .where(eq(users.id, userId))
+  return row?.githubLogin ?? null
+}
+
 export async function getOwnAvatarUrl(userId: string): Promise<string | null> {
   const [row] = await db
     .select({ avatarUrl: users.avatarUrl })

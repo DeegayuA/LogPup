@@ -15,6 +15,7 @@ import {
   parseDraftedEntries,
   type ProposedEntry,
 } from '@/features/worklog/entry-draft-prompt'
+import { commitPromptLines } from '@/features/github/commits'
 import { getMyDayEntries, loadDayEvidence, toCheckEvidence } from '@/features/worklog/entry-evidence'
 import { WORK_DAY_PATTERN, isFutureWorkDay } from '@/features/worklog/worklog-day'
 
@@ -139,6 +140,7 @@ export async function draftWorklogEntries(
     meetings: evidence.meetings,
     activity: evidence.activity,
     tasks: evidence.tasks,
+    commits: commitPromptLines(evidence.commits),
   })
 
   try {

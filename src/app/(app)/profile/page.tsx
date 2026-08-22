@@ -16,8 +16,9 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { SetPasswordForm } from '@/features/auth/components/set-password-form'
 import { PasskeysCard } from '@/features/auth/components/passkeys-card'
+import { GithubLoginField } from '@/features/auth/components/github-login-field'
 import { PhoneField } from '@/features/auth/components/phone-field'
-import { getOwnPhone, getOwnAvatarUrl, getOwnTitle } from '@/features/auth/queries'
+import { getOwnPhone, getOwnAvatarUrl, getOwnGithubLogin, getOwnTitle } from '@/features/auth/queries'
 import { listPasskeys } from '@/features/auth/webauthn-actions'
 import { AvatarUpload } from '@/features/auth/components/avatar-upload'
 import { isAdminRole, roleLabel } from '@/features/auth/capabilities'
@@ -43,11 +44,12 @@ export default async function ProfilePage(props: {
   // types honestly rather than scattering `?.` through the render.
   if (!user?.id) redirect('/sign-in')
 
-  const [passkeysRes, phone, avatarUrl, title] = await Promise.all([
+  const [passkeysRes, phone, avatarUrl, title, githubLogin] = await Promise.all([
     listPasskeys(),
     getOwnPhone(user.id),
     getOwnAvatarUrl(user.id),
     getOwnTitle(user.id),
+    getOwnGithubLogin(user.id),
   ])
   const passkeys = passkeysRes.ok ? passkeysRes.data : []
   const showFirstLoginBanner = firstLogin === '1' || user.mustChangePassword === true
@@ -146,6 +148,7 @@ export default async function ProfilePage(props: {
         </Card>
 
         <PhoneField phone={phone} />
+        <GithubLoginField githubLogin={githubLogin} />
 
         <SetPasswordForm />
 

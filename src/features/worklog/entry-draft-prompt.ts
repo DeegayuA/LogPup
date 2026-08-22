@@ -124,6 +124,12 @@ export function buildEntryDraftPrompt(input: {
   meetings: readonly DraftMeeting[]
   activity: readonly DraftActivityRow[]
   tasks: readonly DraftTask[]
+  /** Pre-rendered commit lines (commitPromptLines, github/commits.ts), oldest
+   *  first. Empty both when they pushed nothing AND when the GitHub
+   *  integration isn't set up — which is why the section is omitted rather
+   *  than saying "no commits": absence of the integration must never read to
+   *  the model as "they wrote no code that day". */
+  commits: readonly string[]
 }): string {
   const meetings = input.meetings.length > 0
     ? `Meetings they were on, with the times actually recorded:\n${input.meetings.map(meetingLine).join('\n')}`
@@ -135,6 +141,10 @@ export function buildEntryDraftPrompt(input: {
         + `${row.appName ? ` (${row.appName})` : ''}`)
       .join('\n')
     : 'LogPup recorded no other activity for them that day.'
+
+  const commits = input.commits.length > 0
+    ? `Code they pushed that day (commit subjects, oldest first):\n${input.commits.join('\n')}`
+    : ''
 
   const tasks = input.tasks.length > 0
     ? 'Tasks assigned to them and in progress — these ids are the ONLY ones you may use:\n'
@@ -164,7 +174,7 @@ export function buildEntryDraftPrompt(input: {
 ${meetings}
 
 ${activity}
-
+${commits ? `\n${commits}\n` : ''}
 ${tasks}
 
 ${schedule}

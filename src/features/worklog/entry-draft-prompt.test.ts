@@ -38,12 +38,22 @@ const prompt = (over: Partial<Parameters<typeof buildEntryDraftPrompt>[0]> = {})
     meetings,
     activity,
     tasks,
+    commits: [],
     ...over,
   })
 
 const reply = (entries: unknown[]) => JSON.stringify({ entries })
 
 describe('buildEntryDraftPrompt', () => {
+  it('names pushed code only when commit lines exist', () => {
+    // Omitted, not "no commits": an unconfigured GitHub integration and a
+    // day without code look identical here, and only one of them is true.
+    expect(prompt()).not.toContain('Code they pushed')
+    const withCommits = prompt({ commits: ['- [acme/kestrel] fix: rate limiter drift'] })
+    expect(withCommits).toContain('Code they pushed that day')
+    expect(withCommits).toContain('- [acme/kestrel] fix: rate limiter drift')
+  })
+
   it('lists meetings with the times actually recorded', () => {
     expect(prompt()).toContain('09:30-10:30 (60 min) Sprint planning')
   })

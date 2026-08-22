@@ -8,6 +8,8 @@ import { approvedAbsenceDays } from '@/features/worklog/absence-queries'
 import { computeCoverage } from '@/features/worklog/coverage'
 import { patternForDay, scheduledMinutesForFraction, STUDIO_DEFAULT_PATTERN } from '@/features/worklog/schedules'
 import { getMyWorkSchedule, getOrgHolidayDays, getUserJoinDay } from '@/features/worklog/queries'
+import { commitEvidenceFor } from '@/features/github/evidence'
+import type { CommitEvidence } from '@/features/github/commits'
 import type { CheckEntry, DayEvidence } from '@/features/worklog/entry-check'
 import type { DraftMeeting, DraftActivityRow, DraftTask } from '@/features/worklog/entry-draft-prompt'
 import { resolveWorkDay } from '@/features/worklog/worklog-day'
@@ -88,6 +90,10 @@ export type WorklogDayEvidence = {
   meetings: EvidenceMeeting[]
   activity: DraftActivityRow[]
   tasks: DraftTask[]
+  /** Commits they authored inside the day window — empty whenever the GitHub
+   *  App isn't configured or they haven't set a username on /profile, and the
+   *  draft works identically without them (extra witnesses, not a dependency). */
+  commits: CommitEvidence[]
   /** Task ids the activity log shows them demonstrably touching that day. */
   tasksTouched: string[]
 }
@@ -247,7 +253,7 @@ export async function loadDayEvidence(
 ): Promise<WorklogDayEvidence> {
   const { start, end } = dayWindow(day)
 
-  const [schedule, meetings, activityRows, taskRows] = await Promise.all([
+  const [schedule, meetings, activityRows, taskRows, commits] = await Promise.all([
     scheduledMinutesFor(userId, day, now),
     meetingsAttended(userId, day),
     db
@@ -276,6 +282,7 @@ export async function loadDayEvidence(
       .where(and(eq(liveTasks.assigneeId, userId), eq(liveTasks.status, 'in_progress')))
       .orderBy(asc(liveTasks.title))
       .limit(MAX_TASKS),
+    commitEvidenceFor(userId, start, end),
   ])
 
   return {
@@ -290,6 +297,7 @@ export async function loadDayEvidence(
       appName: row.appName,
     })),
     tasks: taskRows.map((row) => ({ id: row.id, title: row.title, appName: row.appName })),
+    commits,
     // A task row in the activity log carries the task's own id as entityId, so
     // "did they touch this task today" is answerable without a second read.
     tasksTouched: [
