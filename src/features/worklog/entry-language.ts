@@ -82,7 +82,20 @@ export const CATEGORY_WORDS: readonly { category: EntryCategory; words: readonly
 /** What a line means when no word above appears in it. */
 export const DEFAULT_CATEGORY: EntryCategory = 'other'
 
+/**
+ * The self-score, when the line carries one.
+ *
+ * REQUIRES THE PERCENT SIGN. "80%" is a score; "80" at the start of a line is
+ * eighty hours' worth of nothing — the bare-number rule already means hours,
+ * and one token that could mean either a judgement or a measurement is exactly
+ * the collapse the percent/minutes firewall exists to prevent. The sign is
+ * cheap to type and impossible to misread.
+ */
+const PERCENT_RE = /(?:^|\s)(\d{1,3})\s*%/
+
 export type ParsedEntryLine = {
+  /** Self-scored percent when the line says one, e.g. "80%". */
+  percent: number | null
   /** Whole minutes, or null when the line names no duration at all. */
   minutes: number | null
   category: EntryCategory
@@ -140,7 +153,19 @@ export function parseEntryLine(
   raw: string,
   refs: { apps?: readonly NamedRef[]; tasks?: readonly NamedRef[] } = {},
 ): ParsedEntryLine {
-  const text = raw.trim()
+  let text = raw.trim()
+
+  // Taken out FIRST, so "80% 2h review" reads as a score and a duration rather
+  // than the duration reader tripping over the score's digits.
+  let percent: number | null = null
+  const percentMatch = text.match(PERCENT_RE)
+  if (percentMatch && Number(percentMatch[1]) <= 100) {
+    percent = Number(percentMatch[1])
+    text = (text.slice(0, percentMatch.index ?? 0) +
+      text.slice((percentMatch.index ?? 0) + percentMatch[0].length))
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  }
 
   let minutes: number | null = null
   let note = text
@@ -185,6 +210,7 @@ export function parseEntryLine(
   // so nothing here fights that.
   if (task) {
     return {
+      percent,
       minutes,
       category: 'task',
       categoryMatched: true,
@@ -199,6 +225,7 @@ export function parseEntryLine(
   // A project name with no other signal means project work, not "other".
   if (app && !categoryMatched) {
     return {
+      percent,
       minutes,
       category: 'other',
       categoryMatched: false,
@@ -211,6 +238,7 @@ export function parseEntryLine(
   }
 
   return {
+    percent,
     minutes,
     category,
     categoryMatched,
@@ -277,4 +305,90 @@ export function parseDuration(raw: string): number | null {
   if (bare) return Math.round(Number(bare[1].replace(',', '.')) * 60)
 
   return null
+}
+
+/**
+ * What the line was understood to say, as labelled pieces the UI can paint.
+ *
+ * SHOWN, NEVER SILENTLY APPLIED. The whole risk of one free-text field is that
+ * a person cannot tell what it heard until after they commit — so the reading
+ * comes back as data, one chip per recognised thing, and anything unrecognised
+ * is explicitly the note rather than quietly dropped.
+ */
+export type LineToken = {
+  kind: 'score' | 'time' | 'category' | 'project' | 'task' | 'note'
+  label: string
+}
+
+export function describeLine(parsed: ParsedEntryLine): LineToken[] {
+  const tokens: LineToken[] = []
+  if (parsed.percent !== null) tokens.push({ kind: 'score', label: `${parsed.percent}% of plan` })
+  if (parsed.minutes !== null) {
+    const hours = Math.round((parsed.minutes / 60) * 10) / 10
+    tokens.push({ kind: 'time', label: `${hours}h` })
+  }
+  if (parsed.taskTitle) tokens.push({ kind: 'task', label: parsed.taskTitle })
+  else if (parsed.appName) tokens.push({ kind: 'project', label: parsed.appName })
+  // The category is only worth a chip once something else anchors it — a bare
+  // "other" on an empty line is noise, not feedback.
+  if (parsed.categoryMatched) tokens.push({ kind: 'category', label: parsed.category })
+  if (parsed.note) tokens.push({ kind: 'note', label: parsed.note })
+  return tokens
+}
+
+/**
+ * What the line still needs before it records anything.
+ *
+ * A line may legitimately carry only a score, only hours, or both — this says
+ * which of the two it currently is, so the button can name what it will do
+ * instead of a generic "Add" that hides whether hours are about to be logged.
+ */
+export type LineIntent = { scores: boolean; logsHours: boolean; note: string }
+
+export function lineIntent(parsed: ParsedEntryLine): LineIntent {
+  return {
+    scores: parsed.percent !== null,
+    logsHours: parsed.minutes !== null,
+    note: parsed.note,
+  }
+}
+
+/** One tap-to-insert suggestion. `text` is appended to the line as typed. */
+export type LineSuggestion = { kind: LineToken['kind']; label: string; text: string }
+
+/**
+ * The chips offered under the field.
+ *
+ * These are not a menu of everything — they are the tokens somebody would
+ * otherwise have to remember the spelling of. Scores and durations first
+ * because they are what a line CANNOT be committed without; projects next
+ * because their names are long and easy to mistype; kinds last because the
+ * grammar usually catches those from ordinary prose.
+ */
+export function lineSuggestions(
+  parsed: ParsedEntryLine,
+  apps: readonly NamedRef[],
+): LineSuggestion[] {
+  const out: LineSuggestion[] = []
+  if (parsed.percent === null) {
+    for (const value of [25, 50, 80, 100]) {
+      out.push({ kind: 'score', label: `${value}%`, text: `${value}%` })
+    }
+  }
+  if (parsed.minutes === null) {
+    for (const value of ['1h', '2h', '4h']) {
+      out.push({ kind: 'time', label: value, text: value })
+    }
+  }
+  if (!parsed.appId && !parsed.taskId) {
+    for (const app of apps.slice(0, 4)) {
+      out.push({ kind: 'project', label: app.name, text: app.name })
+    }
+  }
+  if (!parsed.categoryMatched) {
+    for (const group of CATEGORY_WORDS.slice(0, 4)) {
+      out.push({ kind: 'category', label: group.category, text: group.words[0] })
+    }
+  }
+  return out
 }

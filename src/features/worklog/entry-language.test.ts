@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   CATEGORY_WORDS,
   describeGrammar,
+  describeLine,
   grammarForPrompt,
+  lineIntent,
+  lineSuggestions,
   parseDuration,
   parseEntryLine,
 } from '@/features/worklog/entry-language'
@@ -176,6 +179,93 @@ describe('the sentence reader agrees with the Hours box', () => {
   it('reads every bare duration to the same number of minutes', () => {
     for (const form of ['2h', '1.5h', '1h30', '90m', '2 hours', '45 mins', '0.5h']) {
       expect(parseEntryLine(form).minutes, `"${form}"`).toBe(parseDuration(form))
+    }
+  })
+})
+
+/**
+ * ONE FIELD FOR THE WHOLE DAY. The score, the hours, the project and the note
+ * arrive in one sentence — so the parser has to keep the two halves of the day
+ * apart while reading them from the same string.
+ */
+describe('the self-score', () => {
+  it('reads a percent and keeps it out of the note', () => {
+    const r = parse('80% shipped the importer')
+    expect(r.percent).toBe(80)
+    expect(r.note).toBe('shipped the importer')
+  })
+
+  /**
+   * THE FIREWALL, IN THE GRAMMAR. percent is a JUDGEMENT and minutes are a
+   * MEASUREMENT, and neither may be derived from the other. One token that
+   * could mean either is that collapse by the back door, so a score REQUIRES
+   * its sign — a bare number at the start has always meant hours.
+   */
+  it('will not read a bare number as a score', () => {
+    // A bare leading number has always meant HOURS, so "8 shipped the
+    // importer" is an eight-hour day, not an eight-percent one.
+    expect(parse('8 shipped the importer').percent).toBeNull()
+    expect(parse('8 shipped the importer').minutes).toBe(8 * 60)
+    // And 80 of them is refused as a duration rather than quietly re-read as a
+    // score — out of range stays out of range.
+    expect(parse('80 shipped the importer').percent).toBeNull()
+    expect(parse('80 shipped the importer').minutes).toBeNull()
+  })
+
+  it('reads a score and a duration from the same line, without confusing them', () => {
+    const r = parse('80% 2h reviewed the feeder model for SCADA | CEB Assist')
+    expect(r.percent).toBe(80)
+    expect(r.minutes).toBe(120)
+    expect(r.category).toBe('review')
+    expect(r.appId).toBe('app-scada')
+    expect(r.note).toBe('reviewed the feeder model for SCADA | CEB Assist')
+  })
+
+  it('refuses an impossible score rather than clamping it', () => {
+    expect(parse('180% done').percent).toBeNull()
+  })
+
+  it('is null when the line says nothing about the plan', () => {
+    expect(parse('2h review').percent).toBeNull()
+  })
+})
+
+describe('what it shows back', () => {
+  it('names every recognised piece, and calls the leftovers the note', () => {
+    const tokens = describeLine(parse('80% 2h reviewed the feeder model for SCADA | CEB Assist'))
+    expect(tokens.map((t) => t.kind)).toEqual(['score', 'time', 'project', 'category', 'note'])
+  })
+
+  it('says nothing about a category it did not actually recognise', () => {
+    const tokens = describeLine(parse('2h on the thing'))
+    expect(tokens.some((t) => t.kind === 'category')).toBe(false)
+  })
+
+  it('reports which half of the day the line would write', () => {
+    expect(lineIntent(parse('80% good day'))).toMatchObject({ scores: true, logsHours: false })
+    expect(lineIntent(parse('2h review'))).toMatchObject({ scores: false, logsHours: true })
+    expect(lineIntent(parse('80% 2h review'))).toMatchObject({ scores: true, logsHours: true })
+  })
+})
+
+describe('the suggestions', () => {
+  it('offers only what the line is still missing', () => {
+    const kinds = (text: string) =>
+      new Set(lineSuggestions(parse(text), APPS).map((s) => s.kind))
+    expect(kinds('')).toContain('score')
+    expect(kinds('80%')).not.toContain('score')
+    expect(kinds('2h')).not.toContain('time')
+    expect(kinds('2h SCADA | CEB Assist')).not.toContain('project')
+  })
+
+  // A suggestion that does not parse to what its chip claims is worse than no
+  // suggestion: the person taps "review" and gets a meeting.
+  it('inserts text that actually parses back to what the chip says', () => {
+    for (const s of lineSuggestions(parse(''), APPS)) {
+      const round = parse(`1h ${s.text}`)
+      if (s.kind === 'score') expect(round.percent).toBe(Number(s.label.replace('%', '')))
+      if (s.kind === 'category') expect(round.category).toBe(s.label)
+      if (s.kind === 'project') expect(round.appName).toBe(s.label)
     }
   })
 })

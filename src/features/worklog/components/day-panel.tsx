@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
+import { DayOneLine } from '@/features/worklog/components/day-one-line'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
 import {
@@ -145,14 +146,14 @@ export function DayPanel({
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm sm:p-5">
-      {canEdit && anyAi ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <h2 className="font-heading text-sm font-semibold">Your day</h2>
-            <p className="text-2xs text-muted-foreground">
-              Score it, say what you did, and log where the time went.
-            </p>
-          </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <h2 className="font-heading text-sm font-semibold">Your day</h2>
+          <p className="text-2xs text-muted-foreground">
+            One line does it — a % scores the day, a time logs hours.
+          </p>
+        </div>
+        {canEdit && anyAi ? (
           <Button type="button" size="sm" disabled={filling} onClick={fillMyDay}>
             {filling ? (
               <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
@@ -161,9 +162,29 @@ export function DayPanel({
             )}
             {filling ? 'Reading your day…' : 'Fill my day'}
           </Button>
-        </div>
+        ) : null}
+      </div>
+
+      {/* THE ONE FIELD, in front. Everything below it is the same day seen in
+          detail — what is already logged, and the full controls for correcting
+          it. Kept rather than deleted: the line is the fast path, not the only
+          path, and a day already logged still has to be readable and editable.
+          Collapsed by default so the fast path is what a person meets. */}
+      {canEdit ? (
+        <DayOneLine
+          day={day}
+          apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
+          tasks={tasks}
+          savedNote={initial?.note ?? null}
+          scored={initial != null}
+        />
       ) : null}
 
+      <details open={!canEdit || entries.length > 0 || initial != null}>
+        <summary className="w-fit cursor-pointer text-2xs text-muted-foreground hover:text-foreground">
+          The day in detail
+        </summary>
+        <div className="mt-3 flex flex-col gap-3">
       <WorklogForm
         // Keyed by day AND by fill, so a new draft re-seeds the box while
         // paging to another day still starts from that day's saved state.
@@ -194,6 +215,8 @@ export function DayPanel({
         suggestions={anyAi ? entryDrafts : null}
         evidence={evidence}
       />
+        </div>
+      </details>
     </div>
   )
 }
