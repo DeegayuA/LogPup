@@ -209,7 +209,7 @@ export default async function WorklogPage(props: {
 
       {isAdmin ? (
         <Suspense fallback={<TeamSkeleton />}>
-          <TeamZone today={today} retryHref={retryHref} />
+          <TeamZone today={today} viewerId={session.user.id} retryHref={retryHref} />
         </Suspense>
       ) : null}
     </div>
@@ -944,7 +944,24 @@ async function CatchUpZone({
 // Team zone — admins only
 // ---------------------------------------------------------------------------
 
-async function TeamZone({ today, retryHref }: { today: string; retryHref: string }) {
+async function TeamZone({
+  today,
+  viewerId,
+  retryHref,
+}: {
+  today: string
+  /**
+   * Who is reading. Their OWN row's days link into the editor.
+   *
+   * Not everybody's: a worklog is a first-person statement and there is no
+   * worklog.write.any capability for any seat — capabilities.test.ts asserts
+   * the key does not exist. An admin editing somebody's day would be putting
+   * words in their mouth in the one record that is meant to be theirs, so the
+   * card links to the person instead and the row stays read-only.
+   */
+  viewerId: string
+  retryHref: string
+}) {
   const days = worklogDaysBack(TEAM_DAYS, new Date(`${today}T12:00:00Z`))
   const from = days[days.length - 1]
   const strip = [...days].reverse() // chronological, oldest → today
@@ -1049,10 +1066,14 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
                     today,
                   }) === 'owed',
               ).length
+              const isSelf = person.userId === viewerId
               return (
               <div
                 key={person.userId}
-                className="flex min-w-0 flex-col gap-2 rounded-xl border bg-card p-3"
+                className={cn(
+                  'flex min-w-0 flex-col gap-2 rounded-xl border bg-card p-3',
+                  isSelf && 'border-primary/40',
+                )}
               >
                 <div className="flex items-baseline justify-between gap-2">
                   <Link
@@ -1065,6 +1086,7 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
                       logged" beside three amber squares left the amber ones
                       unnamed, and an unnamed state reads as decoration. */}
                   <span className="shrink-0 text-2xs text-muted-foreground">
+                    {isSelf ? <span className="text-primary">You · </span> : null}
                     <span className="font-mono tabular-nums">{person.entries.size}</span> logged
                     {owed > 0 ? (
                       <>
@@ -1091,8 +1113,12 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
                     }
                     const state = classifyDay(input)
                     const half = isHalfDay(iso, closed.has(iso))
-                    return (
-                      <li key={iso} className="relative size-8 overflow-hidden rounded-sm">
+                    // Own row only, and never a day that cannot be logged
+                    // against — the same rule the calendar's own cells follow.
+                    const editable =
+                      isSelf && state !== 'future' && state !== 'outside'
+                    const paint = (
+                      <>
                         <span
                           aria-hidden
                           className={cn(
@@ -1108,7 +1134,24 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
                             {Number(iso.slice(8, 10))}
                           </span>
                         </span>
-                        <span className="sr-only">{dayStateText(input)}</span>
+                        <span className="sr-only">
+                          {dayStateText(input)}
+                          {editable ? ' — open to edit' : ''}
+                        </span>
+                      </>
+                    )
+                    return (
+                      <li key={iso} className="relative size-8 overflow-hidden rounded-sm">
+                        {editable ? (
+                          <Link
+                            href={`/worklog?day=${iso}&month=${iso.slice(0, 7)}`}
+                            className="absolute inset-0 rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {paint}
+                          </Link>
+                        ) : (
+                          paint
+                        )}
                       </li>
                     )
                   })}
