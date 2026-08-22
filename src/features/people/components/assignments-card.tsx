@@ -1,11 +1,29 @@
+'use client'
+
 import Link from 'next/link'
-import { Crown, LayoutGrid } from 'lucide-react'
+import { useTransition } from 'react'
+import { toast } from 'sonner'
+import { Crown, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { AssignDialog } from '@/features/people/components/assign-dialog'
+import { removeAssignment } from '@/features/people/actions'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CapacityBar, capacityBand } from '@/features/people/components/capacity-bar'
 import { SectionEmpty } from '@/features/people/components/section-empty'
 import { formatPct, PCT_CLASS } from '@/features/people/format-pct'
-import type { PersonAssignment } from '@/features/people/queries'
+import type { AssignableApp, PersonAssignment } from '@/features/people/queries'
 import { cn } from '@/lib/utils'
 
 const linkClass =
@@ -38,22 +56,70 @@ export function AssignmentsCard({
   assignments,
   totalPct,
   overallocated,
+  personId,
+  personName,
+  assignableApps = [],
+  canAssign = false,
 }: {
   assignments: PersonAssignment[]
   totalPct: number
   overallocated: boolean
+  /** Whose workload this is — the fixed end of every allocation edited here. */
+  personId?: string
+  personName?: string
+  /** Live, non-archived projects to choose from. Empty when the reader cannot assign. */
+  assignableApps?: AssignableApp[]
+  /**
+   * `app.assign`, resolved on the server. The controls are hidden without it
+   * AND the action checks again — this gate is about not offering a door that
+   * would be refused, never about being the lock.
+   */
+  canAssign?: boolean
 }) {
   const scale = Math.max(totalPct, 100)
   const band = capacityBand(totalPct)
+  const [isPending, startTransition] = useTransition()
+
+  /* Editable only when we know WHOSE workload this is. The card is rendered in
+     one place today, but a caller that forgot to pass the person would
+     otherwise get an "Add to a project" button that assigns nobody. */
+  const editable = canAssign && personId !== undefined
+
+  function handleRemove(assignmentId: string, appName: string) {
+    startTransition(async () => {
+      try {
+        const res = await removeAssignment(assignmentId)
+        if (!res.ok) toast.error(res.error)
+        else toast.success(`Taken off ${appName}`)
+      } catch {
+        // A thrown error is not `{ ok: false }` — without this catch it is an
+        // unhandled rejection and Remove silently does nothing. Same fix
+        // TeamPanel.handleRemove documents.
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
 
   return (
     <Card>
       <CardHeader>
         <CardTitle as="h2">Workload</CardTitle>
-        <CardAction>
+        <CardAction className="flex items-center gap-2">
           <span className={cn(PCT_CLASS, 'text-xs text-muted-foreground')}>
             {assignments.length} {assignments.length === 1 ? 'app' : 'apps'}
           </span>
+          {editable ? (
+            <AssignDialog
+              userId={personId}
+              apps={assignableApps}
+              personTotalPct={totalPct}
+              trigger={
+                <Button variant="outline" size="sm">
+                  <Plus aria-hidden /> Add to project
+                </Button>
+              }
+            />
+          ) : null}
         </CardAction>
       </CardHeader>
 
@@ -61,7 +127,11 @@ export function AssignmentsCard({
         <SectionEmpty
           icon={LayoutGrid}
           title="Not assigned to any app."
-          hint="Allocations are set from an app's Team panel, or inline on the dashboard capacity list."
+          hint={
+            editable
+              ? 'Add them to a project above — allocations can also be set from an app’s Team panel.'
+              : "Allocations are set from an app's Team panel, or inline on the dashboard capacity list."
+          }
         />
       ) : (
         <>
@@ -69,8 +139,11 @@ export function AssignmentsCard({
             {assignments.map((entry) => (
               <div key={entry.appId} className="flex flex-col gap-1.5 py-2.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  {/* Lands on the app's Team panel — the only place this
-                      allocation can be edited — rather than the page top. */}
+                  {/* Lands on the app's Team panel rather than the page top.
+                      It is no longer the ONLY place this allocation can be
+                      edited — the controls at the end of this row do it from
+                      here — but it is still where the rest of that project's
+                      team is. */}
                   <Link
                     href={`/apps/${entry.slug}#team`}
                     className={cn('truncate text-sm font-medium', linkClass)}
@@ -91,6 +164,76 @@ export function AssignmentsCard({
                   <span className={cn(PCT_CLASS, 'ml-auto text-xs')}>
                     {formatPct(entry.allocationPct)}
                   </span>
+                  {editable ? (
+                    <span className="flex shrink-0 items-center gap-0.5">
+                      <AssignDialog
+                        userId={personId}
+                        apps={assignableApps}
+                        personTotalPct={totalPct}
+                        // The edit form wants the shape the app side passes it.
+                        // appId/slug/appName are this card's language; assignmentId,
+                        // userId, role and allocationPct are what the action needs.
+                        assignment={{
+                          assignmentId: entry.assignmentId,
+                          userId: personId,
+                          name: personName ?? 'this person',
+                          email: '',
+                          avatarUrl: null,
+                          phone: null,
+                          role: entry.role,
+                          allocationPct: entry.allocationPct,
+                          employmentType: null,
+                        }}
+                        trigger={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Edit ${personName ?? 'this person'}’s allocation on ${entry.appName}`}
+                          >
+                            <Pencil aria-hidden />
+                          </Button>
+                        }
+                      />
+                      <AlertDialog>
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={isPending}
+                              aria-label={`Take ${personName ?? 'this person'} off ${entry.appName}`}
+                            />
+                          }
+                        >
+                          <Trash2 aria-hidden className="text-destructive" />
+                        </AlertDialogTrigger>
+                        {/* Two steps, because this is not undoable from here:
+                            removing closes the allocation interval and writes a
+                            history row. Re-adding is possible but it is a new
+                            interval, not the old one restored. */}
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>
+                              Take {personName ?? 'this person'} off {entry.appName}?
+                            </AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Their {formatPct(entry.allocationPct)} goes back to their
+                              headroom. Work already logged against this project keeps their
+                              name on it — this ends the allocation, not the record.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              onClick={() => handleRemove(entry.assignmentId, entry.appName)}
+                            >
+                              Remove
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </span>
+                  ) : null}
                 </div>
                 {/* Every row shares one denominator, so the widths add up to
                     the whole meter — the reason the overflow past the 100%

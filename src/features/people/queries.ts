@@ -121,6 +121,12 @@ export type ActiveUser = {
 export type AssignableApp = { id: string; name: string; slug: string }
 
 export type PersonAssignment = {
+  /**
+   * The live `assignments` row, so the Workload card can edit or end this
+   * allocation in place through the existing actions rather than sending
+   * somebody to the project page to do it.
+   */
+  assignmentId: string
   appId: string
   appName: string
   slug: string
@@ -761,6 +767,7 @@ export const getPersonOverview = cache(async function getPersonOverview(
       .where(eq(users.id, userId)),
     db
       .select({
+        assignmentId: assignments.id,
         appId: liveApps.id,
         appName: liveApps.name,
         slug: liveApps.slug,

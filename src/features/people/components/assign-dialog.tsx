@@ -17,24 +17,53 @@ import { SearchSelect } from '@/components/ui/search-select'
 import { Label } from '@/components/ui/label'
 import { JOB_ROLES } from '@/lib/job-roles'
 import { assignUser, updateAssignment } from '@/features/people/actions'
-import type { ActiveUser, TeamMember } from '@/features/people/queries'
+import type { AssignableApp, ActiveUser, TeamMember } from '@/features/people/queries'
+
+/**
+ * The allocation form, from either end.
+ *
+ * ONE DIALOG, TWO DIRECTIONS. A project's Team panel fixes the app and picks a
+ * person; a person's Workload card fixes the person and picks a project. It is
+ * the same row in `assignments` either way, the same action, and the same
+ * headroom arithmetic — so it is one component with the picker swapped, not
+ * two that will drift about what a legal allocation is.
+ *
+ * Which end is fixed is decided by WHICH SIDE WAS GIVEN. `appId` present means
+ * pick a person; `userId` present means pick a project. Editing needs neither
+ * picker, because both ends are already settled.
+ */
+type AssignSubject =
+  /** Fixed app, choose the person — the project's Team panel. */
+  | { appId: string; activeUsers: ActiveUser[]; userId?: never; apps?: never }
+  /** Fixed person, choose the project — the person's Workload card. */
+  | { userId: string; apps: AssignableApp[]; appId?: never; activeUsers?: never }
 
 export function AssignDialog({
-  appId,
-  activeUsers,
   assignment,
   trigger,
-}: {
-  appId: string
-  activeUsers: ActiveUser[]
+  /**
+   * What this person already carries elsewhere, for the headroom sentence.
+   * Supplied by the person-side caller, which knows it; the app-side caller
+   * reads it off activeUsers instead.
+   */
+  personTotalPct,
+  ...subject
+}: AssignSubject & {
   assignment?: TeamMember
   trigger: ReactElement
+  personTotalPct?: number
 }) {
+  const appId = subject.appId
+  const activeUsers = subject.activeUsers ?? []
+  const apps = subject.apps ?? []
+  /** True when the PROJECT is what has to be chosen. */
+  const picksApp = subject.userId !== undefined
   const isEdit = Boolean(assignment)
   const submitLabel = isEdit ? 'Save changes' : 'Add member'
   const [open, setOpen] = useState(false)
   const [isPending, startTransition] = useTransition()
-  const [userId, setUserId] = useState(assignment?.userId ?? '')
+  const [userId, setUserId] = useState(assignment?.userId ?? subject.userId ?? '')
+  const [pickedAppId, setPickedAppId] = useState('')
   const [role, setRole] = useState(assignment?.role ?? '')
   const [allocationPct, setAllocationPct] = useState(
     assignment ? String(assignment.allocationPct) : '',
@@ -52,7 +81,14 @@ export function AssignDialog({
    */
   const selectedId = isEdit ? assignment!.userId : userId
   const selected = activeUsers.find((user) => user.id === selectedId)
-  const totalPct = typeof selected?.totalPct === 'number' ? selected.totalPct : null
+  // Person-side: the caller already knows this person's load and hands it over,
+  // because `apps` carries projects rather than people and there is nothing
+  // here to look it up in.
+  const totalPct = picksApp
+    ? (personTotalPct ?? null)
+    : typeof selected?.totalPct === 'number'
+      ? selected.totalPct
+      : null
   const elsewherePct =
     totalPct === null ? null : Math.max(0, totalPct - (assignment?.allocationPct ?? 0))
   const headroom = elsewherePct === null ? null : 100 - elsewherePct
@@ -68,8 +104,18 @@ export function AssignDialog({
     setAllocationPct(free >= 5 ? String(Math.min(free, 100)) : '')
   }
 
+  function pickApp(nextId: string) {
+    setPickedAppId(nextId)
+    if (allocTouched || isEdit || totalPct === null) return
+    const free = 100 - totalPct
+    // Same rule as picking a person: prefill only when a legal share fits, so
+    // an already-full person gets the sentence rather than an unsaveable number.
+    setAllocationPct(free >= 5 ? String(Math.min(free, 100)) : '')
+  }
+
   function resetForm() {
-    setUserId(assignment?.userId ?? '')
+    setUserId(assignment?.userId ?? subject.userId ?? '')
+    setPickedAppId('')
     setRole(assignment?.role ?? '')
     setAllocationPct(assignment ? String(assignment.allocationPct) : '')
     setAllocTouched(false)
@@ -95,7 +141,12 @@ export function AssignDialog({
         const allocation = Number(allocationPct)
         const res = assignment
           ? await updateAssignment(assignment.assignmentId, { role, allocationPct: allocation })
-          : await assignUser({ appId, userId, role, allocationPct: allocation })
+          : await assignUser({
+              appId: picksApp ? pickedAppId : appId,
+              userId,
+              role,
+              allocationPct: allocation,
+            })
 
         if (!res.ok) {
           toast.error(res.error)
@@ -121,15 +172,36 @@ export function AssignDialog({
       <DialogTrigger render={trigger} />
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEdit ? 'Edit assignment' : 'Add member'}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? 'Edit assignment' : picksApp ? 'Add to a project' : 'Add member'}
+          </DialogTitle>
           <DialogDescription>
             {isEdit
               ? `Update ${assignment?.name}'s role and allocation on this app.`
-              : 'Assign a team member to this app.'}
+              : picksApp
+                ? 'Put this person on a project, and say how much of them it takes.'
+                : 'Assign a team member to this app.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          {isEdit ? null : (
+          {isEdit || !picksApp ? null : (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="assign-app">Project</Label>
+              {/* Searchable for the same reason the people picker is: the
+                  studio has more projects than fit a comfortable list, and the
+                  name is the one thing the assigner already knows. */}
+              <SearchSelect
+                id="assign-app"
+                value={pickedAppId}
+                onValueChange={pickApp}
+                options={apps.map((app) => ({ value: app.id, label: app.name }))}
+                placeholder="Select a project"
+                searchPlaceholder="Search projects…"
+                emptyText="No project by that name."
+              />
+            </div>
+          )}
+          {isEdit || picksApp ? null : (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="assign-user">Member</Label>
               {/* Searchable: this is every active person in the studio, and the
@@ -220,7 +292,12 @@ export function AssignDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isPending || (!isEdit && !userId)}>
+            {/* Whichever end is being CHOSEN has to be chosen. Editing settles
+                both, so neither gates it. */}
+            <Button
+              type="submit"
+              disabled={isPending || (!isEdit && !(picksApp ? pickedAppId : userId))}
+            >
               {isPending ? 'Saving…' : submitLabel}
             </Button>
           </DialogFooter>

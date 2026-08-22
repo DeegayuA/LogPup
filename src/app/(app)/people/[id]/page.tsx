@@ -6,6 +6,7 @@ import { PersonAppRoleHistoryCard } from '@/features/people/components/app-role-
 import { AssignmentsCard } from '@/features/people/components/assignments-card'
 import { PersonActivityCard } from '@/features/people/components/person-activity-card'
 import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
+import { requireCapability } from '@/features/auth/actor'
 import { PersonHeader } from '@/features/people/components/person-header'
 import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
 import { PersonStatRow } from '@/features/people/components/person-stat-row'
@@ -21,6 +22,7 @@ import {
   getPersonMeetings,
   getPersonOverview,
   getPersonWorkload,
+  listAssignableApps,
 } from '@/features/people/queries'
 
 /**
@@ -75,7 +77,17 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
    * that matches nobody is rare enough that serialising every load to rule it
    * out costs more than the five wasted queries on the rare miss.
    */
-  const [overview, workload, followups, meetings, activity, history, roleHistory] = await Promise.all([
+  const [
+    overview,
+    workload,
+    followups,
+    meetings,
+    activity,
+    history,
+    roleHistory,
+    assignActor,
+    assignableApps,
+  ] = await Promise.all([
     getPersonOverview(userId),
     getPersonWorkload(userId),
     getPersonFollowups(userId),
@@ -83,9 +95,21 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
     getPersonActivity(userId),
     getPersonAllocationHistory(userId),
     getPersonAppRoleHistory(userId),
+    // Whether to OFFER the workload controls. The action checks `app.assign`
+    // again on every call — this only decides whether a door is drawn that
+    // would then be refused.
+    requireCapability('app.assign'),
+    // Joined to the same fan-out rather than fetched behind the gate: it is a
+    // small cached read, and awaiting it after `canAssign` would put a second
+    // round trip in front of the one page section that needs it.
+    listAssignableApps(),
   ])
 
   if (!overview) notFound()
+
+  // The same predicate assignUser/removeAssignment run, asked the same way with
+  // no resource — so the controls appear exactly when the action would accept.
+  const canAssign = assignActor !== null
 
   /**
    * The stat strip is derived from the SAME summaries the cards below render —
@@ -154,6 +178,12 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
           assignments={overview.assignments}
           totalPct={overview.totalPct}
           overallocated={overview.overallocated}
+          personId={userId}
+          personName={overview.user.name}
+          canAssign={canAssign}
+          // Nothing to choose from when the reader cannot assign anyway, so the
+          // project list is not shipped to their browser either.
+          assignableApps={canAssign ? assignableApps : []}
         />
 
         <PersonTasksCard
