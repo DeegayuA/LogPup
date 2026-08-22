@@ -12,6 +12,7 @@ import { parseCalendarView, parseFocusedDate } from '@/features/meetings/calenda
 import { StatTile } from '@/features/meetings/components/meeting-chips'
 import { summarizeMeetings } from '@/features/meetings/components/meeting-glance'
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
+import { MeetingHeaderActions } from '@/features/meetings/components/meeting-header-actions'
 import { MeetingsViews } from '@/features/meetings/components/meetings-views'
 import {
   MeetingLoadLink, MeetingLoadLinkFallback,
@@ -84,11 +85,15 @@ export default async function MeetingsPage(props: {
             <Suspense fallback={<MeetingLoadLinkFallback />}>
               <MeetingLoadLink />
             </Suspense>
-            <MeetingForm
+            {/* One split pill for both creation gestures — quick note and
+                scheduled meeting — instead of a notebook button stranded in
+                the list toolbar two rows below the "New meeting" it rhymes
+                with. See MeetingHeaderActions. */}
+            <MeetingHeaderActions
               apps={appOptions}
               activeUsers={activeUsers}
-              trigger={<Button className="shadow-sm font-semibold">New meeting</Button>}
-              defaultOpen={newParam === '1'}
+              currentUserId={currentUserId}
+              defaultOpenNewMeeting={newParam === '1'}
             />
           </div>
         }
