@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { dayFormProblem } from '@/features/worklog/day-form'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { upsertDailyWorklog } from '@/features/worklog/actions'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
@@ -72,7 +73,11 @@ export function WorklogForm({
   const fieldId = useId()
 
   const dirty = percent !== (saved?.percent ?? null) || note.trim() !== (saved?.note ?? '')
-  const canSave = percent !== null && dirty
+  // ONE description of why Save is unavailable, shared by the button and the
+  // sentence beside it — so a dead button can never again be the only thing
+  // the person is told.
+  const problem = dayFormProblem({ percent, dirty })
+  const canSave = problem === null
 
   // Whether this project is already tagged in the note. The TAG form only:
   // also matching the bare name meant an app called "API" or "Ops" counted as
@@ -492,14 +497,24 @@ export function WorklogForm({
         />
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <span className="font-mono text-2xs text-muted-foreground">
-            <kbd className="rounded border border-border/80 bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">⌘ + Enter</kbd> to save
-          </span>
+          {/* The keyboard hint gives way to the reason: a shortcut for an
+              action that will not run is not the useful half. Only the
+              missing-score case speaks — "nothing to save" is the resting
+              state of an untouched form and would be a complaint about a
+              mistake nobody has made. */}
+          {percent === null ? (
+            <span className="text-2xs text-amber-600 dark:text-amber-400">{problem}</span>
+          ) : (
+            <span className="font-mono text-2xs text-muted-foreground">
+              <kbd className="rounded border border-border/80 bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">⌘ + Enter</kbd> to save
+            </span>
+          )}
 
           <Button
             type="button"
             size="sm"
             disabled={!canSave || saving}
+            title={problem ?? undefined}
             onClick={handleSave}
             className="min-w-24 font-medium shadow-xs cursor-pointer"
           >
