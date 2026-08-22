@@ -32,15 +32,18 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         aria-hidden
       />
 
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <PageHeader
           title="Admin Console"
           description="Workspace management tools. These act on everyone's data — tread carefully."
         />
-        <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
-          <AdminNav sections={visibleSections(actor)} />
-          <main className="min-w-0 flex-1">{children}</main>
-        </div>
+        {/* No second sidebar. Every admin section is now a row in the main
+            sidebar's Manage block, capability-filtered by the same
+            visibleSections() call — so moving between them no longer starts by
+            navigating somewhere else, and the page gets its full width back.
+            AdminNav is kept for the mobile sheet, which has no Manage block. */}
+        <AdminNav sections={visibleSections(actor)} className="lg:hidden" />
+        <main className="min-w-0 flex-1">{children}</main>
       </div>
     </div>
   )

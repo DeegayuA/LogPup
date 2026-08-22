@@ -12,13 +12,27 @@ import { cn } from '@/lib/utils'
  * nav cannot offer a section the route guard refuses. Nothing here is an
  * enforcement point; every section re-checks on the server.
  */
-export function AdminNav({ sections }: { sections: AdminSection[] }) {
+/**
+ * The admin sections as a nav.
+ *
+ * SMALL SCREENS ONLY now. Every section is a row in the main sidebar's Manage
+ * block on desktop, so rendering this beside it would be the same list twice.
+ * The mobile sheet has no Manage block, and a horizontal scroller here is still
+ * better than a nav with no replacement at all.
+ */
+export function AdminNav({
+  sections,
+  className,
+}: {
+  sections: AdminSection[]
+  className?: string
+}) {
   const pathname = usePathname()
   const safe = sections.filter((s) => !s.danger)
   const danger = sections.filter((s) => s.danger)
 
   return (
-    <nav aria-label="Admin sections" className="w-full lg:w-56 lg:shrink-0">
+    <nav aria-label="Admin sections" className={cn('w-full lg:w-56 lg:shrink-0', className)}>
       {/* Horizontal scroller on small screens rather than a hidden sidebar:
           a nav with no replacement is worse than one that scrolls. */}
       <ul className="flex gap-1 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">

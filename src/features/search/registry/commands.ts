@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { adminNavItems, navItems } from '@/components/shell/nav-items'
+import { activityNavItem, adminNavItems, navItems } from '@/components/shell/nav-items'
 import { isAdminRole } from '@/features/auth/capabilities'
 import { settingsNavItem } from '@/features/settings/nav'
 import { commands as appsCommands } from '@/features/apps/commands'
@@ -103,6 +103,10 @@ function matches(command: CommandDescriptor, ctx: PaletteContext, q: string): bo
 function navCommands(ctx: PaletteContext): CommandDescriptor[] {
   const rows = [
     ...navItems,
+    // Off the sidebar but still a destination — see activityNavItem. The
+    // palette is where somebody already asking "what happened to this?" goes,
+    // which is the only moment Activity is wanted.
+    activityNavItem,
     settingsNavItem,
     /* Admin's own nav list, gated through the shared predicate rather than a
        `role === 'admin'` comparison — that comparison goes silently false for

@@ -3,13 +3,20 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { PawPrint } from 'lucide-react'
+import { ClipboardCheck, PawPrint, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Kbd } from '@/components/ui/kbd'
 import { VersionBadge } from '@/components/shell/version-badge'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { InstallButton } from '@/features/pwa/pwa'
-import { adminNavItems, navItems, progressNavItem } from '@/components/shell/nav-items'
+import { ADMIN_SECTION_ICONS, navItems, progressNavItem } from '@/components/shell/nav-items'
+import {
+  NO_APPROVALS,
+  approvalBadgeLabel,
+  approvalBadgeText,
+  showApprovals,
+  type ApprovalCounts,
+} from '@/features/admin/approval-badge'
 import { settingsNavItem } from '@/features/settings/nav'
 
 // Exported so MobileNav (the mobile nav sheet) can render the exact same
@@ -20,12 +27,21 @@ export function NavLink({
   icon: Icon,
   active,
   hint,
+  badge,
+  badgeLabel,
+  tone,
 }: {
   href: string
   label: string
   icon: React.ComponentType<{ className?: string }>
   active: boolean
   hint?: string
+  /** A count worth interrupting for. Absent or '0' renders nothing. */
+  badge?: string
+  /** What a screen reader hears instead of the bare digit. */
+  badgeLabel?: string
+  /** 'danger' for the one row that leads somewhere irreversible. */
+  tone?: 'danger'
 }) {
   return (
     <Link
@@ -45,9 +61,35 @@ export function NavLink({
           active ? 'opacity-100 scale-100' : 'opacity-0 scale-50',
         )}
       />
-      <Icon className={cn('size-4 shrink-0 transition-colors', active ? 'text-primary' : 'text-sidebar-foreground/70 group-hover:text-sidebar-foreground')} />
-      <span className="truncate">{label}</span>
-      {hint ? (
+      <Icon
+        className={cn(
+          'size-4 shrink-0 transition-colors',
+          tone === 'danger'
+            ? 'text-destructive'
+            : active
+              ? 'text-primary'
+              : 'text-sidebar-foreground/70 group-hover:text-sidebar-foreground',
+        )}
+      />
+      <span className={cn('truncate', tone === 'danger' && !active && 'text-destructive')}>
+        {label}
+      </span>
+      {/* The count wins the right edge when there is one. A badge and a keyboard
+          hint competing for the same slot is why the hint yields: the hint is a
+          thing you learn once, the count is a thing that changed. */}
+      {badge && badge !== '0' ? (
+        <span className="ml-auto flex shrink-0 items-center">
+          <span
+            aria-hidden
+            className="inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 font-mono text-2xs font-semibold tabular-nums text-primary-foreground"
+          >
+            {badge}
+          </span>
+          {/* The digit alone says a number without saying what it counts, and
+              position is context a screen reader does not get. */}
+          <span className="sr-only">{badgeLabel ?? `${badge} waiting`}</span>
+        </span>
+      ) : hint ? (
         <Kbd className="ml-auto hidden border-sidebar-border bg-sidebar-accent/80 text-sidebar-foreground/80 group-hover:inline-flex group-focus-visible:inline-flex">
           G {hint}
         </Kbd>
@@ -81,6 +123,8 @@ export function Sidebar({
   isAdmin,
   canSeeProgress,
   account,
+  adminSections = [],
+  approvals = NO_APPROVALS,
 }: {
   isAdmin: boolean
   /* Whether this seat may read somebody else's work log — see
@@ -88,6 +132,19 @@ export function Sidebar({
      rather than on isAdmin. Resolved once in the (app) layout. */
   canSeeProgress: boolean
   account?: React.ReactNode
+  /**
+   * The admin sections this seat may actually open, already filtered by
+   * `visibleSections(actor)` on the server.
+   *
+   * Passed as data rather than filtered here, because the filter is a
+   * capability check and a capability check belongs on the server — a client
+   * that decided its own admin nav would be deciding it from whatever the
+   * browser was told. Icons join by href (ADMIN_SECTION_ICONS): a React
+   * component cannot cross that boundary on the section itself.
+   */
+  adminSections?: readonly { href: string; label: string; danger?: boolean }[]
+  /** How much is waiting on this person, for the Approvals badge. */
+  approvals?: ApprovalCounts
 }) {
   const pathname = usePathname()
 
@@ -169,15 +226,81 @@ export function Sidebar({
         />
       </div>
 
-      {/* Admin Section */}
-      {isAdmin ? (
+      {/* Approvals for a seat that is NOT an admin.
+          A manager can hold `request.review` without holding the admin seat, so
+          they never see the Manage block below — and this was the one thing
+          they were being asked to act on with nowhere in the nav to act from.
+          Shown only when something is actually waiting: a permanent
+          "Approvals 0" is how somebody learns to stop reading this column. */}
+      {!isAdmin && showApprovals(approvals) ? (
+        <div className="flex flex-col gap-1 px-3 pt-1">
+          <NavLink
+            href="/admin/approvals"
+            label="Approvals"
+            icon={ClipboardCheck}
+            active={pathname.startsWith('/admin/approvals')}
+            badge={approvalBadgeText(approvals)}
+            badgeLabel={approvalBadgeLabel(approvals)}
+          />
+        </div>
+      ) : null}
+
+      {/* Manage — every admin section, not a single "Admin" door.
+          The sections used to live in a second sidebar that only appeared once
+          you were already inside /admin, which meant every jump between them
+          began by going somewhere else first. They are destinations like any
+          other, so they are listed like any other. `adminSections` is already
+          capability-filtered, so a seat that cannot open Holidays is not
+          offered it. */}
+      {isAdmin && adminSections.length > 0 ? (
         <div className="mt-5 flex flex-col gap-1 px-3 pt-3 border-t border-sidebar-border/50">
           <div className="px-2 pb-1 font-mono text-2xs font-bold uppercase tracking-widest text-primary">
             Manage
           </div>
-          {adminNavItems.map(({ href, label, icon }) => (
-            <NavLink key={href} href={href} label={label} icon={icon} active={pathname.startsWith(href)} />
-          ))}
+          {adminSections
+            .filter((section) => !section.danger)
+            .map((section) => (
+              <NavLink
+                key={section.href}
+                href={section.href}
+                label={section.label}
+                icon={ADMIN_SECTION_ICONS[section.href] ?? ShieldCheck}
+                // Exact match for the index: `startsWith('/admin')` is true of
+                // every section below it, which would light the whole list up.
+                active={
+                  section.href === '/admin'
+                    ? pathname === '/admin'
+                    : pathname.startsWith(section.href)
+                }
+                badge={
+                  section.href === '/admin/approvals'
+                    ? approvalBadgeText(approvals)
+                    : undefined
+                }
+                badgeLabel={
+                  section.href === '/admin/approvals'
+                    ? approvalBadgeLabel(approvals)
+                    : undefined
+                }
+              />
+            ))}
+
+          {/* Below a rule and in the destructive tone, the same separation the
+              old admin nav gave it. A row that empties the database must not
+              sit flush against the row that lists holidays. */}
+          {adminSections
+            .filter((section) => section.danger)
+            .map((section) => (
+              <div key={section.href} className="mt-1 border-t border-sidebar-border/50 pt-1">
+                <NavLink
+                  href={section.href}
+                  label={section.label}
+                  icon={ADMIN_SECTION_ICONS[section.href] ?? TriangleAlert}
+                  active={pathname.startsWith(section.href)}
+                  tone="danger"
+                />
+              </div>
+            ))}
         </div>
       ) : null}
 

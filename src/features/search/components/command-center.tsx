@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
-import { navItems } from '@/components/shell/nav-items'
+import { activityNavItem, navItems } from '@/components/shell/nav-items'
 import { ShortcutsOverlay } from '@/components/shell/shortcuts-overlay'
 import { cn } from '@/lib/utils'
 import { createDeduper } from '@/lib/dedupe'
@@ -85,7 +85,10 @@ export function useCommandCenter() {
  * had a hint that did nothing. Give a nav item a `key` and both surfaces —
  * hint, handler, and the palette chips below — gain it together.
  */
-const GO_TARGETS = navItems.flatMap((item) =>
+const GO_TARGETS = [...navItems, activityNavItem].flatMap((item) =>
+  // activityNavItem is listed explicitly because it left the sidebar but kept
+  // its jump: `g v` must keep working for anybody who already has the habit,
+  // and dropping it here would have retired the shortcut silently.
   item.key ? [{ key: item.key, href: item.href }] : [],
 )
 const GO_KEYS: Record<string, string> = Object.fromEntries(

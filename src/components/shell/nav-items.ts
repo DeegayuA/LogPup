@@ -1,12 +1,17 @@
 import type { ComponentType } from 'react'
 import {
   AppWindow,
+  Bug,
   CalendarDays,
+  CalendarOff,
+  ClipboardCheck,
   GaugeCircle,
   History,
   LayoutDashboard,
   NotebookPen,
   ShieldCheck,
+  Trash2,
+  TriangleAlert,
   Users,
 } from 'lucide-react'
 
@@ -45,12 +50,26 @@ export const navItems: NavItem[] = [
   { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
   { href: '/people', label: 'People', icon: Users, key: 'P' },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },
-  // V rather than A, which Apps holds — it is the letter people reach for in
-  // "actiVity" once the obvious one is gone. Every other primary destination
-  // has a jump letter; this one had none, so the palette listed it without a
-  // shortcut and the row never showed one.
-  { href: '/activity', label: 'Activity', icon: History, key: 'V' },
 ]
+
+/**
+ * /activity — the workspace-wide feed.
+ *
+ * TAKEN OUT OF THE SIDEBAR, kept as a destination. It is a place you go when
+ * you are already asking a question ("what happened to this?"), not one of the
+ * handful of places anybody opens by habit, and a seven-row primary nav where
+ * two rows are read daily is a nav people stop scanning.
+ *
+ * It keeps its 'V' jump and its palette row — both are derived from this
+ * declaration — so anybody who used it loses nothing but a line of chrome. The
+ * dashboard's trail zone links to it as well.
+ */
+export const activityNavItem: NavItem = {
+  href: '/activity',
+  label: 'Activity',
+  icon: History,
+  key: 'V',
+}
 
 /**
  * /progress — the studio-wide "who did what, where, how far" view.
@@ -80,7 +99,36 @@ export const progressNavItem: NavItem = {
 
 // Admin-only nav, appended after the primary nav. Gated on `isAdmin` the
 // same way in every surface — see getVisibleNavItems below.
+//
+// STILL ONE ROW HERE, deliberately, even though the sidebar now lists every
+// admin section under Manage. This array feeds the COMMAND PALETTE, and the
+// palette gets its admin rows from ADMIN_SECTIONS through the same
+// capability filter the pages use — so listing them here as well would put
+// every section in the palette twice, once capability-checked and once not.
 export const adminNavItems: NavItem[] = [{ href: '/admin', label: 'Admin', icon: ShieldCheck }]
+
+/**
+ * An icon per admin section, keyed by href.
+ *
+ * Kept HERE rather than on ADMIN_SECTIONS because that module is imported by
+ * route guards and by `visibleSections`, which the server calls — and a React
+ * component on a section would have to cross the server/client boundary to
+ * reach the sidebar, which it cannot. The href is the join key, and a section
+ * with no entry falls back rather than failing: a missing icon is a plain row,
+ * not a crash.
+ */
+export const ADMIN_SECTION_ICONS: Record<string, ComponentType<{ className?: string }>> = {
+  '/admin': LayoutDashboard,
+  '/admin/people': Users,
+  '/admin/approvals': ClipboardCheck,
+  '/admin/apps': AppWindow,
+  '/admin/bugs': Bug,
+  '/admin/absences': CalendarOff,
+  '/admin/holidays': CalendarDays,
+  '/admin/audit': History,
+  '/admin/trash': Trash2,
+  '/admin/danger': TriangleAlert,
+}
 
 // All nav items visible to a user with the given permission level, primary
 // nav first. Exists mainly so the admin gate is one pure function instead
