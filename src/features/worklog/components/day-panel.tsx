@@ -212,6 +212,10 @@ export function DayPanel({
         // not a draft has come back yet — otherwise the card renders a second
         // one beside it.
         outerFill={canEdit && anyAi}
+        // The one-line box above renders the grammar legend when it is shown,
+        // so this card must not render a second copy of it a few hundred
+        // pixels below — the same rule as outerFill on the line above.
+        showGrammarHelp={!canEdit}
         suggestions={anyAi ? entryDrafts : null}
         evidence={evidence}
       />

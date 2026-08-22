@@ -6,8 +6,8 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { EntryGrammarHelp } from '@/features/worklog/components/entry-grammar-help'
 import {
-  describeGrammar,
   describeLine,
   lineIntent,
   lineSuggestions,
@@ -52,7 +52,6 @@ const TOKEN_CLASS: Record<LineToken['kind'], string> = {
   note: 'bg-muted text-muted-foreground',
 }
 
-const grammar = describeGrammar()
 
 export function DayOneLine({
   day,
@@ -243,32 +242,9 @@ export function DayOneLine({
         </p>
       )}
 
-      <details>
-        <summary className="w-fit cursor-pointer text-2xs text-muted-foreground hover:text-foreground">
-          What it understands
-        </summary>
-        <div className="mt-1.5 flex flex-col gap-1 rounded-xl border border-border/50 bg-background/40 p-2.5">
-          <p className="text-2xs text-muted-foreground">
-            <span className="font-medium text-foreground">Score:</span>{' '}
-            <span className="font-mono">25% · 50% · 80% · 100%</span> — the sign is what makes it a
-            score rather than hours.
-          </p>
-          <p className="text-2xs text-muted-foreground">
-            <span className="font-medium text-foreground">Time:</span>{' '}
-            <span className="font-mono">{grammar.durations.join('  ·  ')}</span>
-          </p>
-          {grammar.kinds.map((kind) => (
-            <p key={kind.label} className="text-2xs text-muted-foreground">
-              <span className="font-medium capitalize text-foreground">{kind.label}:</span>{' '}
-              <span className="font-mono">{kind.words}</span>
-            </p>
-          ))}
-          <p className="text-2xs text-muted-foreground">
-            Naming a project attributes the time to it; naming a task makes it a task entry. The
-            first matching word wins, so a &ldquo;review meeting&rdquo; is a meeting.
-          </p>
-        </div>
-      </details>
+      {/* The ONE copy on this page. The hours card below suppresses its own
+          while this is showing — see EntryGrammarHelp. */}
+      <EntryGrammarHelp showScore />
     </div>
   )
 }

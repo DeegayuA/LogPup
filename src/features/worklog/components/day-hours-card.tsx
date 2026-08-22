@@ -28,13 +28,16 @@ import {
   entryFormProblem,
   type EntryFormFields,
 } from '@/features/worklog/entry-form'
+import {
+  CATEGORY_LABEL,
+  EntryGrammarHelp,
+} from '@/features/worklog/components/entry-grammar-help'
 // The duration grammar lives beside the sentence reader in
 // entry-language.ts, not here: this box and that sentence had already
 // drifted — "90m" parsed in one and returned null in the other — and one
 // grammar cannot disagree with itself. Re-exported so existing importers
 // are unaffected.
 import {
-  describeGrammar,
   parseDuration,
   parseEntryLine,
 } from '@/features/worklog/entry-language'
@@ -73,20 +76,10 @@ import { cn } from '@/lib/utils'
  * these.
  */
 
-const CATEGORY_LABEL: Record<EntryCategory, string> = {
-  task: 'Task',
-  meeting: 'Meeting',
-  review: 'Review',
-  support: 'Support',
-  admin: 'Admin',
-  learning: 'Learning',
-  other: 'Other',
-}
 
 const NO_APP = '__none__'
 
 /** Generated once from the parser's own tables — see entry-language.ts. */
-const grammar = describeGrammar()
 
 /** Shared empty set, so the derivation below returns a stable reference. */
 const EMPTY_HIDDEN: ReadonlySet<string> = new Set()
@@ -161,6 +154,7 @@ export function DayHoursCard({
   aiDraftEnabled = false,
   suggestions = null,
   outerFill = false,
+  showGrammarHelp = true,
   evidence = 0,
 }: {
   day: string
@@ -201,6 +195,14 @@ export function DayHoursCard({
    * set state during render forever.
    */
   outerFill?: boolean
+  /**
+   * Whether to render "What it understands" here.
+   *
+   * Defaults TRUE so this card carries its own help wherever it stands alone.
+   * The day panel passes false while the one-line box above it is showing the
+   * same block — the same reason it suppresses this card's own draft button.
+   */
+  showGrammarHelp?: boolean
   evidence?: number
 }) {
   const [pending, startTransition] = React.useTransition()
@@ -1140,33 +1142,11 @@ export function DayHoursCard({
             </p>
           )}
 
-          {/* THE SUPPORTED TERMS, generated from the arrays the parser runs on
-              — so a word added to the grammar is documented for free, and one
-              removed cannot linger here promising something that no longer
-              works. The model is handed this same text. */}
-          <details className="group">
-            <summary className="w-fit cursor-pointer text-2xs text-muted-foreground hover:text-foreground">
-              What it understands
-            </summary>
-            <div className="mt-1.5 flex flex-col gap-1.5 rounded-xl border border-border/50 bg-background/40 p-2.5">
-              <p className="text-2xs text-muted-foreground">
-                <span className="font-medium text-foreground">Time:</span>{' '}
-                <span className="font-mono">{grammar.durations.join('  ·  ')}</span>
-              </p>
-              {grammar.kinds.map((kind) => (
-                <p key={kind.label} className="text-2xs text-muted-foreground">
-                  <span className="font-medium text-foreground">
-                    {CATEGORY_LABEL[kind.label as EntryCategory]}:
-                  </span>{' '}
-                  <span className="font-mono">{kind.words}</span>
-                </p>
-              ))}
-              <p className="text-2xs text-muted-foreground">
-                Naming a project attributes the time to it; naming a task makes it a task entry.
-                The first matching word wins, so a &ldquo;review meeting&rdquo; is a meeting.
-              </p>
-            </div>
-          </details>
+          {/* SUPPRESSED WHEN THE ONE-LINE BOX IS SHOWING ONE. Both used to
+              render this, and the day panel renders both — so the same eight
+              lines of grammar appeared twice on one screen. Same rule the
+              panel already applies to the AI draft button. */}
+          {showGrammarHelp ? <EntryGrammarHelp /> : null}
         </div>
       ) : null}
     </section>
