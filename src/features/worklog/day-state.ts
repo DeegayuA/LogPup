@@ -22,6 +22,7 @@ export type DayState =
   | 'absence'
   | 'off'
   | 'logged'
+  | 'partial'
   | 'owed'
   | 'future'
   | 'outside'
@@ -30,8 +31,24 @@ export type DayInput = {
   /** ISO day (YYYY-MM-DD), Asia/Colombo semantics — same contract as the
    *  rest of the worklog feature (see worklog-day.ts). */
   iso: string
-  /** Self-scored percent, when the day was logged. */
+  /** Self-scored percent, when the day was scored. */
   percent?: number
+  /**
+   * Whether the day carries at least one worklog_entries row.
+   *
+   * A SEPARATE FACT FROM `percent`, and this is the whole reason `partial`
+   * exists. The two halves of a day are written by two different actions to
+   * two different tables, and every "is this day done?" answer used to read
+   * only daily_worklogs — so somebody who carefully recorded three hours and
+   * did not move the slider was counted as having logged nothing, on the
+   * calendar, in coverage and in the catch-up ledger, with nothing on screen
+   * saying so.
+   *
+   * This does NOT derive one from the other: no percent is inferred from
+   * minutes and no minutes from a percent. It only stops the app from calling
+   * a day empty when it demonstrably is not.
+   */
+  hasHours?: boolean
   /** Day is covered by an APPROVED absence. Pending ones don't excuse. */
   absent?: boolean
   /** Day closes the studio: gazetted mercantile OR org holiday that
@@ -50,6 +67,11 @@ export function classifyDay(d: DayInput): DayState {
   const fraction = workingDayFraction(d.iso, () => d.holiday ?? false)
   if (fraction === 0) return 'off'
   if (d.percent !== undefined) return 'logged'
+  // Checked BEFORE `future`: a day somebody has already booked hours against
+  // is not upcoming, whatever the clock says. Checked AFTER `logged` because a
+  // scored day is complete whether or not hours were recorded — hours are
+  // optional, the score is the day record.
+  if (d.hasHours) return 'partial'
   if (d.iso > d.today) return 'future'
   return 'owed'
 }
@@ -68,6 +90,10 @@ export function isHalfDay(iso: string, holiday = false): boolean {
 export const DAY_STATE_CLASS: Record<DayState, string> = {
   // Fill applied via loggedTone; this is the shared chrome.
   logged: 'text-primary-foreground',
+  // Reads as a started `owed`, not as a weak `logged`: same chart-1 hue as the
+  // day it still is, with a filled dot the empty state does not have. Somebody
+  // scanning for what is left must still see this cell as outstanding.
+  partial: 'ring-1 ring-inset ring-chart-1/70 bg-chart-1/20 text-chart-1',
   owed: 'ring-1 ring-inset ring-chart-1/70 text-chart-1',
   absence: 'bg-tag-discussion/15 text-tag-discussion',
   holiday: 'bg-holiday/15 text-holiday',
@@ -90,6 +116,7 @@ export function loggedTone(percent: number): string {
 
 export const DAY_STATE_LABEL: Record<DayState, string> = {
   logged: 'Logged',
+  partial: 'Hours logged, day not scored',
   owed: 'Not logged yet',
   absence: 'On approved absence',
   holiday: 'Holiday',

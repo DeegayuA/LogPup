@@ -14,7 +14,11 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { DayPanel } from '@/features/worklog/components/day-panel'
-import { listDayEntriesForDisplay, listLoggableTasks } from '@/features/worklog/entry-queries'
+import {
+  getMyEntryDaysInRange,
+  listDayEntriesForDisplay,
+  listLoggableTasks,
+} from '@/features/worklog/entry-queries'
 import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
 import {
   WorklogCalendar,
@@ -438,11 +442,24 @@ async function CalendarZone({
   /* Fetching and derivation only — the JSX below renders after the catch has
      already decided between data and the error card. */
   const load = async () => {
-    const [actor, joinedOn, rows, approved, pending, schedule, orgRows, aiPrefs, assignedApps] =
-      await Promise.all([
+    const [
+      actor,
+      joinedOn,
+      rows,
+      hourDays,
+      approved,
+      pending,
+      schedule,
+      orgRows,
+      aiPrefs,
+      assignedApps,
+    ] = await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
         getMyWorklogsInRange(userId, from, to),
+        // The OTHER half of "did I log this day". Batched with the rest, one
+        // distinct-day read over the same window the scores are read over.
+        getMyEntryDaysInRange(userId, from, to),
         getMyApprovedAbsences(userId, from, to),
         getMyPendingAbsences(userId),
         getMyWorkSchedule(userId),
@@ -461,6 +478,7 @@ async function CalendarZone({
       ),
       absentDays: absent,
       closedDays: Object.fromEntries(closed),
+      hourDays,
     }
 
     // The selected day's own facts, for the panel's heading and form.
@@ -468,6 +486,7 @@ async function CalendarZone({
     const selectedState = classifyDay({
       iso: selectedDay,
       percent: selectedRow?.percent,
+      hasHours: hourDays.has(selectedDay),
       absent: absent.has(selectedDay),
       holiday: closed.has(selectedDay),
       today,
@@ -629,7 +648,7 @@ async function CalendarZone({
             ) : null}
           </div>
 
-          {canDeclare && selectedState === 'owed' ? (
+          {canDeclare && (selectedState === 'owed' || selectedState === 'partial') ? (
             <DeclareAbsenceDialog
               day={selectedDay}
               filed={filed}
@@ -644,6 +663,21 @@ async function CalendarZone({
           <HelpNote>
             Nobody expected work from you this day — log it only if you actually worked. It
             counts as extra, never against you.
+          </HelpNote>
+        ) : null}
+
+        {/* THE HALF-LOGGED DAY, SAID OUT LOUD. Hours and the score are written
+            by two actions to two tables, and every "is this day done?" answer
+            on this page reads only the score — so this day counts as owed on
+            the calendar, in coverage and in the ledger, despite the hours
+            sitting right there in the panel below. That was true before and is
+            still true; the only thing that was missing was anybody saying it.
+            Server-rendered, so it does not depend on an AI pref being on. */}
+        {selectedState === 'partial' ? (
+          <HelpNote>
+            Your hours for this day are recorded — the day still needs a score. They are two
+            separate answers: the hours say where the time went, the score says how much of
+            what you planned you got through. Score it below and the day is complete.
           </HelpNote>
         ) : null}
 

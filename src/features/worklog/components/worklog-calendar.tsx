@@ -21,6 +21,14 @@ export type CalendarDayFacts = {
   absentDays: ReadonlySet<string>
   /** ISO day → holiday name, ONLY days that actually close the studio */
   closedDays: Readonly<Record<string, string>>
+  /**
+   * ISO days carrying at least one hour entry.
+   *
+   * Separate from `loggedPercent` because they are separate records written by
+   * separate actions: a day can have hours and no score (`partial`) or a score
+   * and no hours (`logged`). Nothing here derives either from the other.
+   */
+  hourDays: ReadonlySet<string>
 }
 
 function monthShape(month: string): { first: string; count: number } {
@@ -56,6 +64,10 @@ const WEEKDAYS = [
 
 const LEGEND_STATES: readonly DayState[] = [
   'logged',
+  // Beside 'owed', because that is what it still is — a started one. Reading
+  // the legend should tell somebody what is left, and a half-logged day is
+  // left.
+  'partial',
   'owed',
   'absence',
   'holiday',
@@ -169,6 +181,7 @@ export function WorklogCalendar({
           const input = {
             iso,
             percent,
+            hasHours: facts.hourDays.has(iso),
             absent: facts.absentDays.has(iso),
             holiday: closed,
             today,

@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, lte, sql } from 'drizzle-orm'
 
 import { db } from '@/db'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
@@ -132,4 +132,39 @@ export async function listLoggableTasks(userId: string): Promise<LoggableTask[]>
     .limit(MAX_LOGGABLE_TASKS)
 
   return rows as LoggableTask[]
+}
+
+/**
+ * Which days in a range carry at least one live hour entry.
+ *
+ * ONE ROW PER DAY, not per entry: the caller only ever asks "does this day
+ * have hours on it", and returning the entries themselves would pull a whole
+ * month of rows across to answer a set-membership question.
+ *
+ * This is the other half of `getMyWorklogsInRange` (queries.ts). That one
+ * reads daily_worklogs — the SCORE — and for a long time it was the only
+ * input to every "is this day done?" answer on the page, so a day with three
+ * carefully recorded hours and no slider movement was counted as empty. The
+ * two reads stay separate because the two facts are separate: a score is a
+ * judgement, hours are a measurement, and neither is derived from the other.
+ * Composing them into a state is `classifyDay`'s job (day-state.ts), not a
+ * query's.
+ */
+export async function getMyEntryDaysInRange(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<Set<string>> {
+  const rows = await db
+    .selectDistinct({ day: liveWorklogEntries.day })
+    .from(liveWorklogEntries)
+    .where(
+      and(
+        eq(liveWorklogEntries.userId, userId),
+        gte(liveWorklogEntries.day, fromIso),
+        lte(liveWorklogEntries.day, toIso),
+      ),
+    )
+
+  return new Set(rows.map((row) => row.day))
 }

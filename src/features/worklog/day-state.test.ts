@@ -63,3 +63,54 @@ describe('dayStateText', () => {
     expect(dayStateText({ iso: '2026-08-22', today: '2026-08-25' })).toBe('22 — Not logged yet, half day')
   })
 })
+
+/**
+ * THE HALF-LOGGED DAY.
+ *
+ * Before `partial` existed, every "is this day done?" answer on /worklog read
+ * daily_worklogs alone (queries.ts:87), so a person who recorded three hours
+ * and never moved the slider was counted as having logged nothing — amber on
+ * the calendar, owed in coverage, still sitting in the catch-up ledger, with
+ * nothing on screen saying which half was missing.
+ */
+describe('classifyDay — hours without a score', () => {
+  const today = '2026-08-25'
+
+  it('is partial, not owed, when the day carries hours and no score', () => {
+    expect(classifyDay({ iso: '2026-08-18', hasHours: true, today })).toBe('partial')
+  })
+
+  it('is still owed when it carries neither', () => {
+    expect(classifyDay({ iso: '2026-08-18', today })).toBe('owed')
+  })
+
+  // The score is the day record; hours are optional. A scored day is complete
+  // whether or not anybody itemised where the time went.
+  it('is logged, not partial, once it is scored — with or without hours', () => {
+    expect(classifyDay({ iso: '2026-08-18', percent: 80, today })).toBe('logged')
+    expect(classifyDay({ iso: '2026-08-18', percent: 80, hasHours: true, today })).toBe('logged')
+  })
+
+  // Nothing about hours may override a day nobody was expected to work, or one
+  // before the person joined — those answers are about entitlement, not effort.
+  it('never overrides holiday, absence, off or outside', () => {
+    expect(classifyDay({ iso: '2026-08-18', hasHours: true, holiday: true, today })).toBe('holiday')
+    expect(classifyDay({ iso: '2026-08-18', hasHours: true, absent: true, today })).toBe('absence')
+    expect(classifyDay({ iso: '2026-08-23', hasHours: true, today })).toBe('off')
+    expect(
+      classifyDay({ iso: '2026-08-10', hasHours: true, today, joinDay: '2026-08-15' }),
+    ).toBe('outside')
+  })
+
+  // A day somebody has already booked hours against is not upcoming.
+  it('beats future, because a day with hours on it has happened', () => {
+    expect(classifyDay({ iso: '2026-08-27', hasHours: true, today })).toBe('partial')
+    expect(classifyDay({ iso: '2026-08-27', today })).toBe('future')
+  })
+
+  it('says which half is missing, in words', () => {
+    expect(dayStateText({ iso: '2026-08-18', hasHours: true, today })).toBe(
+      '18 — Hours logged, day not scored',
+    )
+  })
+})
