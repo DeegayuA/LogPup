@@ -52,7 +52,7 @@
  * whoever builds a chart on top of this, not hiding behind a query that looks
  * complete.
  */
-import { and, eq, gte, lt } from 'drizzle-orm'
+import { and, eq, gte, lt, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { personRates, projectValue, rateCards, users } from '@/db/schema'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
@@ -377,10 +377,13 @@ export async function projectMargin(
  * `finance.view`, gated instead on `app.view` (whatever already gates
  * reading a project).
  *
- * See the module header: only `category = 'task'` rows carry a `task_id`, so
- * only task-linked minutes can be attributed to a project at all today. This
- * will read as ~100% 'task' until `worklog_entries` can name a project on a
- * non-task row — a schema gap, not a bug here.
+ * IT NO LONGER READS ~100% 'task'. That was true while the only route from an
+ * entry to a project was its `task_id`, and the note here called it a schema
+ * gap rather than a bug. Migration 0050 closed the gap: `worklog_entries`
+ * carries its own `app_id`, so a meeting about a project, a review of it or an
+ * incident on it is attributable — which is the whole reason the categories
+ * exist. A mix that could only ever say 'task' was measuring the join, not the
+ * work.
  */
 export async function effortMix(appId: string, from: string, to: string) {
   const actor = await requireCapability('app.view', { appId })
@@ -391,9 +394,9 @@ export async function effortMix(appId: string, from: string, to: string) {
   const rows = await db
     .select({ minutes: liveWorklogEntries.minutes, category: liveWorklogEntries.category })
     .from(liveWorklogEntries)
-    .innerJoin(liveTasks, eq(liveWorklogEntries.taskId, liveTasks.id))
+    .leftJoin(liveTasks, eq(liveWorklogEntries.taskId, liveTasks.id))
     .where(and(
-      eq(liveTasks.appId, appId),
+      eq(sql`coalesce(${liveWorklogEntries.appId}, ${liveTasks.appId})`, appId),
       gte(liveWorklogEntries.day, from),
       lt(liveWorklogEntries.day, to),
     ))
@@ -443,14 +446,16 @@ export async function portfolioCost(from: string, to: string): Promise<Portfolio
   const [entryRows, appRows, roleRates, personRateRows] = await Promise.all([
     db
       .select({
-        appId: liveTasks.appId,
+        // Same precedence as the single-project read: the entry's own app_id
+        // wins, the task's app is the fallback for rows written before 0050.
+        appId: sql<string | null>`coalesce(${liveWorklogEntries.appId}, ${liveTasks.appId})`,
         userId: liveWorklogEntries.userId,
         day: liveWorklogEntries.day,
         minutes: liveWorklogEntries.minutes,
         title: users.title,
       })
       .from(liveWorklogEntries)
-      .innerJoin(liveTasks, eq(liveWorklogEntries.taskId, liveTasks.id))
+      .leftJoin(liveTasks, eq(liveWorklogEntries.taskId, liveTasks.id))
       .innerJoin(users, eq(liveWorklogEntries.userId, users.id))
       .where(and(gte(liveWorklogEntries.day, from), lt(liveWorklogEntries.day, to))),
     db.select({ id: liveApps.id, name: liveApps.name }).from(liveApps),
@@ -460,6 +465,10 @@ export async function portfolioCost(from: string, to: string): Promise<Portfolio
 
   const entriesByApp = new Map<string, AttributedTaskEntry[]>()
   for (const row of entryRows) {
+    // Admin and learning time legitimately belongs to no project — 0050 made
+    // app_id nullable for exactly that reason. Such a row is not free work
+    // hidden in a project's total; it is simply not this table's subject.
+    if (!row.appId) continue
     const bucket = entriesByApp.get(row.appId)
     if (bucket) bucket.push(row)
     else entriesByApp.set(row.appId, [row])
