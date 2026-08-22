@@ -4,6 +4,7 @@
   "buildCommand": "next build",
   "regions": ["sin1"],
   "crons": [
-    { "path": "/api/cron/backup", "schedule": "0 3 * * *" }
+    { "path": "/api/cron/backup", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/notify-tick", "schedule": "30 3 * * *" }
   ]
 }

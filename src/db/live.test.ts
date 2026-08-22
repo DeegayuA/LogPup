@@ -417,6 +417,15 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   // answer, absence is the lack of one, and the prep table renders them
   // differently — so the row has to be removable, not markable.
   'src/features/sprints/checkin-actions.ts': 'deleteSprintCheckin',
+
+  // why: `notifications` is deliberately NOT one of the soft-deleted tables —
+  // its `dismissed_at` is somebody clearing their own inbox, not an admin
+  // trashing a record (schema.ts says so on the column), so there is no trash
+  // bin for a notification to sit in and nothing that could restore one. The
+  // retention prune in the daily notify-tick cron is therefore a real DELETE,
+  // and the rule deciding WHICH rows it takes is the pure, unit-tested
+  // src/features/notifications/retention.ts rather than the WHERE clause here.
+  'src/app/api/cron/notify-tick/route.ts': 'pruneExpiredNotifications',
 }
 
 /**
