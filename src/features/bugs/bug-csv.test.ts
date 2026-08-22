@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   BUG_CSV_COLUMNS,
+  BUG_CSV_EXAMPLE_ROW,
   BUG_CSV_HEADERS,
   BUG_CSV_ROW_LIMIT,
   bugCsvTemplate,
   bugCsvTemplateFilename,
   describeBugImport,
+  isTemplateExampleRow,
   normalizeHeader,
   parseBugCsv,
   splitCsvRows,
@@ -69,23 +71,49 @@ describe('the template', () => {
     ])
   })
 
-  it('round-trips: its own example row parses back as one valid bug', () => {
-    const result = parseOk(bugCsvTemplate())
+  /*
+   * This block used to assert the opposite — "its own example row parses back
+   * as one valid bug" — which is exactly the behaviour that filed "Sprint
+   * switcher forgets the backlog" into real projects. The round-trip property
+   * it was protecting (every column survives the write/read cycle) is still
+   * covered below, by a row that has been EDITED the way somebody filling the
+   * template in actually edits it.
+   */
+  it('refuses the untouched template: it holds no bug anybody filed', () => {
+    expect(parseBugCsv(bugCsvTemplate())).toEqual({
+      ok: false,
+      error: 'That file is still the blank import template — add your bugs under the header row',
+    })
+  })
+
+  it('recognises the template through the BOM Excel adds', () => {
+    // The BOM used to become part of the first header name, so `title` stopped
+    // matching and every row came back as missing a required column. Reaching
+    // the TEMPLATE message rather than a missing-column one is the proof that
+    // the header still parsed and the row was matched against the example.
+    expect(parseBugCsv(`\ufeff${bugCsvTemplate()}`)).toEqual({
+      ok: false,
+      error: 'That file is still the blank import template — add your bugs under the header row',
+    })
+  })
+
+  it('round-trips every column once the example row has been edited', () => {
+    const edited = bugCsvTemplate().replace(
+      'Sprint switcher forgets the backlog',
+      'Sprint switcher forgets the sprint',
+    )
+    const result = parseOk(edited)
     expect(result.invalid).toEqual([])
     expect(result.valid).toHaveLength(1)
+    expect(result.ignoredExampleRows).toBe(0)
     expect(result.valid[0]).toMatchObject({
       rowNumber: 2,
+      title: 'Sprint switcher forgets the sprint',
       severity: 'high',
       status: 'open',
       assigneeEmail: null,
       pagePath: '/apps/logpup?tab=board',
     })
-  })
-
-  it('round-trips with the BOM Excel adds', () => {
-    const result = parseOk(`﻿${bugCsvTemplate()}`)
-    expect(result.valid).toHaveLength(1)
-    expect(result.invalid).toEqual([])
   })
 
   it('is named for the day it was downloaded', () => {
@@ -238,6 +266,94 @@ describe('sparse rows', () => {
       title: 'Save, then reload',
       description: 'Line one\nLine two, with a comma',
       severity: 'critical',
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The template's own example row
+// ---------------------------------------------------------------------------
+
+describe('the example row, on the way back in', () => {
+  /** The example row as a CSV line, so a file can be built around it. */
+  const EXAMPLE_LINE = BUG_CSV_EXAMPLE_ROW.map((cell) =>
+    cell.includes(',') ? `"${cell}"` : cell,
+  ).join(',')
+
+  const REAL_BUG = 'Save button explodes,It falls over on save when you press it'
+
+  it('drops the untouched example and keeps the bugs typed underneath it', () => {
+    const result = parseOk(file(EXAMPLE_LINE, REAL_BUG))
+    expect(result.valid).toHaveLength(1)
+    expect(result.valid[0]?.title).toBe('Save button explodes')
+    expect(result.invalid).toEqual([])
+    expect(result.ignoredExampleRows).toBe(1)
+  })
+
+  it('leaves the row numbers of everything below it alone', () => {
+    // The dropped row is line 2. The bug under it is line 3 in the
+    // spreadsheet's own gutter and must still say 3, or the preview stops
+    // matching the file the person is looking at.
+    const result = parseOk(file(EXAMPLE_LINE, REAL_BUG))
+    expect(result.valid[0]?.rowNumber).toBe(3)
+  })
+
+  it('keeps the row once the title has been rewritten over', () => {
+    const edited = EXAMPLE_LINE.replace(
+      'Sprint switcher forgets the backlog',
+      'Sprint switcher forgets the sprint',
+    )
+    const result = parseOk(file(edited))
+    expect(result.valid).toHaveLength(1)
+    expect(result.ignoredExampleRows).toBe(0)
+  })
+
+  it('keeps the row when only the description has been rewritten', () => {
+    const cells = [...BUG_CSV_EXAMPLE_ROW]
+    cells[1] = 'Actually it drops every selection, not just the backlog one.'
+    const line = cells.map((cell) => (cell.includes(',') ? `"${cell}"` : cell)).join(',')
+    const result = parseOk(file(line))
+    expect(result.valid).toHaveLength(1)
+    expect(result.ignoredExampleRows).toBe(0)
+  })
+
+  it('counts more than one copy of it', () => {
+    const result = parseOk(file(EXAMPLE_LINE, EXAMPLE_LINE, REAL_BUG))
+    expect(result.ignoredExampleRows).toBe(2)
+    expect(result.valid).toHaveLength(1)
+  })
+
+  it('does not spend the row limit on it', () => {
+    // 500 real rows plus the example is a 500-row import, not a rejection.
+    const rows = Array.from(
+      { length: BUG_CSV_ROW_LIMIT },
+      (_, index) => `Save button explodes ${index},It falls over on save`,
+    )
+    const result = parseOk(file(EXAMPLE_LINE, ...rows))
+    expect(result.valid).toHaveLength(BUG_CSV_ROW_LIMIT)
+  })
+
+  describe('isTemplateExampleRow', () => {
+    it('needs the title, so a lone matching enum value is not a template row', () => {
+      // The bug this clause exists for: `severity,high` alone matched once.
+      expect(isTemplateExampleRow({ severity: 'high' })).toBe(false)
+      expect(isTemplateExampleRow({ status: 'open' })).toBe(false)
+      expect(isTemplateExampleRow({})).toBe(false)
+    })
+
+    it('ignores case and surrounding space, which Excel adds on its own', () => {
+      expect(
+        isTemplateExampleRow({ title: '  SPRINT SWITCHER FORGETS THE BACKLOG  ' }),
+      ).toBe(true)
+    })
+
+    it('is false as soon as any populated cell differs', () => {
+      expect(
+        isTemplateExampleRow({
+          title: BUG_CSV_EXAMPLE_ROW[0],
+          severity: 'low',
+        }),
+      ).toBe(false)
     })
   })
 })

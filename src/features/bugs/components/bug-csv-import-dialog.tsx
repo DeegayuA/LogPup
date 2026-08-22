@@ -322,7 +322,7 @@ function ImportPreview({
   preview: BugImportPreview
   fileName: string | null
 }) {
-  const { valid, invalid, ignoredColumns } = preview
+  const { valid, invalid, ignoredColumns, ignoredExampleRows } = preview
   const shown = valid.slice(0, PREVIEW_ROW_CAP)
 
   return (
@@ -345,6 +345,17 @@ function ImportPreview({
         <p className="text-2xs text-muted-foreground">
           Ignored {ignoredColumns.length === 1 ? 'a column' : 'columns'} this import has no
           field for: <span className="font-mono">{ignoredColumns.join(', ')}</span>
+        </p>
+      ) : null}
+
+      {/* Said out loud rather than left to be noticed. The example row is
+          visible in the uploader's spreadsheet, so a preview that is silently
+          one row shorter reads as the importer having eaten something. */}
+      {ignoredExampleRows > 0 ? (
+        <p className="text-2xs text-muted-foreground">
+          Skipped the template’s own example row
+          {ignoredExampleRows === 1 ? '' : ` (${ignoredExampleRows} of them)`} — it was left
+          unchanged, so it is not a bug anybody filed.
         </p>
       ) : null}
 

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MIN_DESCRIPTION,
   bugFilterHref,
   bugReportInput,
   bugTriageInput,
   parseBugFilters,
+  stripIssueTemplate,
 } from './report-input'
 
 // Pure schema rules and the URL contract, no mocks — the split
@@ -156,5 +158,107 @@ describe('bugFilterHref', () => {
     expect(bugFilterHref('ledger', { status: 'open' }, { status: undefined })).toBe(
       '/apps/ledger?tab=bugs',
     )
+  })
+})
+
+
+// ---------------------------------------------------------------------------
+// Scaffolding pasted out of an issue template
+// ---------------------------------------------------------------------------
+
+describe('stripIssueTemplate', () => {
+  it('leaves an ordinary report byte-identical', () => {
+    const plain = 'Picked Backlog, chose a sprint, landed back on Overview. Every time.'
+    expect(stripIssueTemplate(plain)).toBe(plain)
+  })
+
+  it('removes the instruction comments nobody was meant to keep', () => {
+    expect(
+      stripIssueTemplate(
+        '<!-- describe the steps -->\nPicked Backlog, then chose a sprint from the dropdown.',
+      ),
+    ).toBe('Picked Backlog, then chose a sprint from the dropdown.')
+  })
+
+  it('removes a comment that runs across lines', () => {
+    expect(
+      stripIssueTemplate(
+        '<!--\n  Thanks for filing!\n  Please fill in every section.\n-->\nIt drops the selection.',
+      ),
+    ).toBe('It drops the selection.')
+  })
+
+  it('drops a heading with nothing under it', () => {
+    expect(
+      stripIssueTemplate('## Steps to reproduce\n\n## Expected\nIt should keep the sprint.'),
+    ).toBe('## Expected\nIt should keep the sprint.')
+  })
+
+  it('keeps a heading that has anything at all under it', () => {
+    const filled = '## Steps\nOpen the board.\n\n## Expected\nIt keeps the sprint.'
+    expect(stripIssueTemplate(filled)).toBe(filled)
+  })
+
+  it('handles the real shape: comments under every heading, one section filled', () => {
+    expect(
+      stripIssueTemplate(
+        [
+          '### Steps to reproduce',
+          '<!-- numbered steps please -->',
+          '',
+          '### What happened',
+          'The sprint dropdown reset itself to Overview.',
+          '',
+          '### Screenshots',
+          '<!-- drag them in -->',
+        ].join('\n'),
+      ),
+    ).toBe('### What happened\nThe sprint dropdown reset itself to Overview.')
+  })
+
+  it('does not mistake a shell comment inside a fence for a heading', () => {
+    const withCode = ['## Repro', '```sh', '# rebuild first', 'pnpm build', '```'].join('\n')
+    expect(stripIssueTemplate(withCode)).toBe(withCode)
+  })
+
+  it('counts a fenced block as body, so its heading survives', () => {
+    const withCode = ['## Stack trace', '```', 'TypeError: nope', '```'].join('\n')
+    expect(stripIssueTemplate(withCode)).toBe(withCode)
+  })
+
+  it('hands back the ORIGINAL when stripping would empty the report', () => {
+    // A description that is nothing but scaffolding must reach validation
+    // intact and be refused there. Silently rewriting it to '' would delete
+    // somebody's bug report on their behalf.
+    const allScaffolding = '### Steps to reproduce\n<!-- fill this in -->\n\n### Expected\n'
+    expect(stripIssueTemplate(allScaffolding)).toBe(allScaffolding)
+  })
+
+  it('hands back the original rather than a result under the schema floor', () => {
+    // Cleaning leaves something, but not enough: 'nope' is four characters and
+    // the schema will not take it. The original comes back so the reporter is
+    // answered about what they wrote, not about what was left of it.
+    const barelyAnything = '<!-- describe what you expected to happen -->\nnope'
+    expect('nope'.length).toBeLessThan(MIN_DESCRIPTION)
+    expect(stripIssueTemplate(barelyAnything)).toBe(barelyAnything)
+  })
+})
+
+describe('bugReportInput, cleaning what was pasted', () => {
+  it('stores the description without the template scaffolding', () => {
+    const parsed = bugReportInput.parse({
+      ...validReport,
+      description: '<!-- steps -->\n### Steps\n\n### What happened\nIt reset to Overview.',
+    })
+    expect(parsed.description).toBe('### What happened\nIt reset to Overview.')
+  })
+
+  it('judges LENGTH on what was typed, not on what survives stripping', () => {
+    // Long enough as typed, nothing left after cleaning: it is accepted and
+    // stored as typed, rather than rejected for a length the reporter never
+    // wrote. The cleaner is not a second validator.
+    const scaffolding = '### Steps to reproduce\n<!-- fill this in -->\n'
+    const parsed = bugReportInput.parse({ ...validReport, description: scaffolding })
+    expect(parsed.description).toBe(scaffolding.trim())
   })
 })

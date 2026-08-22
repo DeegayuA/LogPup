@@ -77,6 +77,12 @@ export type BugImportPreview = {
   invalid: InvalidBugCsvRow[]
   /** Headers that were not recognised and were ignored. Never fatal. */
   ignoredColumns: string[]
+  /**
+   * Rows that were the import template's own example, left in place and
+   * dropped. Surfaced so the preview can account for the row a user can see
+   * in their spreadsheet but will not find in the table below it.
+   */
+  ignoredExampleRows: number
 }
 
 export type BugImportResult = {
@@ -192,7 +198,12 @@ async function resolveImport(
   return {
     ok: true,
     app,
-    preview: { valid, invalid, ignoredColumns: parsed.ignoredColumns },
+    preview: {
+      valid,
+      invalid,
+      ignoredColumns: parsed.ignoredColumns,
+      ignoredExampleRows: parsed.ignoredExampleRows,
+    },
   }
 }
 

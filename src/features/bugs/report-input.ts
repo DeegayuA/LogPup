@@ -32,6 +32,90 @@ export const bugPagePath = z
   })
 
 /**
+ * The floor a description has to clear, named once because
+ * `stripIssueTemplate` below has to know it: a cleaner that strips a report
+ * down past the length the schema will accept must hand back the original
+ * rather than produce something the very next line rejects.
+ */
+export const MIN_DESCRIPTION = 10
+
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g
+/** ATX headings only — up to three leading spaces, then `#`…`######`, then space. */
+const HEADING_RE = /^ {0,3}#{1,6}\s/
+const FENCE_RE = /^ {0,3}(?:```|~~~)/
+
+/**
+ * Take the scaffolding out of a description pasted from an issue template.
+ *
+ * People arrive with a GitHub-style template in the clipboard and paste the
+ * whole thing: instruction comments they were meant to replace, and section
+ * headings they never filled in. Stored verbatim, a triage queue fills up
+ * with reports whose visible content is `<!-- describe the steps -->`.
+ *
+ * TWO RULES, both conservative:
+ *
+ *   1. `<!-- … -->` comes out, including across lines. It is addressed to the
+ *      person filling the form in, never to the person reading the bug.
+ *   2. A heading with NOTHING under it comes out. A heading with anything at
+ *      all under it STAYS, along with its content — the structure is the
+ *      reporter's and this is not a formatter.
+ *
+ * Fenced code blocks are found first, because `# make clean` inside a fence is
+ * a shell comment and bug reports are full of pasted code. A heading inside a
+ * fence is not a heading, and lines inside one always count as body.
+ *
+ * If what is left would not clear MIN_DESCRIPTION, the ORIGINAL comes back
+ * untouched. A helpful cleaner that deletes somebody's whole bug report is
+ * worse than no cleaner, and a report that really is nothing but scaffolding
+ * should be answered by validation saying so — not by a silent rewrite.
+ */
+export function stripIssueTemplate(description: string): string {
+  // The overwhelmingly common report is prose with neither marker in it.
+  // Leaving that byte-identical is worth one scan.
+  if (!description.includes('<!--') && !description.includes('#')) return description
+
+  const lines = description.replace(HTML_COMMENT_RE, '').split('\n')
+
+  const fenced: boolean[] = []
+  let inFence = false
+  for (const line of lines) {
+    if (FENCE_RE.test(line)) {
+      // The fence line belongs to the block at either end.
+      fenced.push(true)
+      inFence = !inFence
+      continue
+    }
+    fenced.push(inFence)
+  }
+
+  const isHeading = (index: number) => !fenced[index] && HEADING_RE.test(lines[index] ?? '')
+
+  const keep = lines.map(() => true)
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!isHeading(i)) continue
+    let hasBody = false
+    // Everything up to the NEXT heading is this section's body. One non-blank
+    // line anywhere in it is enough to keep the heading.
+    for (let j = i + 1; j < lines.length && !isHeading(j); j += 1) {
+      if ((lines[j] ?? '').trim() !== '') {
+        hasBody = true
+        break
+      }
+    }
+    if (!hasBody) keep[i] = false
+  }
+
+  const stripped = lines
+    .filter((_, index) => keep[index])
+    .join('\n')
+    // Dropping a heading leaves the blank lines that surrounded it.
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  return stripped.length < MIN_DESCRIPTION ? description : stripped
+}
+
+/**
  * Filing a bug.
  *
  * NO SEVERITY FIELD, deliberately. `bug_severity` in schema.ts says severity
@@ -52,7 +136,10 @@ export const bugReportInput = z.object({
   // worth reading. The minimums exist so "it's broken" cannot be the entire
   // report — the one thing triage cannot recover from later.
   title: z.string().trim().min(4).max(140),
-  description: z.string().trim().min(10).max(4000),
+  // Validated on what was typed, then cleaned — so a description that is
+  // nothing but an unfilled template is judged on its real length rather than
+  // on what survives stripping. See stripIssueTemplate.
+  description: z.string().trim().min(MIN_DESCRIPTION).max(4000).transform(stripIssueTemplate),
   pagePath: bugPagePath.optional(),
 })
 

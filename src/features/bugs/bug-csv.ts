@@ -6,7 +6,7 @@ import {
   type BugSeverity,
   type BugStatus,
 } from '@/features/bugs/bug-display'
-import { bugPagePath, bugReportInput } from '@/features/bugs/report-input'
+import { bugPagePath, bugReportInput, stripIssueTemplate } from '@/features/bugs/report-input'
 
 /**
  * The bulk-import format: writing the template, and reading back whatever
@@ -165,9 +165,14 @@ export const BUG_CSV_MAX_CHARS = 600_000
  *
  * Zero leaves a PM guessing what `severity` wants — they write `P1`, the
  * import flags every row, and the format has taught them nothing. Five means
- * five bugs to delete. One shows the shape of every column at once, and the
- * preview step means it cannot be imported by accident: it is right there in
- * the table with its title, waiting to be looked at.
+ * five bugs to delete. One shows the shape of every column at once.
+ *
+ * This comment used to end "and the preview step means it cannot be imported
+ * by accident: it is right there in the table with its title, waiting to be
+ * looked at." That was a HUMAN safeguard and it did not hold — people fill
+ * their rows in underneath and upload the file whole, and this row lands in
+ * their project as a real bug. `isTemplateExampleRow` below is the code that
+ * now does what the sentence claimed.
  */
 export const BUG_CSV_EXAMPLE_ROW: readonly string[] = [
   'Sprint switcher forgets the backlog',
@@ -213,24 +218,28 @@ const EXAMPLE_BY_COLUMN: ReadonlyMap<BugCsvColumn, string> = new Map(
  *     differ → kept
  *
  * A half-cleared example (some cells blanked, the rest original) is still an
- * example and still drops. The cost of that rule is one marginal case: a real
- * bug whose title is exactly the example's AND whose every other cell is empty
- * drops rather than being reported as missing a description. It fails
- * validation either way; only the wording the reporter sees changes.
+ * example and still drops.
+ *
+ * THE TITLE IS THE IDENTIFYING CELL and must be present and match. Without
+ * that clause "every populated cell matches" is far too loose: a row carrying
+ * nothing but `severity,high` matches on a single low-cardinality enum value
+ * and gets silently dropped, when it is really an unfinished bug that ought to
+ * come back as "Title is missing, Description is missing". A title is the one
+ * cell nobody fills in by coincidence.
  */
 export function isTemplateExampleRow(cells: Partial<Record<BugCsvColumn, string>>): boolean {
-  let populated = 0
+  const title = (cells.title ?? '').trim().toLowerCase()
+  if (title === '' || title !== EXAMPLE_BY_COLUMN.get('title')) return false
+
   for (const [key, example] of EXAMPLE_BY_COLUMN) {
+    if (key === 'title') continue
     const value = (cells[key] ?? '').trim()
     // An empty cell is evidence of nothing — the example's own assignee_email
-    // is empty, and so is most of what people leave alone.
+    // is empty, and so is most of what somebody leaves alone.
     if (value === '') continue
-    populated += 1
     if (value.toLowerCase() !== example) return false
   }
-  // A wholly blank row is dropped upstream as blank, not here as a template:
-  // `populated === 0` must never come back as "matches".
-  return populated > 0
+  return true
 }
 
 /** Names the downloaded file. Shared so the dialog cannot drift from the test. */
@@ -534,7 +543,20 @@ export function validateBugCsvRow(
   if (reasons.length > 0) return { ok: false, row: { rowNumber, title, reasons } }
   return {
     ok: true,
-    row: { rowNumber, title, description, severity, status, pagePath, assigneeEmail },
+    row: {
+      rowNumber,
+      title,
+      // Cleaned the same way the dialog cleans it, through the same helper: a
+      // spreadsheet column pasted out of an issue tracker carries the same
+      // scaffolding a textarea does, and two importers disagreeing about what
+      // a description is would show up as two shapes in one triage queue.
+      // Length was already judged on what was typed, above.
+      description: stripIssueTemplate(description),
+      severity,
+      status,
+      pagePath,
+      assigneeEmail,
+    },
   }
 }
 
