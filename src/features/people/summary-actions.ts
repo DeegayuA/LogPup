@@ -45,7 +45,7 @@ export async function getPersonSummary(personId: string): Promise<ActionResult<P
       getPersonOverview(personId),
       getPersonWorkload(personId),
       getPersonFollowups(personId),
-      getPersonMeetings(personId),
+      getPersonMeetings(personId, actor.id),
     ])
     if (!overview) return err('No one to summarise')
 

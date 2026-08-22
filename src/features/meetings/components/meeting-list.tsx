@@ -473,6 +473,7 @@ function MeetingRow({
                   agenda: meeting.agenda,
                   meetingUrl: meeting.meetingUrl,
                   attendeeIds: meeting.attendees.map((attendee) => attendee.id),
+                  visibility: meeting.visibility,
                 }}
                 trigger={
                   <Button variant="ghost" size="icon-sm" aria-label={`Edit ${meeting.title}`}>

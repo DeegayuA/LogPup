@@ -295,7 +295,7 @@ export async function MyDayZone({ actor, userName }: ZoneProps) {
     await Promise.all([
       showTasks ? getPersonWorkload(actor.id) : null,
       showFollowups ? getPersonFollowups(actor.id) : null,
-      getPersonMeetings(actor.id),
+      getPersonMeetings(actor.id, actor.id),
       listNotifications(actor.id, 8),
       // In the same Promise.all as the rest, not awaited after them: the
       // briefing reads its own workspace snapshot, and sequencing it behind

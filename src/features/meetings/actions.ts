@@ -63,6 +63,10 @@ const meetingFields = {
   // room only exists as a property of a Calendar event (see createCalendarEvent).
   // Accepted on update too for schema symmetry, though only create acts on it.
   withMeet: z.boolean().optional(),
+  // Who may see this meeting outside its attendees. Defaulted here, not in
+  // the DB read path: an absent field from an older client means what it
+  // always meant — visible to the workspace.
+  visibility: z.enum(['workspace', 'attendees']).default('workspace'),
 }
 
 const endsAfterStart = (data: { startsAt: string; endsAt: string }) =>
@@ -439,6 +443,7 @@ export async function createMeeting(
         endsAt: new Date(endsAt),
         agenda: agenda || null,
         meetingUrl: meetingUrl ?? null,
+        visibility: parsed.data.visibility,
         createdBy: session.user.id,
         createdAt: at,
       }),
@@ -931,6 +936,7 @@ export async function updateMeeting(
           // the project it names is removed. See src/db/schema.ts.
           appId: mirroredAppId(existing.appId, nextAppIds),
           title,
+          visibility: parsed.data.visibility,
           startsAt: nextStart,
           endsAt: nextEnd,
           agenda: agenda || null,

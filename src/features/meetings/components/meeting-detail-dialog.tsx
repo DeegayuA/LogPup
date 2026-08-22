@@ -208,6 +208,7 @@ export function MeetingDetailDialog({
             agenda: editing.agenda,
             meetingUrl: editing.meetingUrl,
             attendeeIds: editing.attendees.map((attendee) => attendee.id),
+            visibility: editing.visibility,
           }}
           defaultOpen
           onOpenChange={(next) => {

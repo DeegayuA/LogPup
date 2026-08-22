@@ -186,7 +186,7 @@ export default async function AppDetailPage(props: {
     getAppCounts(app.id),
     needsUsers ? listActiveUsers() : Promise.resolve([]),
     tab === 'discussion' ? listAppComments(app.id) : Promise.resolve([]),
-    tab === 'meetings' ? getMeetingsForApp(app.id) : Promise.resolve([]),
+    tab === 'meetings' ? getMeetingsForApp(app.id, session?.user?.id ?? '') : Promise.resolve([]),
     tab === 'meetings' ? listAssignableApps() : Promise.resolve([]),
     needsTechTags ? listDistinctTechTags() : Promise.resolve([]),
     activityLimit > 0 ? getAppActivity(app.id, activityLimit) : Promise.resolve([]),

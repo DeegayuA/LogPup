@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
+import { getSession } from '@/lib/session'
 import { z } from 'zod'
 import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
 import { PersonAppRoleHistoryCard } from '@/features/people/components/app-role-history-card'
@@ -66,6 +67,12 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
   if (!parsed.success) notFound()
   const userId = parsed.data
 
+  // Who is LOOKING — the meetings card is viewer-scoped now (attendees-only
+  // meetings exist), and getSession is request-cached, so this costs nothing
+  // the shell has not already paid for.
+  const session = await getSession()
+  const viewerId = session?.user?.id ?? ''
+
   /**
    * SIX READS, ALL IN PARALLEL — never N+1. Every section of this page is a
    * single query (or, where a lifetime count is needed alongside a list, one
@@ -91,7 +98,7 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
     getPersonOverview(userId),
     getPersonWorkload(userId),
     getPersonFollowups(userId),
-    getPersonMeetings(userId),
+    getPersonMeetings(userId, viewerId),
     getPersonActivity(userId),
     getPersonAllocationHistory(userId),
     getPersonAppRoleHistory(userId),

@@ -63,6 +63,10 @@ export function MeetingHeaderActions({
           startsAt: start.toISOString(),
           endsAt: end.toISOString(),
           attendeeIds: [currentUserId],
+          // Private from birth: a one-click scratchpad has no business on
+          // nineteen colleagues' calendars. Adding an attendee later is what
+          // shares it — visibility follows the list.
+          visibility: 'attendees',
         })
         if (!res.ok) {
           toast.error(res.error)

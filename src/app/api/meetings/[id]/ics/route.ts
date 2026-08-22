@@ -1,7 +1,8 @@
 import { z } from 'zod'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveMeetings } from '@/db/live'
+import { meetingVisibleTo } from '@/features/meetings/visibility'
 import { meetingAttendees, users } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { canAccessApp } from '@/lib/access-gate'
@@ -55,7 +56,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const parsed = paramsSchema.safeParse(await params)
   if (!parsed.success) return new Response('Not found', { status: 404 })
 
-  const [meeting] = await db.select().from(liveMeetings).where(eq(liveMeetings.id, parsed.data.id))
+  const [meeting] = await db
+    .select()
+    .from(liveMeetings)
+    // Visibility folded into existence: a private meeting a non-attendee
+    // fetches answers 404, never a 403 that confirms the id is real.
+    .where(and(eq(liveMeetings.id, parsed.data.id), meetingVisibleTo(session.user.id)))
   if (!meeting) return new Response('Not found', { status: 404 })
 
   const [[organizer], attendees] = await Promise.all([

@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lte, ne, or, sql }
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
 import { liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
+import { meetingVisibleTo } from '@/features/meetings/visibility'
 import {
   activityLog,
   appRoleHistory,
@@ -957,7 +958,13 @@ const MEETING_WINDOW_DAYS = 60
  * standups behind them; the split caps what renders inside it and reports the
  * full in-window totals so the UI can say how much it is not showing.
  */
-export const getPersonMeetings = cache(async function getPersonMeetings(userId: string): Promise<PersonMeetingsView> {
+export const getPersonMeetings = cache(async function getPersonMeetings(
+  userId: string,
+  /** Who is LOOKING. An attendees-only meeting the subject sits in shows on
+   *  their page only to viewers who are also on it — the subject themself
+   *  included, via the membership arm of meetingVisibleTo. */
+  viewerId: string,
+): Promise<PersonMeetingsView> {
   const now = new Date()
   const from = new Date(now.getTime() - MEETING_WINDOW_DAYS * 86_400_000)
   const until = new Date(now.getTime() + MEETING_WINDOW_DAYS * 86_400_000)
@@ -981,6 +988,7 @@ export const getPersonMeetings = cache(async function getPersonMeetings(userId: 
     .where(
       and(
         eq(meetingAttendees.userId, userId),
+        meetingVisibleTo(viewerId),
         gte(liveMeetings.startsAt, from),
         lte(liveMeetings.startsAt, until),
       ),

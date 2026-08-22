@@ -1,6 +1,7 @@
 import { cache } from 'react'
 import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
+import { meetingVisibleTo } from '@/features/meetings/visibility'
 import { liveApps, liveMeetings } from '@/db/live'
 import { meetingApps, meetingAttendees, users } from '@/db/schema'
 import type { MeetingApp } from '@/features/meetings/app-labels'
@@ -17,6 +18,11 @@ export type MeetingAttendee = {
 export type MeetingSummary = {
   id: string
   title: string
+  /** Who may see it: 'workspace' (everyone signed in) or 'attendees' only.
+   *  Every list that carries a summary was already visibility-filtered for
+   *  its viewer; this field exists so the EDIT form can show and keep the
+   *  setting rather than silently resetting it to the default. */
+  visibility: 'workspace' | 'attendees'
   /**
    * DEPRECATED. The meetings.app_id column — one project id, kept only so
    * change-request routing has a stable primary-ish answer without resolving a
@@ -47,6 +53,7 @@ export type MeetingSummary = {
 const meetingColumns = {
   id: liveMeetings.id,
   title: liveMeetings.title,
+  visibility: liveMeetings.visibility,
   appId: liveMeetings.appId,
   startsAt: liveMeetings.startsAt,
   endsAt: liveMeetings.endsAt,
@@ -157,10 +164,18 @@ async function hydrate(rows: MeetingRow[]): Promise<MeetingSummary[]> {
   }))
 }
 
-export async function listMeetings(): Promise<MeetingSummary[]> {
+/**
+ * Every meeting THIS VIEWER may see — the /meetings page's list and calendar.
+ * 'attendees'-visibility meetings surface only for people on them; see
+ * meetingVisibleTo. There is deliberately no viewerless variant left: a list
+ * of all meetings with no viewer is exactly the query that leaks a private
+ * one.
+ */
+export async function listMeetings(viewerId: string): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
     .from(liveMeetings)
+    .where(meetingVisibleTo(viewerId))
     .orderBy(desc(liveMeetings.startsAt))
 
   return hydrate(rows)
@@ -174,12 +189,12 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
  * then attaches the FULL project list, which is what lets the tab show a joint
  * meeting's sibling projects instead of implying it belongs here alone.
  */
-export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]> {
+export async function getMeetingsForApp(appId: string, viewerId: string): Promise<MeetingSummary[]> {
   const rows = await db
     .select(meetingColumns)
     .from(liveMeetings)
     .innerJoin(meetingApps, eq(meetingApps.meetingId, liveMeetings.id))
-    .where(eq(meetingApps.appId, appId))
+    .where(and(eq(meetingApps.appId, appId), meetingVisibleTo(viewerId)))
     .orderBy(desc(liveMeetings.startsAt))
 
   return hydrate(rows)
@@ -191,11 +206,18 @@ export async function getMeetingsForApp(appId: string): Promise<MeetingSummary[]
  * (generateMetadata for the PDF filename, then the page itself).
  */
 export const getMeetingById = cache(
-  async function getMeetingById(meetingId: string): Promise<MeetingSummary | null> {
+  async function getMeetingById(
+    meetingId: string,
+    viewerId: string,
+  ): Promise<MeetingSummary | null> {
     const rows = await db
       .select(meetingColumns)
       .from(liveMeetings)
-      .where(eq(liveMeetings.id, meetingId))
+      // Visibility is part of "exists" here on purpose: a private meeting a
+      // non-attendee asks for by id answers null, indistinguishable from a
+      // meeting that was never created — an exports route must not confirm
+      // the id is real by answering 403 instead of 404.
+      .where(and(eq(liveMeetings.id, meetingId), meetingVisibleTo(viewerId)))
 
     const [meeting] = await hydrate(rows)
     return meeting ?? null

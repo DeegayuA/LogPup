@@ -1,7 +1,8 @@
-import { desc, eq, ilike, or, sql } from 'drizzle-orm'
+import { and, desc, eq, ilike, or, sql } from 'drizzle-orm'
 import { format } from 'date-fns'
 import { db } from '@/db'
 import { liveApps, liveMeetings } from '@/db/live'
+import { meetingVisibleTo } from '@/features/meetings/visibility'
 import { meetingApps } from '@/db/schema'
 import { formatAppNames } from '@/features/meetings/app-labels'
 import { PALETTE_RESULT_LIMIT, likePattern } from '@/features/search/registry/limits'
@@ -43,7 +44,7 @@ export const searchProviders: SearchProvider[] = [
     id: 'meetings',
     label: 'Meetings',
     rank: 50,
-    search: async (query) => {
+    search: async (query, ctx) => {
       const pattern = likePattern(query)
       // JOIN + GROUP BY, not a correlated subquery — and that is not a style
       // choice. Drizzle drops table qualifiers from the whole select list when
@@ -69,7 +70,15 @@ export const searchProviders: SearchProvider[] = [
         .from(liveMeetings)
         .leftJoin(meetingApps, eq(meetingApps.meetingId, liveMeetings.id))
         .leftJoin(liveApps, eq(liveApps.id, meetingApps.appId))
-        .where(or(ilike(liveMeetings.title, pattern), ilike(liveMeetings.agenda, pattern)))
+        .where(
+          and(
+            // An attendees-only meeting is not findable by people who are not
+            // on it — an index anyone can type into is exactly where a
+            // private title leaks first.
+            meetingVisibleTo(ctx.user.id),
+            or(ilike(liveMeetings.title, pattern), ilike(liveMeetings.agenda, pattern)),
+          ),
+        )
         .groupBy(liveMeetings.id, liveMeetings.title, liveMeetings.startsAt)
         .orderBy(desc(liveMeetings.startsAt))
         .limit(PALETTE_RESULT_LIMIT)

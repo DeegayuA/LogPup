@@ -69,7 +69,8 @@ export async function generateMetadata(props: {
   const [{ id }, search] = await Promise.all([props.params, props.searchParams])
   if (!UUID_RE.test(id)) return { title: 'Meeting minutes — LogPup' }
 
-  const meeting = await getMeetingById(id)
+  const session = await getSession()
+  const meeting = await getMeetingById(id, session?.user?.id ?? '')
   if (!meeting) return { title: 'Meeting minutes — LogPup' }
 
   const day = fileDateFmt.format(meeting.startsAt) // 2026-08-12
@@ -319,7 +320,7 @@ export default async function MeetingPrintPage(props: {
   const session = await getSession()
   if (!session?.user) notFound()
 
-  const meeting = await getMeetingById(id)
+  const meeting = await getMeetingById(id, session.user.id)
   if (!meeting) notFound()
   if (!(await canReadMeetingIntel(session.user, meeting))) notFound()
 

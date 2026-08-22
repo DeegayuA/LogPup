@@ -69,6 +69,9 @@ type FormState = {
   agenda: string
   meetingUrl: string
   attendeeIds: string[]
+  /** Who may see this meeting — the "show to everyone or just attendees?"
+   *  answer the form asks for out loud. */
+  visibility: 'workspace' | 'attendees'
   // Which of attendeeIds only the app-team prefill put there (see
   // attendee-prefill.ts for the swap semantics). Lives inside FormState, not
   // its own useState, so a prefill response updates both lists in ONE
@@ -134,6 +137,7 @@ function emptyState(
     end: proposed ?? (endAt && endAt > start ? endAt : addHours(start, 1)),
     agenda: prefill?.agenda ?? '',
     meetingUrl: '',
+    visibility: 'workspace',
     attendeeIds: prefill?.attendeeIds ?? [],
     // Deliberately empty even when `prefill` named attendees. `prefilledIds`
     // marks people the APP-TEAM prefill put here, which a later app switch may
@@ -233,6 +237,7 @@ export type EditableMeeting = {
   agenda: string | null
   meetingUrl: string | null
   attendeeIds: string[]
+  visibility: 'workspace' | 'attendees'
 }
 
 function stateFromMeeting(meeting: EditableMeeting): FormState {
@@ -243,6 +248,7 @@ function stateFromMeeting(meeting: EditableMeeting): FormState {
     end: meeting.endsAt,
     agenda: meeting.agenda ?? '',
     meetingUrl: meeting.meetingUrl ?? '',
+    visibility: meeting.visibility,
     attendeeIds: meeting.attendeeIds,
     // Nothing here came from the app-team prefill — these are attendees a
     // person actually committed to. Marking them prefilled would let a later
@@ -567,6 +573,7 @@ export function MeetingForm({
           agenda: form.agenda || undefined,
           meetingUrl: form.meetingUrl,
           attendeeIds: form.attendeeIds,
+          visibility: form.visibility,
           // Only meaningful with a blank link — the server enforces the same.
           withMeet: withMeet && !form.meetingUrl ? true : undefined,
         }
@@ -814,6 +821,41 @@ export function MeetingForm({
                   : 'Meet, Zoom or Teams link — attendees get a one-click join'}
               </p>
             )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label id="meeting-visibility-label">Who can see it</Label>
+            {/* Asked out loud, per the product ask — not buried in an
+                advanced section. Same segmented idiom as the views toggle:
+                aria-pressed halves on a muted track. */}
+            <div
+              role="group"
+              aria-labelledby="meeting-visibility-label"
+              className="flex w-fit items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5"
+            >
+              {(
+                [
+                  { value: 'workspace', label: 'Everyone' },
+                  { value: 'attendees', label: 'Attendees only' },
+                ] as const
+              ).map(({ value, label }) => (
+                <Button
+                  key={value}
+                  type="button"
+                  size="sm"
+                  variant={form.visibility === value ? 'default' : 'ghost'}
+                  aria-pressed={form.visibility === value}
+                  onClick={() => setForm((f) => ({ ...f, visibility: value }))}
+                  className="h-7 px-2.5"
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {form.visibility === 'workspace'
+                ? 'Shows on every teammate’s calendar and in search.'
+                : 'Only the people on it see it anywhere — lists, calendars, search.'}
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>Attendees</Label>

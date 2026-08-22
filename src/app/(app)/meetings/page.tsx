@@ -34,13 +34,19 @@ export default async function MeetingsPage(props: {
     allMeetings,
     apps,
     activeUsers,
-  ] = await Promise.all([
-    props.searchParams,
-    getSession(),
-    listMeetings(),
-    listApps(),
-    listActiveUsers(),
-  ])
+  ] = await (async () => {
+    // Session FIRST: the meetings list is now viewer-scoped (attendees-only
+    // meetings exist), so the query cannot start before we know who is asking.
+    const session = await getSession()
+    const viewerId = session?.user?.id ?? ''
+    const [search, meetings, apps, users] = await Promise.all([
+      props.searchParams,
+      listMeetings(viewerId),
+      listApps(),
+      listActiveUsers(),
+    ])
+    return [search, session, meetings, apps, users] as const
+  })()
 
   // `allMeetings` arrives newest-first, which is what the past side wants and
   // the reverse of what upcoming does — splitByUpcoming owns that flip. Sorting
