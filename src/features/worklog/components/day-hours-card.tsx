@@ -28,6 +28,13 @@ import {
   entryFormProblem,
   type EntryFormFields,
 } from '@/features/worklog/entry-form'
+// The duration grammar lives beside the sentence reader in
+// entry-language.ts, not here: this box and that sentence had already
+// drifted — "90m" parsed in one and returned null in the other — and one
+// grammar cannot disagree with itself. Re-exported so existing importers
+// are unaffected.
+import { parseDuration } from '@/features/worklog/entry-language'
+export { parseDuration }
 import {
   createWorklogEntry,
   deleteWorklogEntry,
@@ -95,32 +102,6 @@ function observationKey(observation: { kind: string; facts: Record<string, unkno
   return `${observation.kind}::${facts}`
 }
 
-/**
- * "1.5", "90m", "1h30", "2h" all mean the same thing to somebody logging a
- * day, and refusing three of them because the fourth was expected is the kind
- * of small rudeness that stops a habit forming. Returns whole minutes, or null
- * when there is genuinely no number in there.
- */
-export function parseDuration(raw: string): number | null {
-  const text = raw.trim().toLowerCase()
-  if (!text) return null
-
-  const hm = text.match(/^(\d+)\s*h\s*(\d+)\s*m?$/)
-  if (hm) return Number(hm[1]) * 60 + Number(hm[2])
-
-  const hours = text.match(/^(\d+(?:[.,]\d+)?)\s*h(?:rs?|ours?)?$/)
-  if (hours) return Math.round(Number(hours[1].replace(',', '.')) * 60)
-
-  const mins = text.match(/^(\d+)\s*m(?:ins?|inutes?)?$/)
-  if (mins) return Number(mins[1])
-
-  // A bare number is HOURS, because that is what somebody typing "1.5" into a
-  // box labelled Hours means. Minutes have to say so.
-  const bare = text.match(/^(\d+(?:[.,]\d+)?)$/)
-  if (bare) return Math.round(Number(bare[1].replace(',', '.')) * 60)
-
-  return null
-}
 
 /**
  * A saved row's minutes as text the duration box can hold WITHOUT changing it.
