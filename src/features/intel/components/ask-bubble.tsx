@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
-import { MessageCircleQuestion, X } from 'lucide-react'
+import { ArrowRight, MessageCircleQuestion, Radar, X } from 'lucide-react'
 
 import {
   Dialog,
@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { cn } from '@/lib/utils'
 import { AskPanel } from '@/features/intel/components/ask-panel'
+import { IntelView } from '@/features/intel/components/intel-view'
+import { subscribeIntelBubble, type BubbleView } from '@/features/intel/bubble-bus'
 
 /**
  * "Ask LogPup" on every authed page — a floating trigger opening the SAME
@@ -26,13 +28,56 @@ import { AskPanel } from '@/features/intel/components/ask-panel'
  * behaviours and, eventually, two answers to the same question. This file is a
  * shell: a button, a sheet, and the rules for opening and closing it.
  *
- * MOUNTING IS GATED ON askAvailable(), resolved once by the layout that
- * renders this. A bubble on every page that then refuses to answer is worse
- * than no bubble — it advertises a capability the account does not have, on
- * every screen, permanently.
+ * TWO HALVES SINCE /intel WAS REMOVED. The ask panel is one; the other is
+ * everything LogPup noticed — the briefing and the ranked signals that page
+ * used to hold. An arrow in the header moves between them.
+ *
+ * `canAsk` NO LONGER GATES MOUNTING, and that change is load-bearing. It used
+ * to: "a bubble on every page that then refuses to answer is worse than no
+ * bubble". But signals are deliberately AI-FREE — signals.ts exists so that a
+ * reader with AI switched off, or a key that just got rejected, still gets the
+ * whole list of things that need them. Gating the only remaining surface on
+ * askAvailable() would have made that list unreachable for exactly the readers
+ * it was written for.
+ *
+ * So the bubble always mounts, and `canAsk` decides what it IS: with AI it is
+ * Ask LogPup, opening on the question box. Without, it is LogPup's signal
+ * board, wearing the radar icon, with no ask affordance offered anywhere. The
+ * old rule is kept — nothing advertises a capability the account does not
+ * have — it just no longer takes the signals down with it.
  */
-export function AskBubble({ className }: { className?: string }) {
+export function AskBubble({
+  canAsk = true,
+  className,
+}: {
+  /**
+   * Whether this account can actually get an answer. Resolved once by the
+   * layout (askAvailable() owns routed-ness, the feature pref and key presence
+   * together), because a client-side probe would flash the wrong surface.
+   */
+  canAsk?: boolean
+  className?: string
+}) {
   const [open, setOpen] = React.useState(false)
+  /* Without AI there is only one half, and it is the intel one. */
+  const [view, setView] = React.useState<BubbleView>(canAsk ? 'ask' : 'intel')
+  const [region, setRegion] = React.useState<'briefing' | 'signals' | undefined>(undefined)
+  const [prefill, setPrefill] = React.useState('')
+
+  /* The palette opens this instead of navigating to /intel, which no longer
+     exists. It names the half it wants, so "Today's briefing" still lands on
+     the briefing rather than on whatever was open last time. */
+  React.useEffect(
+    () =>
+      subscribeIntelBubble((request) => {
+        const wanted = request.view === 'ask' && !canAsk ? 'intel' : request.view
+        setView(wanted)
+        setRegion(request.region)
+        if (request.question !== undefined) setPrefill(request.question)
+        setOpen(true)
+      }),
+    [canAsk],
+  )
 
   /**
    * ⌘/ (Ctrl+/) toggles it. Not a bare letter: the palette already owns the
@@ -68,7 +113,7 @@ export function AskBubble({ className }: { className?: string }) {
           own panel. */}
       <button
         type="button"
-        aria-label="Ask LogPup"
+        aria-label={canAsk ? 'Ask LogPup' : 'What LogPup noticed'}
         aria-expanded={open}
         onClick={() => setOpen(true)}
         className={cn(
@@ -81,8 +126,14 @@ export function AskBubble({ className }: { className?: string }) {
           className,
         )}
       >
-        <MessageCircleQuestion className="size-5 shrink-0" aria-hidden />
-        <span className="hidden text-sm font-medium sm:inline">Ask LogPup</span>
+        {canAsk ? (
+          <MessageCircleQuestion className="size-5 shrink-0" aria-hidden />
+        ) : (
+          <Radar className="size-5 shrink-0" aria-hidden />
+        )}
+        <span className="hidden text-sm font-medium sm:inline">
+          {canAsk ? 'Ask LogPup' : 'Signals'}
+        </span>
       </button>
 
       <DialogPortal>
@@ -105,8 +156,49 @@ export function AskBubble({ className }: { className?: string }) {
           )}
         >
           <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-3">
-            <MessageCircleQuestion className="size-4 shrink-0 text-primary" aria-hidden />
-            <DialogTitle className="flex-1 text-sm font-semibold">Ask LogPup</DialogTitle>
+            {view === 'ask' ? (
+              <MessageCircleQuestion className="size-4 shrink-0 text-primary" aria-hidden />
+            ) : (
+              <Radar className="size-4 shrink-0 text-primary" aria-hidden />
+            )}
+            <DialogTitle className="flex-1 text-sm font-semibold">
+              {view === 'ask' ? 'Ask LogPup' : 'What LogPup noticed'}
+            </DialogTitle>
+
+            {/* The two halves, one arrow. Offered only when there ARE two:
+                without AI the ask panel cannot answer, so a control leading to
+                it would advertise a dead end on every page.
+
+                It carries a LABEL as well as a direction, because an arrow
+                alone says "forward" and not "forward to what" — and it flips
+                with the view so the button always names where it goes rather
+                than where you are. */}
+            {canAsk ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-label={
+                  view === 'ask' ? 'Show what LogPup noticed' : 'Back to asking a question'
+                }
+                onClick={() => {
+                  setView((current) => (current === 'ask' ? 'intel' : 'ask'))
+                  // A manual switch is not a deep link: clear the region so it
+                  // does not scroll somewhere the person did not ask for.
+                  setRegion(undefined)
+                }}
+                className="text-muted-foreground"
+              >
+                <span className="hidden sm:inline">{view === 'ask' ? 'Signals' : 'Ask'}</span>
+                <ArrowRight
+                  aria-hidden
+                  className={cn(
+                    'transition-transform duration-150 ease-out motion-reduce:transition-none',
+                    view === 'intel' && 'rotate-180',
+                  )}
+                />
+              </Button>
+            ) : null}
+
             <Kbd className="hidden sm:inline-flex">⌘/</Kbd>
             <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="Close" />}>
               <X aria-hidden />
@@ -116,7 +208,14 @@ export function AskBubble({ className }: { className?: string }) {
           {/* The panel scrolls inside the sheet rather than the sheet growing:
               a conversation is unbounded and the header must stay reachable. */}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
-            <AskPanel />
+            {view === 'ask' ? (
+              <AskPanel initialQuestion={prefill} />
+            ) : (
+              /* Keyed on `open` so closing the sheet discards it: the intel
+                 view reads on mount, and "what is true now" must not be
+                 answered by whatever was true when it was last opened. */
+              <IntelView key={open ? 'open' : 'closed'} region={region} />
+            )}
           </div>
         </DialogPrimitive.Popup>
       </DialogPortal>

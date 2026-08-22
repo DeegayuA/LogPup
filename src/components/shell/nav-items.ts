@@ -6,7 +6,6 @@ import {
   History,
   LayoutDashboard,
   NotebookPen,
-  Radar,
   ShieldCheck,
   Users,
 } from 'lucide-react'
@@ -43,7 +42,6 @@ export const navItems: NavItem[] = [
   // needs attention today. Open to every signed-in seat — it only restates
   // rows the dashboard already shows the same reader — so it belongs in this
   // ungated list rather than beside Progress.
-  { href: '/intel', label: 'Intel', icon: Radar, key: 'I' },
   { href: '/apps', label: 'Apps', icon: AppWindow, key: 'A' },
   { href: '/people', label: 'People', icon: Users, key: 'P' },
   { href: '/meetings', label: 'Meetings', icon: CalendarDays, key: 'M' },

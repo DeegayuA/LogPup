@@ -23,6 +23,7 @@ import { navItems } from '@/components/shell/nav-items'
 import { ShortcutsOverlay } from '@/components/shell/shortcuts-overlay'
 import { cn } from '@/lib/utils'
 import { createDeduper } from '@/lib/dedupe'
+import { openIntelBubble } from '@/features/intel/bubble-bus'
 import { askAvailable } from '@/features/intel/actions'
 import { usePrefetchIntent } from '@/hooks/use-prefetch-intent'
 import {
@@ -626,7 +627,10 @@ export function CommandCenterProvider({
                          contract. A palette row that spent someone's Gemini
                          quota on navigation would charge them for a keystroke
                          they were still typing. */
-                      router.push(`/intel?ask=${encodeURIComponent(question)}#ask`)
+                      // Opens the bubble rather than navigating: /intel is
+                      // gone, and the question travels in the event instead of
+                      // a query string so nothing has to survive a round trip.
+                      openIntelBubble({ view: 'ask', question })
                     }}
                   >
                     <Sparkles />
