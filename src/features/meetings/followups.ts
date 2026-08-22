@@ -279,7 +279,12 @@ const MATCH_STOPWORDS = new Set([
 function normalizeMatchTokens(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    // \p{M} and ZWJ (‍) stay: Sinhala vowel signs and the al-lakuna are
+    // combining marks, and stripping them shatters every Sinhala word into
+    // consonant fragments — unrelated Sinhala texts then share enough
+    // fragments to cross the match threshold and auto-link (and later
+    // auto-resolve) the wrong follow-up.
+    .replace(/[^\p{L}\p{M}\p{N}\s‍]/gu, ' ')
     .split(/\s+/)
     .filter((word) => word.length > 0 && !MATCH_STOPWORDS.has(word))
 }

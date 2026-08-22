@@ -161,6 +161,15 @@ describe('findMentionQuery', () => {
     expect(ids('shan ayas')).toEqual(['u1'])
   })
 
+  it('keeps the popover open while a Sinhala name is typed', () => {
+    // Sinhala vowel signs (ී) and the al-lakuna (්) are combining marks
+    // (\p{M}), not letters — a letters-only word class closes the popover on
+    // the second character of virtually every Sinhala name.
+    expect(atEnd('@දී')).toEqual({ start: 0, query: 'දී' })
+    expect(atEnd('@සමන්')).toEqual({ start: 0, query: 'සමන්' })
+    expect(atEnd('hey @ශනිකා')).toEqual({ start: 4, query: 'ශනිකා' })
+  })
+
   it('stops at a third word, so a sentence after "@" is not a name', () => {
     expect(atEnd('@sam can you')).toBeNull()
     expect(atEnd('@shan ayas manthi')).toBeNull()

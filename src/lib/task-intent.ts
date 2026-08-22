@@ -124,13 +124,19 @@ function extractDue(
  * restores the words when <app> resolves to nothing.
  */
 function extractApp(text: string): { rest: string; app: string | null } {
-  const match = /^([\s\S]+?)\s+on\s+([\w][\w .-]*)$/i.exec(text)
+  // Unicode classes, not \w: an app named in Sinhala ('පූප්') must extract the
+  // same as 'logpup', or the words silently stay in the title and the task is
+  // routed to the assignee's default app instead of the one the user named.
+  const match = /^([\s\S]+?)\s+on\s+([\p{L}\p{N}][\p{L}\p{N}\p{M} .-]*)$/iu.exec(text)
   if (!match) return { rest: text, app: null }
   return { rest: match[1].trim(), app: match[2].trim() }
 }
 
 /** Letters/digits plus the punctuation that lives *inside* names (O'Neil, Anne-Marie). */
-const NAME_WORD = String.raw`[\p{L}\p{N}][\p{L}\p{N}.'’-]*`
+// \p{M} keeps Sinhala names whole: vowel signs and the al-lakuna are combining
+// marks, and without them in the continuation class 'සමන්' tokenizes as 'සමන'
+// and the (?=\s|$) lookahead then fails on the stranded mark.
+const NAME_WORD = String.raw`[\p{L}\p{N}][\p{L}\p{N}\p{M}.'’-]*`
 
 /**
  * `@name`, ANYWHERE in the phrase — "fix login @shanika today" as well as
@@ -340,8 +346,10 @@ export function parseTaskIntent(
   // "assign <title> to <name and name>" / "task <title> for <name>"
   const command =
     /^(?:assign|create\s+task|add\s+task|task)\s+([\s\S]+?)\s+(?:to|for)\s+([\s\S]+)$/i.exec(body)
-  // "sam: ship the thing"
-  const colon = /^([\w][\w .'-]{0,40}?)\s*:\s+([\s\S]+)$/.exec(body)
+  // "sam: ship the thing" — Unicode classes so 'සමන්: ship the thing' resolves
+  // through the same exact tier instead of limping through fuzzy with the colon
+  // glued to the name.
+  const colon = /^([\p{L}\p{N}][\p{L}\p{N}\p{M} .'-]{0,40}?)\s*:\s+([\s\S]+)$/u.exec(body)
 
   const nameQueries: string[] = [...atQueries]
 

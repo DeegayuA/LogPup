@@ -60,6 +60,13 @@ describe('fuzzyActivityFallback', () => {
   it('does not crash on an empty row list', () => {
     expect(fuzzyActivityFallback([], 'meetign', text)).toEqual([])
   })
+
+  it('rescues a misspelled Sinhala query the same way it rescues English typos', () => {
+    // An ASCII-only word splitter deletes every Sinhala character, so pure
+    // Sinhala rows were skipped outright and Sinhala typos found nothing.
+    const rows: Row[] = [{ id: 'a', text: 'රැස්වීම් සටහන් updated' }]
+    expect(fuzzyActivityFallback(rows, 'රැස්වම', text).map((r) => r.id)).toEqual(['a'])
+  })
 })
 
 describe('activityRowSearchText', () => {

@@ -23,9 +23,14 @@ function tokenize(q: string): string[] {
   return q.trim().toLowerCase().split(/\s+/).filter(Boolean)
 }
 
-/** Splits a haystack into words, discarding punctuation. */
+/**
+ * Splits a haystack into words, discarding punctuation. Unicode classes, not
+ * [a-z0-9]: an ASCII splitter treats every Sinhala character as a separator,
+ * which skipped pure-Sinhala rows entirely and made Sinhala typo-rescue and
+ * relevance ranking a no-op. \p{M} keeps vowel signs/al-lakuna inside words.
+ */
 function words(haystack: string): string[] {
-  return haystack.split(/[^a-z0-9]+/i).filter(Boolean)
+  return haystack.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean)
 }
 
 /** Best similarity between `token` and any individual word of `haystackWords`. */

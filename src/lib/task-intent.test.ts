@@ -39,6 +39,28 @@ describe('parseTaskIntent', () => {
     expect(intent?.title).toBe('review the PR')
   })
 
+  // Sinhala names/apps carry combining marks (vowel signs, al-lakuna) that are
+  // \p{M}, not \p{L} — and \w matches neither. Each ASCII-shaped pattern below
+  // must treat a Sinhala token exactly like its Latin twin.
+  const SI_PEOPLE = [...PEOPLE, { id: 'u5', name: 'සමන් පෙරේරා' }]
+
+  it('reads a Sinhala @name mid-sentence', () => {
+    const intent = parseTaskIntent('fix the @සමන් login bug', SI_PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u5')
+  })
+
+  it('supports the colon form with a Sinhala name', () => {
+    const intent = parseTaskIntent('සමන්: review the PR', SI_PEOPLE, TODAY)
+    expect(intent?.assignee?.id).toBe('u5')
+    expect(intent?.title).toBe('review the PR')
+  })
+
+  it('extracts a Sinhala app name after "on"', () => {
+    const intent = parseTaskIntent('shanika fix login on පූප්', PEOPLE, TODAY)
+    expect(intent?.appQuery).toBe('පූප්')
+    expect(intent?.title).toBe('fix login')
+  })
+
   it('reads a bare trailing first name — "fix login shanika"', () => {
     const intent = parseTaskIntent('fix login shanika', PEOPLE, TODAY)
     expect(intent?.assignee?.id).toBe('u1')

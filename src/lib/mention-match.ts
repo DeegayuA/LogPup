@@ -58,8 +58,13 @@ const RANK: Record<MentionMatchKind, number> = {
  */
 const MENTION_QUERY_MAX_WORDS = 2
 
-/** Letters/digits plus the punctuation that lives *inside* names (O'Neil, Anne-Marie). */
-const NAME_WORD = String.raw`[\p{L}\p{N}][\p{L}\p{N}'’-]*`
+/**
+ * Letters/digits plus the punctuation that lives *inside* names (O'Neil,
+ * Anne-Marie). \p{M} is load-bearing: Sinhala vowel signs and the al-lakuna
+ * (සමන්'s ්) are combining marks, not letters — without it the popover closes
+ * on the second character of virtually every Sinhala name.
+ */
+const NAME_WORD = String.raw`[\p{L}\p{N}][\p{L}\p{N}\p{M}'’-]*`
 
 /*
  * The whole slice between '@' and the caret must be a bare "@" or up to

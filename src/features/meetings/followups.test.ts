@@ -284,6 +284,25 @@ describe('selectUnattributed', () => {
 })
 
 describe('followupTaskSimilarity', () => {
+  it('keeps Sinhala words whole — unrelated Sinhala texts stay below the threshold', () => {
+    // Stripping combining marks shattered every Sinhala word into consonant
+    // fragments; these two UNRELATED action items then scored exactly 0.5 and
+    // auto-linked, which later silently auto-resolved the wrong follow-up.
+    const score = followupTaskSimilarity(
+      'report එක අනිද්දා යවන්න',
+      'invoice එක අනිද්දා හදන්න',
+    )
+    expect(score).toBeLessThan(FOLLOWUP_TASK_MATCH_THRESHOLD)
+  })
+
+  it('still matches the same Sinhala item reordered', () => {
+    const score = followupTaskSimilarity(
+      'report එක අනිද්දා යවන්න',
+      'අනිද්දා report එක යවන්න',
+    )
+    expect(score).toBeGreaterThanOrEqual(FOLLOWUP_TASK_MATCH_THRESHOLD)
+  })
+
   it('scores near-identical rewordings highly', () => {
     const score = followupTaskSimilarity(
       'Update the onboarding doc for new hires',
