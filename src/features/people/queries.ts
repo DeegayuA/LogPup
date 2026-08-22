@@ -71,6 +71,8 @@ export type TeamMember = {
   phone: string | null
   role: string
   allocationPct: number
+  /** For the roster export. Null where nobody has set one. */
+  employmentType: string | null
 }
 
 export type CapacityBreakdownEntry = {
@@ -162,6 +164,7 @@ export async function getTeamForApp(appId: string): Promise<TeamMember[]> {
       phone: users.phone,
       role: assignments.role,
       allocationPct: assignments.allocationPct,
+      employmentType: users.employmentType,
     })
     .from(assignments)
     .innerJoin(users, eq(assignments.userId, users.id))

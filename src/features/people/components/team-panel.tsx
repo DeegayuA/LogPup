@@ -3,7 +3,7 @@
 import { useTransition } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { Download, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { ContactButtons } from '@/components/contact-buttons'
 import { Button } from '@/components/ui/button'
@@ -18,23 +18,37 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import { downloadCsv } from '@/features/admin/components/csv-download'
 import { removeAssignment } from '@/features/people/actions'
+import { TEAM_CSV_HEADERS, teamCsvPrefix, teamCsvRows } from '@/features/people/team-csv'
 import { AssignDialog } from '@/features/people/components/assign-dialog'
 import type { ActiveUser, TeamMember } from '@/features/people/queries'
 
 export function TeamPanel({
   appId,
+  appSlug,
   appName,
   team,
   activeUsers,
   isAdmin,
+  pmUserId = null,
+  leadUserId = null,
 }: {
   appId: string
+  /** Names the downloaded roster: `logpup-team-2026-08-22.csv`. */
+  appSlug?: string
   /** Prefills the WhatsApp message with which project this is about. */
   appName?: string
   team: TeamMember[]
   activeUsers: ActiveUser[]
   isAdmin: boolean
+  /**
+   * Who holds the project's two tracked positions. Passed in rather than read
+   * off the member rows because a PM or lead need not be ASSIGNED to the
+   * project — the two are separate facts in the schema.
+   */
+  pmUserId?: string | null
+  leadUserId?: string | null
 }) {
   const [isPending, startTransition] = useTransition()
 
@@ -69,7 +83,27 @@ export function TeamPanel({
             <span className="font-mono text-xs text-muted-foreground">{team.length}</span>
           ) : null}
         </div>
-        {isAdmin ? (
+        <div className="flex items-center gap-1.5">
+          {/* Exports exactly the rows rendered below — the same property
+              downloadCsv is built around, so the file can never hand back
+              somebody this reader was not already shown. Hidden when there is
+              nobody to export rather than downloading an empty file. */}
+          {team.length > 0 && appSlug ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                downloadCsv(
+                  teamCsvPrefix(appSlug),
+                  TEAM_CSV_HEADERS,
+                  teamCsvRows(team, { pmUserId, leadUserId }),
+                )
+              }
+            >
+              <Download aria-hidden /> CSV
+            </Button>
+          ) : null}
+          {isAdmin ? (
           <AssignDialog
             appId={appId}
             activeUsers={activeUsers}
@@ -79,7 +113,8 @@ export function TeamPanel({
               </Button>
             }
           />
-        ) : null}
+          ) : null}
+        </div>
       </div>
       {team.length === 0 ? (
         <div className="flex flex-col gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">

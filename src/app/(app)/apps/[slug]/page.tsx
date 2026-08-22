@@ -506,10 +506,13 @@ export default async function AppDetailPage(props: {
 
           <TeamPanel
             appId={app.id}
+            appSlug={app.slug}
             appName={app.name}
             team={team}
             activeUsers={activeUsers}
             isAdmin={isAdmin}
+            pmUserId={app.pmId}
+            leadUserId={app.leadId}
           />
 
           {/* Directly under Team on purpose: Team is the plan (who is on this,
