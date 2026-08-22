@@ -111,6 +111,20 @@ const ALLOWLIST: readonly string[] = [
   // directly — the opposite of what liveMeetings/liveTasks/... expose.
   'src/features/admin/trash-queries.ts',
 
+  // why: delete and restore both have to READ a take's deleted_at to act on
+  // it — restore matches segments against the recording's own deletion
+  // timestamp, so a segment somebody removed separately and earlier is not
+  // quietly resurrected with the take. A live-only subquery cannot express
+  // either operation. The segments these touch are written through
+  // meetingRecordingSegments by id, never selected unfiltered.
+  'src/features/meetings/recording-actions.ts',
+
+  // why: a removed take stays VISIBLE to whoever removed it, or "remove" is
+  // indistinguishable from "lose" and nobody presses the button twice. The
+  // live/removed split is explicit in the returned shape rather than implied
+  // by absence, which is exactly what a live-only read cannot do.
+  'src/features/meetings/recording-queries.ts',
+
   // why: the restore + permanent-purge actions operate on already-trashed
   // rows and perform the eventual hard delete.
   'src/features/admin/trash-actions.ts',
@@ -178,7 +192,7 @@ const ALIAS_RE = new RegExp(`alias\\(\\s*${SOFT_TABLE_NAMES}\\b`)
 // error message — is the actual enforcement, and it can only see a table named
 // here as a LITERAL. meetingApps was added to both in the commit that created
 // the table, before its first reader existed.
-const CHILD_TABLE_NAMES = '(meetingAttendees|meetingAiNotes|meetingFollowups|meetingSpeakers|meetingTaskSuggestions|meetingRecordingSegments|meetingApps)'
+const CHILD_TABLE_NAMES = '(meetingAttendees|meetingAiNotes|meetingFollowups|meetingSpeakers|meetingTaskSuggestions|meetingRecordingSegments|meetingRecordings|meetingApps)'
 const CHILD_FROM_RE = new RegExp(`\\.from\\(\\s*${CHILD_TABLE_NAMES}\\s*[),]`)
 // Joins and alias() are read forms too. Check 1 has always had a join regex
 // for the soft tables; check 3 had only `.from(`, so

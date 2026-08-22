@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { ACCENTS, DEFAULT_ACCENT } from './theme-provider'
+import { ACCENTS, DEFAULT_ACCENT, themeInitScript } from './theme-provider'
 
 /**
  * The colourway contract, enforced.
@@ -97,5 +97,84 @@ describe('colourways', () => {
       const touched = [...propsOf(lightSelector(way)), ...propsOf(darkSelector(way))]
       expect(touched.filter((prop) => forbidden.includes(prop))).toEqual([])
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The pre-paint script, executed.
+//
+// This string runs before anything else on the page, so it is the one piece of
+// code in the app with no framework catching its mistakes: a throw here is a
+// blank document, and a wrong branch is a colour that flashes on every load.
+// It is also the piece least likely to be exercised by anything else — nothing
+// imports it, it is interpolated into a <script> tag and forgotten.
+//
+// The parameters shadow the globals the script reaches for, so it runs against
+// stubs without a DOM.
+// ---------------------------------------------------------------------------
+
+type Root = {
+  classList: { add: (name: string) => void; remove?: (name: string) => void }
+  style: { colorScheme?: string }
+  setAttribute: (name: string, value: string) => void
+}
+
+function runInitScript(stored: Record<string, string> | 'throws', prefersDark = false) {
+  const classes: string[] = []
+  const attrs: Record<string, string> = {}
+  const root: Root = {
+    classList: { add: (name) => void classes.push(name) },
+    style: {},
+    setAttribute: (name, value) => void (attrs[name] = value),
+  }
+  const localStorage = {
+    getItem(key: string) {
+      if (stored === 'throws') throw new Error('storage disabled')
+      return key in stored ? stored[key] : null
+    },
+  }
+  const win = { matchMedia: () => ({ matches: prefersDark }) }
+  new Function('window', 'document', 'localStorage', themeInitScript)(
+    win,
+    { documentElement: root },
+    localStorage,
+  )
+  return { classes, attrs }
+}
+
+describe('the pre-paint script', () => {
+  it('applies a stored way as an attribute, before anything renders', () => {
+    const { attrs } = runInitScript({ 'logpup.accent': 'ocean' })
+    expect(attrs['data-accent']).toBe('ocean')
+  })
+
+  it('falls back to the default when nothing is stored', () => {
+    expect(runInitScript({}).attrs['data-accent']).toBe(DEFAULT_ACCENT)
+  })
+
+  it('refuses a way it does not recognise', () => {
+    // A hand-edited or stale storage value must not become an attribute that
+    // no CSS block matches — that renders as pine anyway, but silently, and
+    // the picker would then disagree with the page.
+    const { attrs } = runInitScript({ 'logpup.accent': 'chartreuse' })
+    expect(attrs['data-accent']).toBe(DEFAULT_ACCENT)
+  })
+
+  it('accepts every way the picker offers', () => {
+    for (const way of ACCENTS) {
+      expect(runInitScript({ 'logpup.accent': way }).attrs['data-accent']).toBe(way)
+    }
+  })
+
+  it('still applies the theme alongside the way', () => {
+    const { classes } = runInitScript({ 'logpup.theme': 'dark', 'logpup.accent': 'rose' })
+    expect(classes).toContain('dark')
+  })
+
+  it('survives storage that throws, without applying anything', () => {
+    // Private mode. The page then renders as :root declares it — light, pine —
+    // which is a correct page, not a broken one.
+    expect(() => runInitScript('throws')).not.toThrow()
+    expect(runInitScript('throws').attrs['data-accent']).toBeUndefined()
   })
 })
