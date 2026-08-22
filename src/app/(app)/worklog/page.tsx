@@ -1025,7 +1025,13 @@ async function TeamZone({ today, retryHref }: { today: string; retryHref: string
             className="rounded-xl border border-dashed"
           />
         ) : (
-          <div className="grid items-start gap-3 md:grid-cols-2">
+          /* COLUMNS, NOT A GRID. Every card is a different height — one
+             person's four logged days against another's empty strip — and in
+             a two-column grid the whole row stretches to the tallest card,
+             so a short card leaves a screen-high hole beside a long one. CSS
+             columns pack by height instead. break-inside-avoid keeps a card
+             from being split across the column boundary. */
+          <div className="gap-3 md:columns-2 [&>*]:mb-3 [&>*]:break-inside-avoid">
             {people.map((person) => {
               // A working day this person neither logged nor was away for —
               // the amber squares in the strip. Counted from the same

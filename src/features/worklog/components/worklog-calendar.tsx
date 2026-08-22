@@ -76,6 +76,22 @@ const LEGEND_STATES: readonly DayState[] = [
   'outside',
 ]
 
+/**
+ * Legend wording, where the screen-reader sentence is too long for a chip.
+ *
+ * DAY_STATE_LABEL has to read as a whole sentence inside dayStateText
+ * ("18 — Hours logged, day not scored"); a key beside a swatch is read with
+ * the swatch and does not. Overrides only — anything absent falls through to
+ * the precise label, so the two cannot drift apart for the states that share
+ * wording.
+ */
+const LEGEND_LABEL: Partial<Record<DayState, string>> = {
+  partial: 'Hours only',
+  owed: 'Not logged',
+  absence: 'Approved absence',
+  outside: 'Before joining',
+}
+
 function legendSwatchClass(state: DayState): string {
   if (state === 'logged') return cn(DAY_STATE_CLASS.logged, loggedTone(100))
   return DAY_STATE_CLASS[state]
@@ -338,7 +354,7 @@ export function WorklogCalendar({
                 <strong>Holiday:</strong> Mercantile (Studio Off) / Public
               </span>
             ) : (
-              DAY_STATE_LABEL[state]
+              LEGEND_LABEL[state] ?? DAY_STATE_LABEL[state]
             )}
           </li>
         ))}
