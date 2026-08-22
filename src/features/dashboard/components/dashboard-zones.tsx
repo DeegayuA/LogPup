@@ -1,16 +1,39 @@
+import type { ReactNode } from 'react'
 import Link from 'next/link'
-import { AtSign } from 'lucide-react'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { format } from 'date-fns'
+import { AtSign, CalendarCheck, FileCheck, LayoutGrid, ListTodo, PawPrint } from 'lucide-react'
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatTile } from '@/components/ui/stat-tile'
 import { cn } from '@/lib/utils'
+import { can, type Actor } from '@/features/auth/capabilities'
+import {
+  zoneScope,
+  type AdmittingGrant,
+  type ZoneId,
+} from '@/features/dashboard/zones'
 import {
   getPersonFollowups,
   getPersonMeetings,
   getPersonWorkload,
+  getTeamForApp,
   getUserCapacities,
   listAssignableApps,
 } from '@/features/people/queries'
+import { isoDayAdd, isoDayOf } from '@/features/people/iso-day'
+import { dueState, summarizeOpenTasks, type PersonTaskRow } from '@/features/people/task-workload'
+import { getCoverage } from '@/features/worklog/coverage-queries'
+import {
+  getTeamApprovedAbsences,
+  getTeamRoster,
+  getTeamWorklogs,
+} from '@/features/worklog/queries'
+import { CoverageFigure } from '@/features/admin/components/coverage-figure'
+import { getApprovalsInbox, type InboxRequest } from '@/features/admin/change-request-queries'
+import { HealthDot } from '@/features/apps/components/health-dot'
+import type { AppPortfolioEntry } from '@/features/apps/queries'
+import type { HealthLevel } from '@/features/apps/app-health'
 import { MeetingLoadCard } from '@/features/meeting-load/components/meeting-load-card'
 import { getSuggestionsAggregate, getWeeklyLoadTable } from '@/features/meeting-load/queries'
 import { buildLoadTrend } from '@/features/meeting-load/trend-points'
@@ -50,7 +73,12 @@ import { PersonFollowupsCard } from '@/features/people/components/person-followu
 import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
 
 /**
- * STREAMING UI — the dashboard as three independent zones instead of one wait.
+ * STREAMING UI — the dashboard as independent zones instead of one wait.
+ *
+ * WHICH zones is not decided here. `composeDashboard` (features/dashboard/
+ * zones.ts) answers that from the actor's capabilities, and hands each zone
+ * the grant level that admitted it; this file only knows how to draw one and
+ * how far the grant lets it read.
  *
  * The page used to be a single `Promise.all` of eleven reads followed by one
  * render. Running them together was right; making the whole page wait for the
@@ -78,7 +106,13 @@ import { PersonMeetingsCard } from '@/features/people/components/person-meetings
  * render the same labels in the cold-entry skeleton — they are constants, and
  * a grey box where a known word belongs makes a page feel slower than it is.
  */
-export function ZoneLabel({ children }: { children: string }) {
+export function ZoneLabel({ children, hidden = false }: { children: string; hidden?: boolean }) {
+  // `hidden` hides the RULE, never the heading: a zone whose own cards already
+  // carry visible titles does not need a second one above them, but dropping
+  // the <h2> would leave the page a flat list of cards to anyone navigating by
+  // headings. Same element, read aloud, not drawn.
+  if (hidden) return <h2 className="sr-only">{children}</h2>
+
   return (
     <h2 className="mt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
       {children}
@@ -133,6 +167,70 @@ export function pairedCards(count: number): string {
   )
 }
 
+/* ────────────────────── Zone plumbing ───────────────────────── */
+
+/**
+ * THE ONE PROP SHAPE EVERY ZONE TAKES.
+ *
+ * Uniform on purpose. The page renders whatever `composeDashboard` returns by
+ * looking each id up in `ZONE_VIEWS` below, so a zone with bespoke props would
+ * put the chain of ternaries back into the page — the thing this refactor
+ * exists to remove. What differs between zones is what they DO with the grant.
+ *
+ * `grant` is carried down rather than re-derived: a zone that asked the matrix
+ * again could ask it differently from the function that admitted it, and then
+ * the answer to "who sees what" would live in two places.
+ */
+export type ZoneProps = {
+  actor: Actor
+  grant: AdmittingGrant
+  /** How to address the reader, for the cards that use a name in prose. */
+  userName: string
+}
+
+type ZoneComponent = (props: ZoneProps) => ReactNode | Promise<ReactNode>
+
+export type ZoneView = {
+  Zone: ZoneComponent
+  /** What fills the zone's Suspense boundary. Same geometry as the real thing. */
+  Skeleton: () => ReactNode
+}
+
+/**
+ * Zone id → what to draw, and what to draw while it loads.
+ *
+ * The page's entire "which zone is this" decision, as data. Adding a zone is a
+ * row in `DASHBOARD_ZONES` and a row here; the page does not change, and
+ * neither does any other zone.
+ *
+ * `Record<ZoneId, …>` is what keeps the two halves honest — a zone declared in
+ * the registry with nothing to draw is a compile error, not a blank space on
+ * somebody's dashboard.
+ */
+export const ZONE_VIEWS: Record<ZoneId, ZoneView> = {
+  'my-day': { Zone: MyDayZone, Skeleton: MyDayZoneSkeleton },
+  'my-work': { Zone: MyWorkZone, Skeleton: MyWorkZoneSkeleton },
+  team: { Zone: TeamZone, Skeleton: TeamZoneSkeleton },
+  coverage: { Zone: CoverageZone, Skeleton: CoverageZoneSkeleton },
+  portfolio: { Zone: PortfolioZone, Skeleton: PortfolioZoneSkeleton },
+  approvals: { Zone: ApprovalsZone, Skeleton: ApprovalsZoneSkeleton },
+  trail: { Zone: TrailZone, Skeleton: TrailZoneSkeleton },
+  'ai-usage': { Zone: AiZone, Skeleton: AiZoneSkeleton },
+}
+
+/** Shared link treatment for the in-card destinations. */
+const cardLink =
+  'rounded-sm underline-offset-2 outline-none transition-colors duration-150 hover:text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none'
+
+/**
+ * Plain `YYYY-MM-DD` anchored to local noon before formatting. Handed straight
+ * to `new Date()` it parses as midnight UTC and renders as the previous day in
+ * any negative-offset zone — the same fix the sprint and task cards carry.
+ */
+function formatDay(iso: string): string {
+  return format(new Date(`${iso}T12:00:00`), 'MMM d')
+}
+
 /* ─────────────────────────── My day ─────────────────────────── */
 
 /**
@@ -175,65 +273,100 @@ function MyDayStatTiles({ stats }: { stats: PersonStat[] }) {
   )
 }
 
-export async function MyDayZone({ userId, userName }: { userId: string; userName: string }) {
+/** Tiles whose subject is the reader's board rather than their calendar. */
+const TASK_TILES = new Set(['due-soon', 'overdue'])
+
+export async function MyDayZone({ actor, userName }: ZoneProps) {
+  // FILTERED INSIDE THE ZONE, because this zone is shown to every seat — a
+  // stakeholder still attends meetings and still gets mentioned. They hold no
+  // task.edit and no meeting.manage, so their my-day is those two cards and
+  // nothing else; without this it would be the one always-on zone that leaks.
+  //
+  // Asked WITH `ownerId`: both actions bottom out at 'own', and an 'own' grant
+  // asked without a resource fails closed — which would empty the zone for
+  // every member in the workspace.
+  const showTasks = can(actor, 'task.edit', { ownerId: actor.id })
+  const showFollowups = can(actor, 'meeting.manage', { ownerId: actor.id })
+  // The briefing is a sentence about the WORKSPACE, not about you, so it rides
+  // on the trail's capability rather than on whether AI happens to be on.
+  const showBriefing = can(actor, 'activity.view')
+
   const [workload, followups, meetings, notificationItems, briefingResult] =
     await Promise.all([
-      getPersonWorkload(userId),
-      getPersonFollowups(userId),
-      getPersonMeetings(userId),
-      listNotifications(userId, 8),
+      showTasks ? getPersonWorkload(actor.id) : null,
+      showFollowups ? getPersonFollowups(actor.id) : null,
+      getPersonMeetings(actor.id),
+      listNotifications(actor.id, 8),
       // In the same Promise.all as the rest, not awaited after them: the
       // briefing reads its own workspace snapshot, and sequencing it behind
       // four queries would add its latency to a zone that already streams as
       // one unit.
-      getBriefing(),
+      showBriefing ? getBriefing() : null,
     ])
 
   // The one err() case is a snapshot that could not be read at all. Nothing
   // to say and nothing to derive from, so the zone renders without the card
   // rather than with an apology — the four cards below still answer the
   // question the briefing was summarising.
-  const briefing = briefingResult.ok ? briefingResult.data : null
+  const briefing = briefingResult?.ok ? briefingResult.data : null
 
   // meetings.today, NOT a filter over meetings.upcoming: `upcoming` is a
   // display slice — capped at 5 and holding only meetings that have not
   // ended — so counting from it undercounts a busy day and drops every
   // meeting already finished. See features/people/meeting-window.ts.
-  const myDayStats = buildMyDayStats({
-    tasks: workload.load,
-    followupsOwed: followups.owed.length,
-    oldestOwedDays: followups.oldestOwedDays,
-    meetingsToday: meetings.today,
-  })
-
+  //
   // One "now" for this zone, shared with the Portfolio zone's convention:
   // NotificationsCard's relative timestamps must count back from the same
   // moment as every other "ago" on the page.
   const now = new Date()
+  const todayIso = workload?.todayIso ?? isoDayOf(now)
+
+  const myDayStats = buildMyDayStats({
+    // `summarizeOpenTasks([])` rather than a hand-written zero literal: the
+    // tiles it feeds are dropped below for a reader who may not see tasks, and
+    // an invented TaskLoad is a second definition of "no work" waiting to
+    // disagree with the real one.
+    tasks: workload?.load ?? summarizeOpenTasks([], todayIso),
+    followupsOwed: followups?.owed.length ?? 0,
+    oldestOwedDays: followups?.oldestOwedDays ?? null,
+    meetingsToday: meetings.today,
+  }).filter(
+    (stat) =>
+      (showTasks || !TASK_TILES.has(stat.key)) && (showFollowups || stat.key !== 'owed'),
+  )
+
+  // A tile row of "0 overdue, 0 owed" for somebody who can hold neither is not
+  // a calm dashboard, it is a lie with a zero in it.
+  const cardCount = 2 + (showTasks ? 1 : 0) + (showFollowups ? 1 : 0)
 
   return (
     <>
       <MyDayStatTiles stats={myDayStats} />
       {/* Full width and above the paired cards: the briefing is the sentence
-          that says which of the four cards below to open, so it reads before
-          them or not at all. No error branch and no conditional on AI being
-          configured — getBriefing degrades to source:'derived', a true
-          summary off the same snapshot, when AI is off, keyless or unrouted.
-          A card that sometimes vanished would make the zone's height depend
-          on somebody's AI settings. */}
+          that says which of the cards below to open, so it reads before them
+          or not at all. Absent for two reasons only — a snapshot that could
+          not be read at all, and a reader without `activity.view`. Never
+          because of AI settings: getBriefing degrades to source:'derived', a
+          true summary off the same snapshot, when AI is off, keyless or
+          unrouted, and a card that vanished with somebody's model choice would
+          make the zone's height depend on it. */}
       {briefing ? <BriefingCard initial={briefing} className="mb-1" /> : null}
-      <div className={pairedCards(4)}>
-        <div id="my-tasks" className="scroll-mt-6">
-          <PersonTasksCard
-            openTasks={workload.openTasks}
-            todayIso={workload.todayIso}
-            doneCount={workload.doneCount}
-            totalCount={workload.totalCount}
-          />
-        </div>
-        <div id="my-followups" className="scroll-mt-6">
-          <PersonFollowupsCard followups={followups} personName={userName} />
-        </div>
+      <div className={pairedCards(cardCount)}>
+        {workload ? (
+          <div id="my-tasks" className="scroll-mt-6">
+            <PersonTasksCard
+              openTasks={workload.openTasks}
+              todayIso={workload.todayIso}
+              doneCount={workload.doneCount}
+              totalCount={workload.totalCount}
+            />
+          </div>
+        ) : null}
+        {followups ? (
+          <div id="my-followups" className="scroll-mt-6">
+            <PersonFollowupsCard followups={followups} personName={userName} />
+          </div>
+        ) : null}
         <div id="my-meetings" className="scroll-mt-6">
           <PersonMeetingsCard meetings={meetings} />
         </div>
@@ -292,24 +425,189 @@ export function MyDayZoneSkeleton() {
   )
 }
 
+/* ────────────────────────── My work ─────────────────────────── */
+
+/** Rows shown per project before the card defers to the board. */
+const MY_WORK_PER_APP = 4
+
+type AppTaskGroup = { appName: string; appSlug: string; tasks: PersonTaskRow[] }
+
+/**
+ * The same open rows my-day counts, cut by PROJECT instead of by urgency.
+ *
+ * Most work first, then alphabetical: a stable order, so two loads that
+ * returned the same rows never reshuffle the card under somebody reading it.
+ */
+function groupTasksByApp(rows: PersonTaskRow[]): AppTaskGroup[] {
+  const byApp = new Map<string, AppTaskGroup>()
+  for (const row of rows) {
+    const group = byApp.get(row.appSlug)
+      ?? { appName: row.appName, appSlug: row.appSlug, tasks: [] }
+    group.tasks.push(row)
+    byApp.set(row.appSlug, group)
+  }
+  return [...byApp.values()].sort(
+    (a, b) => b.tasks.length - a.tasks.length || a.appName.localeCompare(b.appName),
+  )
+}
+
+/**
+ * Where the week is going, by project.
+ *
+ * my-day answers "what is late". This answers "what am I carrying, and where"
+ * — the cut you need when deciding which board to open rather than which task
+ * to panic about.
+ *
+ * READS THE ACTOR'S OWN ROWS AT EVERY GRANT LEVEL, deliberately. A scoped or
+ * 'all' grant on task.edit reaches further than this — every unassigned item
+ * on those boards — but the query that exists is per-assignee, and a card that
+ * silently listed a third of the board would be a worse answer than a link to
+ * all of it. The group headings are that link.
+ */
+export async function MyWorkZone({ actor }: ZoneProps) {
+  const workload = await getPersonWorkload(actor.id)
+  const groups = groupTasksByApp(workload.openTasks)
+
+  return (
+    <div className={pairedCards(1)}>
+      <Card>
+        <CardHeader>
+          <CardTitle as="h3" className="flex items-center gap-2">
+            <ListTodo className="size-4" aria-hidden /> My work by project
+          </CardTitle>
+          <CardAction>
+            <Link href="/apps" className={cn(cardLink, 'text-xs font-medium text-muted-foreground')}>
+              All boards →
+            </Link>
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          {groups.length === 0 ? (
+            <EmptyState
+              icon={PawPrint}
+              title="Nothing open on any board."
+              description="Work assigned to you shows up here, grouped by the project it belongs to."
+            />
+          ) : (
+            <ul className="flex flex-col divide-y divide-border">
+              {groups.map((group) => (
+                <li key={group.appSlug} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <Link href={`/apps/${group.appSlug}`} className={cn(cardLink, 'text-sm font-medium')}>
+                      {group.appName}
+                    </Link>
+                    <span className="font-mono text-2xs tabular-nums text-muted-foreground">
+                      {group.tasks.length} open
+                    </span>
+                  </div>
+                  <ul className="flex flex-col gap-1">
+                    {group.tasks.slice(0, MY_WORK_PER_APP).map((task) => {
+                      const state = dueState(task.dueDate, workload.todayIso)
+                      return (
+                        <li key={task.id} className="flex items-baseline justify-between gap-3 text-sm">
+                          <span className="min-w-0 truncate">{task.title}</span>
+                          <span
+                            className={cn(
+                              'shrink-0 font-mono text-2xs tabular-nums',
+                              // Lateness is the only thing that gets colour,
+                              // and the date beside it says so in words.
+                              state === 'overdue' ? 'text-destructive' : 'text-muted-foreground',
+                            )}
+                          >
+                            {task.dueDate ? formatDay(task.dueDate) : 'no date'}
+                          </span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {group.tasks.length > MY_WORK_PER_APP ? (
+                    <Link
+                      href={`/apps/${group.appSlug}`}
+                      className={cn(cardLink, 'text-2xs text-muted-foreground')}
+                    >
+                      {group.tasks.length - MY_WORK_PER_APP} more on the board →
+                    </Link>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+export function MyWorkZoneSkeleton() {
+  return (
+    <div className={pairedCards(1)} aria-hidden>
+      <span className="sr-only" role="status">
+        Loading your work…
+      </span>
+      <CardSkeleton rows={5} />
+    </div>
+  )
+}
+
 /* ──────────────────────────── Team ──────────────────────────── */
 
-export async function TeamZone({ isAdmin }: { isAdmin: boolean }) {
+export async function TeamZone({ actor, grant }: ZoneProps) {
+  const scope = zoneScope(grant, actor)
+  // NARROW BY THE GRANT, NEVER BY WHETHER THE SCOPE SET IS EMPTY. `scopeAppIds`
+  // is empty for superadmin, admin and auditor because their grant is 'all'
+  // and never consults it — filtering on the set unconditionally would show an
+  // admin an empty team, which is the exact inversion of what the seat is for.
+  const orgWide = scope.kind === 'all'
   // One "now" for the zone, so the trend's last point and the this-week figure
   // cannot straddle midnight and disagree about which week it is.
   const now = new Date()
+  // The inline "Assign to app" control WRITES assignments, so it is gated on
+  // the action that writes them — asked without a resource, which is what
+  // makes a scoped manager fall through to the read-only heat instead of being
+  // handed an editor over every app in the workspace.
+  const canAssign = can(actor, 'app.assign')
   const [capacities, activeSprints, assignableApps, weeklyRows, decidedKeys] = await Promise.all([
     getUserCapacities(),
     getActiveSprints(),
-    // Only the admin's inline "Assign to app" control renders this list — a
-    // member never sees it, so don't pay for the query.
-    isAdmin ? listAssignableApps() : Promise.resolve([]),
-    getWeeklyLoadTable(now),
-    // Fetched for everybody, not just admins: the aggregate is org-wide and
-    // would over-count if a member's copy could not see what has been decided.
-    getAllDecidedKeys(),
+    // Two callers now: the assign control, and the scoped read below, which
+    // needs app SLUGS to narrow sprints (ActiveSprintSummary carries no id).
+    // Neither one runs for a plain 'all' reader, so nobody pays who does not.
+    canAssign || scope.kind === 'apps' ? listAssignableApps() : Promise.resolve([]),
+    // The meeting-load figures are org-wide by construction — a count of
+    // everybody's week — and there is no scoped form of them, so a narrowed
+    // reader does not buy the two heaviest reads in the zone.
+    orgWide ? getWeeklyLoadTable(now) : Promise.resolve([]),
+    // Fetched with the table, not per reader: the aggregate is org-wide and
+    // would over-count if this copy could not see what has been decided.
+    orgWide ? getAllDecidedKeys() : Promise.resolve(new Set<string>()),
   ])
-  const aggregate = await getSuggestionsAggregate(now, decidedKeys)
+  const aggregate = orgWide ? await getSuggestionsAggregate(now, decidedKeys) : null
+
+  const visibleCapacities =
+    scope.kind === 'all'
+      ? capacities
+      : scope.kind === 'apps'
+        ? capacities.filter((person) =>
+            person.breakdown.some((entry) => scope.appIds.has(entry.appId)),
+          )
+        : // An 'own' grant on the directory is unreachable today; if the matrix
+          // ever narrows that far, the honest team view is the reader alone
+          // rather than everybody.
+          capacities.filter((person) => person.user.id === scope.userId)
+
+  // Sprints narrow by SLUG because ActiveSprintSummary carries no app id — the
+  // ids come from the same live-apps list the assign control uses, so the two
+  // narrowings cannot drift apart.
+  const scopedSlugs =
+    scope.kind === 'apps'
+      ? new Set(assignableApps.filter((app) => scope.appIds.has(app.id)).map((app) => app.slug))
+      : scope.kind === 'own'
+        ? new Set(visibleCapacities.flatMap((person) => person.breakdown.map((e) => e.slug)))
+        : null
+  const visibleSprints = scopedSlugs
+    ? activeSprints.filter((sprint) => scopedSlugs.has(sprint.appSlug))
+    : activeSprints
+
   // Built from the SAME rows the drill-down renders, rather than a second
   // query with its own bucketing — a card that disagreed with the page it
   // links to would make both unreadable.
@@ -330,24 +628,33 @@ export async function TeamZone({ isAdmin }: { isAdmin: boolean }) {
       ? (trailing[trailing.length / 2 - 1] + trailing[trailing.length / 2]) / 2
       : trailing[Math.floor(trailing.length / 2)]
   // Only needed for the sprints card's empty-but-not-really state, so it is
-  // fetched after we already know whether anything is running now.
-  const nextSprint = activeSprints.length === 0 ? await getNextUpcomingSprint() : null
+  // fetched after we already know whether anything is running now. The query
+  // is org-wide, so it goes through the SAME slug narrowing as the list it is
+  // standing in for — otherwise a manager with nothing running would be
+  // consoled with another team's sprint.
+  const upcoming = visibleSprints.length === 0 ? await getNextUpcomingSprint() : null
+  const nextSprint =
+    upcoming && (!scopedSlugs || scopedSlugs.has(upcoming.appSlug)) ? upcoming : null
 
   return (
     <div className={pairedCards(2)}>
-      <CapacityHeat capacities={capacities} isAdmin={isAdmin} apps={assignableApps} />
-      <ActiveSprints sprints={activeSprints} nextSprint={nextSprint} />
+      <CapacityHeat capacities={visibleCapacities} isAdmin={canAssign} apps={assignableApps} />
+      <ActiveSprints sprints={visibleSprints} nextSprint={nextSprint} />
       {/* A team number, not a personal one — how much of everybody's week is
           spoken for before any work starts. No names and no named series: the
-          org-wide view is a count, and the questions go to the organizers. */}
-      <MeetingLoadCard
-        thisWeekHours={thisWeekHours}
-        trailingMedianHours={trailingMedianHours}
-        coverage={coverage}
-        trend={trend}
-        suggestionCount={aggregate.count}
-        potentialHoursPerWeek={aggregate.potentialHoursPerWeek}
-      />
+          org-wide view is a count, and the questions go to the organizers.
+          Absent for a narrowed reader, because there is no narrowed form of
+          "everybody's week" and a scoped seat must not be shown one. */}
+      {aggregate ? (
+        <MeetingLoadCard
+          thisWeekHours={thisWeekHours}
+          trailingMedianHours={trailingMedianHours}
+          coverage={coverage}
+          trend={trend}
+          suggestionCount={aggregate.count}
+          potentialHoursPerWeek={aggregate.potentialHoursPerWeek}
+        />
+      ) : null}
     </div>
   )
 }
@@ -362,20 +669,233 @@ export function TeamZoneSkeleton() {
   )
 }
 
-/* ───────────────────────── Portfolio ────────────────────────── */
+/* ───────────────────────── Coverage ─────────────────────────── */
 
-export async function PortfolioZone({ isAdmin }: { isAdmin: boolean }) {
-  const [apps, recentActivity, pendingUsers] = await Promise.all([
-    listApps(),
-    listRecentActivity(10),
-    isAdmin ? listPendingUsers() : Promise.resolve([]),
+/** How far back the personal coverage figure looks. */
+const COVERAGE_WINDOW_DAYS = 14
+
+const COVERAGE_STAT_GRID = 'grid grid-cols-2 gap-3 sm:grid-cols-3'
+
+/** Day fractions read as "3" and "2.5", never as "2.5000000001". */
+function formatOwed(days: number): string {
+  return Number.isInteger(days) ? String(days) : days.toFixed(1)
+}
+
+/**
+ * Everybody this reader is answerable for, from the assignments on their own
+ * apps. One query per app in scope — scope sets are a handful of projects, and
+ * the alternative is re-deriving membership from a capacity roll-up that only
+ * lists people who have an allocation.
+ */
+async function rosterForApps(appIds: ReadonlySet<string>) {
+  const teams = await Promise.all([...appIds].map((appId) => getTeamForApp(appId)))
+  const byId = new Map<string, { userId: string; name: string }>()
+  for (const member of teams.flat()) {
+    if (!byId.has(member.userId)) byId.set(member.userId, { userId: member.userId, name: member.name })
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Who is logged, who is away, and who neither — today.
+ *
+ * THE ROSTER IS THE DENOMINATOR, not the worklog rows. Counted the other way
+ * round, the one view you open to find who is behind structurally cannot show
+ * them: somebody who logged nothing produces no row, so a team of twenty with
+ * three loggers reports a full house.
+ *
+ * A morning reading is not a verdict — a day is owed by the end of it — which
+ * is why the third figure is "not logged yet" and says so.
+ */
+export async function CoverageZone({ actor, grant }: ZoneProps) {
+  const scope = zoneScope(grant, actor)
+  const today = isoDayOf(new Date())
+
+  if (scope.kind === 'own') {
+    // Their own window, through the same pure core /worklog uses, so the two
+    // surfaces cannot disagree about which days were owed. Half-open
+    // [from, to): `to` is tomorrow, so today is inside the window.
+    const summary = await getCoverage(
+      actor,
+      scope.userId,
+      isoDayAdd(today, -(COVERAGE_WINDOW_DAYS - 1)),
+      isoDayAdd(today, 1),
+      today,
+    )
+
+    return (
+      <div className={pairedCards(1)}>
+        <Card>
+          <CardHeader>
+            <CardTitle as="h3" className="flex items-center gap-2">
+              <CalendarCheck className="size-4" aria-hidden /> My coverage
+            </CardTitle>
+            <CardAction>
+              <Link href="/worklog" className={cn(cardLink, 'text-xs font-medium text-muted-foreground')}>
+                Open worklog →
+              </Link>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            {summary ? (
+              <div className="flex flex-col gap-1.5">
+                <CoverageFigure summary={summary} label={`Last ${COVERAGE_WINDOW_DAYS} days`} />
+                <p className="text-2xs text-muted-foreground">
+                  {summary.missing === 0
+                    ? 'Every day you owed is logged.'
+                    : `${formatOwed(summary.missing)} owed still unlogged — the catch-up queue on /worklog has them.`}
+                </p>
+              </div>
+            ) : (
+              <EmptyState
+                icon={PawPrint}
+                title="No coverage to read yet."
+                description="Coverage starts counting from your first day, and skips approved leave and company holidays."
+              />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  // 'all' reads the whole roster; 'apps' reads the people on the reader's own
+  // projects. Never a filter over `scopeAppIds` for an 'all' reader — that set
+  // is empty for exactly the seats that see everything.
+  const roster = scope.kind === 'all' ? await getTeamRoster() : await rosterForApps(scope.appIds)
+  const [logged, away] = await Promise.all([
+    getTeamWorklogs(today, today),
+    // Approved only. A pending absence exempts nothing, here or anywhere else.
+    getTeamApprovedAbsences(today, today),
   ])
 
+  const loggedIds = new Set(logged.map((row) => row.userId))
+  const awayIds = new Set(away.map((row) => row.userId))
+  const loggedCount = roster.filter((person) => loggedIds.has(person.userId)).length
+  const awayCount = roster.filter((person) => awayIds.has(person.userId)).length
+  const owing = roster.filter(
+    (person) => !loggedIds.has(person.userId) && !awayIds.has(person.userId),
+  )
+  // A dead link is worse than no link: /admin/absences is behind absence.view,
+  // which a scoped seat holds only WITH a resource and therefore not here.
+  const absencesHref = can(actor, 'absence.view') ? '/admin/absences' : undefined
+
+  return (
+    <>
+      <div className={COVERAGE_STAT_GRID}>
+        <StatTile
+          label="Logged today"
+          value={loggedCount}
+          meta={`of ${roster.length} expected`}
+          href="/worklog"
+        />
+        <StatTile
+          label="Away"
+          value={awayCount}
+          meta={awayCount === 0 ? 'nobody on approved leave' : 'on approved leave'}
+          href={absencesHref}
+        />
+        <StatTile
+          label="Not logged yet"
+          value={owing.length}
+          tone={owing.length > 0 ? 'attention' : 'default'}
+          meta={owing.length === 0 ? 'everybody accounted for' : 'still owed by end of day'}
+          href="/worklog"
+        />
+      </div>
+      <div className={pairedCards(1)}>
+        <Card>
+          <CardHeader>
+            <CardTitle as="h3" className="flex items-center gap-2">
+              <CalendarCheck className="size-4" aria-hidden /> Still to log today
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {roster.length === 0 ? (
+              <EmptyState
+                icon={PawPrint}
+                title="Nobody on the roster yet."
+                description="This counts everybody active and approved on the projects you can see."
+              />
+            ) : owing.length === 0 ? (
+              <EmptyState
+                icon={PawPrint}
+                title="Everybody is accounted for."
+                description="Logged, or away on approved leave. Nothing owed for today."
+              />
+            ) : (
+              <ul className="flex flex-col divide-y divide-border">
+                {owing.map((person) => (
+                  <li key={person.userId} className="flex items-baseline justify-between gap-2 py-2 first:pt-0 last:pb-0 text-sm">
+                    <Link href={`/people/${person.userId}`} className={cardLink}>
+                      {person.name}
+                    </Link>
+                    <span className="font-mono text-2xs tabular-nums text-muted-foreground">
+                      {formatDay(today)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </>
+  )
+}
+
+export function CoverageZoneSkeleton() {
+  return (
+    <>
+      <span className="sr-only" role="status">
+        Loading coverage…
+      </span>
+      <div className={COVERAGE_STAT_GRID} aria-hidden>
+        {Array.from({ length: 3 }, (_, i) => (
+          <div
+            key={i}
+            className="flex min-w-0 flex-col gap-1 rounded-lg border border-border bg-card px-3 py-2"
+          >
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-6 w-10" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        ))}
+      </div>
+      <div className={pairedCards(1)} aria-hidden>
+        <CardSkeleton rows={4} />
+      </div>
+    </>
+  )
+}
+
+/* ───────────────────────── Portfolio ────────────────────────── */
+
+/** At-risk first: the strip counts them, and this is where they are named. */
+const RISK_RANK: Record<HealthLevel, number> = {
+  'at-risk': 0,
+  watch: 1,
+  'on-track': 2,
+  dormant: 3,
+}
+
+export async function PortfolioZone({ actor, grant }: ZoneProps) {
+  const scope = zoneScope(grant, actor)
+  const all = await listApps()
+  // Scoped seats — editor, member, stakeholder — see the projects they are on.
+  // An 'all' seat ignores `scopeAppIds` entirely; it is empty for them, and
+  // filtering on it would hand an auditor an empty portfolio.
+  const apps =
+    scope.kind === 'all'
+      ? all
+      : scope.kind === 'apps'
+        ? all.filter((app) => scope.appIds.has(app.id))
+        : // Nothing owns a slice of a portfolio, so an 'own' grant shows none
+          // of it. Unreachable through the registry (portfolio needs 'scoped'
+          // at minimum) and written out so it cannot become reachable quietly.
+          []
+
   const summary = summarizePortfolio(apps)
-  // One "now" for this zone: the activity trail's relative timestamps must all
-  // agree on which moment they are counting back from.
-  const now = new Date()
-  const showApprovals = isAdmin && pendingUsers.length > 0
 
   return (
     <>
@@ -388,24 +908,87 @@ export async function PortfolioZone({ isAdmin }: { isAdmin: boolean }) {
           })}
         />
       ) : null}
-      <div className={pairedCards(showApprovals ? 2 : 1)}>
-        <RecentActivityCard rows={recentActivity} now={now} />
-        {showApprovals ? <PendingApprovalsCard users={pendingUsers} /> : null}
+      <div className={pairedCards(1)}>
+        <AppHealthCard apps={apps} />
       </div>
     </>
   )
 }
 
 /**
- * Shaped like the COMMON resolved zone: summary strip plus one full-width
- * card. The zone renders no strip when the portfolio is empty and a second
- * card only for an admin with pending signups — both rare, and neither is
- * knowable while the query is still running, so the skeleton promises the
- * usual shape rather than always drawing the widest one.
+ * The strip's counts, with the projects behind them named.
+ *
+ * "3 at risk" tells you a number and not which three; every row here carries
+ * its verdict in words (HealthDot spells the level out and puts the reasons in
+ * its accessible name) and links to the board that answers it.
+ */
+function AppHealthCard({ apps }: { apps: AppPortfolioEntry[] }) {
+  const ranked = [...apps]
+    .filter((app) => app.status !== 'archived')
+    .sort(
+      (a, b) =>
+        RISK_RANK[a.health.level] - RISK_RANK[b.health.level] || a.name.localeCompare(b.name),
+    )
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle as="h3" className="flex items-center gap-2">
+          <LayoutGrid className="size-4" aria-hidden /> Project health
+        </CardTitle>
+        <CardAction>
+          <Link href="/apps" className={cn(cardLink, 'text-xs font-medium text-muted-foreground')}>
+            All projects →
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {ranked.length === 0 ? (
+          <EmptyState
+            icon={PawPrint}
+            title="No live projects here yet."
+            description="Projects you are on show up with their health, open work and running sprint."
+          />
+        ) : (
+          <ul className="flex flex-col divide-y divide-border">
+            {ranked.map((app) => (
+              <li key={app.id} className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <Link href={`/apps/${app.slug}`} className={cn(cardLink, 'text-sm font-medium')}>
+                    {app.name}
+                  </Link>
+                  <HealthDot health={app.health} />
+                </div>
+                <p className="font-mono text-2xs tabular-nums text-muted-foreground">
+                  {app.stats.tasks.todo + app.stats.tasks.in_progress} open ·{' '}
+                  {app.stats.tasks.overdue} overdue ·{' '}
+                  {app.stats.currentSprint
+                    ? `${app.stats.currentSprint.name} running`
+                    : app.stats.nextSprint
+                      ? `${app.stats.nextSprint.name} next`
+                      : 'no sprint scheduled'}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Shaped like the resolved zone: summary strip plus one full-width card. The
+ * strip is absent only for a reader whose portfolio is empty, which is not
+ * knowable while the query is still running — so the skeleton promises the
+ * usual shape rather than the rare one.
  */
 export function PortfolioZoneSkeleton() {
   return (
     <>
+      <span className="sr-only" role="status">
+        Loading the portfolio…
+      </span>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-hidden>
         {Array.from({ length: 4 }, (_, i) => (
           <Card key={i}>
@@ -420,6 +1003,134 @@ export function PortfolioZoneSkeleton() {
         <CardSkeleton rows={6} />
       </div>
     </>
+  )
+}
+
+/* ───────────────────────── Approvals ────────────────────────── */
+
+/**
+ * What is waiting on THIS person's signature.
+ *
+ * Lifted out of the portfolio zone, where it used to render as a second card
+ * behind `isAdmin && pendingUsers.length > 0`. Two things were wrong with
+ * that: a queue is not portfolio news, and a zone that appears only when it
+ * has content cannot be relied on to be checked.
+ */
+export async function ApprovalsZone({ actor }: ZoneProps) {
+  const [pendingUsers, requests] = await Promise.all([
+    listPendingUsers(),
+    // The zone is admitted by `user.approve`; signing a change request is a
+    // DIFFERENT signature, so it is asked for rather than assumed. Both reads
+    // already refuse rows this actor may not act on.
+    can(actor, 'request.review') ? getApprovalsInbox(actor) : Promise.resolve([]),
+  ])
+
+  return (
+    <div className={pairedCards(2)}>
+      <PendingApprovalsCard users={pendingUsers} />
+      <ChangeRequestsCard requests={requests} />
+    </div>
+  )
+}
+
+/**
+ * A pointer, not a second approvals screen. Approving here would mean a second
+ * copy of the review flow — and the reasons, the payload diff and the
+ * self-approval rule all live on /admin/approvals, which is one click away.
+ */
+function ChangeRequestsCard({ requests }: { requests: InboxRequest[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle as="h3" className="flex items-center gap-2">
+          <FileCheck className="size-4" aria-hidden /> Change requests
+        </CardTitle>
+        <CardAction>
+          <Link
+            href="/admin/approvals"
+            className={cn(cardLink, 'text-xs font-medium text-muted-foreground')}
+          >
+            Review →
+          </Link>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {requests.length === 0 ? (
+          <EmptyState
+            icon={PawPrint}
+            title="Nothing waiting on your signature."
+            description="Edits and deletes proposed by somebody who could not make them directly land here."
+          />
+        ) : (
+          <ul className="flex flex-col divide-y divide-border">
+            {requests.map((request) => (
+              <li key={request.id} className="flex flex-col gap-0.5 py-2 first:pt-0 last:pb-0 text-sm">
+                <span>
+                  <span className="font-medium">{request.requesterName}</span>{' '}
+                  <span className="text-muted-foreground">
+                    wants to {request.operation} {request.entityType}
+                  </span>{' '}
+                  <span className="font-medium">{request.entityLabel}</span>
+                </span>
+                {request.reason ? (
+                  <span className="text-2xs text-muted-foreground">{request.reason}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+export function ApprovalsZoneSkeleton() {
+  return (
+    <div className={pairedCards(2)} aria-hidden>
+      <span className="sr-only" role="status">
+        Loading what is waiting on you…
+      </span>
+      <CardSkeleton rows={3} />
+      <CardSkeleton rows={3} />
+    </div>
+  )
+}
+
+/* ─────────────────────────── Trail ──────────────────────────── */
+
+/**
+ * What changed, lately.
+ *
+ * Gated on `activity.view` — the org's shared memory — and NOT on `audit.view`,
+ * which is the compliance surface: the same table unfiltered, with trashed
+ * rows and self-approval metadata. If that is ever wanted on a dashboard it is
+ * a second zone, not this one widened.
+ *
+ * The catch-up digest the design pairs with this feed is the intel briefing,
+ * which my-day already renders. A second copy would be a second Gemini call
+ * for the same paragraph on the same page.
+ */
+export async function TrailZone() {
+  const rows = await listRecentActivity(10)
+  // One "now" for this zone: every "ago" in the feed must count back from the
+  // same moment.
+  const now = new Date()
+
+  return (
+    <div className={pairedCards(1)}>
+      <RecentActivityCard rows={rows} now={now} />
+    </div>
+  )
+}
+
+export function TrailZoneSkeleton() {
+  return (
+    <div className={pairedCards(1)} aria-hidden>
+      <span className="sr-only" role="status">
+        Loading the activity trail…
+      </span>
+      <CardSkeleton rows={6} />
+    </div>
   )
 }
 
@@ -469,21 +1180,23 @@ const AI_STAT_GRID = 'grid grid-cols-2 gap-3 sm:grid-cols-2 md:grid-cols-4'
  * person — the only zone on this page whose subject is the machine rather
  * than the team.
  *
- * It sits LAST on purpose. The three zones above are what someone opens the
- * dashboard to act on; this one is reference they consult. Streaming order
- * follows reading order, so the numbers people came for still paint first.
+ * It sits late in every role's ordering on purpose — the zones above are what
+ * someone opens the dashboard to act on, and this one is reference they
+ * consult. Streaming order follows reading order, so the numbers people came
+ * for still paint first. That position is a row in ZONE_ORDER (zones.ts), not
+ * a fact about this component.
  *
  * Two reads, both scoped to one user and both already indexed: the ledger
  * roll-up and the key pool. The routing table itself costs nothing — it is
  * computed from the same constants the call sites use.
  */
-export async function AiZone({ userId }: { userId: string }) {
+export async function AiZone({ actor }: ZoneProps) {
   const now = new Date()
   const since = new Date(now.getTime() - AI_WINDOW_MS)
   const [prefs, aggRows, poolKeys] = await Promise.all([
-    getAiPrefs(userId),
-    aggregateAiUsage(userId, since),
-    listPoolKeyHealth(userId),
+    getAiPrefs(actor.id),
+    aggregateAiUsage(actor.id, since),
+    listPoolKeyHealth(actor.id),
   ])
 
   const summaries = summarizeUsage(aggRows, now)

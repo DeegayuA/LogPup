@@ -1,6 +1,7 @@
-import { isAdminRole } from '@/features/auth/capabilities'
-import { Suspense } from 'react'
+import { Fragment, Suspense } from 'react'
 import { getSession } from '@/lib/session'
+import { loadActor } from '@/features/auth/actor'
+import { composeDashboard } from '@/features/dashboard/zones'
 import { PageHeader } from '@/components/ui/page-header'
 import { PasskeyNudge } from '@/features/auth/components/passkey-nudge'
 import { FirstLogNudge } from '@/features/worklog/components/first-log-nudge'
@@ -9,15 +10,8 @@ import {
   formatBusinessWeekdayLong,
 } from '@/features/people/format-instant'
 import {
-  AiZone,
-  AiZoneSkeleton,
-  MyDayZone,
-  MyDayZoneSkeleton,
-  PortfolioZone,
-  PortfolioZoneSkeleton,
-  TeamZone,
-  TeamZoneSkeleton,
   UnreadMentionsPill,
+  ZONE_VIEWS,
   ZoneLabel,
 } from '@/features/dashboard/components/dashboard-zones'
 
@@ -27,10 +21,32 @@ function greetingFor(hour: number): string {
   return 'Good evening'
 }
 
+/**
+ * A ROLE-SHAPED DASHBOARD: whatever `composeDashboard` says, in the order it
+ * says it, each zone in its own Suspense boundary.
+ *
+ * There is no `isAdmin` on this page any more, and deliberately no branch that
+ * names a role. The old version gated its last two zones on
+ * `isAdminRole(session.role)` — with seven seats that collapsed manager,
+ * editor, member, stakeholder and auditor into one "not admin" view, and it
+ * was the exact role comparison capabilities.ts exists to forbid.
+ *
+ * The zone list is the authority now. A role that gains a capability gains its
+ * zone here with no edit to this file: the registry admits it, the ordering
+ * hint places it, and ZONE_VIEWS knows what to draw.
+ */
 export default async function DashboardPage() {
-  const session = await getSession()
+  // Both request-cached, and the layout has already paid for the session — so
+  // this is one extra read (the employment type and the actor's app scope),
+  // not two round trips.
+  const [session, actor] = await Promise.all([getSession(), loadActor()])
   const user = session?.user
-  const isAdmin = user ? isAdminRole(user.role) : false
+
+  // No actor means no zones, not a smaller set of them. `loadActor` returns
+  // null for a signed-out reader and for a deactivated account — the layout
+  // redirects both before this renders, so reaching here with null is a
+  // defence, and the honest answer to "what may they see" is nothing.
+  const zones = actor ? composeDashboard(actor) : []
 
   const now = new Date()
   const firstName = user?.name?.trim().split(/\s+/)[0]
@@ -71,7 +87,8 @@ export default async function DashboardPage() {
         }
       />
 
-      {/* Two one-time pointers */}
+      {/* Two one-time pointers, above the zones for every reader: they are
+          about this account, not about anything a capability decides. */}
       {user ? (
         <Suspense fallback={null}>
           <FirstLogNudge userId={user.id} />
@@ -83,40 +100,22 @@ export default async function DashboardPage() {
         </Suspense>
       ) : null}
 
-      {/* ——— My day ——— */}
-      {user ? (
-        <>
-          <h2 className="sr-only">My day</h2>
-          <Suspense fallback={<MyDayZoneSkeleton />}>
-            <MyDayZone userId={user.id} userName={user.name ?? 'You'} />
-          </Suspense>
-        </>
-      ) : null}
-
-      {/* ——— Team ——— */}
-      <ZoneLabel>Team Capacity &amp; Sprints</ZoneLabel>
-      <Suspense fallback={<TeamZoneSkeleton />}>
-        <TeamZone isAdmin={isAdmin} />
-      </Suspense>
-
-      {/* ——— Portfolio ——— */}
-      <ZoneLabel>App Portfolio &amp; Activity Trail</ZoneLabel>
-      <Suspense fallback={<PortfolioZoneSkeleton />}>
-        <PortfolioZone isAdmin={isAdmin} />
-      </Suspense>
-
-      {/* ——— AI engine ——— */}
-      {/* Last, and only for a signed-in reader: every figure in it is that
-          person's own ledger and their own key pool. There is no org-wide
-          version of this zone to fall back to for a signed-out render. */}
-      {user ? (
-        <>
-          <ZoneLabel>AI Engine &amp; Model Routing</ZoneLabel>
-          <Suspense fallback={<AiZoneSkeleton />}>
-            <AiZone userId={user.id} />
-          </Suspense>
-        </>
-      ) : null}
+      {/* One boundary per zone, as before, so the page still streams controls
+          before data — and so a slow portfolio scan never holds up somebody's
+          own day. */}
+      {actor
+        ? zones.map((zone) => {
+            const { Zone, Skeleton } = ZONE_VIEWS[zone.id]
+            return (
+              <Fragment key={zone.id}>
+                <ZoneLabel hidden={zone.labelHidden}>{zone.label}</ZoneLabel>
+                <Suspense fallback={<Skeleton />}>
+                  <Zone actor={actor} grant={zone.grant} userName={user?.name ?? 'You'} />
+                </Suspense>
+              </Fragment>
+            )
+          })
+        : null}
     </div>
   )
 }
