@@ -19,6 +19,11 @@ import { cn } from '@/lib/utils'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { upsertDailyWorklog } from '@/features/worklog/actions'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import type { UserAssignedApp } from '@/features/worklog/queries'
 
 type PercentSuggestion = { percent: number; activityCount: number }
@@ -61,6 +66,7 @@ export function WorklogForm({
   )
   const [saving, startSaving] = useTransition()
   const [drafting, startDrafting] = useTransition()
+  const meter = useAiMeter()
   const [saved, setSaved] = useState(initial)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fieldId = useId()
@@ -144,10 +150,12 @@ export function WorklogForm({
     })
   }
 
-  function handleDraft() {
+  function handleDraft(source?: MeterOriginSource) {
+    // Read before the transition — see meterOrigin's note on currentTarget.
+    const origin = meterOrigin(source)
     startDrafting(async () => {
       try {
-        const res = await draftWorklogNote(day)
+        const res = await meter.track('worklog-draft', origin, () => draftWorklogNote(day))
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -188,22 +196,32 @@ export function WorklogForm({
       aria-label={`Work log for ${format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d, yyyy')}`}
       className="flex flex-col gap-4 rounded-2xl border border-border/70 bg-card/60 p-5 shadow-xs backdrop-blur-sm"
     >
-      {/* 1. Percentage / Plan Progress */}
-      <div className="flex flex-col gap-2.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <label htmlFor={`${fieldId}-percent`} className="font-heading text-xs font-semibold text-foreground">
-            How much of what you planned did you get through?
-          </label>
-          {percent === null ? (
-            <span className="font-mono text-2xs font-medium text-muted-foreground">
-              Not scored yet
-            </span>
-          ) : (
-            <span className="font-mono text-base font-bold tabular-nums text-primary">
-              {percent}%
-            </span>
-          )}
-        </div>
+      {/* 1. Percentage / Plan Progress
+          ONE ROW, not three. The question, the reading and the four one-tap
+          answers used to stack; on the common path a person taps a preset and
+          never touches anything else here, so the fast answer sits beside the
+          question rather than below it. The long question survives as the
+          control's accessible name — shortened on screen, not in the a11y
+          tree. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div className="flex items-baseline gap-2">
+            <label
+              htmlFor={`${fieldId}-percent`}
+              className="font-heading text-xs font-semibold text-foreground"
+            >
+              Plan progress
+            </label>
+            {percent === null ? (
+              <span className="font-mono text-2xs font-medium text-muted-foreground">
+                Not scored yet
+              </span>
+            ) : (
+              <span className="font-mono text-sm font-bold tabular-nums text-primary">
+                {percent}%
+              </span>
+            )}
+          </div>
 
         {/* 1-Tap Preset Pills */}
         <div className="flex flex-wrap items-center gap-1.5">
@@ -227,19 +245,14 @@ export function WorklogForm({
             )
           })}
         </div>
+        </div>
 
-        {/* Precision Slider */}
-        <div className="relative pt-6">
-          {percent !== null ? (
-            <output
-              htmlFor={`${fieldId}-percent`}
-              aria-hidden
-              className="pointer-events-none absolute top-0 -translate-x-1/2 rounded-md bg-primary px-1.5 py-0.5 font-mono text-2xs font-bold tabular-nums text-primary-foreground shadow-xs"
-              style={{ left: `calc(${percent}% + ${(50 - percent) * 0.16}px)` }}
-            >
-              {percent}%
-            </output>
-          ) : null}
+        {/* Precision slider, for the answers the four presets do not cover.
+            Its floating bubble and the 24px of empty space that existed only
+            to hold it are gone: the reading is already in the header one line
+            up, and two readouts of one number is height spent saying the same
+            thing twice. */}
+        <div className="relative">
           <input
             id={`${fieldId}-percent`}
             type="range"
@@ -247,6 +260,7 @@ export function WorklogForm({
             max={100}
             step={5}
             value={thumbAt}
+            aria-label="How much of what you planned did you get through?"
             aria-valuetext={percent === null ? 'Not scored yet' : `${percent}%`}
             onPointerDown={scoreFromGesture}
             onKeyDown={scoreFromGesture}
@@ -303,7 +317,7 @@ export function WorklogForm({
           <div className="flex items-center gap-1.5">
             <Layers className="size-3.5 text-primary" />
             <span className="font-heading text-xs font-semibold text-foreground">
-              {singleProject ? 'Assigned Project' : 'Project Allocation for Today'}
+              {singleProject ? 'Assigned project' : 'Projects today'}
             </span>
           </div>
 
@@ -402,9 +416,6 @@ export function WorklogForm({
               })}
             </div>
 
-            <p className="text-2xs text-muted-foreground">
-              💡 <strong>Smart Allocation:</strong> Click any project chip above to tag it in your note.
-            </p>
           </div>
         ) : null}
 

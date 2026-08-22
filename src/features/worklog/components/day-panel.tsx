@@ -8,6 +8,11 @@ import { Button } from '@/components/ui/button'
 import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
 import type { UserAssignedApp } from '@/features/worklog/queries'
@@ -70,15 +75,27 @@ export function DayPanel({
   const [fillCount, setFillCount] = React.useState(0)
 
   const anyAi = noteAiEnabled || entriesAiEnabled
+  const meter = useAiMeter()
 
-  async function fillMyDay() {
+  async function fillMyDay(source?: MeterOriginSource) {
+    const origin = meterOrigin(source)
     setFilling(true)
     try {
       // Both halves at once: independent reads, and running them in series
       // would make one button feel like two.
+      //
+      // TWO meters, not one, because these are two registry features with
+      // separate estimates, separate model choices and separate ledger slugs.
+      // Folding them into one card would report a cost under a feature name
+      // that only paid for half of it — and a dock built for concurrency is
+      // exactly what makes showing both affordable.
       const [noteRes, entryRes] = await Promise.all([
-        noteAiEnabled ? draftWorklogNote(day) : null,
-        entriesAiEnabled ? draftWorklogEntries(day) : null,
+        noteAiEnabled
+          ? meter.track('worklog-draft', origin, () => draftWorklogNote(day))
+          : null,
+        entriesAiEnabled
+          ? meter.track('worklog-entries-draft', origin, () => draftWorklogEntries(day))
+          : null,
       ])
 
       let filledNote = false
@@ -170,6 +187,10 @@ export function DayPanel({
         aiDraftEnabled={entriesAiEnabled}
         // null until the first fill, so the card keeps its own button for
         // anybody who has only the hours feature switched on.
+        // The panel owns the fill button whenever it shows one, whether or
+        // not a draft has come back yet — otherwise the card renders a second
+        // one beside it.
+        outerFill={canEdit && anyAi}
         suggestions={anyAi ? entryDrafts : null}
         evidence={evidence}
       />

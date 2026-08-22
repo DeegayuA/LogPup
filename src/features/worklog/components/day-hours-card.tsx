@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Check, Loader2Icon, Plus, SparklesIcon, Trash2, X } from 'lucide-react'
+import { Check, Loader2Icon, Pencil, Plus, SparklesIcon, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -14,7 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { EmptyState } from '@/components/ui/empty-state'
 import { SearchSelect } from '@/components/ui/search-select'
 import {
   ENTRY_CATEGORIES,
@@ -24,8 +23,16 @@ import {
   type EntryCategory,
 } from '@/features/worklog/entries'
 import type { Observation } from '@/features/worklog/entry-check'
-import { buildEntryPayload, entryFormProblem } from '@/features/worklog/entry-form'
-import { createWorklogEntry, deleteWorklogEntry } from '@/features/worklog/entry-actions'
+import {
+  buildEntryPayload,
+  entryFormProblem,
+  type EntryFormFields,
+} from '@/features/worklog/entry-form'
+import {
+  createWorklogEntry,
+  deleteWorklogEntry,
+  updateWorklogEntry,
+} from '@/features/worklog/entry-actions'
 import {
   checkWorklogEntries,
   draftWorklogEntries,
@@ -115,6 +122,47 @@ export function parseDuration(raw: string): number | null {
   return null
 }
 
+/**
+ * A saved row's minutes as text the duration box can hold WITHOUT changing it.
+ *
+ * `formatHours` rounds to one decimal for display and `parseDuration` reads
+ * that back as a different number: 100 minutes renders "1.7" and would save as
+ * 102. Somebody who opened a row only to fix a typo in the note would have
+ * their hours moved by the act of looking at them — the exact silent
+ * corruption an editor exists to prevent. Durations that survive the round
+ * trip stay in the friendly unit; the rest are seeded in minutes, which
+ * always does.
+ */
+function editableDuration(minutes: number): string {
+  const asHours = formatHours(minutes)
+  return parseDuration(asHours) === minutes ? asHours : `${minutes}m`
+}
+
+/**
+ * A saved row as the add-form's field shape, with the two values the inline
+ * editor may change substituted in.
+ *
+ * KIND, TASK AND PROJECT ARE PASSED THROUGH UNCHANGED. `updateWorklogEntry`
+ * takes the whole mutable body rather than a patch — deliberately, so a
+ * half-update cannot leave a 'meeting' row carrying a stale task — which means
+ * they still have to be sent, and sending the row's own values is what keeps
+ * the category/task rule true of the row after the edit.
+ *
+ * Going through the same `EntryFormFields` the add form uses is what stops the
+ * two forms from disagreeing: one `entryFormProblem`, one `buildEntryPayload`,
+ * so a correction is refused for the same reason and in the same words an add
+ * would be.
+ */
+function rowFields(entry: WorklogEntryRow, duration: string, note: string): EntryFormFields {
+  return {
+    minutes: parseDuration(duration),
+    category: entry.category,
+    taskId: entry.taskId,
+    appId: entry.appId,
+    note,
+  }
+}
+
 export function DayHoursCard({
   day,
   entries,
@@ -124,6 +172,7 @@ export function DayHoursCard({
   canEdit,
   aiDraftEnabled = false,
   suggestions = null,
+  outerFill = false,
   evidence = 0,
 }: {
   day: string
@@ -149,6 +198,21 @@ export function DayHoursCard({
    * and wonders which one they were meant to press.
    */
   suggestions?: DraftedEntry[] | null
+  /**
+   * Whether an OUTER control owns filling this day.
+   *
+   * Stated explicitly rather than inferred from `suggestions !== null`, which
+   * is what it used to be — and `suggestions` is null until the first draft
+   * comes back, so on every fresh render the card believed nobody was driving
+   * it and rendered its own "Fill from my day" beside the panel's "Fill my
+   * day". Two AI buttons doing overlapping work on one screen, which is the
+   * exact thing day-panel.tsx's header says this arrangement removed.
+   *
+   * It cannot be fixed by passing `[]` instead of null: the dismissal reset
+   * compares `suggestions` by identity, and a fresh array each render would
+   * set state during render forever.
+   */
+  outerFill?: boolean
   evidence?: number
 }) {
   const [pending, startTransition] = React.useTransition()
@@ -213,6 +277,49 @@ export function DayHoursCard({
   const [taskId, setTaskId] = React.useState<string>('')
   const [note, setNote] = React.useState('')
   const [busyId, setBusyId] = React.useState<string | null>(null)
+  /*
+   * The row being corrected, and the draft in its two boxes.
+   *
+   * ONE ROW AT A TIME. A second open editor would need a second busy flag and
+   * a second problem line, and nobody corrects two rows at once — but the
+   * bigger reason is that the draft is UNSAVED: two of them on screen is two
+   * ways to lose work by clicking somewhere else.
+   *
+   * Held here rather than in the row, because cancelling has to restore the
+   * SERVER's values, and the only way to be sure of that is never to have
+   * written the draft anywhere the row reads from.
+   */
+  const [editing, setEditing] = React.useState<{
+    id: string
+    duration: string
+    note: string
+  } | null>(null)
+  /*
+   * The row whose edit button should take focus back once it returns to the
+   * DOM. Closing the editor UNMOUNTS the button that opened it, so focus would
+   * otherwise fall to <body> and a keyboard user would restart from the top of
+   * the page. Applied as a ref below rather than from an effect: there is
+   * nothing to focus until the commit that re-renders the button, and setting
+   * state from an effect to arrange that is the cascade the lint rule forbids.
+   */
+  const [returnFocusTo, setReturnFocusTo] = React.useState<string | null>(null)
+
+  /*
+   * STABLE IDENTITIES, so React attaches each ref exactly once — on mount —
+   * instead of detaching and re-running it on every render. An inline arrow
+   * here would re-focus and re-select the duration box on every keystroke,
+   * which is a field you cannot type in.
+   */
+  const focusEditField = React.useCallback((node: HTMLInputElement | null) => {
+    if (!node) return
+    node.focus()
+    // Selected, not merely focused: the correction this exists for is
+    // retyping a whole duration — 90 that should have been 190.
+    node.select()
+  }, [])
+  const focusReturnedTrigger = React.useCallback((node: HTMLButtonElement | null) => {
+    node?.focus()
+  }, [])
   // Proposals live HERE, not in the entries list, and are never written until
   // somebody accepts one. A draft that saved itself would be the model filing
   // a timesheet in a person's name — and hours, unlike a note, are the thing
@@ -223,7 +330,7 @@ export function DayHoursCard({
   // showing, so a person can clear rows the outer panel handed down without
   // that panel having to own the dismissal.
   const [dismissed, setDismissed] = React.useState<Set<number>>(new Set())
-  const externallyDriven = suggestions !== null
+  const externallyDriven = outerFill
   // ONE source list, and dismissal is tracked by INDEX INTO IT rather than by
   // rebuilding the array. The panel owns its array and this card cannot
   // rewrite it, so a filtered copy would make every index mean something
@@ -371,6 +478,76 @@ export function DayHoursCard({
         runCheck()
       } catch {
         toast.error('Could not log that — try again')
+      }
+    })
+  }
+
+  function startEdit(entry: WorklogEntryRow) {
+    setEditing({
+      id: entry.id,
+      duration: editableDuration(entry.minutes),
+      note: entry.note ?? '',
+    })
+  }
+
+  function cancelEdit(id: string) {
+    setEditing(null)
+    setReturnFocusTo(id)
+  }
+
+  function handleSaveEdit(
+    entry: WorklogEntryRow,
+    fields: EntryFormFields,
+    problem: string | null,
+  ) {
+    const payload = buildEntryPayload(fields)
+    if (!payload || problem) {
+      toast.error(problem ?? 'Enter a time — "1.5", "90m" and "1h30" all work')
+      return
+    }
+    setBusyId(entry.id)
+    startTransition(async () => {
+      try {
+        const res = await updateWorklogEntry({
+          id: entry.id,
+          ...payload,
+          /*
+           * THE ROW'S OWN PROJECT, ON A TASK ROW TOO.
+           *
+           * `buildEntryPayload` nulls appId for task entries because
+           * `resolveEntryAppId` re-derives it from the task and throws the
+           * client's answer away. But the action validates the WHOLE BODY
+           * with `requireAppForTask: true` BEFORE that derivation runs, so a
+           * task entry that arrives without a project is refused with "That
+           * task is not linked to a project" and never reaches the code that
+           * would have supplied one.
+           *
+           * What is sent here is the project the row already carries, which
+           * the server derived from this same task when the row was written —
+           * so it satisfies the guard without the client deciding anything,
+           * and the derivation overwrites it with the same value.
+           */
+          appId: entry.appId,
+          // Carried through explicitly. The action reads `billable ?? false`
+          // over the WHOLE body, so leaving it out would quietly un-bill an
+          // entry somebody had opened only to fix a typo in the note.
+          billable: entry.billable,
+        })
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        setEditing(null)
+        setReturnFocusTo(entry.id)
+        toast.success(`Updated to ${formatHours(payload.minutes)}h`)
+        // A correction changes the day exactly as an add does — a fixed
+        // duration can resolve an observation as easily as raise one — so the
+        // cross-check has to re-run here too, not only on add and delete.
+        runCheck()
+      } catch {
+        toast.error('Could not save that — try again')
+      } finally {
+        setBusyId(null)
       }
     })
   }
@@ -574,53 +751,195 @@ export function DayHoursCard({
       ) : null}
 
       {entries.length === 0 ? (
-        <EmptyState
-          title="No hours on this day yet"
-          description="Add where the time went — a task, a meeting, review, support. Separate from the score above, which is about your plan."
-        />
+        /* ONE LINE, not an illustrated empty state. Nothing is broken and
+           nothing needs explaining — the add row is directly below and its
+           own labels already say what goes in it. A full EmptyState block
+           here pushed that row off the fold on a laptop, so the control that
+           answers the emptiness was hidden by the notice about it. */
+        <p className="px-0.5 py-1 text-2xs text-muted-foreground">
+          No hours on this day yet — add them below. Separate from the score, which is about
+          your plan.
+        </p>
       ) : (
         <ul className="flex flex-col gap-1.5">
-          {entries.map((entry) => (
-            <li
-              key={entry.id}
-              className="flex items-start gap-2 rounded-lg border border-border/50 bg-background/40 px-2.5 py-2"
-            >
-              <span className="w-14 shrink-0 font-mono text-xs font-semibold tabular-nums">
-                {formatHours(entry.minutes)}h
-              </span>
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-xs font-medium">
-                  {entry.taskTitle ?? CATEGORY_LABEL[entry.category]}
-                </span>
-                <span className="truncate text-2xs text-muted-foreground">
-                  {[
-                    entry.taskTitle ? CATEGORY_LABEL[entry.category] : null,
-                    entry.appName,
-                    entry.billable ? 'Billable' : null,
-                    entry.note,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-              </div>
-              {canEdit ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={`Remove ${formatHours(entry.minutes)} hours`}
-                  disabled={pending}
-                  onClick={() => handleDelete(entry.id, entry.minutes)}
-                >
-                  {busyId === entry.id ? (
-                    <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
-                  ) : (
-                    <Trash2 aria-hidden />
-                  )}
-                </Button>
-              ) : null}
-            </li>
-          ))}
+          {entries.map((entry) => {
+            // Narrowed through `editing &&` rather than `editing?.id`, so the
+            // draft is non-null inside the branch without a second assertion.
+            const draft = editing && editing.id === entry.id ? editing : null
+            const label = entry.taskTitle ?? CATEGORY_LABEL[entry.category]
+            const fields = draft ? rowFields(entry, draft.duration, draft.note) : null
+            const editProblem = fields ? entryFormProblem(fields) : null
+            /*
+             * NO EDIT CONTROL ON A ROW THE SAVE PATH WOULD REFUSE. Two ways
+             * that happens, and both leave a row that legitimately belongs in
+             * the table:
+             *
+             *  - a 'task' entry whose task was purged. `task_id` is ON DELETE
+             *    SET NULL and entries.ts keeps such a row deliberately — the
+             *    hours were still worked — but the category/task rule then
+             *    refuses the whole body.
+             *  - a 'task' entry carrying no project. The action checks that
+             *    BEFORE it derives one from the task (see the payload above),
+             *    and `entryFormProblem` cannot see the difference: it passes
+             *    `requireAppForTask: false`, which is right for the add form
+             *    and is not what this action actually checks.
+             *
+             * Either way an editor there would open a form whose Save can
+             * never light up, which reads as broken rather than as a refusal.
+             */
+            const correctable =
+              entryFormProblem(
+                rowFields(entry, editableDuration(entry.minutes), entry.note ?? ''),
+              ) === null
+              && (entry.category !== 'task' || entry.appId !== null)
+
+            function onEditKey(event: React.KeyboardEvent<HTMLInputElement>) {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelEdit(entry.id)
+                return
+              }
+              if (event.key === 'Enter' && fields && editProblem === null && !pending) {
+                event.preventDefault()
+                handleSaveEdit(entry, fields, editProblem)
+              }
+            }
+
+            return (
+              <li
+                key={entry.id}
+                className="flex items-start gap-2 rounded-lg border border-border/50 bg-background/40 px-2.5 py-2"
+              >
+                {draft && fields ? (
+                  <div className="flex min-w-0 w-full flex-col gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Input
+                        ref={focusEditField}
+                        value={draft.duration}
+                        onChange={(e) => setEditing({ ...draft, duration: e.target.value })}
+                        onKeyDown={onEditKey}
+                        aria-label={`Hours for ${label}`}
+                        aria-invalid={editProblem !== null}
+                        aria-describedby={`entry-edit-hint-${entry.id}`}
+                        inputMode="decimal"
+                        className="h-7 w-20 text-xs"
+                      />
+                      <Input
+                        value={draft.note}
+                        onChange={(e) => setEditing({ ...draft, note: e.target.value })}
+                        onKeyDown={onEditKey}
+                        aria-label={`Note for ${label}`}
+                        aria-describedby={`entry-edit-hint-${entry.id}`}
+                        placeholder="What was it? (optional)"
+                        className="h-7 min-w-32 flex-1 text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Save ${label}`}
+                        disabled={pending || editProblem !== null}
+                        onClick={() => handleSaveEdit(entry, fields, editProblem)}
+                      >
+                        {busyId === entry.id ? (
+                          <Loader2Icon
+                            className="animate-spin motion-reduce:animate-none"
+                            aria-hidden
+                          />
+                        ) : (
+                          <Check aria-hidden />
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Cancel editing ${label}`}
+                        disabled={pending}
+                        onClick={() => cancelEdit(entry.id)}
+                      >
+                        <X aria-hidden />
+                      </Button>
+                    </div>
+                    {/* The hint the two boxes point at. It says what is
+                        stopping the save in the server's own words when
+                        something is wrong, and the two keys otherwise — one
+                        element either way, so the description an assistive
+                        reader announced does not disappear mid-edit. */}
+                    <p
+                      id={`entry-edit-hint-${entry.id}`}
+                      className={cn(
+                        'text-2xs',
+                        editProblem
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-muted-foreground',
+                      )}
+                    >
+                      {editProblem ?? 'Enter saves, Escape cancels.'}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <span className="w-14 shrink-0 font-mono text-xs font-semibold tabular-nums">
+                      {formatHours(entry.minutes)}h
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="truncate text-xs font-medium">{label}</span>
+                      <span className="truncate text-2xs text-muted-foreground">
+                        {[
+                          entry.taskTitle ? CATEGORY_LABEL[entry.category] : null,
+                          entry.appName,
+                          entry.billable ? 'Billable' : null,
+                          entry.note,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                    {canEdit && correctable ? (
+                      <Button
+                        // Focus comes back HERE when the editor closes, and
+                        // only for the row that was just closed — the ref is
+                        // attached to one button at a time, so no other row
+                        // can steal the caret on an unrelated re-render.
+                        ref={returnFocusTo === entry.id ? focusReturnedTrigger : undefined}
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        // Named by its hours AND its work, because a screen
+                        // reader lists these buttons out of context and "Edit"
+                        // seven times over says nothing about which row.
+                        aria-label={`Edit ${formatHours(entry.minutes)} hours of ${label}`}
+                        disabled={pending}
+                        onClick={() => startEdit(entry)}
+                      >
+                        <Pencil aria-hidden />
+                      </Button>
+                    ) : null}
+                    {canEdit ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Remove ${formatHours(entry.minutes)} hours`}
+                        disabled={pending}
+                        onClick={() => handleDelete(entry.id, entry.minutes)}
+                      >
+                        {busyId === entry.id ? (
+                          <Loader2Icon
+                            className="animate-spin motion-reduce:animate-none"
+                            aria-hidden
+                          />
+                        ) : (
+                          <Trash2 aria-hidden />
+                        )}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
 
