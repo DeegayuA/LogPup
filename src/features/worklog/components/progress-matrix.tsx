@@ -112,6 +112,18 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
               >
                 Logged
               </th>
+              {/* DAYS AND HOURS ARE DIFFERENT QUESTIONS, so they get different
+                  columns. "4/9.5" says how much of what the schedule expected
+                  was answered at all; hours say how much time those answers
+                  account for. A person can be 9.5/9.5 with two hours recorded,
+                  and reading either number as the other is the confusion this
+                  grid exists to remove. */}
+              <th
+                scope="col"
+                className="border-b px-3 py-2 text-right text-xs font-medium text-muted-foreground"
+              >
+                Hours
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -152,13 +164,19 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
                     return (
                       <td
                         key={iso}
-                        className={cn('px-0.5 py-1 text-center', border)}
+                        className={cn('group/cell px-0.5 py-1 text-center', border)}
                         title={mixTitle(text, mix)}
                       >
                         <span
                           aria-hidden
                           className={cn(
                             'mx-auto flex size-6 items-center justify-center rounded-md font-mono text-2xs tabular-nums',
+                            // A dense grid gives no sign that a cell is worth
+                            // hovering, and every cell carries a title nobody
+                            // knows is there. A lift on hover is the only cue
+                            // that says "there is more here" without adding a
+                            // pixel of height.
+                            'transition-transform duration-150 group-hover/cell:scale-125 motion-reduce:transition-none motion-reduce:group-hover/cell:scale-100',
                             DAY_STATE_CLASS[state],
                             state === 'logged' && loggedTone(input.percent ?? 0),
                           )}
@@ -214,6 +232,37 @@ export function ProgressMatrix({ data, today }: { data: ProgressMatrixData; toda
                     </span>
                     <span className="sr-only">{formatCoverage(person.coverage)}</span>
                   </td>
+                  {(() => {
+                    // Summed from the SAME entries the cells and the legend
+                    // are built from, so the row total and the bars can never
+                    // disagree about what the day contained.
+                    let minutes = 0
+                    for (const entries of person.entriesByDay.values()) {
+                      for (const entry of entries) minutes += entry.minutes
+                    }
+                    return (
+                      <td
+                        className={cn('px-3 py-1.5 text-right align-middle', border)}
+                        title={
+                          minutes > 0
+                            ? `${formatMinutes(minutes)} recorded against projects in this window`
+                            : 'No hours recorded in this window'
+                        }
+                      >
+                        {/* An em dash, never 0h. Nobody in this workspace has
+                            recorded an hour yet, and a zero reads as "worked
+                            none" rather than "recorded none". */}
+                        <span
+                          className={cn(
+                            'font-mono text-xs tabular-nums',
+                            minutes > 0 ? 'text-foreground' : 'text-muted-foreground/50',
+                          )}
+                        >
+                          {minutes > 0 ? formatMinutes(minutes) : '—'}
+                        </span>
+                      </td>
+                    )
+                  })()}
                 </tr>
               )
             })}
