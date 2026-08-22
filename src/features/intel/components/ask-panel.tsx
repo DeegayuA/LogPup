@@ -10,6 +10,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SpotlightCard } from '@/components/ui/spotlight-card'
 import { Textarea } from '@/components/ui/textarea'
 import { askWorkspace } from '@/features/intel/actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { splitAnswerLinks } from '@/features/intel/answer-links'
 import { appendTurn, parseChat, type ChatTurn } from '@/features/intel/chat-history'
 import { cn } from '@/lib/utils'
@@ -125,6 +130,7 @@ export function AskPanel({
 }) {
   const [question, setQuestion] = React.useState(initialQuestion)
   const [pending, setPending] = React.useState(false)
+  const meter = useAiMeter()
   const [error, setError] = React.useState<string | null>(null)
   /* Set once per arriving answer and cleared the moment a new ask starts, so
      the live region announces "answer ready" exactly once and never re-reads
@@ -177,7 +183,10 @@ export function AskPanel({
     if (document.activeElement === document.body) boxRef.current?.focus()
   }, [pending])
 
-  async function submit(raw: string) {
+  async function submit(raw: string, source?: MeterOriginSource) {
+    // Frozen at the keystroke/click: `submit` awaits, and React nulls an
+    // event's currentTarget the moment its handler returns.
+    const origin = meterOrigin(source)
     const trimmed = raw.trim()
     if (trimmed === '' || pending) return
     hadFocus.current =
@@ -192,7 +201,7 @@ export function AskPanel({
        rejection they will not bother with twice. */
     setQuestion('')
     try {
-      const res = await askWorkspace(trimmed)
+      const res = await meter.track('workspace-ask', origin, () => askWorkspace(trimmed))
       if (!res.ok) {
         setError(res.error)
         setQuestion(trimmed)
@@ -233,7 +242,7 @@ export function AskPanel({
        composer people use all day. */
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault()
-      void submit(question)
+      void submit(question, event.currentTarget)
     }
   }
 
@@ -315,7 +324,7 @@ export function AskPanel({
                 type="button"
                 variant="ghost"
                 size="xs"
-                onClick={() => void submit(question)}
+                onClick={(event) => void submit(question, event.currentTarget)}
                 className="ml-auto"
               >
                 Try again
@@ -327,7 +336,7 @@ export function AskPanel({
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            void submit(question)
+            void submit(question, event.currentTarget)
           }}
           className="flex flex-col gap-3"
         >

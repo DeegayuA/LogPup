@@ -863,6 +863,12 @@ export const aiUsageEvents = pgTable('ai_usage_events', {
   outputTokens: integer('output_tokens').notNull().default(0),
   // 'ok' or the GeminiErrorCode that ended the call (e.g. 'AUTH_FAILED').
   status: text('status').notNull().default('ok'),
+  // Wall-clock milliseconds the call took, measured in client.ts around the
+  // whole key/model/retry loop — what the CALLER waited, not one HTTP round
+  // trip. Nullable: rows from before 0056, and writers that cannot measure
+  // (live sessions never resolve client-side). It exists so the meter can say
+  // "usually ~40s" from observed history instead of inventing an ETA.
+  durationMs: integer('duration_ms'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [
   index('ai_usage_user_created_idx').on(t.userId, t.createdAt),

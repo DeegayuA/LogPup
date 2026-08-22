@@ -24,16 +24,15 @@
  */
 
 import * as React from 'react'
+import { AI_FEATURES, type AiFeatureId } from '@/features/gemini/ai-features'
 import {
-  AI_FEATURES,
-  estimatePerUseCostUsd,
-  type AiFeatureId,
-} from '@/features/gemini/ai-features'
-import {
+  CARD_FLIGHT_HEIGHT,
   SETTLE_WINDOW_MS,
   addTask,
+  closeSettleWindow,
   dismissTask as dropTask,
   expireSettled,
+  flightDelta,
   patchTask,
   type MeterOriginPoint,
   type MeterSettlement,
@@ -87,7 +86,20 @@ export function useAiMeter(): AiMeterApi {
   return React.useContext(AiMeterContext)
 }
 
-/** The centre of whatever was clicked, in viewport coordinates. */
+/**
+ * The centre of whatever was clicked, in viewport coordinates.
+ *
+ * Exported because some call sites cannot hand the event straight to `track`:
+ * a question asked inside a `startTransition`, or a draft kicked off from a
+ * `useEffect`, runs after the handler has returned and React has already
+ * nulled `currentTarget`. Those sites freeze the point at click time with this
+ * and pass the point instead — which is the same fact, read while it still
+ * exists.
+ */
+export function meterOrigin(source: MeterOriginSource): MeterOriginPoint | null {
+  return originPoint(source)
+}
+
 function originPoint(source: MeterOriginSource): MeterOriginPoint | null {
   if (!source) return null
   if ('x' in source && 'y' in source && typeof source.x === 'number') {
@@ -133,6 +145,14 @@ function nextTaskId(): string {
 export function AiMeterProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = React.useState<MeterTask[]>([])
   const [context, setContext] = React.useState<MeterContext | null>(null)
+  /* Also held in a ref so `track` never changes identity when the context
+     lands. Call sites put `track` in useCallback dependency lists (use-speech,
+     use-dictation), and a `track` that churned would re-create their handlers
+     every time any AI call started or stopped. */
+  const contextRef = React.useRef(context)
+  React.useEffect(() => {
+    contextRef.current = context
+  }, [context])
   /* A pointer resting on the dock holds every finished meter in place — see
      expireSettled. Someone reading a cost is not someone who wants it to
      vanish mid-sentence. */
@@ -145,8 +165,14 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
      placeholder the dock always renders, so a card knows where it is going
      before it exists. */
   const dockAnchor = React.useRef<HTMLDivElement>(null)
+  /* Synced in an effect rather than during render: a ref written while
+     rendering is a side effect React is allowed to discard and re-run. It is
+     read only by the settle loop below, which waits at least 350ms before
+     looking, so being one commit behind cannot matter. */
   const tasksRef = React.useRef(tasks)
-  tasksRef.current = tasks
+  React.useEffect(() => {
+    tasksRef.current = tasks
+  }, [tasks])
   const alive = React.useRef(true)
   React.useEffect(() => {
     alive.current = true
@@ -192,7 +218,14 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
    * feeds is a request per second for a number with nowhere to go.
    */
   const settle = React.useCallback(async (task: MeterTask) => {
-    const deadline = task.startedAt + SETTLE_WINDOW_MS
+    /* Measured from NOW — the moment the call returned — not from when the
+       task started. `after()` only runs once the response is sent, so the wait
+       for a ledger row begins at the end of the call, and a window anchored to
+       the start would already be spent before the first poll for anything
+       slower than SETTLE_WINDOW_MS. A meeting write-up takes minutes; every
+       one of them would have reported "no usage recorded" for a call that had
+       recorded usage perfectly well. */
+    const deadline = Date.now() + SETTLE_WINDOW_MS
     for (let attempt = 0; ; attempt += 1) {
       const wait = SETTLE_BACKOFF_MS[Math.min(attempt, SETTLE_BACKOFF_MS.length - 1)]
       await new Promise((resolve) => setTimeout(resolve, wait))
@@ -212,6 +245,7 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
             models: dto.models,
             keyTier: dto.keyTier,
             ownKey: dto.ownKey,
+            tokensEstimated: dto.tokensEstimated,
             today: dto.today,
           }
           // Today's recorded spend moves with every call, and the settle read
@@ -231,14 +265,19 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
           patchTask(current, task.id, {
             settlement,
             // A task that already failed stays failed — the ledger row for a
-            // blocked call carries its error code, not a result.
-            phase: tasksRef.current.find((t) => t.id === task.id)?.phase === 'failed' ? 'failed' : 'done',
+            // blocked call carries its error code, not a result. Read from
+            // `current` rather than a ref so the phase is the committed one.
+            phase: current.find((t) => t.id === task.id)?.phase === 'failed' ? 'failed' : 'done',
           }),
         )
         return
       }
       if (Date.now() >= deadline) {
-        setTasks((current) => patchTask(current, task.id, { unrecorded: true }))
+        // Both, not just the flag: a task left in 'settling' would show
+        // "reading the usage ledger" forever and never expire, because only a
+        // 'done' task is ever swept. Marking it done AND unrecorded is what
+        // makes "we cannot say what this cost" a state the card can leave.
+        setTasks((current) => closeSettleWindow(current, task.id))
         return
       }
     }
@@ -253,20 +292,36 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
       const feature = AI_FEATURES.find((f) => f.id === featureId)
       if (!feature) return work()
 
+      /* Measured HERE, inside the click handler, for two reasons that happen
+         to agree: it is the only moment the button's rect exists, and it is a
+         legal place to read a ref (a component may not read one while
+         rendering). The anchor is the zero-height placeholder the dock always
+         renders, and it sits exactly where the newest card will land. */
+      const anchor = dockAnchor.current?.getBoundingClientRect() ?? null
+      const flight = flightDelta(
+        point,
+        anchor
+          ? {
+              left: anchor.left,
+              top: anchor.top,
+              width: anchor.width,
+              height: CARD_FLIGHT_HEIGHT,
+            }
+          : null,
+      )
+
       const startedAt = Date.now()
-      const chosenModel = context?.models[featureId] ?? null
       const task: MeterTask = {
         id: nextTaskId(),
         featureId,
         featureLabel: feature.label,
         chain: feature.chain,
         estimateLabel: feature.estimate.label,
-        estimateUsd: estimatePerUseCostUsd(feature.estimate, chosenModel, new Date(startedAt)),
-        requestedModel: chosenModel,
         startedAt,
         endedAt: null,
         phase: 'running',
         origin: point,
+        flight,
         settlement: null,
         unrecorded: false,
         error: null,
@@ -274,10 +329,14 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
       setTasks((current) => addTask(current, task))
       setNow(startedAt)
 
-      // Fetched once per tab, lazily: the running meter is otherwise entirely
-      // static registry data, and a round trip per click would add latency to
-      // the one moment this UI is meant to feel immediate.
-      if (!context) {
+      /* Fetched once per tab, LAZILY — never on mount. The running meter is
+         otherwise entirely static registry data, and fetching on mount would
+         put a three-query round trip on every authed page load for people who
+         never touch an AI feature. The two fields it supplies (the pinned
+         model and the key picture) are derived in the card, not frozen onto
+         the task, so they fill themselves in the moment this resolves —
+         comfortably inside the first call it was fetched for. */
+      if (!contextRef.current) {
         void meterContext().then((res) => {
           if (alive.current && res.ok) setContext(res.data)
         })
@@ -305,7 +364,7 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         throw error
       }
     },
-    [context, settle],
+    [settle],
   )
 
   const api = React.useMemo<AiMeterApi>(() => ({ track, busy }), [track, busy])

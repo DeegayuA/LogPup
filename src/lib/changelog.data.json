@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.409",
+  "current": "v0.0.454",
   "versions": [
     {
       "version": "v0.0.1",
@@ -3272,6 +3272,366 @@
       "hash": "d269096",
       "kind": "feat",
       "change": "keep the Ask LogPup conversation, and stop printing UUIDs at people"
+    },
+    {
+      "version": "v0.0.410",
+      "date": "2026-08-21",
+      "at": "2026-08-21T15:57:04+05:30",
+      "hash": "8bacbca",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.411",
+      "date": "2026-08-21",
+      "at": "2026-08-21T15:58:02+05:30",
+      "hash": "ce0f1f5",
+      "kind": "feat",
+      "change": "a person card behind the name, with a way to reach them"
+    },
+    {
+      "version": "v0.0.412",
+      "date": "2026-08-21",
+      "at": "2026-08-21T16:00:02+05:30",
+      "hash": "8a3fe20",
+      "kind": "feat",
+      "change": "Ask LogPup on every page, as a second surface not a second panel"
+    },
+    {
+      "version": "v0.0.413",
+      "date": "2026-08-21",
+      "at": "2026-08-21T16:04:31+05:30",
+      "hash": "ae2feea",
+      "kind": "feat",
+      "change": "filtering and ordering for the By project view"
+    },
+    {
+      "version": "v0.0.414",
+      "date": "2026-08-21",
+      "at": "2026-08-21T16:17:15+05:30",
+      "hash": "ea1622e",
+      "kind": "fix",
+      "change": "Ask LogPup reads as a chat, and stops rejecting short questions badly"
+    },
+    {
+      "version": "v0.0.415",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:11:55+05:30",
+      "hash": "d78a3e1",
+      "kind": "fix",
+      "change": "the briefing links its own evidence instead of printing brackets"
+    },
+    {
+      "version": "v0.0.416",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:17:38+05:30",
+      "hash": "3893a7b",
+      "kind": "style",
+      "change": "holiday moves from amber to purple, in both themes"
+    },
+    {
+      "version": "v0.0.417",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:18:43+05:30",
+      "hash": "6e7c05f",
+      "kind": "fix",
+      "change": "stop printing a person's name twice in a row"
+    },
+    {
+      "version": "v0.0.418",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:18:53+05:30",
+      "hash": "b1ef1b9",
+      "kind": "feat",
+      "change": "log where the day's hours went"
+    },
+    {
+      "version": "v0.0.419",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:21:46+05:30",
+      "hash": "752ea90",
+      "kind": "style",
+      "change": "the ember token follows holiday to purple"
+    },
+    {
+      "version": "v0.0.420",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:22:21+05:30",
+      "hash": "8cfbffd",
+      "kind": "fix",
+      "change": "the hours selects showed raw values, not labels"
+    },
+    {
+      "version": "v0.0.421",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:23:40+05:30",
+      "hash": "a448866",
+      "kind": "style",
+      "change": "use #7f00ff for holiday and the ember highlight"
+    },
+    {
+      "version": "v0.0.422",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:28:32+05:30",
+      "hash": "994627c",
+      "kind": "style",
+      "change": "warning joins the purple family — the last amber goes"
+    },
+    {
+      "version": "v0.0.423",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:29:08+05:30",
+      "hash": "232b7ef",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.424",
+      "date": "2026-08-21",
+      "at": "2026-08-21T17:33:45+05:30",
+      "hash": "e38a385",
+      "kind": "feat",
+      "change": "what a logged day went to, as segments a cell can carry"
+    },
+    {
+      "version": "v0.0.425",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:00:58+05:30",
+      "hash": "c2f2819",
+      "kind": "feat",
+      "change": "work out which meetings could have been one meeting"
+    },
+    {
+      "version": "v0.0.426",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:09:28+05:30",
+      "hash": "624466e",
+      "kind": "feat",
+      "change": "the ownership query behind the key census"
+    },
+    {
+      "version": "v0.0.427",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:12:24+05:30",
+      "hash": "51008f1",
+      "kind": "feat",
+      "change": "one click fills the day's hours from what LogPup already saw"
+    },
+    {
+      "version": "v0.0.428",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:13:00+05:30",
+      "hash": "a628b27",
+      "kind": "feat",
+      "change": "the progress grid shows which project each day went to"
+    },
+    {
+      "version": "v0.0.429",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:15:04+05:30",
+      "hash": "7228d54",
+      "kind": "refactor",
+      "change": "one derivation behind both surfaces that ask the same thing"
+    },
+    {
+      "version": "v0.0.430",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:15:35+05:30",
+      "hash": "44b1c48",
+      "kind": "feat",
+      "change": "Continue with GitHub, in the Notion shape rather than the Google one"
+    },
+    {
+      "version": "v0.0.431",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:19:18+05:30",
+      "hash": "b35d96b",
+      "kind": "fix",
+      "change": "two hours reads counted soft-deleted rows"
+    },
+    {
+      "version": "v0.0.432",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:30:24+05:30",
+      "hash": "272f9a7",
+      "kind": "feat",
+      "change": "store the decision, never the suggestion"
+    },
+    {
+      "version": "v0.0.433",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:33:59+05:30",
+      "hash": "8dd587b",
+      "kind": "feat",
+      "change": "filter and sort the By project view, from the URL"
+    },
+    {
+      "version": "v0.0.434",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:36:00+05:30",
+      "hash": "d614dea",
+      "kind": "feat",
+      "change": "rank the overlaps before making anyone read them"
+    },
+    {
+      "version": "v0.0.435",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:38:11+05:30",
+      "hash": "a1e0845",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.436",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:38:49+05:30",
+      "hash": "de48f5b",
+      "kind": "feat",
+      "change": "a page that says which meetings could have been one"
+    },
+    {
+      "version": "v0.0.437",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:39:53+05:30",
+      "hash": "f114f1e",
+      "kind": "docs",
+      "change": "record what R6 shipped as, and where it left the plan"
+    },
+    {
+      "version": "v0.0.438",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:44:55+05:30",
+      "hash": "fc6d16a",
+      "kind": "feat",
+      "change": "one panel for the day, and one button that fills it"
+    },
+    {
+      "version": "v0.0.439",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:52:46+05:30",
+      "hash": "5deded7",
+      "kind": "feat",
+      "change": "the metrics and the engine behind R1-R5"
+    },
+    {
+      "version": "v0.0.440",
+      "date": "2026-08-21",
+      "at": "2026-08-21T22:58:36+05:30",
+      "hash": "d933927",
+      "kind": "feat",
+      "change": "reads that cannot name anyone, and the three writes"
+    },
+    {
+      "version": "v0.0.441",
+      "date": "2026-08-21",
+      "at": "2026-08-21T23:06:56+05:30",
+      "hash": "5c7efa5",
+      "kind": "feat",
+      "change": "four surfaces for a number that has to be honest"
+    },
+    {
+      "version": "v0.0.442",
+      "date": "2026-08-21",
+      "at": "2026-08-21T23:09:46+05:30",
+      "hash": "8249431",
+      "kind": "test",
+      "change": "end-to-end cover for the claim that matters"
+    },
+    {
+      "version": "v0.0.443",
+      "date": "2026-08-21",
+      "at": "2026-08-21T23:10:11+05:30",
+      "hash": "456f0e2",
+      "kind": "docs",
+      "change": "record what B shipped as, and what stays quiet"
+    },
+    {
+      "version": "v0.0.444",
+      "date": "2026-08-22",
+      "at": "2026-08-22T00:07:33+05:30",
+      "hash": "2b9e5c5",
+      "kind": "feat",
+      "change": "rebuild the recording pop-out around what you cannot see"
+    },
+    {
+      "version": "v0.0.445",
+      "date": "2026-08-22",
+      "at": "2026-08-22T00:18:11+05:30",
+      "hash": "644d391",
+      "kind": "feat",
+      "change": "ask before closing a tab that still holds unsent audio"
+    },
+    {
+      "version": "v0.0.446",
+      "date": "2026-08-22",
+      "at": "2026-08-22T00:24:55+05:30",
+      "hash": "72b853c",
+      "kind": "feat",
+      "change": "segment upload order and honest progress, as a pure module"
+    },
+    {
+      "version": "v0.0.447",
+      "date": "2026-08-22",
+      "at": "2026-08-22T00:39:36+05:30",
+      "hash": "f3c4d35",
+      "kind": "feat",
+      "change": "one segment on the wire at a time, and leaving the page is just Stop"
+    },
+    {
+      "version": "v0.0.448",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:25:02+05:30",
+      "hash": "afba1c3",
+      "kind": "feat",
+      "change": "the hours form can name a task, which is what it always required"
+    },
+    {
+      "version": "v0.0.449",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:27:25+05:30",
+      "hash": "7479d4a",
+      "kind": "docs",
+      "change": "measure the work, not the worker"
+    },
+    {
+      "version": "v0.0.450",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:32:45+05:30",
+      "hash": "13be4b6",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.451",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:38:10+05:30",
+      "hash": "b0692bd",
+      "kind": "fix",
+      "change": "the template is not a bug somebody filed"
+    },
+    {
+      "version": "v0.0.452",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:39:27+05:30",
+      "hash": "41d5428",
+      "kind": "feat",
+      "change": "the short read on a person, from the page's own numbers"
+    },
+    {
+      "version": "v0.0.453",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:39:35+05:30",
+      "hash": "de769e3",
+      "kind": "refactor",
+      "change": "one RFC 4180 parser, beside the writer"
+    },
+    {
+      "version": "v0.0.454",
+      "date": "2026-08-22",
+      "at": "2026-08-22T08:42:16+05:30",
+      "hash": "1eedff1",
+      "kind": "feat",
+      "change": "a project's team as a file, without the private half"
     }
   ]
 }

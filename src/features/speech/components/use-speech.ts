@@ -1,6 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { synthesizeSpeech } from '../actions'
 import { toSpokenText } from '../spoken-text'
 import { base64ToBytes, parsePcmRate, pcmToWav } from '../wav'
@@ -26,7 +31,7 @@ export type SpeechHandle = {
   /** Which rung produced the audio currently playing, if any. */
   engine: 'gemini' | 'browser' | null
   error: string | null
-  speak: (text: string) => Promise<void>
+  speak: (text: string, origin?: MeterOriginSource) => Promise<void>
   stop: () => void
 }
 
@@ -101,8 +106,13 @@ export function useSpeech(): SpeechHandle {
     return true
   }, [])
 
+  const meterApi = useAiMeter()
   const speak = useCallback(
-    async (text: string) => {
+    async (text: string, originSource?: MeterOriginSource) => {
+      // Frozen on the first line: speak() awaits before it ever reaches
+      // synthesizeSpeech, and React nulls an event's currentTarget as soon as
+      // its handler returns.
+      const origin = meterOrigin(originSource)
       // Callers hand over what is on screen, which for the meeting summary is
       // Markdown. Stripping it here rather than at each call site means no
       // future caller can accidentally have "hash hash Decisions made" read
@@ -124,7 +134,15 @@ export function useSpeech(): SpeechHandle {
         // playing — a whole summary in one response exceeds the platform's
         // buffered-response ceiling and fails outright, and waiting for all
         // of it would put 15-45s of silence first anyway. See chunk-speech.ts.
-        const res = await synthesizeSpeech(trimmed, 0)
+        //
+        // ONE meter for the whole reading, wrapped around chunk 0 alone. The
+        // later chunks are the same feature, the same key and the same slug
+        // inside the same settle window, so the ledger sums them into this
+        // card by itself — while a meter per chunk would put five cards in
+        // the corner for one press of Play.
+        const res = await meterApi.track('read-aloud', origin, () =>
+          synthesizeSpeech(trimmed, 0),
+        )
         // Stale ticket: a stop() or newer speak() happened while Gemini was
         // generating. No cleanup — this invocation owns no audio yet, and the
         // shared refs may already belong to the newer one.
@@ -235,7 +253,7 @@ export function useSpeech(): SpeechHandle {
         }
       }
     },
-    [cleanupAudio, speakInBrowser, stop],
+    [cleanupAudio, meterApi, speakInBrowser, stop],
   )
 
   return { speaking, loading, engine, error, speak, stop }

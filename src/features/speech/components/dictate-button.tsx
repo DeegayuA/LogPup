@@ -73,10 +73,10 @@ export function DictateButton({
         aria-pressed={dictation.recording}
         aria-label={iconOnly ? label : undefined}
         className={cn(className)}
-        onClick={() => {
+        onClick={(event) => {
           if (busy) return
           if (dictation.recording) dictation.stop()
-          else void dictation.start()
+          else void dictation.start(event.currentTarget)
         }}
       >
         {icon}

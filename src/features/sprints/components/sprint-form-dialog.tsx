@@ -17,6 +17,11 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { createSprint } from '@/features/sprints/actions'
 import { suggestSprint } from '@/features/sprints/suggest-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { Loader2, Sparkles } from 'lucide-react'
 import { defaultSprintRange, shiftEndDate, sprintDurationLabel } from '@/features/sprints/sprint-date-range'
 
@@ -76,11 +81,14 @@ export function SprintFormDialog({
   // classic calendar-tool bug this dialog is meant to avoid.
   const [endDateTouched, setEndDateTouched] = useState(false)
   const [suggesting, startSuggesting] = useTransition()
+  const meter = useAiMeter()
 
-  function handleSuggest() {
+  function handleSuggest(source?: MeterOriginSource) {
+    // Read before the transition — see meterOrigin's note on currentTarget.
+    const origin = meterOrigin(source)
     startSuggesting(async () => {
       try {
-        const res = await suggestSprint(appId)
+        const res = await meter.track('sprint-draft', origin, () => suggestSprint(appId))
         if (!res.ok) {
           toast.error(res.error)
           return

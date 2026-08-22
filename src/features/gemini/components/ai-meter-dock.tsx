@@ -27,8 +27,9 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Check, ChevronDown, Loader2, TriangleAlert, X } from 'lucide-react'
 
 import { formatUsd } from '@/features/gemini/pricing'
+import { AI_FEATURES, estimatePerUseCostUsd } from '@/features/gemini/ai-features'
 import { meterView } from '@/features/gemini/ai-meter'
-import { dockView, flightDelta, type MeterTask } from '@/features/gemini/meter-tasks'
+import { dockView, type MeterTask } from '@/features/gemini/meter-tasks'
 import type { MeterContext } from '@/features/gemini/meter-actions'
 import { cn } from '@/lib/utils'
 
@@ -40,17 +41,6 @@ const EASE_ENTER = [0.16, 1, 0.3, 1] as const
 const EASE_EXIT = [0.7, 0, 0.84, 0] as const
 const DUR_BASE = 0.2
 const DUR_SLOW = 0.32
-
-/**
- * A card's nominal height, used only to aim the flight.
- *
- * The dock's anchor is a zero-height placeholder, so it gives an exact x and a
- * top but no centre. This supplies the missing half. It is approximate on
- * purpose: the card is laid out at its real position from the first frame and
- * only ever moves by `transform`, so being a few pixels out changes where the
- * flight *starts*, never where anything ends up.
- */
-const CARD_FLIGHT_HEIGHT = 88
 
 const number = (value: number) => value.toLocaleString()
 
@@ -103,7 +93,6 @@ export function AiMeterDock({
             task={task}
             now={now}
             context={context}
-            anchorRef={anchorRef}
             onDismiss={onDismiss}
           />
         ))}
@@ -130,35 +119,21 @@ function MeterCard({
   task,
   now,
   context,
-  anchorRef,
   onDismiss,
 }: {
   task: MeterTask
   now: number
   context: MeterContext | null
-  anchorRef: React.RefObject<HTMLDivElement | null>
   onDismiss: (id: string) => void
 }) {
   const reduced = useReducedMotion()
   const [open, setOpen] = React.useState(false)
 
-  /* Measured once, at mount, from the anchor that was already on screen.
-     Deliberately not a dependency-tracked memo: the flight describes where
-     this card CAME FROM, which is a fact about one instant and must not be
-     recomputed when the dock reflows underneath it. */
-  const flight = React.useMemo(() => {
-    if (reduced) return null
-    const anchor = anchorRef.current
-    if (!anchor) return null
-    const rect = anchor.getBoundingClientRect()
-    return flightDelta(task.origin, {
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: CARD_FLIGHT_HEIGHT,
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  /* Measured in the click handler that created this task, not here: the
+     flight describes where the card CAME FROM, which is a fact about one
+     instant that no longer exists by the time this renders. Reduced motion
+     drops it and keeps everything else. */
+  const flight = reduced ? null : task.flight
 
   const view = meterView({
     featureLabel: task.featureLabel,
@@ -177,6 +152,19 @@ function MeterCard({
   const running = task.phase === 'running'
   const settling = task.phase === 'settling'
   const failed = task.phase === 'failed'
+  const estimated = task.settlement?.tokensEstimated ?? false
+
+  /* DERIVED, not frozen onto the task when it started. The pinned model
+     arrives with the meter context a moment after the first call begins, and a
+     figure captured before it landed would quote the default chain's price for
+     a call the user had explicitly routed elsewhere. Deriving here means the
+     estimate corrects itself the instant the context resolves — still inside
+     the call it belongs to. */
+  const chosenModel = context?.models[task.featureId] ?? null
+  const feature = AI_FEATURES.find((f) => f.id === task.featureId)
+  const estimateUsd = feature
+    ? estimatePerUseCostUsd(feature.estimate, chosenModel, new Date(task.startedAt))
+    : null
 
   return (
     <motion.div
@@ -247,7 +235,7 @@ function MeterCard({
             label="Estimate"
             value={
               <span className="tabular-nums">
-                {task.estimateUsd === null ? 'price unknown' : formatUsd(task.estimateUsd)}
+                {estimateUsd === null ? 'price unknown' : formatUsd(estimateUsd)}
                 <span className="text-muted-foreground"> {task.estimateLabel}</span>
               </span>
             }
@@ -260,16 +248,22 @@ function MeterCard({
             /* A request, not a result. resolveChain can fall through several
                models, so naming this one as "the" model would misattribute
                both the cost and the capability. */
-            value={task.requestedModel ?? `${task.chain} chain (default)`}
+            value={chosenModel ?? `${task.chain} chain (default)`}
           />
         ) : null}
 
         {view.tokens ? (
           <>
             <Row
-              label="Tokens"
+              /* A live session never returns usageMetadata — it streams
+                 browser-direct, and the ledger holds a rate x duration
+                 reservation the app itself wrote. live-token.ts states the
+                 rule outright: every UI showing one of those rows says
+                 "approximately". So the LABEL changes, not just a footnote. */
+              label={estimated ? 'Tokens (approx.)' : 'Tokens'}
               value={
                 <span className="tabular-nums">
+                  {estimated ? '≈' : ''}
                   {number(view.tokens.input)} in · {number(view.tokens.output)} out
                 </span>
               }
@@ -285,11 +279,20 @@ function MeterCard({
                 ) : (
                   <span className="tabular-nums">
                     {formatUsd(view.costUsd)}
-                    <span className="text-muted-foreground"> indicative</span>
+                    <span className="text-muted-foreground">
+                      {' '}
+                      {estimated ? 'from an estimate' : 'indicative'}
+                    </span>
                   </span>
                 )
               }
             />
+            {estimated ? (
+              <p className="text-muted-foreground">
+                Live sessions stream straight from the browser, so Gemini never reports their
+                usage. This is the rate LogPup reserved for the slice, not a measurement.
+              </p>
+            ) : null}
           </>
         ) : null}
 
@@ -462,7 +465,8 @@ function announcement(tasks: MeterTask[], hiddenCount: number): string {
     if (task.phase === 'settling') return `${task.featureLabel} answered; reading usage.`
     if (task.settlement) {
       const total = task.settlement.usage.inputTokens + task.settlement.usage.outputTokens
-      return `${task.featureLabel} finished, ${number(total)} tokens.`
+      const about = task.settlement.tokensEstimated ? 'about ' : ''
+      return `${task.featureLabel} finished, ${about}${number(total)} tokens.`
     }
     return `${task.featureLabel} finished.`
   })

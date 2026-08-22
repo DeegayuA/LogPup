@@ -1,0 +1,13 @@
+-- ai_usage_events.duration_ms: how long the call took, as the caller felt it.
+--
+-- Measured in client.ts around the whole key/model/retry loop — wall-clock
+-- waiting, not one HTTP round trip. Nullable, because history has no
+-- retroactive stopwatch (rows before this migration) and live sessions never
+-- resolve client-side (their tokens are already a reservation, not a
+-- measurement — this column keeps the same honesty).
+--
+-- Why it exists: the AI meter wants to say "usually ~40s" while a call runs.
+-- Gemini reports no progress, Google publishes no quota remaining — the ONLY
+-- defensible source for a time-remaining figure is observed history of the
+-- same feature, and this is that history.
+ALTER TABLE "ai_usage_events" ADD COLUMN "duration_ms" integer;

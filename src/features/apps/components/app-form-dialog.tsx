@@ -36,6 +36,11 @@ import {
   generateAppFromRepo,
   updateApp,
 } from '@/features/apps/actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { TechTagsInput } from '@/features/apps/components/tech-tags-input'
 import { CURATED_TECH_TAGS, mergeTagSources } from '@/lib/tech-tags'
 import type { ActiveUser } from '@/features/people/queries'
@@ -189,6 +194,7 @@ export function AppFormDialog({
   const [form, setForm] = useState<FormState>(() => toFormState(initialValues))
   const [errors, setErrors] = useState<FieldErrors>({})
   const [generating, setGenerating] = useState(false)
+  const meter = useAiMeter()
   // Non-null once GitHub has refused to hand over a repo that does exist; holds
   // the reason so the paste box can say why it appeared rather than materializing
   // unexplained.
@@ -261,7 +267,8 @@ export function AppFormDialog({
     setErrors((e) => ({ ...e, repoUrl: repoUrlError(normalized) ?? undefined }))
   }
 
-  async function handleGenerateFromRepo() {
+  async function handleGenerateFromRepo(source?: MeterOriginSource) {
+    const origin = meterOrigin(source)
     const normalized = normalizeRepoUrl(form.repoUrl)
     const urlError = repoUrlError(normalized)
     if (urlError) {
@@ -275,7 +282,9 @@ export function AppFormDialog({
     // here would disable "Create app" while the user is still writing.
     setGenerating(true)
     try {
-      const res = await generateAppFromRepo(normalized)
+      const res = await meter.track('app-metadata', origin, () =>
+        generateAppFromRepo(normalized),
+      )
       if (!res.ok) {
         toast.error(res.error)
         return
@@ -314,10 +323,13 @@ export function AppFormDialog({
     toast.success('Filled in from the repo — check it before saving')
   }
 
-  async function handleGenerateFromReadme() {
+  async function handleGenerateFromReadme(source?: MeterOriginSource) {
+    const origin = meterOrigin(source)
     setGenerating(true)
     try {
-      const res = await generateAppFromReadme(readme, form.repoUrl)
+      const res = await meter.track('app-metadata', origin, () =>
+        generateAppFromReadme(readme, form.repoUrl),
+      )
       if (!res.ok) {
         toast.error(res.error)
         return

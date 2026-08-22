@@ -18,6 +18,11 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { createTask } from '@/features/sprints/task-actions'
 import { draftTasksFromPaste } from '@/features/sprints/paste-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { planFor } from '@/features/sprints/composer-plan'
 import {
   MAX_PASTE_TASKS,
@@ -96,6 +101,7 @@ export function TaskComposer({
   const [paste, setPaste] = useState<PasteState | null>(null)
   /** Separate transition so a Gemini round trip never locks the input. */
   const [aiPending, startAiTransition] = useTransition()
+  const meter = useAiMeter()
   const [aiError, setAiError] = useState<string | null>(null)
   const previewId = useId()
 
@@ -217,12 +223,16 @@ export function TaskComposer({
     })
   }
 
-  function refineWithAi() {
+  function refineWithAi(source?: MeterOriginSource) {
+    // Read before the transition — see meterOrigin's note on currentTarget.
+    const origin = meterOrigin(source)
     if (!paste || aiPending || isPending) return
     setAiError(null)
     startAiTransition(async () => {
       try {
-        const res = await draftTasksFromPaste(paste.raw)
+        const res = await meter.track('sprint-draft', origin, () =>
+          draftTasksFromPaste(paste.raw),
+        )
         if (!res.ok) {
           setAiError(res.error)
           return

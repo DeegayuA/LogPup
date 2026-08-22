@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { requestLiveToken } from '../actions'
+import { useAiMeter } from '@/features/gemini/components/ai-meter-provider'
 import { type LiveStatus, LiveTranscriptionSession } from '../live-client'
 import { EMPTY_TRANSCRIPT, type TranscriptState, fullText } from '../transcript-buffer'
 import { type AutoStopReason } from '../session-budget'
@@ -67,6 +68,7 @@ export function useLiveTranscription(meetingId: string): LiveTranscriptionHandle
     }
   }, [stop])
 
+  const meter = useAiMeter()
   const start = useCallback(
     async (stream: MediaStream) => {
       stop()
@@ -76,8 +78,20 @@ export function useLiveTranscription(meetingId: string): LiveTranscriptionHandle
 
       const session = new LiveTranscriptionSession({
         stream,
+        /* METERED PER MINT, not per session. A live session has no request
+           and no response to measure — it streams browser-direct for as long
+           as the meeting lasts. What IS discrete is the mint: each one commits
+           another ~10-minute slice of somebody's quota, and mintLiveToken
+           writes exactly that reservation to the ledger. So a card here says a
+           true thing at the moment it becomes true, which a card spanning the
+           whole hour could not.
+
+           No origin: this runs after getUserMedia resolved, long past any
+           click. The dock's designed answer to that is to appear in place. */
         requestToken: async () => {
-          const result = await requestLiveToken(meetingId)
+          const result = await meter.track('live-captions', null, () =>
+            requestLiveToken(meetingId),
+          )
           if (!result.ok) throw new Error(result.error)
           return { token: result.data.token, model: result.data.model }
         },
@@ -101,7 +115,7 @@ export function useLiveTranscription(meetingId: string): LiveTranscriptionHandle
       sessionRef.current = session
       await session.start()
     },
-    [meetingId, stop],
+    [meetingId, meter, stop],
   )
 
   return {

@@ -14,6 +14,12 @@ export type AiUsageEventInput = {
   outputTokens?: number
   /** 'ok' or the GeminiErrorCode that ended the call. */
   status: string
+  /**
+   * Wall-clock ms the caller waited — the whole key/model/retry loop, not one
+   * HTTP round trip. Omit when nothing measured it (live sessions); an
+   * invented duration would poison the "usually ~40s" medians it feeds.
+   */
+  durationMs?: number
 }
 
 /**
@@ -42,6 +48,7 @@ export function recordAiUsage(event: AiUsageEventInput): void {
         inputTokens: event.inputTokens ?? 0,
         outputTokens: event.outputTokens ?? 0,
         status: event.status,
+        durationMs: event.durationMs ?? null,
       })
       .catch((error) => {
         console.error('[ai-usage] ledger write failed (ignored):', error)

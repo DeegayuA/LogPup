@@ -8,6 +8,11 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { askMeeting } from '@/features/meetings/assistant-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+} from '@/features/gemini/components/ai-meter-provider'
+import type { MeterOriginPoint } from '@/features/gemini/meter-tasks'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { SpeakButton } from '@/features/speech/components/speak-button'
 import { useSpeech } from '@/features/speech/components/use-speech'
@@ -26,15 +31,21 @@ export function MeetingAssistant({ meetingId }: { meetingId: string }) {
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState<string | null>(null)
   const [asking, startAsking] = useTransition()
+  const meter = useAiMeter()
   const speech = useSpeech()
 
-  function ask(text: string, viaVoice: boolean) {
+  /* `origin` is a POINT, not the event: the call happens inside a
+     transition, by which time React has nulled the event's currentTarget. It
+     is frozen at click time by meterOrigin and passed down. */
+  function ask(text: string, viaVoice: boolean, origin: MeterOriginPoint | null) {
     const asked = text.trim()
     if (!asked) return
     setAnswer(null)
     startAsking(async () => {
       try {
-        const res = await askMeeting(meetingId, asked)
+        const res = await meter.track('meeting-assistant', origin, () =>
+          askMeeting(meetingId, asked),
+        )
         if (!res.ok) {
           toast.error(res.error)
           return
@@ -65,7 +76,7 @@ export function MeetingAssistant({ meetingId }: { meetingId: string }) {
         className="flex flex-wrap items-center gap-1.5"
         onSubmit={(event) => {
           event.preventDefault()
-          ask(question, false)
+          ask(question, false, meterOrigin(event.currentTarget))
         }}
       >
         <Input
@@ -82,7 +93,10 @@ export function MeetingAssistant({ meetingId }: { meetingId: string }) {
         <DictateButton
           onText={(text) => {
             setQuestion(text)
-            ask(text, true)
+            /* No event to read: the dictate button reports text after its own
+               async transcription finished. The meter's designed answer to a
+               missing origin is to appear in place. */
+            ask(text, true, null)
           }}
           disabled={asking}
           label="Ask by voice"

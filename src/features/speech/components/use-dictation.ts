@@ -1,6 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { transcribeDictation } from '../actions'
 
 /**
@@ -24,7 +29,7 @@ export type DictationHandle = {
   /** Whether this browser can record at all (no MediaRecorder = no dictation). */
   supported: boolean
   error: string | null
-  start: () => Promise<void>
+  start: (origin?: MeterOriginSource) => Promise<void>
   stop: () => void
   cancel: () => void
 }
@@ -82,7 +87,14 @@ export function useDictation(onText: (text: string) => void): DictationHandle {
     [releaseDevice],
   )
 
-  const start = useCallback(async () => {
+  const meter = useAiMeter()
+  /* The origin is frozen at the START of the recording, not at the stop:
+     transcription fires from recorder.onstop, seconds or minutes later, with
+     no event in scope at all. The button the person pressed to begin is the
+     honest place for the meter to have come from. */
+  const originRef = useRef<ReturnType<typeof meterOrigin>>(null)
+  const start = useCallback(async (originSource?: MeterOriginSource) => {
+    originRef.current = meterOrigin(originSource)
     if (recorderRef.current || !supported) return
     setError(null)
     cancelledRef.current = false
@@ -137,7 +149,9 @@ export function useDictation(onText: (text: string) => void): DictationHandle {
         try {
           const formData = new FormData()
           formData.append('audio', new File([blob], 'dictation', { type: blob.type }))
-          const res = await transcribeDictation(formData)
+          const res = await meter.track('dictation', originRef.current, () =>
+            transcribeDictation(formData),
+          )
           if (!res.ok) {
             setError(res.error)
             return
@@ -162,7 +176,7 @@ export function useDictation(onText: (text: string) => void): DictationHandle {
     capRef.current = setTimeout(() => {
       if (recorderRef.current?.state === 'recording') recorderRef.current.stop()
     }, MAX_CLIP_MS)
-  }, [releaseDevice, supported])
+  }, [meter, releaseDevice, supported])
 
   const stop = useCallback(() => {
     const recorder = recorderRef.current

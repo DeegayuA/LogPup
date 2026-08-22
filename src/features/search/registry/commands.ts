@@ -12,6 +12,7 @@ import { commands as geminiCommands } from '@/features/gemini/commands'
 import { commands as meetingsCommands } from '@/features/meetings/commands'
 import { commands as notificationsCommands } from '@/features/notifications/commands'
 import { commands as peopleCommands } from '@/features/people/commands'
+import { commands as signalsCommands } from '@/features/signals/commands'
 import { commands as settingsCommands } from '@/features/settings/commands'
 import { commands as worklogCommands } from '@/features/worklog/commands'
 import type { CommandApi, CommandDescriptor, PaletteContext } from './types'
@@ -51,6 +52,7 @@ const FEATURE_COMMANDS: CommandDescriptor[] = [
   ...notificationsCommands,
   ...peopleCommands,
   ...settingsCommands,
+  ...signalsCommands,
   ...worklogCommands,
 ]
 

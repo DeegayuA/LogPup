@@ -6,6 +6,11 @@ import { Sparkles, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { askAuditFilters } from '@/features/admin/audit-nl-actions'
+import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
 import { auditQueryString, type AuditParamState } from '@/features/admin/audit-filters'
 
 /**
@@ -27,21 +32,28 @@ export function AuditAsk({ current }: { current: AuditParamState }) {
   const [question, setQuestion] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, startAsking] = useTransition()
+  const meter = useAiMeter()
 
-  function ask() {
+  /* The origin is frozen HERE rather than read inside the transition below:
+     React nulls an event's currentTarget once the handler returns, and the
+     call happens a tick later. */
+  function ask(source?: MeterOriginSource) {
+    const origin = meterOrigin(source)
     const trimmed = question.trim()
     if (!trimmed || pending) return
     setError(null)
     startAsking(async () => {
       try {
-        const res = await askAuditFilters({
+        const res = await meter.track('audit-filter', origin, () =>
+          askAuditFilters({
           question: trimmed,
           // The reader's current state travels along, so a question narrows
           // what is on screen rather than silently restarting from the
           // unfiltered log. Serialised through the same function the URL uses,
           // so there is one definition of what a filter state looks like.
-          params: Object.fromEntries(new URLSearchParams(auditQueryString(current))),
-        })
+            params: Object.fromEntries(new URLSearchParams(auditQueryString(current))),
+          }),
+        )
         if (!res.ok) {
           setError(res.error)
           return
@@ -73,7 +85,7 @@ export function AuditAsk({ current }: { current: AuditParamState }) {
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault()
-                ask()
+                ask(event.currentTarget)
               }
             }}
             maxLength={300}

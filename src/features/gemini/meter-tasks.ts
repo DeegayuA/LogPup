@@ -56,6 +56,12 @@ export type MeterSettlement = {
   keyTier: 'free' | 'paid' | 'unknown'
   /** Whether the key spent belonged to the caller, or a teammate's shared one. */
   ownKey: boolean
+  /**
+   * These token counts are estimates the app wrote, not counts Gemini
+   * reported — true for live sessions, which stream browser-direct and never
+   * return usageMetadata at all. The card must label them.
+   */
+  tokensEstimated: boolean
   /** Local, app-only, no denominator — see localSpend in ai-meter.ts. */
   today: { calls: number; tokens: number }
 }
@@ -68,15 +74,20 @@ export type MeterTask = {
   chain: string
   /** The feature's published per-use estimate label, e.g. "per meeting hour". */
   estimateLabel: string | null
-  /** The feature's published per-use estimate in dollars, or null if unpriced. */
-  estimateUsd: number | null
-  /** The model this task will ask for first — a request, not a result. */
-  requestedModel: string | null
   startedAt: number
   /** When the action returned. Null while running. */
   endedAt: number | null
   phase: MeterTaskPhase
   origin: MeterOriginPoint | null
+  /**
+   * The transform the card starts at, measured against the dock when the task
+   * was created — i.e. in the click handler, which is the only moment the
+   * button's rect exists AND the only place a ref may be read.
+   *
+   * Null means no flight: no origin to fly from, or a click that landed on the
+   * dock itself.
+   */
+  flight: { x: number; y: number } | null
   settlement: MeterSettlement | null
   /**
    * True when the settle window closed with no ledger rows for this task.
@@ -109,6 +120,12 @@ export const DONE_LINGER_MS = 12_000
 
 /**
  * How long to keep asking the ledger for a finished task's rows.
+ *
+ * Counted from when the CALL RETURNED, never from when the task started:
+ * `after()` only runs once the response is sent, so the wait for a row begins
+ * at the end. A window anchored to the start would already be spent before the
+ * first poll for anything slower than this — which is every meeting write-up
+ * there is.
  *
  * `after()` normally lands within a second; this is generous enough to cover a
  * slow insert and short enough that "we cannot say" arrives while the person
@@ -156,14 +173,24 @@ export function expireSettled(
 }
 
 /**
- * A finished task with no ledger rows to show for it.
+ * The settle window closed with no ledger rows for this task.
  *
- * Returns `unrecorded` rather than inventing a zero-token settlement, because
+ * Sets `unrecorded` rather than inventing a zero-token settlement, because
  * those are different claims: one says the call cost nothing, the other says
  * this app does not know what it cost. Only the second is true.
+ *
+ * AND it moves the task off 'settling', which is the part that is easy to
+ * forget and expensive to get wrong: only a 'done' task is ever swept by
+ * expireSettled, so a task left settling would sit in the corner claiming to
+ * be reading the ledger for the rest of the session. A failure stays failed —
+ * it did not become a success by going unrecorded.
  */
-export function markUnrecorded(tasks: readonly MeterTask[], id: string): MeterTask[] {
-  return patchTask(tasks, id, { unrecorded: true })
+export function closeSettleWindow(tasks: readonly MeterTask[], id: string): MeterTask[] {
+  return tasks.map((task) =>
+    task.id === id
+      ? { ...task, unrecorded: true, phase: task.phase === 'failed' ? 'failed' : 'done' }
+      : task,
+  )
 }
 
 export type DockView = {
@@ -218,6 +245,17 @@ export function dockView(
  * retry, a task started while the tab was hidden). The dock's answer to that
  * is to appear in place, not to fly in from a corner it made up.
  */
+/**
+ * A card's nominal height, used only to aim the flight.
+ *
+ * The dock's anchor is a zero-height placeholder: it gives an exact x and a
+ * top, but no centre. This supplies the missing half, and is approximate on
+ * purpose — the card is laid out at its real position from the first frame and
+ * only ever moves by `transform`, so being a few pixels out changes where the
+ * flight STARTS, never where anything ends up.
+ */
+export const CARD_FLIGHT_HEIGHT = 88
+
 export function flightDelta(
   origin: MeterOriginPoint | null,
   dock: { left: number; top: number; width: number; height: number } | null,

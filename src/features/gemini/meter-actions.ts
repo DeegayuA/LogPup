@@ -85,6 +85,18 @@ export type MeterContext = {
   today: { calls: number; tokens: number }
 }
 
+/**
+ * Ledger slugs whose token counts are ESTIMATES, not measurements.
+ *
+ * `live.session` is the only one, and it is not a rounding matter: the Live
+ * API streams browser-direct, so no `usageMetadata` ever reaches this app.
+ * mintLiveToken writes `AUDIO_TOKENS_PER_SECOND x the token's TTL` — a
+ * reservation for a slice somebody may not use half of — and its own comment
+ * states the rule this set exists to keep: every UI that surfaces a
+ * live.session row must say "approximately".
+ */
+const ESTIMATED_TOKEN_SLUGS = new Set<string>(['live.session'])
+
 export type MeterSettlementDto = {
   calls: number
   okCalls: number
@@ -97,6 +109,12 @@ export type MeterSettlementDto = {
   keyTier: MeterKeyTier
   /** True when every key spent was the caller's own. */
   ownKey: boolean
+  /**
+   * True when any row here came from a slug whose tokens are estimated rather
+   * than reported by Gemini. The card must then say so — the whole point of
+   * this meter is that a number nobody measured never appears as one.
+   */
+  tokensEstimated: boolean
   today: { calls: number; tokens: number }
 }
 
@@ -166,6 +184,7 @@ export async function meterSettlement(
   const [rows, today] = await Promise.all([
     db
       .select({
+        feature: aiUsageEvents.feature,
         model: aiUsageEvents.model,
         inputTokens: aiUsageEvents.inputTokens,
         outputTokens: aiUsageEvents.outputTokens,
@@ -214,6 +233,7 @@ export async function meterSettlement(
     // gone. "Not mine" is the honest floor — the same rule aggregateAiUsage
     // applies for the usage page, so the two cannot disagree.
     ownKey: rows.every((r) => r.keyOwnerId === userId),
+    tokensEstimated: rows.some((r) => ESTIMATED_TOKEN_SLUGS.has(r.feature)),
     today,
   })
 }

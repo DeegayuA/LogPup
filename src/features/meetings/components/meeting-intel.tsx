@@ -110,6 +110,11 @@ import {
   type UnattributedFollowupView,
 } from '@/features/meetings/ai-actions'
 import {
+  meterOrigin,
+  useAiMeter,
+  type MeterOriginSource,
+} from '@/features/gemini/components/ai-meter-provider'
+import {
   containsSinhala,
   isRestartStorm,
   isSilentSinhalaFallback,
@@ -563,6 +568,7 @@ export function MeetingIntelPanel({
   // re-run by hand (e.g. after retrying a segment that failed the first
   // time) without touching the recorder again.
   const [finalizing, startFinalizing] = useTransition()
+  const meter = useAiMeter()
   const [finalizeError, setFinalizeError] = useState<string | null>(null)
   /**
    * A line the planner panel wants appended to the note composer below it —
@@ -2024,7 +2030,10 @@ export function MeetingIntelPanel({
   // (concatenateSegments) — so a person can see minutes with a noted gap
   // instead of nothing at all, retry the failed segment, and run this again
   // to fill it in.
-  function runFinalize() {
+  function runFinalize(source?: MeterOriginSource) {
+    // Frozen before the transition: the write-up starts a tick later, by
+    // which time React has nulled the event's currentTarget.
+    const origin = meterOrigin(source)
     setFinalizeError(null)
     // Everything this pass covers, fixed BEFORE the first await. Recording can
     // start again while the write-up is still running (a meeting does not stop
@@ -2041,7 +2050,16 @@ export function MeetingIntelPanel({
     startFinalizing(async () => {
       try {
         await Promise.allSettled(pendingUploads)
-        const res = await finalizeMeetingRecording(meetingId, transcript)
+        /* The metered call is the WRITE-UP, not the per-segment
+           transcription. Segments upload continuously while somebody is still
+           in the meeting and already report themselves honestly in the panel
+           above; a card per five-minute segment would put a dozen meters in
+           the corner for one recording and duplicate progress that is already
+           on screen. What this card reports is the calls inside its own
+           window, and its "Calls" line says how many that was. */
+        const res = await meter.track('meeting-intel', origin, () =>
+          finalizeMeetingRecording(meetingId, transcript),
+        )
         if (!res.ok) {
           setFinalizeError(res.error)
           toast.error(res.error)
@@ -3391,7 +3409,12 @@ export function MeetingIntelPanel({
                 : 'Analysis needs another run'}
             </span>
             {!finalizing ? (
-              <Button variant="outline" size="sm" type="button" onClick={runFinalize}>
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                onClick={(event) => runFinalize(event.currentTarget)}
+              >
                 <Sparkles aria-hidden /> {finalizeError ? 'Retry analysis' : 'Analyze again'}
               </Button>
             ) : (

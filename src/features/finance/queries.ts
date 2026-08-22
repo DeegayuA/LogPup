@@ -144,10 +144,19 @@ async function loadTaskEntriesForApp(
       title: users.title,
     })
     .from(liveWorklogEntries)
-    .innerJoin(liveTasks, eq(liveWorklogEntries.taskId, liveTasks.id))
+    // LEFT, not INNER. An inner join to tasks meant a project's cost counted
+    // only hours booked to a TASK — so every meeting about it, every review of
+    // it and every production incident on it was free. In this workspace that
+    // is almost the whole bill: nineteen of twenty people hold no task at all.
+    .leftJoin(liveTasks, eq(liveWorklogEntries.taskId, liveTasks.id))
     .innerJoin(users, eq(liveWorklogEntries.userId, users.id))
     .where(and(
-      eq(liveTasks.appId, appId),
+      // The entry's OWN app_id first, the task's app as the fallback — the
+      // precedence migration 0050 states: a stored app_id survives the task
+      // being deleted and must not move when a task is reassigned, so it wins
+      // for historical figures. Rows written before 0050 have no app_id and
+      // still resolve through their task.
+      eq(sql`coalesce(${liveWorklogEntries.appId}, ${liveTasks.appId})`, appId),
       gte(liveWorklogEntries.day, from),
       lt(liveWorklogEntries.day, to),
     ))

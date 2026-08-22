@@ -81,9 +81,9 @@ export function SpeakButton({
       aria-pressed={active}
       aria-label={iconOnly ? label : undefined}
       className={cn(className)}
-      onClick={() => {
+      onClick={(event) => {
         if (active) speech.stop()
-        else void speech.speak(getText())
+        else void speech.speak(getText(), event.currentTarget)
       }}
     >
       {icon}

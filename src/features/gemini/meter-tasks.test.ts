@@ -4,9 +4,9 @@ import {
   addTask,
   dismissTask,
   dockView,
+  closeSettleWindow,
   expireSettled,
   flightDelta,
-  markUnrecorded,
   patchTask,
   type MeterTask,
 } from './meter-tasks'
@@ -17,12 +17,11 @@ const task = (over: Partial<MeterTask> = {}): MeterTask => ({
   featureLabel: 'Daily briefing',
   chain: 'Analysis',
   estimateLabel: 'per briefing',
-  estimateUsd: 0.0075,
-  requestedModel: 'gemini-3.6-flash',
   startedAt: 1_000,
   endedAt: null,
   phase: 'running',
   origin: { x: 200, y: 400 },
+  flight: null,
   settlement: null,
   unrecorded: false,
   error: null,
@@ -103,9 +102,23 @@ describe('when a task finishes', () => {
   it('marks a task unrecorded rather than settling it at zero', () => {
     // Zero tokens says "this call was free". No ledger row says "this app
     // cannot tell you". Only the second is true, so they must not collapse.
-    const [marked] = markUnrecorded([task({ phase: 'done' })], 't1')
+    const [marked] = closeSettleWindow([task({ phase: 'settling' })], 't1')
     expect(marked.unrecorded).toBe(true)
     expect(marked.settlement).toBeNull()
+  })
+
+  it('moves an unrecorded task off settling so it can eventually leave', () => {
+    // The bug this exists to prevent: only a 'done' task is ever swept, so a
+    // task left in 'settling' sits in the corner claiming to be reading the
+    // ledger for the rest of the session.
+    const [marked] = closeSettleWindow([task({ phase: 'settling', endedAt: 1_000 })], 't1')
+    expect(marked.phase).toBe('done')
+    expect(expireSettled([marked], 1_000 + DONE_LINGER_MS)).toHaveLength(0)
+  })
+
+  it('does not turn a failure into a success by going unrecorded', () => {
+    const [marked] = closeSettleWindow([task({ phase: 'failed', error: 'Key rejected' })], 't1')
+    expect(marked.phase).toBe('failed')
   })
 })
 
