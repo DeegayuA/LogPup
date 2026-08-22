@@ -34,10 +34,20 @@ import {
   expireSettled,
   flightDelta,
   patchTask,
+  reportSteps,
   type MeterOriginPoint,
   type MeterSettlement,
+  type MeterSteps,
   type MeterTask,
 } from '@/features/gemini/meter-tasks'
+import {
+  PACE_EXEMPT,
+  durationStorage,
+  paceKey,
+  recordDuration,
+  typicalMs,
+  type DurationHistory,
+} from '@/features/gemini/meter-pace'
 import { meterContext, meterSettlement, type MeterContext } from '@/features/gemini/meter-actions'
 import { AiMeterDock } from '@/features/gemini/components/ai-meter-dock'
 
@@ -56,19 +66,37 @@ export type MeterOriginSource =
   | null
   | undefined
 
+/**
+ * Handed to `work` so a call site that OWNS a real count — a meeting's
+ * transcribed segments — can report it. Every zero-arg closure stays
+ * assignable, so the whole app compiled unchanged the day this appeared;
+ * opting in is adding a parameter, not restructuring a call site.
+ */
+export type MeterTaskHandle = {
+  /** Report where this task's countable work stands. Ignored unless the
+   *  task is still running and the numbers are coherent. */
+  steps(next: MeterSteps): void
+}
+
 export type AiMeterApi = {
   /**
    * Runs `work`, showing a meter for it until it settles, and returns exactly
    * what `work` returned. Failures propagate untouched — the meter reports
    * them, it does not handle them.
    */
-  track<T>(featureId: AiFeatureId, origin: MeterOriginSource, work: () => Promise<T>): Promise<T>
+  track<T>(
+    featureId: AiFeatureId,
+    origin: MeterOriginSource,
+    work: (handle: MeterTaskHandle) => Promise<T>,
+  ): Promise<T>
   /** True while this tab has any AI call in flight. */
   busy: boolean
 }
 
+const NOOP_HANDLE: MeterTaskHandle = { steps: () => undefined }
+
 const NOOP_API: AiMeterApi = {
-  track: (_featureId, _origin, work) => work(),
+  track: (_featureId, _origin, work) => work(NOOP_HANDLE),
   busy: false,
 }
 
@@ -157,6 +185,22 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
      expireSettled. Someone reading a cost is not someone who wants it to
      vanish mid-sentence. */
   const [paused, setPaused] = React.useState(false)
+  /* This browser's completed-run durations, loaded once and lazily — reading
+     localStorage on every task would be a sync IO per click. A ref, not
+     state: history feeds NEW tasks (frozen typical); nothing rendered watches
+     it change. */
+  const historyRef = React.useRef<DurationHistory | null>(null)
+  const getHistory = React.useCallback((): DurationHistory => {
+    if (historyRef.current) return historyRef.current
+    let raw: string | null = null
+    try {
+      raw = window.localStorage.getItem(durationStorage.key)
+    } catch {
+      // Blocked storage reads as no history — first-run behaviour, no pace.
+    }
+    historyRef.current = durationStorage.parse(raw)
+    return historyRef.current
+  }, [])
   /* One clock for the whole dock, not one per card: the only genuinely live
      number is elapsed time, and it moves at the same rate for everybody. */
   const [now, setNow] = React.useState(() => Date.now())
@@ -290,7 +334,7 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
       // all.
       const point = originPoint(origin)
       const feature = AI_FEATURES.find((f) => f.id === featureId)
-      if (!feature) return work()
+      if (!feature) return work(NOOP_HANDLE)
 
       /* Measured HERE, inside the click handler, for two reasons that happen
          to agree: it is the only moment the button's rect exists, and it is a
@@ -311,6 +355,15 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
       )
 
       const startedAt = Date.now()
+      /* The typical is FROZEN here, per feature+model, from this browser's own
+         completed runs. Frozen so the bar's denominator cannot move under a
+         watcher when a concurrent same-feature task lands; per-model because a
+         pinned Pro's typical is severalfold Flash's. Exempt features (meeting
+         write-ups, live sessions) get none — their duration tracks the
+         meeting, not the model. */
+      const typical = PACE_EXEMPT.has(featureId)
+        ? null
+        : typicalMs(getHistory(), paceKey(featureId, contextRef.current?.models[featureId] ?? null))
       const task: MeterTask = {
         id: nextTaskId(),
         featureId,
@@ -325,6 +378,8 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         settlement: null,
         unrecorded: false,
         error: null,
+        steps: null,
+        typical,
       }
       setTasks((current) => addTask(current, task))
       setNow(startedAt)
@@ -342,14 +397,45 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         })
       }
 
+      const handle: MeterTaskHandle = {
+        steps: (next) => {
+          if (!alive.current) return
+          // Coherent numbers only, and only while running: a done>total report
+          // or one arriving after Stop would put a lie on a bar this feature
+          // exists to keep honest.
+          if (next.total <= 0 || next.done < 0 || next.failed < 0) return
+          if (next.done + next.failed > next.total) return
+          setTasks((current) => {
+            const target = current.find((t) => t.id === task.id)
+            if (!target || target.phase !== 'running') return current
+            return reportSteps(current, task.id, next)
+          })
+        },
+      }
+
       const finish = (patch: Partial<MeterTask>) => {
         if (!alive.current) return
-        setTasks((current) => patchTask(current, task.id, { endedAt: Date.now(), ...patch }))
+        const endedAt = Date.now()
+        /* Only a task that DID ITS WORK teaches the typical. Failures measure
+           the error path; exempt features have no typical to teach. Storage is
+           best-effort — a private window losing the history costs a pace line,
+           never a meter. */
+        if (patch.phase !== 'failed' && !PACE_EXEMPT.has(featureId)) {
+          const key = paceKey(featureId, contextRef.current?.models[featureId] ?? null)
+          historyRef.current = recordDuration(getHistory(), key, endedAt - startedAt)
+          try {
+            window.localStorage.setItem(durationStorage.key, durationStorage.serialize(historyRef.current))
+          } catch {
+            // Storage refused (quota, private mode) — the in-memory copy still
+            // serves this tab, and that is the whole loss.
+          }
+        }
+        setTasks((current) => patchTask(current, task.id, { endedAt, ...patch }))
         void settle(task)
       }
 
       try {
-        const value = await work()
+        const value = await work(handle)
         // The repo's actions report failure in their return value rather than
         // by throwing, so a meter that only watched for exceptions would
         // paint a rejected key green.
@@ -364,7 +450,10 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         throw error
       }
     },
-    [settle],
+    // getHistory is a stable useCallback([]) — listed to satisfy the rule,
+    // and identity-stable so `track` still never churns (call sites keep it
+    // in their own dependency lists; see the contextRef comment above).
+    [settle, getHistory],
   )
 
   const api = React.useMemo<AiMeterApi>(() => ({ track, busy }), [track, busy])

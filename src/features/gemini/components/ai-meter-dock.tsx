@@ -8,27 +8,50 @@
  * back and this app's own ledger has caught up — what it actually did cost.
  * The prohibition: never show a number nobody measured.
  *
- * That prohibition is why there is no progress bar anywhere below, and why
- * there never can be. A bar needs a denominator, and the two denominators this
- * UI would want are both unavailable. Tokens do not exist until the response
- * arrives (there is no streaming client — see ai-meter.ts), so a bar filling
- * during the call would be animating a guess. And Google enforces the free
- * tier per PROJECT, per minute and per day, publishing no endpoint for what is
- * left, so a "quota remaining" bar would be inferred from local records and
- * wrong the moment the same key is used from a script or a second deployment.
+ * That prohibition rules out the two denominators this UI would most like.
+ * Tokens do not exist until the response arrives (there is no streaming
+ * client — see ai-meter.ts), so a bar filling on tokens would be animating a
+ * guess. And Google enforces the free tier per PROJECT, per minute and per
+ * day, publishing no endpoint for what is left, so a "quota remaining" bar
+ * would be inferred from local records and wrong the moment the same key is
+ * used from a script or a second deployment. Both stay refused, permanently.
  *
- * Motion reads as evidence, which is exactly why it is spent on the one thing
- * that is genuinely true — this panel came from that button, and it is still
- * working — and on nothing that resembles a measurement.
+ * Two denominators ARE defensible, and the gauge below renders exactly those
+ * (meterView derives them — the component cannot fudge the wording):
+ *
+ *   1. STEPS — server-acknowledged units the call site counted (a meeting's
+ *      transcribed segments). The one percent allowed to mean work done,
+ *      floored and held at 99 while anything is outstanding.
+ *   2. PACE — elapsed against this browser's own median for the same
+ *      feature+model (meter-pace.ts), measured by this meter itself. A claim
+ *      about TIME, labelled "of typical", never "complete"; its bar is
+ *      visually capped short of full and reports indeterminate to ARIA,
+ *      because pace cannot make a completion claim.
+ *
+ * Motion reads as evidence, which is exactly why it is spent on the things
+ * that are genuinely true — this panel came from that button, it is still
+ * working, and this much of the measured denominator has passed — and on
+ * nothing that resembles a measurement nobody made.
  */
 
 import * as React from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { Check, ChevronDown, Loader2, TriangleAlert, X } from 'lucide-react'
+import {
+  AudioLines,
+  Check,
+  ChevronDown,
+  FileText,
+  Loader2,
+  Radio,
+  ScanSearch,
+  TriangleAlert,
+  X,
+  Zap,
+} from 'lucide-react'
 
 import { formatUsd } from '@/features/gemini/pricing'
 import { AI_FEATURES, estimatePerUseCostUsd } from '@/features/gemini/ai-features'
-import { meterView } from '@/features/gemini/ai-meter'
+import { formatElapsed, meterView, type MeterView } from '@/features/gemini/ai-meter'
 import { dockView, type MeterTask } from '@/features/gemini/meter-tasks'
 import type { MeterContext } from '@/features/gemini/meter-actions'
 import { cn } from '@/lib/utils'
@@ -60,6 +83,14 @@ export function AiMeterDock({
   onHoverChange: (hovered: boolean) => void
 }) {
   const view = dockView(tasks)
+  /* A person's click outranks the default until the task it points at leaves
+     the dock; then the model's ordering (failures first, newest next) takes
+     back over rather than leaving a stale choice pinned. */
+  const [expandedOverride, setExpandedOverride] = React.useState<string | null>(null)
+  const expandedId =
+    expandedOverride && view.visible.some((t) => t.id === expandedOverride)
+      ? expandedOverride
+      : view.defaultExpandedId
 
   return (
     /* Below the header rather than over it: "top right" is where this belongs,
@@ -86,16 +117,42 @@ export function AiMeterDock({
         {announcement(view.visible, view.hiddenCount)}
       </p>
 
+      {/* Two or more tasks collapse to rows with ONE expanded — three stacked
+          cards would bury the page this dock is required not to. The choice
+          of which opens expanded (failures first, then newest) is dockView's,
+          in the pure model; a click here only overrides it. */}
+      {view.density === 'stack' ? (
+        <p className="pointer-events-auto self-end rounded-full bg-popover px-3 py-1 text-xs text-muted-foreground shadow-sm ring-1 ring-foreground/10">
+          <span className="font-mono tabular-nums">{view.visible.length + view.hiddenCount}</span> AI
+          tasks · <span className="font-mono tabular-nums">{view.runningCount}</span> running
+          {view.failedCount > 0 ? (
+            <span className="text-destructive">
+              {' '}
+              · <span className="font-mono tabular-nums">{view.failedCount}</span> failed
+            </span>
+          ) : null}
+        </p>
+      ) : null}
       <AnimatePresence initial={false}>
-        {view.visible.map((task) => (
-          <MeterCard
-            key={task.id}
-            task={task}
-            now={now}
-            context={context}
-            onDismiss={onDismiss}
-          />
-        ))}
+        {view.visible.map((task) =>
+          view.density === 'cards' || task.id === expandedId ? (
+            <MeterCard
+              key={task.id}
+              task={task}
+              now={now}
+              context={context}
+              onDismiss={onDismiss}
+            />
+          ) : (
+            <MeterStripRow
+              key={task.id}
+              task={task}
+              now={now}
+              onExpand={() => setExpandedOverride(task.id)}
+              onDismiss={onDismiss}
+            />
+          ),
+        )}
         {view.hiddenCount > 0 ? (
           <motion.p
             key="overflow"
@@ -147,6 +204,8 @@ function MeterCard({
     usage: task.settlement?.usage,
     keyTier: task.settlement?.keyTier ?? 'unknown',
     at: new Date(task.endedAt ?? now),
+    steps: task.steps,
+    typical: task.typical,
   })
 
   const running = task.phase === 'running'
@@ -222,6 +281,7 @@ function MeterCard({
       </div>
 
       <div className="space-y-1.5 px-3 pt-2 pb-3 text-xs">
+        {view.progress ? <ProgressLine progress={view.progress} /> : null}
         {failed && task.error ? (
           <p className="text-destructive">{task.error}</p>
         ) : null}
@@ -350,6 +410,36 @@ function MeterCard({
               className="space-y-1.5 overflow-hidden border-t border-border/70 pt-2 text-muted-foreground"
             >
               <Row label="Chain" value={task.chain} />
+              {task.typical ? (
+                <Row
+                  label="Typical"
+                  /* The denominator confesses where it came from. "This
+                     browser" is load-bearing: the median is this device's own
+                     completed runs, not a fleet statistic. */
+                  value={
+                    <span className="font-mono tabular-nums">
+                      ~{formatElapsed(task.typical.p50)}
+                      <span className="text-muted-foreground">
+                        {' '}
+                        · median of your last {task.typical.samples} runs (this browser)
+                      </span>
+                    </span>
+                  }
+                />
+              ) : null}
+              {task.steps ? (
+                <Row
+                  label="Steps"
+                  value={
+                    <span className="font-mono tabular-nums">
+                      {task.steps.done} done
+                      {task.steps.failed > 0 ? ` · ${task.steps.failed} failed` : ''}
+                      {' '}· {Math.max(0, task.steps.total - task.steps.done - task.steps.failed)}{' '}
+                      to go
+                    </span>
+                  }
+                />
+              ) : null}
               {task.settlement ? (
                 <Row
                   label="Calls"
@@ -450,6 +540,171 @@ function Billing({
      key has since been deleted. Saying so beats defaulting to the comforting
      half of the answer. */
   return <p className="text-muted-foreground">No key recorded for this call.</p>
+}
+
+const CHAIN_GLYPH: Record<string, React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>> = {
+  Quick: Zap,
+  Analysis: ScanSearch,
+  Synthesis: FileText,
+  Voice: AudioLines,
+  Live: Radio,
+}
+
+/**
+ * The one bar in this feature, and the rules that let it exist (see the file
+ * header). Steps fill to their true percent and report it to ARIA. Pace is
+ * VISUALLY capped short of full with a tick at the cap, and reports
+ * indeterminate to ARIA (no aria-valuenow) — the bar physically cannot
+ * present "done", because pace cannot claim it.
+ */
+function Gauge({ progress }: { progress: NonNullable<MeterView['progress']> }) {
+  const fraction =
+    progress.kind === 'steps' ? progress.percent / 100 : (progress.percent / 100) * 0.92
+  return (
+    <div
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      {...(progress.kind === 'steps' ? { 'aria-valuenow': progress.percent } : {})}
+      aria-label={progress.kind === 'steps' ? 'Work transcribed' : 'Elapsed share of typical time'}
+      className="relative h-1 w-full overflow-hidden rounded-full bg-muted"
+    >
+      <div
+        className="h-full w-full origin-left rounded-full bg-primary transition-transform duration-(--dur-slow) motion-reduce:transition-none"
+        style={{ transform: `scaleX(${Math.min(Math.max(fraction, 0), 1)})` }}
+      />
+      {progress.kind === 'pace' ? (
+        <span
+          aria-hidden
+          className="absolute inset-y-0 left-[92%] w-px bg-muted-foreground/40"
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * What the gauge means, said in words on the same line — a percent never
+ * travels without its denominator. Steps say "at this pace" on their ETA
+ * because it extrapolates this task's own rate; pace says "of typical" and
+ * flips to "longer than typical" rather than counting past its end.
+ */
+function ProgressLine({ progress }: { progress: NonNullable<MeterView['progress']> }) {
+  return (
+    <div className="space-y-1">
+      {progress.kind === 'steps' ? (
+        <p className="flex items-baseline justify-between gap-3">
+          <span className="font-mono tabular-nums">
+            {progress.done} of {progress.total} steps · {progress.percent}%
+            {progress.failed > 0 ? (
+              <span className="text-warning"> · {progress.failed} failed</span>
+            ) : null}
+          </span>
+          {progress.remainingMs !== null ? (
+            <span className="text-muted-foreground">
+              ~{formatElapsed(progress.remainingMs)} left at this pace
+            </span>
+          ) : null}
+        </p>
+      ) : (
+        <p className="flex items-baseline justify-between gap-3">
+          <span className="font-mono tabular-nums">
+            {progress.overrun ? (
+              /* Wording change only — no colour shift, no pulse. Slow is not
+                 an error, and in this dock colour is evidence. */
+              <span className="text-muted-foreground">Longer than typical</span>
+            ) : (
+              <>{progress.percent}% of typical</>
+            )}
+          </span>
+          <span className="text-muted-foreground">
+            {progress.remainingMs !== null
+              ? `~${formatElapsed(progress.remainingMs)} left if typical`
+              : `typically ~${formatElapsed(progress.typicalMs)}`}
+          </span>
+        </p>
+      )}
+      <Gauge progress={progress} />
+    </div>
+  )
+}
+
+/**
+ * One 40px row of the stack: identity, state, elapsed — nothing else. The
+ * whole row is a button that expands it into the full card; dismiss appears
+ * only once there is an outcome to dismiss, so a running task cannot be
+ * swatted by a stray click aimed at reading it.
+ */
+function MeterStripRow({
+  task,
+  now,
+  onExpand,
+  onDismiss,
+}: {
+  task: MeterTask
+  now: number
+  onExpand: () => void
+  onDismiss: (id: string) => void
+}) {
+  const reduced = useReducedMotion()
+  const running = task.phase === 'running' || task.phase === 'settling'
+  const failed = task.phase === 'failed'
+  const Glyph = CHAIN_GLYPH[task.chain] ?? Zap
+  const percent =
+    task.phase === 'running' && task.steps && task.steps.total > 0
+      ? `${Math.min(Math.floor((task.steps.done / task.steps.total) * 100), 99)}%`
+      : null
+  return (
+    <motion.div
+      layout={!reduced}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { duration: DUR_BASE, ease: EASE_EXIT } }}
+      transition={{ duration: DUR_BASE, ease: EASE_ENTER }}
+      className={cn(
+        'pointer-events-auto flex h-10 items-center gap-2 overflow-hidden rounded-lg bg-popover px-3 text-popover-foreground shadow-md ring-1',
+        failed ? 'ring-destructive/40' : 'ring-foreground/10',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-expanded={false}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        aria-label={`Show details for ${task.featureLabel}`}
+      >
+        <span className="shrink-0" aria-hidden>
+          {failed ? (
+            <TriangleAlert className="size-4 text-destructive" />
+          ) : running ? (
+            <Loader2 className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />
+          ) : (
+            <Check className="size-4 text-success" />
+          )}
+        </span>
+        <Glyph className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{task.featureLabel}</span>
+        {percent ? (
+          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+            {percent}
+          </span>
+        ) : null}
+        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+          {formatElapsed((task.endedAt ?? now) - task.startedAt)}
+        </span>
+      </button>
+      {!running ? (
+        <button
+          type="button"
+          onClick={() => onDismiss(task.id)}
+          className="-mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors duration-(--dur-quick) hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          aria-label={`Dismiss the ${task.featureLabel} meter`}
+        >
+          <X className="size-3.5" />
+        </button>
+      ) : null}
+    </motion.div>
+  )
 }
 
 /**

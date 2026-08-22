@@ -1,4 +1,6 @@
 import { priceForModel } from './pricing'
+import { paceView, stepsRemainingMs } from './meter-pace'
+import { stepPercent, type MeterSteps } from './meter-tasks'
 
 /**
  * What a live AI meter is allowed to say, at each moment of a call.
@@ -57,6 +59,11 @@ export type MeterInput = {
   keyTier: 'free' | 'paid' | 'unknown'
   /** When to price against — rates are effective-dated and promos expire. */
   at: Date
+  /** Countable server-acked work, when the call site reports it. */
+  steps?: MeterSteps | null
+  /** This browser's median duration for the same feature+model, frozen when
+   *  the task was created so the denominator cannot shift mid-run. */
+  typical?: { p50: number; samples: number } | null
 }
 
 export type MeterView = {
@@ -84,6 +91,28 @@ export type MeterView = {
    * 'unknown' says so rather than defaulting to the reassuring one.
    */
   billing: 'free-tier' | 'billed-to-key-owner' | 'unknown'
+  /**
+   * The only progress this meter may claim, running-phase only, and exactly
+   * one kind at a time:
+   *
+   * - 'steps': server-acked units the call site counted. The one percent
+   *   allowed to mean work done — floored, held at 99 while anything is
+   *   outstanding (stepPercent). `remaining` extrapolates this task's own
+   *   rate and carries "at this pace" in the rendering.
+   * - 'pace': elapsed against this browser's own median for the same
+   *   feature+model. A claim about TIME, never completion — the word
+   *   "complete" must not appear beside it, and `overrun` flips the line to
+   *   "longer than typical" instead of counting past the end.
+   *
+   * Null otherwise: no real steps, no history yet, or not running. The
+   * component's correct move for null stays "render nothing" — an empty bar
+   * reads as 0%, which is a measurement nobody made. Tokens-in-flight and
+   * quota-remaining stay refused; nothing measures either.
+   */
+  progress:
+    | { kind: 'steps'; done: number; total: number; failed: number; percent: number; remainingMs: number | null }
+    | { kind: 'pace'; percent: number; remainingMs: number | null; overrun: boolean; typicalMs: number; samples: number }
+    | null
 }
 
 /**
@@ -129,6 +158,41 @@ export function meterView(input: MeterInput): MeterView {
         (tokens.output / 1_000_000) * price.outputPer1M
       : null
 
+  // Progress is a running-phase claim, like the estimate: a finished task
+  // shows results, not bars. Steps win over pace — a real count beats a
+  // typical every time both exist.
+  let progress: MeterView['progress'] = null
+  if (input.phase === 'running') {
+    // Steps whose work-list is EXHAUSTED stop being the claim: a full bar on
+    // a task still running (write-up waiting on the model after every segment
+    // acked) would read as whole-task completion, which nothing measured.
+    // The task falls back to pace or to nothing — the spinner is still true.
+    const stepsAlive =
+      input.steps &&
+      input.steps.total > 0 &&
+      input.steps.done + input.steps.failed < input.steps.total
+    if (stepsAlive && input.steps) {
+      progress = {
+        kind: 'steps',
+        done: input.steps.done,
+        total: input.steps.total,
+        failed: input.steps.failed,
+        percent: stepPercent(input.steps),
+        remainingMs: stepsRemainingMs(input.steps, input.elapsedMs),
+      }
+    } else if (input.typical) {
+      const pace = paceView(input.elapsedMs, input.typical.p50)
+      progress = {
+        kind: 'pace',
+        percent: pace.percent,
+        remainingMs: pace.remainingMs,
+        overrun: pace.overrun,
+        typicalMs: input.typical.p50,
+        samples: input.typical.samples,
+      }
+    }
+  }
+
   return {
     featureLabel: input.featureLabel,
     model: input.model,
@@ -150,6 +214,7 @@ export function meterView(input: MeterInput): MeterView {
         : input.keyTier === 'paid'
           ? 'billed-to-key-owner'
           : 'unknown',
+    progress,
   }
 }
 

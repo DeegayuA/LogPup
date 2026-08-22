@@ -112,6 +112,7 @@ import {
 import {
   meterOrigin,
   useAiMeter,
+  type MeterTaskHandle,
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
 import {
@@ -569,6 +570,10 @@ export function MeetingIntelPanel({
   // time) without touching the recorder again.
   const [finalizing, startFinalizing] = useTransition()
   const meter = useAiMeter()
+  /** The write-up's live meter task while one runs — the channel the segment
+   *  queue's counts flow through so the dock's card and the panel above can
+   *  never disagree about the same numbers. Null outside a finalize. */
+  const finalizeMeterRef = useRef<MeterTaskHandle | null>(null)
   const [finalizeError, setFinalizeError] = useState<string | null>(null)
   /**
    * A line the planner panel wants appended to the note composer below it —
@@ -2049,17 +2054,29 @@ export function MeetingIntelPanel({
 
     startFinalizing(async () => {
       try {
-        await Promise.allSettled(pendingUploads)
-        /* The metered call is the WRITE-UP, not the per-segment
-           transcription. Segments upload continuously while somebody is still
-           in the meeting and already report themselves honestly in the panel
-           above; a card per five-minute segment would put a dozen meters in
-           the corner for one recording and duplicate progress that is already
-           on screen. What this card reports is the calls inside its own
-           window, and its "Calls" line says how many that was. */
-        const res = await meter.track('meeting-intel', origin, () =>
-          finalizeMeetingRecording(meetingId, transcript),
-        )
+        /* ONE meter for the whole write-up, drain included — not a card per
+           five-minute segment, which would put a dozen meters in the corner
+           duplicating the panel above. While uploads drain, the card's steps
+           line mirrors the SAME queue the panel reports (the effect on
+           segmentProgress below feeds the handle), so the meter can say
+           "7 of 12 steps" with server-acked numbers; once every segment is
+           acked the steps line yields to the plain spinner for the one
+           opaque synthesis call (meterView's exhausted-steps rule). */
+        const res = await meter.track('meeting-intel', origin, async (meterTask) => {
+          finalizeMeterRef.current = meterTask
+          const initial = queueProgress(segmentsRef.current.map(toQueued))
+          meterTask.steps({
+            done: initial.done,
+            total: initial.total,
+            failed: initial.failed,
+          })
+          try {
+            await Promise.allSettled(pendingUploads)
+            return await finalizeMeetingRecording(meetingId, transcript)
+          } finally {
+            finalizeMeterRef.current = null
+          }
+        })
         if (!res.ok) {
           setFinalizeError(res.error)
           toast.error(res.error)
@@ -2707,6 +2724,17 @@ export function MeetingIntelPanel({
   // claiming more than the queue knows.
   const segmentProgress = queueProgress(segments.map(toQueued))
   const failedSegments = segments.filter((s) => s.status === 'failed')
+
+  // Mirror the queue into the write-up's meter card, whenever one is live.
+  // Same source as the chips above — the dock must never contradict the
+  // panel about how many segments are safe.
+  useEffect(() => {
+    finalizeMeterRef.current?.steps({
+      done: segmentProgress.done,
+      total: segmentProgress.total,
+      failed: segmentProgress.failed,
+    })
+  }, [segmentProgress.done, segmentProgress.total, segmentProgress.failed])
   const sendingSegment = segments.find((s) => s.status === 'uploading' || s.status === 'retrying')
   const waitingSegmentCount = segments.filter((s) => s.status === 'queued').length
 

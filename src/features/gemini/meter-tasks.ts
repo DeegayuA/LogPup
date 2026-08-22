@@ -66,6 +66,19 @@ export type MeterSettlement = {
   today: { calls: number; tokens: number }
 }
 
+/**
+ * Real, countable work inside one task — server-acknowledged steps, reported
+ * by the call site that owns the count (a meeting's transcribed segments).
+ * This is the FIRST of the two denominators the dock's no-progress-bar rule
+ * admits; pace (meter-pace.ts) is the second. In-flight tokens and quota
+ * remaining stay forbidden — nothing measures either.
+ */
+export type MeterSteps = {
+  done: number
+  total: number
+  failed: number
+}
+
 export type MeterTask = {
   id: string
   featureId: AiFeatureId
@@ -97,6 +110,16 @@ export type MeterTask = {
   unrecorded: boolean
   /** The failure the user needs to see, verbatim from the action. */
   error: string | null
+  /** Countable progress reported by the call site, or null for the normal
+   *  single-opaque-call task. See MeterSteps. */
+  steps: MeterSteps | null
+  /**
+   * This browser's median duration for this feature+model (meter-pace.ts),
+   * FROZEN when the task was created: a denominator that shifted mid-run —
+   * because a concurrent task of the same feature finished — would move the
+   * goalposts of a bar someone is watching.
+   */
+  typical: { p50: number; samples: number } | null
 }
 
 /**
@@ -151,6 +174,46 @@ export function dismissTask(tasks: readonly MeterTask[], id: string): MeterTask[
 }
 
 /**
+ * A call site reporting where its countable work stands.
+ *
+ * Identity-preserving when nothing changed: reporters fire from render-adjacent
+ * effects, and returning the same array for the same numbers is what keeps a
+ * re-report from being a re-render of every card in the dock.
+ */
+export function reportSteps(
+  tasks: readonly MeterTask[],
+  id: string,
+  steps: MeterSteps,
+): MeterTask[] {
+  const task = tasks.find((t) => t.id === id)
+  if (!task) return [...tasks]
+  const current = task.steps
+  if (
+    current &&
+    current.done === steps.done &&
+    current.total === steps.total &&
+    current.failed === steps.failed
+  ) {
+    return [...tasks]
+  }
+  return patchTask(tasks, id, { steps })
+}
+
+/**
+ * Floor, then hold at 99 while anything is outstanding — the same rule as
+ * queueProgress in src/features/meetings/segment-queue.ts, restated here
+ * because importing meetings into gemini would cross the feature boundary.
+ * The duplication is the cheaper debt; the RULE must not drift: a closed bar
+ * beside outstanding work is the number somebody walks away on.
+ */
+export function stepPercent(steps: MeterSteps): number {
+  if (steps.total <= 0) return 0
+  const raw = Math.floor((steps.done / steps.total) * 100)
+  const outstanding = steps.total - steps.done
+  return outstanding > 0 ? Math.min(raw, 99) : raw
+}
+
+/**
  * Drops finished, SUCCESSFUL meters once they have had their moment.
  *
  * `paused` is what a pointer resting on the dock does: someone reading a cost
@@ -193,6 +256,10 @@ export function closeSettleWindow(tasks: readonly MeterTask[], id: string): Mete
   )
 }
 
+/** Rows the stack renders before overflowing — a 40px row costs a third of a
+ *  card, so capacity rises without burying more of the page under the dock. */
+export const MAX_VISIBLE_STACK = 5
+
 export type DockView = {
   /** Newest first — the one that just started is the one being waited on. */
   visible: MeterTask[]
@@ -202,6 +269,19 @@ export type DockView = {
   failedCount: number
   /** Nothing to show; the dock renders no chrome at all. */
   empty: boolean
+  /**
+   * One task renders as today's full card; two or more collapse to rows with
+   * one expanded, because three stacked cards bury the page the dock is
+   * required not to. The rule lives here so a component under layout pressure
+   * has to change it on purpose.
+   */
+  density: 'cards' | 'stack'
+  /**
+   * Which task the stack opens with: the first visible one — failures sort
+   * ahead of everything and newest-first breaks ties, so this is "the thing
+   * most worth looking at". A person's own click overrides it in the dock.
+   */
+  defaultExpandedId: string | null
 }
 
 /**
@@ -216,13 +296,14 @@ export function dockView(
   tasks: readonly MeterTask[],
   opts: { maxVisible?: number } = {},
 ): DockView {
-  const maxVisible = opts.maxVisible ?? MAX_VISIBLE_TASKS
   const ordered = [...tasks].sort((a, b) => {
     const aFailed = a.phase === 'failed' ? 1 : 0
     const bFailed = b.phase === 'failed' ? 1 : 0
     if (aFailed !== bFailed) return bFailed - aFailed
     return b.startedAt - a.startedAt
   })
+  const density: DockView['density'] = ordered.length >= 2 ? 'stack' : 'cards'
+  const maxVisible = opts.maxVisible ?? (density === 'stack' ? MAX_VISIBLE_STACK : MAX_VISIBLE_TASKS)
   const visible = ordered.slice(0, maxVisible)
   return {
     visible,
@@ -230,6 +311,8 @@ export function dockView(
     runningCount: tasks.filter((t) => t.phase === 'running' || t.phase === 'settling').length,
     failedCount: tasks.filter((t) => t.phase === 'failed').length,
     empty: tasks.length === 0,
+    density,
+    defaultExpandedId: density === 'stack' ? (visible[0]?.id ?? null) : null,
   }
 }
 

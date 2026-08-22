@@ -5,6 +5,9 @@ import {
   dismissTask,
   dockView,
   closeSettleWindow,
+  reportSteps,
+  stepPercent,
+  MAX_VISIBLE_STACK,
   expireSettled,
   flightDelta,
   patchTask,
@@ -25,6 +28,8 @@ const task = (over: Partial<MeterTask> = {}): MeterTask => ({
   settlement: null,
   unrecorded: false,
   error: null,
+  steps: null,
+  typical: null,
   ...over,
 })
 
@@ -154,5 +159,56 @@ describe('the flight', () => {
   it('is null when the click landed on the dock itself', () => {
     // Below a few pixels the "flight" is a twitch, which reads as a glitch.
     expect(flightDelta({ x: 1052, y: 72 }, dock)).toBeNull()
+  })
+})
+
+describe('reportSteps', () => {
+  it('patches the named task and nobody else', () => {
+    const tasks = [task({ id: 'a' }), task({ id: 'b' })]
+    const next = reportSteps(tasks, 'a', { done: 3, total: 10, failed: 0 })
+    expect(next.find((t) => t.id === 'a')?.steps).toEqual({ done: 3, total: 10, failed: 0 })
+    expect(next.find((t) => t.id === 'b')?.steps).toBeNull()
+  })
+
+  it('keeps the same task objects when the numbers have not moved', () => {
+    // Reporters fire from render-adjacent effects; identical numbers must not
+    // become a re-render of every card in the dock.
+    const tasks = [task({ id: 'a', steps: { done: 3, total: 10, failed: 0 } })]
+    const next = reportSteps(tasks, 'a', { done: 3, total: 10, failed: 0 })
+    expect(next[0]).toBe(tasks[0])
+  })
+})
+
+describe('stepPercent never overstates what is acked', () => {
+  it('CANNOT reach 100 while anything is outstanding', () => {
+    // 199 of 200 is 99.5% — the ratio that catches a rewrite to Math.round,
+    // which would print 100 with a segment still on the wire.
+    expect(stepPercent({ done: 199, total: 200, failed: 0 })).toBe(99)
+    expect(stepPercent({ done: 200, total: 200, failed: 0 })).toBe(100)
+    expect(stepPercent({ done: 0, total: 0, failed: 0 })).toBe(0)
+  })
+})
+
+describe('dock density', () => {
+  it('one task is a card; two collapse to the stack', () => {
+    expect(dockView([task({ id: 'a' })]).density).toBe('cards')
+    const stacked = dockView([task({ id: 'a' }), task({ id: 'b', startedAt: 2_000 })])
+    expect(stacked.density).toBe('stack')
+    expect(stacked.visible.length).toBe(2)
+  })
+
+  it('opens the stack on the task most worth looking at — failures first', () => {
+    const view = dockView([
+      task({ id: 'newest', startedAt: 9_000 }),
+      task({ id: 'broken', startedAt: 1_000, phase: 'failed' }),
+    ])
+    expect(view.defaultExpandedId).toBe('broken')
+  })
+
+  it('raises the visible cap in stack mode without dropping anyone', () => {
+    const tasks = [...Array(7).keys()].map((i) => task({ id: `t${i}`, startedAt: i }))
+    const view = dockView(tasks)
+    expect(view.visible.length).toBe(MAX_VISIBLE_STACK)
+    expect(view.hiddenCount).toBe(7 - MAX_VISIBLE_STACK)
   })
 })

@@ -285,7 +285,7 @@ function resolveModelChain(opts?: { model?: string; models?: readonly string[] }
 /**
  * Records a blocked-call ledger row and returns the error unchanged, so every
  * throw site in callGeminiCore can wrap its GeminiError in one call:
- * `throw recordFailure(feature, userId, models, err)`. A blocked call is
+ * `throw recordFailure(feature, userId, models, err, calledAt)`. A blocked call is
  * exactly the kind of event Settings and the adoption panel should count.
  */
 function recordFailure(
@@ -293,8 +293,18 @@ function recordFailure(
   userId: string,
   models: readonly string[],
   error: GeminiError,
+  calledAt: number,
 ): GeminiError {
-  recordAiUsage({ userId, feature, model: models[0] ?? 'unknown', status: error.code })
+  recordAiUsage({
+    userId,
+    feature,
+    model: models[0] ?? 'unknown',
+    status: error.code,
+    // How long the caller waited to be told no — real waiting, worth
+    // recording. Median reads filter to ok rows, so a slow failure can
+    // never stretch "usually ~40s".
+    durationMs: Date.now() - calledAt,
+  })
   return error
 }
 
@@ -314,6 +324,10 @@ async function callGeminiCore<T>(
   extract: ResponseExtractor<T>,
   feature: AiCallSlug,
 ): Promise<{ value: T; model: string }> {
+  // One stopwatch for the WHOLE call as the caller experiences it — keys,
+  // fallback models, retries, upload included. This is the number "usually
+  // ~40s" is computed from, so it must be the caller's wait, nothing shorter.
+  const calledAt = Date.now()
   const rows = await db
     .select()
     .from(geminiKeys)
@@ -337,6 +351,7 @@ async function callGeminiCore<T>(
         'NO_KEYS',
         'No active Gemini API keys — add one in Profile (or ask a teammate to share one).',
       ),
+    calledAt,
     )
   }
 
@@ -408,6 +423,7 @@ async function callGeminiCore<T>(
           inputTokens: result.usage.inputTokens,
           outputTokens: result.usage.outputTokens,
           status: 'ok',
+          durationMs: Date.now() - calledAt,
         })
         return { value: result.value, model }
       }
@@ -415,7 +431,7 @@ async function callGeminiCore<T>(
       if (result.kind === 'bad') {
         // Non-retriable, not key- or model-specific (malformed request,
         // empty response) — no other key or model would fare better.
-        throw recordFailure(feature, userId, models, new GeminiError('BAD_RESPONSE', result.message))
+        throw recordFailure(feature, userId, models, new GeminiError('BAD_RESPONSE', result.message), calledAt)
       }
 
       if (result.kind === 'auth' || result.kind === 'quota') {
@@ -468,6 +484,7 @@ async function callGeminiCore<T>(
           ? "Your key and your team's shared keys were all rejected or have hit their usage limit — check Profile → Gemini API keys, or ask the teammate who shared a key to check theirs."
           : 'Your Gemini key was rejected or has hit its usage limit — check Profile → Gemini API keys.',
       ),
+    calledAt,
     )
   }
   if (sawTransientBusy) {
@@ -481,6 +498,7 @@ async function callGeminiCore<T>(
           ? "All Gemini models are busy right now, on your key and your team's shared keys — your recording is saved, try Analyze again in a minute."
           : 'All Gemini models are busy right now — your recording is saved, try Analyze again in a minute.',
       ),
+    calledAt,
     )
   }
   if (missingModelMessage) {
@@ -495,6 +513,7 @@ async function callGeminiCore<T>(
         'BAD_RESPONSE',
         `${missingModelMessage} — LogPup needs its Gemini model list updated.`,
       ),
+    calledAt,
     )
   }
   throw recordFailure(
@@ -507,6 +526,7 @@ async function callGeminiCore<T>(
         ? 'Could not reach Gemini with any saved or org-shared key — check Profile → Gemini API keys or try again shortly.'
         : 'Could not reach Gemini with any saved key — check Profile → Gemini API keys or try again shortly.',
     ),
+  calledAt,
   )
 }
 
