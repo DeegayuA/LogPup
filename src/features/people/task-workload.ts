@@ -1,4 +1,5 @@
 import { isoDayAdd, isoDayDiff } from '@/features/people/iso-day'
+import { isTerminal } from '@/features/sprints/board-view'
 
 /**
  * How a person's open tasks are ordered, grouped and counted.
@@ -101,7 +102,7 @@ export type TaskBucket = {
  * the caller remembering.
  */
 export function bucketOpenTasks(rows: PersonTaskRow[], todayIso: string): TaskBucket[] {
-  const open = rows.filter((row) => row.status !== 'done')
+  const open = rows.filter((row) => !isTerminal(row.status))
   return DUE_STATE_ORDER.map((state) => ({
     state,
     label: DUE_STATE_LABEL[state],
@@ -126,7 +127,7 @@ export type TaskLoad = {
  * five overdue tasks and nothing scheduled read as busy-but-fine.
  */
 export function summarizeOpenTasks(rows: PersonTaskRow[], todayIso: string): TaskLoad {
-  const open = rows.filter((row) => row.status !== 'done')
+  const open = rows.filter((row) => !isTerminal(row.status))
   const states = open.map((row) => ({ row, state: dueState(row.dueDate, todayIso) }))
   const overdue = states.filter((entry) => entry.state === 'overdue')
   const oldest = overdue.reduce<number | null>((worst, entry) => {

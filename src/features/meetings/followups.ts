@@ -9,6 +9,7 @@
 // can drift apart.
 
 import { resolveSpeakerUserId, type SpeakerMapping } from '@/features/meetings/notes'
+import { isTerminal } from '@/features/sprints/board-view'
 
 import { differenceInCalendarDays } from 'date-fns'
 
@@ -373,8 +374,8 @@ export function decideFollowupResolutionOnTaskStatusChange(
   fromStatus: TaskLikeStatus,
   toStatus: TaskLikeStatus,
 ): FollowupResolutionDecision {
-  const wasDone = fromStatus === 'done'
-  const isDone = toStatus === 'done'
+  const wasDone = isTerminal(fromStatus)
+  const isDone = isTerminal(toStatus)
   if (wasDone === isDone) return 'none'
   return isDone ? 'resolve' : 'reopen'
 }

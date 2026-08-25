@@ -5,6 +5,8 @@
 // meeting-prep surface both import these to decide what a check-in MEANS, not
 // how to fetch one.
 
+import { isTerminal, type TaskStatus } from '@/features/sprints/board-view'
+
 export type TaskForProgress = { assigneeId: string | null; status: string }
 
 export type ComputedProgress = {
@@ -26,17 +28,21 @@ export type ComputedProgress = {
  * to this exact person count — unassigned tasks (assigneeId null) belong to
  * nobody's number, not everybody's.
  *
- * Statuses other than 'done' all count as not-done rather than being
- * enumerated: an in-progress task is incomplete for this purpose, and a new
- * status added to the enum later should default to "not finished yet"
- * instead of silently inflating percentages.
+ * Finished means `isTerminal`, not the literal 'done'. NOTE FOR WS2: the
+ * numerator is routed through the seam but the denominator (`total`, below)
+ * is every task assigned to this person regardless of status. When the enum
+ * widens, a cancelled task will therefore count as finished in this
+ * percentage and in the standup gap check built on it. That is an open
+ * product question — is cancelled work "done" at standup, or does it leave
+ * the denominator entirely? — and it must be answered before 'cancelled'
+ * ships, not after.
  */
 export function computeTaskProgress(
   tasks: TaskForProgress[],
   userId: string,
 ): ComputedProgress {
   const mine = tasks.filter((task) => task.assigneeId !== null && task.assigneeId === userId)
-  const done = mine.filter((task) => task.status === 'done').length
+  const done = mine.filter((task) => isTerminal(task.status as TaskStatus)).length
   const total = mine.length
   return {
     done,

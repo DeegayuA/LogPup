@@ -23,6 +23,7 @@
  * is late.
  */
 
+import { isTerminal } from '@/features/sprints/board-view'
 import type { CheckinGap } from '@/features/sprints/checkins'
 
 /** The columns every rule below reads off a task. `PlanTaskRow` satisfies it
@@ -47,7 +48,7 @@ export function plural(count: number, singular: string): string {
  * against the app page, which is one click away.
  */
 export function isPastDue(task: AskTaskRow, todayIso: string): boolean {
-  if (task.status === 'done') return false
+  if (isTerminal(task.status)) return false
   if (!task.dueDate) return false
   return task.dueDate < todayIso
 }

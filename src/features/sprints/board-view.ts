@@ -203,13 +203,13 @@ export function activeFilterCount(filters: BoardFilters): number {
  */
 export function isOverdue(task: Pick<BoardTask, 'dueDate' | 'status'>, todayIso: string): boolean {
   if (!task.dueDate) return false
-  if (task.status === 'done') return false
+  if (isTerminal(task.status)) return false
   return task.dueDate < todayIso
 }
 
 export function isDueToday(task: Pick<BoardTask, 'dueDate' | 'status'>, todayIso: string): boolean {
   if (!task.dueDate) return false
-  if (task.status === 'done') return false
+  if (isTerminal(task.status)) return false
   return task.dueDate === todayIso
 }
 
@@ -405,7 +405,7 @@ export function boardSummary(tasks: BoardTask[], todayIso: string): BoardSummary
   let unassigned = 0
 
   for (const task of tasks) {
-    if (task.status === 'done') done += 1
+    if (isTerminal(task.status)) done += 1
     else if (task.status === 'in_progress') inProgress += 1
     else todo += 1
     if (isOverdue(task, todayIso)) overdue += 1

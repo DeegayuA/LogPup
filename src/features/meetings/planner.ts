@@ -35,7 +35,7 @@ import {
   stalledCount,
 } from '@/features/meetings/ask-derivation'
 import { boardHref } from '@/features/apps/tabs'
-import { UNASSIGNED_GROUP } from '@/features/sprints/board-view'
+import { isTerminal, UNASSIGNED_GROUP } from '@/features/sprints/board-view'
 import { checkinGap, computeTaskProgress, type CheckinGap } from '@/features/sprints/checkins'
 
 export type PlannerRole = 'pm' | 'lead'
@@ -400,7 +400,7 @@ export function assembleMeetingPlan(input: AssembleMeetingPlanInput): MeetingPla
     for (const sprint of runningSprints.filter((s) => s.appId === project.appId)) {
       const sprintTasks = tasksBySprint.get(sprint.sprintId) ?? []
       const unassigned = sprintTasks.filter(
-        (task) => task.assigneeId === null && task.status !== 'done',
+        (task) => task.assigneeId === null && !isTerminal(task.status),
       ).length
       if (unassigned > 0) {
         addAsk(pmId, {

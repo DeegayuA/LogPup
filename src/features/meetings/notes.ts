@@ -10,7 +10,7 @@ import {
   computeTaskProgress,
   type CheckinGap,
 } from '@/features/sprints/checkins'
-import { isOverdue, type TaskStatus } from '@/features/sprints/board-view'
+import { isOverdue, isTerminal, type TaskStatus } from '@/features/sprints/board-view'
 
 export type NoteSource = 'typed' | 'voice' | 'ai'
 
@@ -604,7 +604,7 @@ export function assembleMeetingPrep(input: {
         const sprint = currentSprintByApp.get(app.appId) ?? null
         const sprintTasks = sprint ? (tasksBySprint.get(sprint.sprintId) ?? []) : []
         const mine = sprintTasks.filter((task) => task.assigneeId === attendee.id)
-        const open = mine.filter((task) => task.status !== 'done')
+        const open = mine.filter((task) => !isTerminal(task.status))
         return {
           ...app,
           sprintId: sprint?.sprintId ?? null,
