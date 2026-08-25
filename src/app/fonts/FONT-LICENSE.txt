@@ -55,3 +55,12 @@ This contract is subject to laws of the Republic of India. Place of performance 
 - 
 Last Updated on 22 March 2021
 Copyright 2021 Indian Type Foundry. All rights reserved. 
+---—---------------------------------—------------------------------
+Noto Sans Sinhala (NotoSansSinhala-Variable.woff2)
+---—---------------------------------—------------------------------
+Copyright 2022 The Noto Project Authors (https://github.com/notofonts/sinhala)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: https://openfontlicense.org
+
+Sourced from Google Fonts (sinhala subset, variable weight 100–900).

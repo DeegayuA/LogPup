@@ -31,6 +31,25 @@ const cabinet = localFont({
   fallback: ["system-ui", "sans-serif"],
 });
 
+// Sinhala glyphs — Noto Sans Sinhala (variable), exposed as --font-sinhala and
+// listed FIRST in the sans/heading stacks (globals.css). Safe to put first
+// because the face is restricted to the Sinhala block below: Latin never
+// matches it and keeps Satoshi/Cabinet, while Sinhala stops depending on
+// whichever face the exporting machine happens to ship (Sinhala Sangam MN on
+// macOS, Nirmala UI on Windows, Noto on Android) — which made the A4 export
+// re-wrap and re-paginate per machine and mixed two bold treatments in one
+// heading. ZWJ/ZWNJ ride along so conjuncts shape inside one font run.
+const notoSinhala = localFont({
+  src: "./fonts/NotoSansSinhala-Variable.woff2",
+  weight: "100 900",
+  variable: "--font-sinhala",
+  display: "swap",
+  // No synthetic size-adjusted fallback face: it would claim every character
+  // and shadow the Latin faces listed after it.
+  adjustFontFallback: false,
+  declarations: [{ prop: "unicode-range", value: "U+0D80-0DFF, U+200C-200D" }],
+});
+
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
@@ -55,7 +74,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${satoshi.variable} ${cabinet.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${satoshi.variable} ${cabinet.variable} ${notoSinhala.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
         {/* Sets the theme class on <html> BEFORE first paint, so the page
