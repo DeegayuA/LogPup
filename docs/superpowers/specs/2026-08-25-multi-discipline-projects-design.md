@@ -283,10 +283,26 @@ replacements: `lib/agenda-topics.ts:64-375` (19 buckets, 7 explicitly
 engineering), `lib/job-roles.ts:17-44` (already hand-stretched with a
 hardware/EMC group at `:47`), `worklog/entry-language.ts:44-78`.
 
-**Caution recorded for the register AI paths:** a sibling session found that
-`live-token.ts` swallowed a 400 whenever any key in the pool also returned
-403, hiding a regression completely. The same defer-the-blame pattern applies
-to any new AI call added by these registers.
+**Caution recorded for the register AI paths.** A sibling session probed the
+Gemini `auth_tokens` endpoint and found the repo's status classification
+wrong. Any AI call added by these registers must use the corrected mapping,
+**not** the pattern already in the tree:
+
+| status | actual meaning |
+|---|---|
+| `403` | **no credential reached Google** ("unregistered callers") — our bug, not the user's key |
+| `400` + `API_KEY_INVALID` | the key really is bad (**not** 401/403) |
+| `400` + `FAILED_PRECONDITION` | billing or region |
+| `429` | quota |
+
+The existing code maps `401 || 403` to "your key was rejected", which reports
+a dropped-header bug as the user's key being bad. Two further traps from the
+same investigation: an error branch that shadows `lastBadMessage` silently
+discards a 400 whenever any key in the pool also 403s — that is how one
+regression stayed invisible — and blaming a key at model level for a 403
+poisons `readiness.ts` across every AI feature. Defer key-level blame, the way
+`callGeminiCore` already does. Also corrected: Live **is** free-tier on both
+models; an earlier note in this repo's history saying otherwise is wrong.
 
 ## Workstreams
 
@@ -520,14 +536,15 @@ meetings, tasks, costs. The registers refine what is already usable.
 - `--> statement-breakpoint` between statements, never inside a comment.
 - Verify with `information_schema`, never the runner's exit code —
   `db:migrate` has reported success while applying nothing.
-- Slot allocation: 0064 is **verbally** claimed by a sibling session
-  (`task_assignees`), but no such file exists on disk, in any worktree, or in
-  git history, and the journal high-water is still 63. Re-confirm the claim
-  via SendMessage immediately before writing; if 0064 is still unwritten at
-  that moment, **take 0064** — skipping it opens a second permanent journal
-  gap of exactly the kind cited above as making `drizzle-kit generate`
-  unusable. The journal is re-read immediately before each write, across every
-  worktree.
+- Slot allocation, confirmed 2026-08-25 with the sibling session **while it
+  was mid-write**: **0064** (`task_assignees`) and **0066**
+  (`meetings.next_meeting_at`) are theirs; **0065** is the first slot for this
+  work. Subsequent migrations take **0067 onward** — 0066 is spoken for, so
+  this work is *not* contiguous and must not assume `last + 1`.
+  The journal is re-read immediately before **each** write, across every
+  worktree, and a writer that finds its slot taken **aborts rather than
+  renumbers** — renumbering mid-write is how the existing `idx 11` gap was
+  created.
 - **`npm run db:migrate` is not run by this session** — it is classifier-blocked
   and must be run by the user.
 
@@ -575,5 +592,17 @@ Schema declaration and applied migration land together or not at all.
 - Git author is identical for every session, so authorship cannot attribute
   commits. Claim files via SendMessage before editing; verify peer claims
   against `git status` rather than trusting them.
-- Known concurrent claim: `src/features/sprints/task-actions.ts`
-  (multi-assignee) — WS0 lands before it.
+- Known concurrent claims, as of 2026-08-25:
+  - `src/features/sprints/task-actions.ts` (multi-assignee) — **WS0 lands
+    before it**; the sibling session is holding for that commit.
+  - `src/db/schema.ts` — the sibling is appending a `taskAssignees` table
+    beside `tasks`. Purely additive and disjoint from this work's `tasks`
+    columns and `task_status` widening, but **both sessions append to the same
+    file**: expect a textual conflict there and resolve by keeping both
+    blocks.
+  - **The app shell** — the sibling is adding sidebar collapse in
+    `src/components/` / `app/(app)/layout.tsx` plus a `commands.ts`. WS1's
+    vocabulary sweep edits `src/components/shell/nav-items.ts`, which feeds
+    the sidebar, the mobile sheet, the shortcuts overlay, `G A` and a ⌘K row
+    (8 importers). **These overlap.** WS1 must re-confirm shell ownership
+    before touching `nav-items.ts` or the ⌘K registry.
