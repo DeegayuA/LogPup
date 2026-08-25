@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { transitionTaskStatus } from './task-status'
@@ -119,10 +121,11 @@ describe('the rule is expressed against the terminal SET, not the done literal',
   })
 
   it('still stamps ONLY on entering done, never on entering some other terminal state', () => {
-    // Pinned deliberately: when WS2 adds 'cancelled', todo -> cancelled must
-    // NOT stamp a completion time. Routing the stamp through isTerminal would
-    // break this, which is why the stamp keeps the literal and the clear does
-    // not. This test is the reason that asymmetry survives review.
+    // This proves today's output is unchanged — nothing more. Within WS0's
+    // type domain 'done' is the only terminal status, so `next === 'done'`
+    // and `isTerminal(next)` are truth-table identical and no runtime
+    // assertion here can tell them apart. The source-guard describe block
+    // below is what actually pins the stamp condition to the literal.
     expect(transitionTaskStatus('todo', 'done', NOW)).toEqual({
       status: 'done',
       completedAt: NOW,
@@ -133,5 +136,52 @@ describe('the rule is expressed against the terminal SET, not the done literal',
     // current is null on INSERT. isTerminal takes TaskStatus, not TaskStatus|null.
     expect(transitionTaskStatus(null, 'todo', NOW)).toEqual({ status: 'todo' })
     expect(transitionTaskStatus(null, 'done', NOW)).toEqual({ status: 'done', completedAt: NOW })
+  })
+})
+
+describe('the stamp/clear asymmetry is pinned in the SOURCE, not just the output', () => {
+  // Within WS0's type domain, `next === 'done'` and `isTerminal(next)` are
+  // truth-table identical (TERMINAL holds only 'done'), so no runtime
+  // assertion above can tell a correctly-literal stamp condition apart from
+  // one accidentally routed through isTerminal — both produce the same
+  // observable patch today and only diverge once WS2 adds 'cancelled'. This
+  // is a static guard instead: it reads task-status.ts's own text and checks
+  // which condition each branch actually uses, the same idiom as
+  // src/db/live.test.ts and src/features/search/registry/registry.test.ts.
+  //
+  // Anchored on the two `if (` lines specifically — not the whole file —
+  // because the surrounding comments mention both 'isTerminal' and the done
+  // literal and would defeat a naive whole-file substring match.
+  const source = readFileSync(path.resolve(__dirname, 'task-status.ts'), 'utf8')
+  const ifLines = source.split('\n').filter((line) => line.trim().startsWith('if ('))
+
+  const stampLine = ifLines.find((line) => line.includes('completedAt: now'))
+  const clearLine = ifLines.find((line) => line.includes('completedAt: null'))
+
+  it('found exactly one stamp line and one clear line to check', () => {
+    // A guard against the guard going stale silently: if a future edit
+    // reshapes these into multi-line ifs or renames the return shape, this
+    // fails loudly instead of the two checks below silently checking nothing
+    // (`.find` over an empty match returns undefined, not a failure).
+    expect(stampLine, 'expected one `if (...) return { ..., completedAt: now }` line').toBeDefined()
+    expect(clearLine, 'expected one `if (...) return { ..., completedAt: null }` line').toBeDefined()
+  })
+
+  it('the stamp condition compares against the done literal, not isTerminal', () => {
+    expect(
+      stampLine!.includes("current !== 'done'"),
+      'stamp condition must read current !== \'done\' — entering a terminal state is only a completion when the state entered is \'done\' specifically',
+    ).toBe(true)
+    expect(
+      stampLine!.includes('isTerminal'),
+      'routing the stamp through isTerminal would make todo -> cancelled stamp a completion time on work that was never completed',
+    ).toBe(false)
+  })
+
+  it('the clear condition routes through isTerminal', () => {
+    expect(
+      clearLine!.includes('isTerminal'),
+      'clear condition must route through isTerminal — leaving ANY terminal state is reopening, not just leaving done',
+    ).toBe(true)
   })
 })

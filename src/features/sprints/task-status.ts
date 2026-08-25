@@ -69,7 +69,7 @@ export type TaskStatusPatch = {
  *
  * Never throws: unlike a committed deadline, there is no status pair a person
  * can ask for that is illegal. Every one of the nine transitions has an
- * answer, and three of them are "leave the column alone".
+ * answer, and five of them are "leave the column alone".
  */
 export function transitionTaskStatus(
   current: TaskStatus | null,
@@ -92,8 +92,11 @@ export function transitionTaskStatus(
   const wasTerminal = current !== null && isTerminal(current)
   const isCompletion = next === 'done'
 
-  // Entering 'done' — including straight from an insert.
-  if (isCompletion && !wasTerminal) return { status: next, completedAt: now }
+  // Entering 'done' — including straight from an insert, and including from
+  // another terminal state. Deliberately `current !== 'done'` and NOT
+  // `!wasTerminal`: a cancelled task that is later genuinely finished must
+  // still get its stamp, and asking `wasTerminal` here would swallow it.
+  if (isCompletion && current !== 'done') return { status: next, completedAt: now }
 
   // Leaving a terminal state. Reopened work has no completion time; keeping
   // the old one is how a task that is visibly in progress reports as
