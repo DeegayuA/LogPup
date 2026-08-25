@@ -27,6 +27,7 @@
  * caller already knows the instant it is writing, and the tests need to name
  * it.
  */
+import { isTerminal } from '@/features/sprints/board-view'
 import type { TaskStatus } from '@/features/sprints/board-view'
 
 // Re-exported so the module that owns the completed_at rule also offers the
@@ -75,21 +76,34 @@ export function transitionTaskStatus(
   next: TaskStatus,
   now: Date,
 ): TaskStatusPatch {
-  const wasDone = current === 'done'
-  const isDone = next === 'done'
+  // ASYMMETRIC ON PURPOSE, and the asymmetry is the whole decision.
+  //
+  // Leaving a terminal state is REOPENING, whatever the terminal state was —
+  // so the clear condition asks isTerminal. Entering one is only a COMPLETION
+  // when the state entered is 'done' specifically — so the stamp condition
+  // keeps the literal.
+  //
+  // Route the stamp through isTerminal too and `todo -> cancelled` writes a
+  // completion time onto work that was never completed, which every
+  // throughput, cycle-time and streak reader downstream would then believe.
+  // `done -> cancelled` falls through both branches and KEEPS its original
+  // stamp: the task really was finished on that date, and this column is the
+  // only place that fact is recorded.
+  const wasTerminal = current !== null && isTerminal(current)
+  const isCompletion = next === 'done'
 
   // Entering 'done' — including straight from an insert.
-  if (isDone && !wasDone) return { status: next, completedAt: now }
+  if (isCompletion && !wasTerminal) return { status: next, completedAt: now }
 
-  // Leaving 'done'. Reopened work has no completion time; keeping the old one
-  // is how a task that is visibly in progress reports as finished to every
-  // reader that trusts the timestamp over the status.
-  if (!isDone && wasDone) return { status: next, completedAt: null }
+  // Leaving a terminal state. Reopened work has no completion time; keeping
+  // the old one is how a task that is visibly in progress reports as
+  // finished to every reader that trusts the timestamp over the status.
+  if (!isTerminal(next) && wasTerminal) return { status: next, completedAt: null }
 
-  // done -> done, and every transition between the two unfinished states.
-  // The column is not mentioned at all, so the UPDATE does not carry it: a
-  // dialog that re-sends 'done' on every save (which the task dialog does)
-  // must not keep pushing the completion time forward to the last time
+  // done -> done, terminal -> terminal, and every transition between open
+  // states. The column is not mentioned at all, so the UPDATE does not carry
+  // it: a dialog that re-sends 'done' on every save (which the task dialog
+  // does) must not keep pushing the completion time forward to the last time
   // somebody edited the title.
   return { status: next }
 }

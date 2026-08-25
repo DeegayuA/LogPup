@@ -107,3 +107,31 @@ describe('the patch is the only thing the caller spreads', () => {
     }
   })
 })
+
+describe('the rule is expressed against the terminal SET, not the done literal', () => {
+  it('clears via isTerminal, so a future terminal status also counts as reopening', () => {
+    // Same observable answer as today. What changed is what the code reads:
+    // "was this terminal" instead of "was this the string done".
+    expect(transitionTaskStatus('done', 'in_progress', NOW)).toEqual({
+      status: 'in_progress',
+      completedAt: null,
+    })
+  })
+
+  it('still stamps ONLY on entering done, never on entering some other terminal state', () => {
+    // Pinned deliberately: when WS2 adds 'cancelled', todo -> cancelled must
+    // NOT stamp a completion time. Routing the stamp through isTerminal would
+    // break this, which is why the stamp keeps the literal and the clear does
+    // not. This test is the reason that asymmetry survives review.
+    expect(transitionTaskStatus('todo', 'done', NOW)).toEqual({
+      status: 'done',
+      completedAt: NOW,
+    })
+  })
+
+  it('never dereferences a null current', () => {
+    // current is null on INSERT. isTerminal takes TaskStatus, not TaskStatus|null.
+    expect(transitionTaskStatus(null, 'todo', NOW)).toEqual({ status: 'todo' })
+    expect(transitionTaskStatus(null, 'done', NOW)).toEqual({ status: 'done', completedAt: NOW })
+  })
+})
