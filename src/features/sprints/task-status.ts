@@ -29,6 +29,12 @@
  */
 import type { TaskStatus } from '@/features/sprints/board-view'
 
+// Re-exported so the module that owns the completed_at rule also offers the
+// terminal test, and callers need not know the helpers are declared next door
+// in board-view.ts (which owns TASK_STATUSES). See the comment there for why
+// they are not declared in this file.
+export { isTerminal, OPEN_STATUSES, TERMINAL_STATUSES } from '@/features/sprints/board-view'
+
 /**
  * The status half of a task UPDATE.
  *

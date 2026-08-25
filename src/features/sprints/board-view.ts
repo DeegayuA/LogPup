@@ -30,6 +30,48 @@
 export const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 export type TaskStatus = (typeof TASK_STATUSES)[number]
 
+/**
+ * WHICH STATUSES MEAN "THIS TASK IS OVER".
+ *
+ * One set, derived one way: `TERMINAL` is the declaration, `OPEN_STATUSES` is
+ * computed from it, and `isTerminal` reads it. Adding a status to the enum
+ * means editing this Set and nothing else — which is the entire reason this
+ * seam exists. Before it, "is this task finished" was the literal `'done'`
+ * written out at 35 separate call sites, four of which were `sql` templates.
+ *
+ * It lives HERE, in the module that already owns `TASK_STATUSES`, rather than
+ * in task-status.ts where it is used most: board-view.ts imports nothing at
+ * all today, and task-status.ts type-imports `TaskStatus` from it. Defining
+ * these there and importing them back would make a leaf module part of an
+ * import cycle. task-status.ts re-exports them, so callers may import from
+ * either and no call site cares which.
+ *
+ * NOT a `readonly string[]` include-check: a Set makes the membership test
+ * O(1) at the board-render sites that call it per task, and the type keeps a
+ * typo from compiling.
+ */
+const TERMINAL: ReadonlySet<TaskStatus> = new Set<TaskStatus>(['done'])
+
+/** The statuses a task can hold and still be somebody's outstanding work. */
+export const OPEN_STATUSES: readonly TaskStatus[] = TASK_STATUSES.filter(
+  (status) => !TERMINAL.has(status),
+)
+
+/** The statuses that mean the task is over, however it ended. */
+export const TERMINAL_STATUSES: readonly TaskStatus[] = TASK_STATUSES.filter((status) =>
+  TERMINAL.has(status),
+)
+
+/**
+ * Whether this status means the task is finished — by any route.
+ *
+ * Today that is exactly `'done'`. Callers must not assume it stays that way;
+ * that assumption is the thing being removed.
+ */
+export function isTerminal(status: TaskStatus): boolean {
+  return TERMINAL.has(status)
+}
+
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: 'To do',
   in_progress: 'In progress',

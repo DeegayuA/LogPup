@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   EMPTY_FILTERS,
+  OPEN_STATUSES,
+  TASK_STATUSES,
+  TERMINAL_STATUSES,
   UNASSIGNED_GROUP,
   activeFilterCount,
   boardSummary,
@@ -10,6 +13,7 @@ import {
   groupTasks,
   isDueToday,
   isOverdue,
+  isTerminal,
   matchesFilters,
   parseBoardView,
   patchForGroup,
@@ -336,5 +340,39 @@ describe('dropIndexIn', () => {
   it('positions against hidden cards, not just the visible ones', () => {
     expect(dropIndexIn(column, 'a', 'd')).toBe(3)
     expect(dropIndexIn([{ id: 'a' }, { id: 'd' }], 'a', 'd')).toBe(1)
+  })
+})
+
+describe('terminal status seam', () => {
+  it('treats done as terminal and nothing else, today', () => {
+    expect(isTerminal('done')).toBe(true)
+    expect(isTerminal('todo')).toBe(false)
+    expect(isTerminal('in_progress')).toBe(false)
+  })
+
+  it('derives OPEN_STATUSES as exactly the non-terminal statuses', () => {
+    // Not a hardcoded ['todo','in_progress']: the point of the seam is that
+    // this list follows TERMINAL_STATUSES automatically when the enum widens.
+    expect([...OPEN_STATUSES]).toEqual(['todo', 'in_progress'])
+    expect(OPEN_STATUSES.every((s) => !isTerminal(s))).toBe(true)
+  })
+
+  it('partitions TASK_STATUSES with no overlap and no gap', () => {
+    // The invariant the whole workstream rests on. If a future status is added
+    // to TASK_STATUSES and to neither set, this fails and names the omission.
+    const open = new Set<string>(OPEN_STATUSES)
+    const terminal = new Set<string>(TERMINAL_STATUSES)
+    for (const status of TASK_STATUSES) {
+      expect(open.has(status) !== terminal.has(status)).toBe(true)
+    }
+    expect(open.size + terminal.size).toBe(TASK_STATUSES.length)
+  })
+
+  it('is behaviourally identical to the literal it replaces', () => {
+    // Pins WS0's contract: this commit changes no behaviour. Delete this test
+    // in WS2, when it stops being true on purpose.
+    for (const status of TASK_STATUSES) {
+      expect(isTerminal(status)).toBe(status === 'done')
+    }
   })
 })
