@@ -325,6 +325,15 @@ only** through them. No behaviour change, no migration, no enum change.
 `TaskStatusPatch` and `transitionTaskStatus`) — the two helpers are ADDED to
 it, not a new module.
 
+**But they are DEFINED in `board-view.ts` and re-exported from
+`task-status.ts`.** `board-view.ts` owns `TASK_STATUSES` and today imports
+nothing at all (its first statement is line 30), while `task-status.ts`
+type-imports `TaskStatus` *from* it. Defining the helpers in `task-status.ts`
+and importing them back into `board-view.ts` — which three ROUTE sites require
+— turns a leaf module into a cycle participant. Defining them at the owner and
+re-exporting keeps every other call site's import path identical and means the
+cycle never exists.
+
 `'done'` appears **124 times across 43 non-test files**, but the literal is
 shared by four unrelated enums that must **not** be routed through a task
 helper — none of them gains `cancelled` in WS2:
@@ -348,18 +357,47 @@ empties the capture and fails loudly), `gemini/ai-meter.test.ts` (19),
 Mis-sweeping any of them **fails the suite; it does not fail silently.** WS0 is
 therefore a lower-risk commit than its file count suggests.
 
-**The real hole is raw SQL, and the seam cannot close it.** `isTerminal()` is
-a TypeScript function and cannot be called inside a `sql` template, so these
-two sites are unreachable by the seam and must be handled by interpolating a
-shared terminal-status list instead:
+**Correction — raw SQL is reachable after all.** An earlier revision of this
+spec claimed `isTerminal()` could not reach `sql` templates and that three
+sites were therefore unfixable by the seam. That is **wrong**, proven by
+compiling against the real types: a drizzle *condition object* interpolates
+into a `sql` template, and this repo already does exactly that at
+`apps/queries.ts:78` (`count(*) filter (where ${condition})`). So
+`contribution-queries.ts:71-72` and `people/queries.ts:849` are ordinary
+ROUTE sites using `inArray`/`notInArray`.
 
-  - `apps/contribution-queries.ts:71-72` — both `= 'done'` and **`<> 'done'`**.
-    The `<>` is the dangerous one: it becomes wrong the moment `cancelled`
-    exists, silently counting cancelled tasks as open. Has a test file.
-  - `people/queries.ts:849` — `count(*) filter (where status = 'done')`, and
-    **`people/queries.ts` has no test file at all.** A characterization test
-    covering this query is a prerequisite of WS2, not optional.
-  - `schema.ts:486` — the partial index, handled by the rebuild in WS2.
+Leaving them out would have been the worse bug: `people/queries.ts:844` (open)
+and `:849` (done) are a **complementary pair**, and routing one without the
+other makes them silently disagree the moment the enum widens.
+
+**Two sites genuinely are unreachable:**
+
+  - `schema.ts:486` — partial-index DDL predicate. Changing it desyncs
+    `schema.ts` from the applied migration; handled by the WS2 index rebuild.
+  - `worklog/entry-queries.ts:128` —
+    `sql\`case ${liveTasks.status} when 'in_progress' then 0 when 'todo' then 1 else 2 end\``.
+    **Contains no `'done'` literal at all**, so no grep for it finds this
+    site, yet its `else 2` encodes "everything not todo/in_progress is
+    terminal" and will sort a future *non*-terminal status into the done
+    bucket.
+
+**`people/queries.ts` still has no test file** — 849+ lines of query surface
+with a `task_status` filter in it and zero coverage. A characterization test
+is a prerequisite of WS2.
+
+**The literal sweep is not sufficient on its own.** A whole class of sites
+expresses terminal semantics with **no `'done'` literal**, by enumerating the
+open states or assuming the enum has exactly three values — invisible to any
+grep for `done`, and each miscounts a widened enum:
+`entry-queries.ts:128` · `plan-read.ts:42,:115` · `intel/context-pack.ts:249-250` ·
+`app-health.ts:378` · `apps/components/app-card.tsx:100` ·
+`apps/components/app-header.tsx:82` · `dashboard/components/dashboard-zones.tsx:963` ·
+`dashboard/sprint-progress.ts:8-9` · `worklog/progress-queries.ts:427` ·
+`apps/components/task-split-bar.tsx:55,:74,:104` · `sprints/queries.ts:275`
+(`board[row.status]`) with its flatteners `apps/[slug]/page.tsx:357`,
+`sprints/components/board.tsx:139`, `sprints/components/sprint-checkins.tsx:42` ·
+`sprints/search-providers.ts:95`.
+**WS2 therefore requires a second sweep keyed on `in_progress`, not on `done`.**
 
 The discipline already exists in exactly one place and is the model:
 `checkins.ts:29-33` counts not-`'done'` as unfinished *specifically* so a new
