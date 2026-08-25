@@ -37,7 +37,9 @@ export type TaskStatus = (typeof TASK_STATUSES)[number]
  * computed from it, and `isTerminal` reads it. Adding a status to the enum
  * means editing this Set and nothing else — which is the entire reason this
  * seam exists. Before it, "is this task finished" was the literal `'done'`
- * written out at 35 separate call sites, four of which were `sql` templates.
+ * spelled out at every call site that asked — in plain comparisons, in
+ * drizzle conditions, and inside `sql` templates, where a widened enum would
+ * have gone wrong silently.
  *
  * It lives HERE, in the module that already owns `TASK_STATUSES`, rather than
  * in task-status.ts where it is used most: board-view.ts imports nothing at
