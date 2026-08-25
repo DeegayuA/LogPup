@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, type ReactNode } from 'react'
+import { useRef, useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import {
@@ -31,6 +31,9 @@ import {
 import type { ActionRow } from '@/features/meetings/components/meeting-notes-model'
 import { SpeakButton } from '@/features/speech/components/speak-button'
 import { updateMeetingSummary } from '@/features/meetings/followup-move-actions'
+import { SelectionCorrector } from '@/features/meetings/components/correct-selection'
+import { ReplaceReviewDialog } from '@/features/meetings/components/replace-review-dialog'
+import type { MeetingReplaceMatches } from '@/features/meetings/text-replace-actions'
 import {
   EmptyFilterState,
   Panel,
@@ -216,6 +219,19 @@ export function MeetingAiNotes({
    * the English view would write over both and destroy the Sinhala half.
    */
   const router = useRouter()
+
+  // The write-up is the half of this page a mis-heard name does the most damage
+  // in: it is what gets circulated, and its Sinhala half is generated from the
+  // same transcript as its English one, so a name the model heard wrong is
+  // wrong twice over in the one document people quote. Highlighting it here
+  // reaches the same correction flow as the note timeline's.
+  const summaryRef = useRef<HTMLDivElement>(null)
+  const [summaryReplace, setSummaryReplace] = useState<{
+    term: string
+    replacement: string
+    matches: MeetingReplaceMatches
+  } | null>(null)
+
   const [editingSummary, setEditingSummary] = useState(false)
   const [summaryDraft, setSummaryDraft] = useState('')
   const [summarySaving, startSummarySave] = useTransition()
@@ -336,7 +352,7 @@ export function MeetingAiNotes({
           {!editingSummary && hasSinhala ? (
             <SummaryLanguageControl value={summaryLang} onChange={setSummaryLang} hasSinhala={hasSinhala} />
           ) : null}
-          <div className={cn('flex flex-col gap-3', editingSummary && 'hidden')}>
+          <div ref={summaryRef} className={cn('flex flex-col gap-3', editingSummary && 'hidden')}>
             {summaryBlocks.map((block) => (
               // The one piece of prose on the page allowed to be bigger than
               // body text. `bilingualLead` buys the extra leading Sinhala
@@ -348,6 +364,34 @@ export function MeetingAiNotes({
               </div>
             ))}
           </div>
+
+          {/* Off while the raw editor is open: the textarea has the whole
+              write-up in it, corrections there are ordinary typing, and a
+              floating button over somebody's cursor is in the way. */}
+          <SelectionCorrector
+            meetingId={meetingId}
+            containerRef={summaryRef}
+            enabled={canManage && !editingSummary}
+            onFound={setSummaryReplace}
+          />
+
+          {summaryReplace ? (
+            <ReplaceReviewDialog
+              meetingId={meetingId}
+              term={summaryReplace.term}
+              replacement={summaryReplace.replacement}
+              matches={summaryReplace.matches}
+              origin="selection"
+              open
+              onOpenChange={(next) => {
+                if (!next) setSummaryReplace(null)
+              }}
+              // The write-up arrives as a prop from a server component, so the
+              // corrected text only appears on a refetch — same path the inline
+              // write-up editor takes after a save.
+              onApplied={() => router.refresh()}
+            />
+          ) : null}
         </Panel>
       ) : null}
 

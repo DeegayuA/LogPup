@@ -37,7 +37,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { MentionText, MentionTextarea, type MentionUser } from '@/components/mention-textarea'
 import { MarkdownLite } from '@/components/markdown-lite'
 import { cn } from '@/lib/utils'
@@ -56,6 +55,9 @@ import {
   type MeetingReplaceMatches,
 } from '@/features/meetings/text-replace-actions'
 import { ReplaceReviewDialog } from '@/features/meetings/components/replace-review-dialog'
+import { SelectionCorrector } from '@/features/meetings/components/correct-selection'
+import { MeetingPeoplePicker } from '@/features/meetings/components/meeting-people-picker'
+import type { PickablePerson } from '@/features/meetings/components/meeting-people-picker-model'
 import type { DeadlineHintSource } from '@/features/meetings/components/note-timeline-model'
 import {
   ActionItemSuggestionsList,
@@ -163,6 +165,11 @@ export function NoteTimeline({
     setDraft((current) => (current.trim() ? `${current.trimEnd()}\n${line}` : line))
   }, [draftSeed])
 
+  // The correctable region: every note, transcript turn and action item on
+  // screen. Handed to SelectionCorrector so a selection reaching outside the
+  // write-up — into the panel chrome, or another panel entirely — is ignored.
+  const timelineRef = useRef<HTMLDivElement>(null)
+
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   // What the note said before the edit, kept so a saved change can be compared
@@ -172,6 +179,14 @@ export function NoteTimeline({
     term: string
     replacement: string
     matches: MeetingReplaceMatches
+    /**
+     * Which gesture started this. It decides one word of copy that matters: an
+     * edit has ALREADY fixed the note in front of you, so what is left is the
+     * OTHER places — a highlighted word has been fixed nowhere yet, and calling
+     * its own occurrence "other" would leave somebody hunting for a mention
+     * that is sitting right there on screen.
+     */
+    origin: 'edit' | 'selection'
   } | null>(null)
   const [savingEditId, setSavingEditId] = useState<string | null>(null)
   const [editPending, startEditPending] = useTransition()
@@ -288,7 +303,12 @@ export function NoteTimeline({
       // The note just saved now holds the NEW spelling, so it cannot match its
       // own old one — every occurrence here is somewhere else.
       if (!res.ok || res.data.occurrences.length === 0) return
-      setReplaceOffer({ term: change.from, replacement: change.to, matches: res.data })
+      setReplaceOffer({
+        term: change.from,
+        replacement: change.to,
+        matches: res.data,
+        origin: 'edit',
+      })
     } catch {
       // Nothing to say: the edit itself succeeded.
     }
@@ -408,9 +428,27 @@ export function NoteTimeline({
   // then every other approved user.
   const attendeeIdSet = new Set(attendees.map((a) => a.id))
   const otherPeople = (data.approvedUsers ?? []).filter((person) => !attendeeIdSet.has(person.id))
+  /**
+   * The wider pool the picker offers below the attendees — everyone else
+   * approved, plus the "not a listed attendee" sentinel as its LAST entry, so
+   * the order the old Select had (attendees, then everyone else, then the
+   * sentinel) survives the swap.
+   *
+   * The sentinel rides here rather than in the picker's own "unassigned" slot
+   * on purpose. It is a DECISION about a voice — it writes a speaker mapping
+   * with no user and opens the "Their name" field beside this control —
+   * whereas the picker's null means "nobody has decided yet", which is what
+   * the old placeholder said. Folding the two together would make every
+   * un-mapped speaker claim a decision nobody made and pop that name field
+   * open underneath all of them.
+   */
+  const speakerPeople: PickablePerson[] = [
+    ...otherPeople,
+    { id: NOT_ATTENDEE, name: 'Not a listed attendee', hint: 'A voice with no account here' },
+  ]
 
   return (
-    <div className="flex flex-col gap-3">
+    <div ref={timelineRef} className="flex flex-col gap-3">
       {speakerLabels.length > 0 ? (
         <section className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5">
           {/* h5: this sits inside the panel's "Record" h4, and used to be an
@@ -419,51 +457,37 @@ export function NoteTimeline({
           <div className="flex flex-wrap gap-2">
             {speakerLabels.map((label) => {
               const mapping = data.speakers.find((s) => s.label === label)
-              const value = mapping ? (mapping.userId ?? NOT_ATTENDEE) : undefined
+              const value = mapping ? (mapping.userId ?? NOT_ATTENDEE) : null
               const busy = speakerBusyLabel === label && speakerPending
               return (
                 <div key={label} className="flex items-center gap-1.5">
                   <span className="text-xs text-muted-foreground">{label}</span>
                   {canManage ? (
-                    <Select
+                    /* The one shared people picker: searchable, attendees under
+                       their own heading, everyone else still reachable by
+                       typing. A workspace of any size made the old flat Select
+                       a scroll hunt, and "Speaker 2" is regularly somebody who
+                       was never on the invite. */
+                    <MeetingPeoplePicker
                       value={value}
-                      onValueChange={(v) => v && handleAssignSpeaker(label, v)}
+                      onValueChange={(id) => {
+                        // The picker's null slot is the old "Assign…"
+                        // placeholder — the state an un-mapped speaker is
+                        // already in, and there is no action that un-maps one.
+                        // Same guard the old `v && …` handler had.
+                        if (id) handleAssignSpeaker(label, id)
+                      }}
+                      // The mapped user's name, so a voice assigned to someone
+                      // the pool has since lost (a deactivated account) still
+                      // reads as a NAME rather than as "Assign…".
+                      currentName={mapping?.userName ?? null}
+                      attendees={attendees}
+                      people={speakerPeople}
                       disabled={busy}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="w-40"
-                        aria-label={`Who is ${label}?`}
-                      >
-                        <SelectValue placeholder="Assign…">
-                          {(v: string) =>
-                            v === NOT_ATTENDEE
-                              ? 'Not an attendee'
-                              : (attendees.find((a) => a.id === v)?.name ??
-                                otherPeople.find((p) => p.id === v)?.name ??
-                                'Assign…')
-                          }
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {attendees.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}
-                          </SelectItem>
-                        ))}
-                        {otherPeople.length > 0 ? (
-                          /* People who spoke without being on the invite list —
-                             the reason this picker exists at all. Kept after the
-                             attendees: the likely answers stay on top. */
-                          otherPeople.map((p) => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.name}
-                            </SelectItem>
-                          ))
-                        ) : null}
-                        <SelectItem value={NOT_ATTENDEE}>Not a listed attendee</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      label={`Who is ${label}?`}
+                      unassignedLabel="Assign…"
+                      className="h-7 w-40 border-input px-2"
+                    />
                   ) : null}
                   {/* "Not a listed attendee" alone only records that the voice
                       is nobody on the invite — it discards WHO it was, so the
@@ -713,12 +737,24 @@ export function NoteTimeline({
       {/* "You corrected this spelling — it appears 11 more times." Mounted only
           while there is an offer on the table, so the search result it is
           reviewing is always the one that produced it. */}
+      {/* The other way in: highlight a word — in a transcript turn nobody may
+          edit, in the AI write-up, anywhere — and say what it should have been.
+          Gated on canManage because the server refuses the write regardless,
+          and an offer that ends in "you can't do that" is worse than none. */}
+      <SelectionCorrector
+        meetingId={meetingId}
+        containerRef={timelineRef}
+        enabled={canManage}
+        onFound={(found) => setReplaceOffer({ ...found, origin: 'selection' })}
+      />
+
       {replaceOffer ? (
         <ReplaceReviewDialog
           meetingId={meetingId}
           term={replaceOffer.term}
           replacement={replaceOffer.replacement}
           matches={replaceOffer.matches}
+          origin={replaceOffer.origin}
           open
           onOpenChange={(next) => {
             if (!next) setReplaceOffer(null)

@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { MeetingPeoplePicker } from '@/features/meetings/components/meeting-people-picker'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import type { ActionResult } from '@/lib/action-result'
@@ -2904,11 +2905,6 @@ export function MeetingIntelPanel({
     (total, group) => total + group.items.filter((item) => item.status === 'open').length,
     0,
   )
-  // Attendees first, then anyone else approved — the model may have named a
-  // client contact or someone who wasn't even in this meeting's attendee
-  // list, so the picker can't stop at `people`.
-  const attendeeIds = new Set(people.map((option) => option.id))
-  const attributionPeople = [...people, ...approvedUsers.filter((option) => !attendeeIds.has(option.id))]
   // The live pane exists whenever SOME engine is on the ladder's rungs —
   // no longer tied to Web Speech support, since Gemini Live works in any
   // browser with WebSocket + Web Audio.
@@ -3722,7 +3718,13 @@ export function MeetingIntelPanel({
                         <UnattributedRow
                           key={item.id}
                           item={item}
-                          people={attributionPeople}
+                          // Two tiers, not one flattened list: the picker
+                          // heads the attendees separately and dedupes the
+                          // overlap. Everyone approved stays reachable — the
+                          // model routinely names a client contact or somebody
+                          // who was never in the room.
+                          attendees={people}
+                          people={approvedUsers}
                           canWrite={canRecord}
                           busy={busyAttributeId === item.id && attributePending}
                           onAttribute={(userId) => handleAttribute(item.id, userId)}
@@ -4010,24 +4012,36 @@ function LinkedTaskChip({ task }: { task: LinkedTaskView }) {
 /**
  * One unattributed item: the model heard a person and a commitment but
  * couldn't resolve the name to a user. A tiny, self-contained picker + one
- * button — the same "who it's for" Select the add-follow-up form uses, just
- * scoped to one row instead of a whole form, since attributing is the only
- * thing this control does.
+ * button, scoped to one row instead of a whole form, since attributing is the
+ * only thing this control does.
+ *
+ * The picker is the shared MeetingPeoplePicker, so this row searches by name
+ * and heads the attendees separately instead of being a flat scroll through
+ * the whole workspace — this panel is routinely a dozen rows deep, and every
+ * one of them was its own hunt.
  */
 function UnattributedRow({
   item,
+  attendees,
   people,
   canWrite,
   busy,
   onAttribute,
 }: {
   item: UnattributedFollowupView
+  /** People on this meeting. Offered first, under their own heading. */
+  attendees: FollowupPersonOption[]
+  /**
+   * Everyone else approved. NEVER blocked: the name the model heard is often
+   * somebody who was not in the room ("with Shani's assistance"), and a picker
+   * that refuses them leaves the row unattributable to the one person it names.
+   */
   people: FollowupPersonOption[]
   canWrite: boolean
   busy: boolean
   onAttribute: (userId: string) => void
 }) {
-  const [personId, setPersonId] = useState('')
+  const [personId, setPersonId] = useState<string | null>(null)
 
   return (
     <li className="flex flex-col gap-2 rounded-lg border border-warning/35 bg-warning/5 px-2.5 py-2 sm:flex-row sm:items-center sm:justify-between">
@@ -4042,26 +4056,22 @@ function UnattributedRow({
       </span>
       {canWrite ? (
         <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <Select value={personId} onValueChange={(value) => setPersonId((value as string | null) ?? '')}>
-            <SelectTrigger className="h-9 w-44" aria-label={`Who “${item.text}” is for`}>
-              <SelectValue>
-                {(value: string) => people.find((option) => option.id === value)?.name ?? 'Pick a person'}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {people.map((option) => (
-                <SelectItem key={option.id} value={option.id}>
-                  {option.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <MeetingPeoplePicker
+            value={personId}
+            onValueChange={setPersonId}
+            attendees={attendees}
+            people={people}
+            label={`Who “${item.text}” is for`}
+            size="default"
+            unassignedLabel="Pick a person"
+            className="h-9 w-44 border-input px-2.5"
+          />
           <Button
             variant="outline"
             size="sm"
             type="button"
             disabled={busy || !personId}
-            onClick={() => onAttribute(personId)}
+            onClick={() => personId && onAttribute(personId)}
           >
             {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Check aria-hidden />}
             Attribute

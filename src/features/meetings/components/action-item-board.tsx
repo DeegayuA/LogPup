@@ -22,7 +22,6 @@ import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import { toast } from 'sonner'
 import { CheckIcon, Loader2Icon, PencilIcon, SparklesIcon, UndoIcon, XIcon } from 'lucide-react'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { DateTimeWheelField, roundUpToStep } from '@/components/ui/datetime-wheel'
 import {
@@ -57,8 +56,23 @@ import {
 } from '@/features/meetings/ai-actions'
 import { updateTask } from '@/features/sprints/task-actions'
 import type { AttendeeRef } from '@/features/meetings/followups'
+import { MeetingPeoplePicker } from './meeting-people-picker'
+import {
+  UNASSIGNED_VALUE,
+  fromPickerValue,
+  toPickerValue,
+} from './meeting-people-picker-model'
 
-export const UNASSIGNED = '__unassigned__'
+/**
+ * "Nobody / unassigned", re-exported rather than redeclared.
+ *
+ * This control and MeetingPeoplePicker read and write this literal to the
+ * same column. Two declarations of the same string is a drift waiting to
+ * happen, and the symptom would be silent: one control persisting a value the
+ * other treats as a real user id. One definition removes the failure instead
+ * of testing for it.
+ */
+export const UNASSIGNED = UNASSIGNED_VALUE
 
 export const PRIORITY_OPTIONS = [
   { value: '0', label: 'None' },
@@ -133,14 +147,6 @@ function applyOptimisticActionItemPatch(
 /** One person's initial, for the assignee trigger's avatar — no avatarUrl is
  *  threaded down this far (attendees/mentionUsers are both {id, name}), so
  *  this is deliberately initials-only rather than a broken image request. */
-function PersonInitial({ name }: { name: string | null }) {
-  return (
-    <Avatar size="sm" className="size-5">
-      <AvatarFallback className="text-2xs">{name ? name.slice(0, 1).toUpperCase() : '?'}</AvatarFallback>
-    </Avatar>
-  )
-}
-
 /**
  * Click the assigned person to reassign — a Select over the meeting's
  * attendees first, then any other approved active user (see `people` at the
@@ -148,9 +154,10 @@ function PersonInitial({ name }: { name: string | null }) {
  * assignment is never a special case. Shows the name (and an initials
  * avatar), never a raw id.
  */
-function ActionItemAssignee({
+export function ActionItemAssignee({
   currentId,
   currentName,
+  attendees,
   people,
   disabled,
   onChange,
@@ -158,36 +165,28 @@ function ActionItemAssignee({
 }: {
   currentId: string | null
   currentName: string | null
+  /** The meeting's own people, offered first. */
+  attendees: AttendeeRef[]
+  /** Everyone else, reachable by typing. Never blocked — see the picker. */
   people: MentionUser[]
   disabled: boolean
   onChange: (id: string | null) => void
   label: string
 }) {
   return (
-    <Select
-      value={currentId ?? UNASSIGNED}
-      onValueChange={(v) => v && onChange(v === UNASSIGNED ? null : v)}
+    <MeetingPeoplePicker
+      value={currentId}
+      onValueChange={onChange}
+      // The name this row already holds, so a person the pool has lost (a
+      // deactivated user, a pool that has not loaded) still renders as a
+      // NAME. The old control fell back to "Unassigned" here, which is a
+      // false statement about a task that is in fact assigned.
+      currentName={currentName}
+      attendees={attendees}
+      people={people}
       disabled={disabled}
-    >
-      <SelectTrigger size="sm" className="h-auto gap-1.5 border-transparent bg-transparent px-1 py-0.5 hover:border-border hover:bg-muted/50" aria-label={label}>
-        <SelectValue>
-          {() => (
-            <span className="inline-flex items-center gap-1.5">
-              <PersonInitial name={currentName} />
-              <span className="text-xs font-medium">{currentName ?? 'Unassigned'}</span>
-            </span>
-          )}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={UNASSIGNED}>Nobody / unassigned</SelectItem>
-        {people.map((person) => (
-          <SelectItem key={person.id} value={person.id}>
-            {person.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      label={label}
+    />
   )
 }
 
@@ -209,12 +208,16 @@ function ActionItemAssignee({
  *  - a RESOLVED HINT — same idea, but the phrase WAS a real date in a format
  *    normalizeDueDate's strict-ISO rule rejected ("August 20, 2026") — shown
  *    pre-filled so confirming it is one click, not a re-type.
+ *  - an UNRESOLVED DUE DATE OF ITS OWN (`unresolvedDue`) — the words this row
+ *    itself carries as its due date, which never resolved to a day. See that
+ *    prop.
  *  - nothing at all — a plain, clearly-labeled "No due date".
  */
-function ActionItemDueDate({
+export function ActionItemDueDate({
   id,
   currentIso,
   hint,
+  unresolvedDue,
   disabled,
   onSave,
   label,
@@ -225,6 +228,20 @@ function ActionItemDueDate({
   id: string
   currentIso: string | null
   hint: string | null
+  /**
+   * The row's OWN due date, written by the model as a phrase we refused to
+   * resolve ("next Friday") — the "Not tracked" case, where the free-text
+   * `deadlines[].due` IS the row's due date rather than a hint found
+   * elsewhere in the write-up.
+   *
+   * Rendered as those words with NO tone, deliberately unlike `hint`: a hint
+   * is flagged because it needs attention, whereas this is simply what was
+   * said, and colouring it would be claiming an urgency we declined to
+   * compute (see parseSpokenDueDate — guessing which Friday is exactly the
+   * wrong-overdue-flag failure that rule exists to avoid). Still opens the
+   * editor, so the words are a starting point rather than a dead end.
+   */
+  unresolvedDue?: string | null
   disabled: boolean
   onSave: (iso: string | null) => void
   label: string
@@ -285,6 +302,20 @@ function ActionItemDueDate({
     )
   }
 
+  if (unresolvedDue) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => openEditor(null)}
+        className={triggerClass}
+        aria-label={`${label} — the write-up said "${unresolvedDue}", which is not a day we could work out. Click to set a real date.`}
+      >
+        <MetaChip>Due {unresolvedDue}</MetaChip>
+      </button>
+    )
+  }
+
   if (hint) {
     const classified = classifyDueDateInput(hint)
     if (classified.kind === 'resolved') {
@@ -335,7 +366,7 @@ function ActionItemDueDate({
  * click-to-reveal control (rather than an always-visible input) so a row of
  * chips doesn't turn into a permanent text box.
  */
-function ActionItemTitle({
+export function ActionItemTitle({
   value,
   disabled,
   onSave,
@@ -586,6 +617,7 @@ function AutoAssignedActionCard({
   suggestion,
   compact,
   canManage,
+  attendees,
   assigneePool,
   deadlines,
   actions,
@@ -593,6 +625,7 @@ function AutoAssignedActionCard({
   suggestion: TaskSuggestionView
   compact: boolean
   canManage: boolean
+  attendees: AttendeeRef[]
   assigneePool: MentionUser[]
   deadlines: DeadlineHintSource[]
   actions: ActionItemActions
@@ -649,6 +682,7 @@ function AutoAssignedActionCard({
             <span className="inline-flex items-center gap-1">
               to
               <ActionItemAssignee
+                attendees={attendees}
                 currentId={suggestion.suggestedUserId}
                 currentName={suggestion.suggestedUserName}
                 people={assigneePool}
@@ -704,6 +738,7 @@ function SuggestedActionCard({
   suggestion,
   compact,
   canManage,
+  attendees,
   assigneePool,
   appIds,
   deadlines,
@@ -712,6 +747,7 @@ function SuggestedActionCard({
   suggestion: TaskSuggestionView
   compact: boolean
   canManage: boolean
+  attendees: AttendeeRef[]
   assigneePool: MentionUser[]
   /** The meeting's projects — a set, none primary; `[]` is the app-less meeting. */
   appIds: string[]
@@ -751,6 +787,7 @@ function SuggestedActionCard({
           ) : null}
           {canManage ? (
             <ActionItemAssignee
+              attendees={attendees}
               currentId={suggestion.suggestedUserId}
               currentName={suggestion.suggestedUserName}
               people={assigneePool}
@@ -901,6 +938,7 @@ export function ActionItemSuggestionsList({
                 suggestion={suggestion}
                 compact={compact}
                 canManage={canManage}
+                attendees={attendees}
                 assigneePool={assigneePool}
                 deadlines={deadlines}
                 actions={actions}
@@ -927,6 +965,7 @@ export function ActionItemSuggestionsList({
                 suggestion={suggestion}
                 compact={compact}
                 canManage={canManage}
+                attendees={attendees}
                 assigneePool={assigneePool}
                 appIds={appIds}
                 deadlines={deadlines}
@@ -977,30 +1016,29 @@ export function ActionItemSuggestionsList({
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="suggestion-assignee">Assignee</Label>
-                  <Select
-                    value={actions.suggestionForm.assigneeId}
-                    onValueChange={(v) =>
-                      actions.setSuggestionForm((f) => (f ? { ...f, assigneeId: v ?? UNASSIGNED } : f))
+                  {/*
+                    The SAME picker and the SAME pool as the inline row.
+                    This list used to be built from `attendees` alone while the
+                    row offered the whole workspace, so one task showed two
+                    different sets of candidates depending on which control you
+                    opened — and an assignee who was not an attendee rendered
+                    here as "Unassigned", quietly losing the person's name off a
+                    task that was assigned to them.
+                  */}
+                  <MeetingPeoplePicker
+                    value={fromPickerValue(actions.suggestionForm.assigneeId)}
+                    onValueChange={(id) =>
+                      actions.setSuggestionForm((f) =>
+                        f ? { ...f, assigneeId: toPickerValue(id) } : f,
+                      )
                     }
-                  >
-                    <SelectTrigger id="suggestion-assignee" className="w-full">
-                      <SelectValue>
-                        {(value: string) =>
-                          value === UNASSIGNED
-                            ? 'Unassigned'
-                            : (attendees.find((a) => a.id === value)?.name ?? 'Unassigned')
-                        }
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
-                      {attendees.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    attendees={attendees}
+                    people={assigneePool}
+                    label="Assignee"
+                    size="default"
+                    className="w-full border-input bg-transparent px-3 py-2"
+                    unassignedLabel="Unassigned"
+                  />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="suggestion-priority">Priority</Label>

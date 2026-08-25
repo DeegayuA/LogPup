@@ -40,11 +40,25 @@ const KIND_WORD: Record<Occurrence['kind'], string> = {
   transcript: 'Transcript',
 }
 
+/**
+ * How this review was reached, which changes exactly one word of the copy.
+ *
+ * 'edit' — somebody corrected a note and saved it. That note already reads
+ * correctly, so the list in front of them is the OTHER places.
+ *
+ * 'selection' — somebody highlighted a word and said what it should be. Nothing
+ * has changed yet; the word they highlighted is itself in this list, and
+ * calling these the "other" places would send them hunting for a mention that
+ * is on screen already.
+ */
+export type ReplaceOrigin = 'edit' | 'selection'
+
 export function ReplaceReviewDialog({
   meetingId,
   term,
   replacement,
   matches,
+  origin = 'edit',
   open,
   onOpenChange,
   onApplied,
@@ -56,6 +70,7 @@ export function ReplaceReviewDialog({
   replacement: string
   /** Result of findMeetingReplacements for `term` on this meeting. */
   matches: MeetingReplaceMatches
+  origin?: ReplaceOrigin
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Fired after a successful apply so the caller can refetch its notes. */
@@ -136,12 +151,14 @@ export function ReplaceReviewDialog({
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            Found <span className="font-mono tabular-nums">{matches.total}</span> other{' '}
+            Found <span className="font-mono tabular-nums">{matches.total}</span>{' '}
+            {origin === 'edit' ? 'other ' : ''}
             {matches.total === 1 ? 'place' : 'places'}
           </DialogTitle>
           <DialogDescription>
             Replacing “{term}” with “{replacement}”. Tick the ones that mean the same thing —
             nothing else in the meeting is touched.
+            {origin === 'selection' ? ' The one you highlighted is in this list too.' : ''}
           </DialogDescription>
         </DialogHeader>
 
@@ -161,7 +178,9 @@ export function ReplaceReviewDialog({
           </div>
         ) : total === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Nothing else in this meeting uses that spelling.
+            {origin === 'edit'
+              ? 'Nothing else in this meeting uses that spelling.'
+              : 'That spelling is no longer anywhere in this meeting.'}
           </p>
         ) : (
           <>

@@ -9,7 +9,7 @@
 // ai-actions.ts so this module — and its test — never pull a 'use server'
 // file, a database client, or an auth session into scope.
 
-import { differenceInCalendarDays, isValid, parse } from 'date-fns'
+import { differenceInCalendarDays, format, isValid, parse } from 'date-fns'
 import { followupTaskSimilarity, FOLLOWUP_TASK_MATCH_THRESHOLD } from '@/features/meetings/followups'
 
 /* --- due dates -------------------------------------------------------- */
@@ -273,6 +273,158 @@ export function reconcileActionItems(
     ;(hasMatch ? tracked : untracked).push(row)
   }
   return { tracked, untracked }
+}
+
+/* --- editing a "Not tracked" row: promote once, then edit --------------- */
+
+/** What a queued write reports back — the shape every server action here
+ *  already returns, narrowed to what the sequencer has to branch on. */
+export type ActionOutcome = { ok: true } | { ok: false; error: string }
+
+/** trackActionItem's result, narrowed the same way. */
+export type PromoteOutcome = { ok: true; id: string } | { ok: false; error: string }
+
+export type ActionItemPromoter = {
+  /**
+   * The `meeting_task_suggestions` id this row was promoted into, or null
+   * while it is still JSONB-only. Read after a `run` to find out whether the
+   * row crossed that line.
+   */
+  readonly id: string | null
+  /**
+   * Queue one write for this row, promoting it into a real suggestion first
+   * if it has no id yet.
+   */
+  run: (work: (suggestionId: string) => Promise<ActionOutcome>) => Promise<ActionOutcome>
+}
+
+/**
+ * THE decision behind "a Not tracked row is fully editable inline".
+ *
+ * An untracked row is JSONB, not a database row: it has no id, so there is
+ * nothing for updateTaskSuggestion to write to until trackActionItem has
+ * created one. Two ways out, and this module implements the first:
+ *
+ *  (a) the first edit silently promotes the row, then applies the edit to the
+ *      suggestion that came back — what this does;
+ *  (b) edits sit in component state and are flushed when "Add task" is
+ *      pressed.
+ *
+ * (b) loses everything a person typed the moment they reload, navigate away,
+ * or lose the tab — and loses it SILENTLY, back to the AI's original wording,
+ * because the JSONB the row is rendered from never changes. (a)'s cost is a
+ * suggestion row created for an item somebody then abandons, which is not
+ * data loss: it lands as a plain 'open' suggestion, visible with a Dismiss
+ * button, exactly like every other suggestion this meeting produced. Losing
+ * a person's work is worse than making a row they can dismiss in one click.
+ *
+ * Which leaves the sequencing, which is the part that can actually corrupt
+ * something, so it lives here where it can be tested:
+ *
+ *  - `promote` runs AT MOST ONCE. Two edits landing together (a title
+ *    committed on blur, then the click that caused the blur) share the single
+ *    in-flight promotion instead of each starting one — two suggestion rows
+ *    for one write-up line is the double-track this exists to prevent.
+ *  - Writes run in the order they were submitted. The blur-then-click pair
+ *    above is exactly a "retitle, then accept": accepting first would create
+ *    the task under the OLD title and then edit a suggestion that is no
+ *    longer the source of truth for it.
+ *  - A FAILED promotion is not remembered. The row stays promotable, so a
+ *    dropped request is one more click to retry rather than a permanently
+ *    dead row.
+ *  - A rejected write does not wedge the queue: later edits on the same row
+ *    still run.
+ */
+export function createActionItemPromoter(promote: () => Promise<PromoteOutcome>): ActionItemPromoter {
+  let id: string | null = null
+  let promoting: Promise<PromoteOutcome> | null = null
+  // Never rejects — see the `tail = ...` assignment below.
+  let tail: Promise<unknown> = Promise.resolve()
+
+  function ensureId(): Promise<PromoteOutcome> {
+    if (id !== null) return Promise.resolve({ ok: true, id })
+    if (promoting !== null) return promoting
+    const started = promote().then(
+      (result) => {
+        promoting = null
+        if (result.ok) id = result.id
+        return result
+      },
+      (error: unknown) => {
+        promoting = null
+        throw error
+      },
+    )
+    promoting = started
+    return started
+  }
+
+  function run(work: (suggestionId: string) => Promise<ActionOutcome>): Promise<ActionOutcome> {
+    const next: Promise<ActionOutcome> = tail.then(async () => {
+      const promoted = await ensureId()
+      if (!promoted.ok) return { ok: false, error: promoted.error }
+      return work(promoted.id)
+    })
+    // The chain the NEXT call waits on swallows both settlements: a thrown
+    // work function must not leave every later edit on this row unrunnable.
+    tail = next.then(
+      () => undefined,
+      () => undefined,
+    )
+    return next
+  }
+
+  return {
+    get id() {
+      return id
+    },
+    run,
+  }
+}
+
+/* --- what a "Not tracked" row's due-date control shows ------------------ */
+
+export type UntrackedDueView = {
+  /** A real day, as `yyyy-MM-dd`, for the editable due control to seed from. */
+  currentIso: string | null
+  /**
+   * The model's own WORDS, for a due date that never resolved to a day
+   * ("next Friday"). Shown verbatim and with no urgency tone — we refused to
+   * guess which Friday, so claiming the row is overdue or due soon would be
+   * inventing a fact. Never both this and `currentIso`.
+   */
+  unresolvedDue: string | null
+  /** Urgency, which an unresolved phrase never has. */
+  status: DueStatus
+}
+
+/**
+ * Reconciles the model's free-text due date with whatever the person has since
+ * picked in the row's own date control.
+ *
+ * `editedIso` distinguishes three states that must never collapse:
+ * `undefined` is untouched (fall back to what the write-up said), `null` is
+ * explicitly cleared, and a string is a real chosen day. Once a person has
+ * chosen, urgency is recomputed from THEIR date — an unparsed phrase stops
+ * being the row's due date the moment a real one replaces it.
+ */
+export function resolveUntrackedDue(
+  row: { due: string | null; dueDate: Date | null; status: DueStatus },
+  editedIso: string | null | undefined,
+  now: Date,
+): UntrackedDueView {
+  if (editedIso !== undefined) {
+    return editedIso
+      ? { currentIso: editedIso, unresolvedDue: null, status: dueStatus(editedIso, now) }
+      : { currentIso: null, unresolvedDue: null, status: 'unscheduled' }
+  }
+  // The words, kept as words. This is the branch the "no urgency colour"
+  // promise lives in: status stays 'unparsed', which no tone maps to.
+  if (row.status === 'unparsed') return { currentIso: null, unresolvedDue: row.due, status: 'unparsed' }
+  if (row.dueDate) {
+    return { currentIso: format(row.dueDate, 'yyyy-MM-dd'), unresolvedDue: null, status: row.status }
+  }
+  return { currentIso: null, unresolvedDue: null, status: 'unscheduled' }
 }
 
 /**

@@ -177,6 +177,63 @@ export function diffSingleWord(before: string, after: string): { from: string; t
   return { from, to }
 }
 
+/**
+ * The most words a selection may span and still be treated as a correction.
+ *
+ * Past four, somebody is highlighting a sentence, and what they want is to
+ * rewrite that sentence — not to find it repeated verbatim everywhere else.
+ * Offering a bulk replace there is noise at best; at worst it is a very large
+ * edit proposed off a very casual gesture.
+ */
+export const MAX_SELECTED_WORDS = 4
+
+/**
+ * Longest term either end of this feature will carry. Lives here rather than
+ * in the server action so the client can refuse an over-long selection without
+ * a round trip, and so the two limits cannot drift apart.
+ */
+export const MAX_TERM_CHARS = 120
+
+/**
+ * Turns whatever a person happened to highlight into a search term — or
+ * refuses.
+ *
+ * The gesture is loose: a double-click carries a trailing space, a drag stops
+ * mid-punctuation, a swipe on a phone overshoots onto the next line. What comes
+ * out has to be exactly the words, because it is about to be searched for
+ * literally and then written back over other people's text.
+ *
+ * Snapped to token boundaries rather than trimmed against a punctuation list:
+ * `tokenize` already knows where a word starts and ends in every script this
+ * app stores, Sinhala included, and a hand-written punctuation set would not —
+ * it would cut ශානිකගේ at its first vowel sign. The span between the first and
+ * last token is sliced out of the ORIGINAL string, so whatever sits between the
+ * words of a phrase ("test.ultravision.lk") survives exactly as it must to
+ * match.
+ *
+ * Returns null — silently — rather than a best guess. This runs on every
+ * selection change in the write-up, so "no offer" is the common, correct
+ * outcome and must never become an error somebody has to dismiss.
+ */
+export function normalizeSelectedTerm(raw: string): string | null {
+  // A selection crossing a line is a passage: two notes, a heading and the line
+  // under it, a whole bullet. A misheard word is within one line by definition,
+  // and the alternative is offering to bulk-replace a paragraph.
+  if (/[\r\n]/.test(raw)) return null
+
+  const tokens = tokenize(raw)
+  if (tokens.length === 0 || tokens.length > MAX_SELECTED_WORDS) return null
+
+  const first = tokens[0]
+  const last = tokens[tokens.length - 1]
+  const term = raw.slice(first.start, last.start + last.word.length)
+
+  // Same floor the find enforces: a one-character term matches half a
+  // transcript, and the review list would be unreadable rather than wrong.
+  if (term.length < 2 || term.length > MAX_TERM_CHARS) return null
+  return term
+}
+
 export type FindOptions = {
   /** Off = character-identical matches only (case still ignored). */
   fuzzy?: boolean

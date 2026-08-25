@@ -10,6 +10,7 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { canManageMeeting } from '@/features/meetings/ai-actions'
 import {
+  MAX_TERM_CHARS,
   applyReplacements,
   findOccurrences,
   type Occurrence,
@@ -24,7 +25,6 @@ const MAX_OCCURRENCES = 200
 // The same ceiling on the way back in — a selection list longer than what the
 // find could ever have produced did not come from the review dialog.
 const MAX_SELECTIONS = MAX_OCCURRENCES
-const MAX_TERM_CHARS = 120
 
 /**
  * Where a match lives, encoded into `SearchTarget.id` so the apply pass knows

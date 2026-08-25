@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
   CONTEXT_CHARS,
+  MAX_SELECTED_WORDS,
+  MAX_TERM_CHARS,
   applyReplacements,
   diffSingleWord,
   editDistance,
   findOccurrences,
   fuzzyBudget,
   groupOccurrences,
+  normalizeSelectedTerm,
   tokenize,
   type Occurrence,
   type SearchTarget,
@@ -540,5 +543,109 @@ describe('diffSingleWord', () => {
 
   it('declines empty text', () => {
     expect(diffSingleWord('', 'hello')).toBeNull()
+  })
+})
+
+describe('normalizeSelectedTerm', () => {
+  it('takes a plain word as-is', () => {
+    expect(normalizeSelectedTerm('Ultravision')).toBe('Ultravision')
+  })
+
+  it('drops the trailing space a double-click adds', () => {
+    expect(normalizeSelectedTerm('Ultravision ')).toBe('Ultravision')
+  })
+
+  it('drops punctuation a drag stopped inside', () => {
+    expect(normalizeSelectedTerm('“Ultravision,”')).toBe('Ultravision')
+    expect(normalizeSelectedTerm('  (Ampitiya).  ')).toBe('Ampitiya')
+  })
+
+  it('keeps a Sinhala word whole, vowel signs and all', () => {
+    // The failure this guards: a punctuation-list trim cuts ශානිකගේ at ා, and
+    // the search then goes looking for half a name.
+    expect(normalizeSelectedTerm(' ශානිකගේ ')).toBe('ශානිකගේ')
+    expect(normalizeSelectedTerm('කතා.')).toBe('කතා')
+  })
+
+  it('keeps what sits between the words of a phrase', () => {
+    expect(normalizeSelectedTerm('test.ultravision.lk')).toBe('test.ultravision.lk')
+    expect(normalizeSelectedTerm('ECC RAM')).toBe('ECC RAM')
+  })
+
+  it('accepts a phrase up to the word limit and refuses one past it', () => {
+    const four = Array.from({ length: MAX_SELECTED_WORDS }, (_, i) => `word${i}`).join(' ')
+    expect(normalizeSelectedTerm(four)).toBe(four)
+    expect(normalizeSelectedTerm(`${four} more`)).toBeNull()
+  })
+
+  it('refuses a selection that crosses a line', () => {
+    expect(normalizeSelectedTerm('Ultravision\nAmpitiya')).toBeNull()
+    expect(normalizeSelectedTerm('Ultravision\r\nAmpitiya')).toBeNull()
+  })
+
+  it('refuses a selection with no word in it', () => {
+    expect(normalizeSelectedTerm('')).toBeNull()
+    expect(normalizeSelectedTerm('   ')).toBeNull()
+    expect(normalizeSelectedTerm(' — ,. ')).toBeNull()
+  })
+
+  it('refuses a single character — it would match half the transcript', () => {
+    expect(normalizeSelectedTerm('a')).toBeNull()
+    expect(normalizeSelectedTerm(' a. ')).toBeNull()
+  })
+
+  it('refuses a term longer than the server would accept', () => {
+    expect(normalizeSelectedTerm('x'.repeat(MAX_TERM_CHARS))).toHaveLength(MAX_TERM_CHARS)
+    expect(normalizeSelectedTerm('x'.repeat(MAX_TERM_CHARS + 1))).toBeNull()
+  })
+
+  it('hands findOccurrences something it can actually match', () => {
+    const targets = [target('s1', 'Ampitiya node replicates to Ampitiya, always.')]
+    const term = normalizeSelectedTerm('“Ampitiya,”')
+    expect(term).not.toBeNull()
+    expect(findOccurrences(targets, term as string)).toHaveLength(2)
+  })
+})
+
+describe('the case this feature exists for', () => {
+  // Straight out of a real write-up: the model heard the same company name two
+  // ways, once per language half, and the English half is the one that reads
+  // correctly. Nobody may edit a transcript turn, so highlighting the wrong
+  // spelling in the Sinhala half is the ONLY way to reach this correction.
+  const summary = [
+    'Nodes at Ultravision and Ampitiya replicate to each other.',
+    'Rahumat to create test.ultravision.lk as a testing subdomain.',
+    'Altavision සහ Ampitiya ස්ථාන අතර automatic failover සකස් කිරීමට තීරණය විය.',
+  ].join('\n')
+
+  it('reaches the misheard spelling in the other language half', () => {
+    const term = normalizeSelectedTerm('Altavision ')
+    expect(term).toBe('Altavision')
+
+    const hits = findOccurrences([target('summary:m1', summary, 'summary')], term as string, {
+      fuzzy: true,
+    })
+    // Its own mention plus the two correct ones it is a mis-hearing of — every
+    // one shown in its sentence, and the approximate ones unticked by default.
+    expect(hits.map((h) => h.matched)).toEqual(['Ultravision', 'ultravision', 'Altavision'])
+    expect(hits.filter((h) => h.approximate).map((h) => h.matched)).toEqual([
+      'Ultravision',
+      'ultravision',
+    ])
+  })
+
+  it('applies only what was ticked, leaving the subdomain alone', () => {
+    const targets = [target('summary:m1', summary, 'summary')]
+    const start = summary.indexOf('Altavision')
+    const { updated, applied, skipped } = applyReplacements(
+      targets,
+      [{ targetId: 'summary:m1', start, matched: 'Altavision' }],
+      'Ultravision',
+    )
+    expect({ applied, skipped }).toEqual({ applied: 1, skipped: 0 })
+    expect(updated[0].text).toContain('Ultravision සහ Ampitiya')
+    // The hostname is lowercase and was never ticked — a blind replace-all
+    // would have rewritten it into a URL that does not resolve.
+    expect(updated[0].text).toContain('test.ultravision.lk')
   })
 })
