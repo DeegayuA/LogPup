@@ -295,6 +295,13 @@ wrong. Any AI call added by these registers must use the corrected mapping,
 | `400` + `FAILED_PRECONDITION` | billing or region |
 | `429` | quota |
 
+Pinned API versions get the same treatment: a sibling session made the Live
+WebSocket version a switch (`NEXT_PUBLIC_GEMINI_LIVE_WS_VERSION`, default
+`v1beta`) rather than a constant, because Google's guide says `v1beta` for
+ephemeral tokens while their own browser sample still uses `v1alpha` and both
+resolve. Any Google API version these registers pin is named as a switch with
+its fallback in the code, not left to be rediscovered during an incident.
+
 The existing code maps `401 || 403` to "your key was rejected", which reports
 a dropped-header bug as the user's key being bad. Two further traps from the
 same investigation: an error branch that shadows `lastBadMessage` silently
@@ -331,8 +338,28 @@ helper — none of them gains `cancelled` in WS2:
 
 Only ~48 of the 124 are `task_status`; roughly 36 further occurrences are
 comment prose. **The sweep is done by reading each site, never by grepping the
-literal** — a literal sweep here breaks the sprint demotion path, the AI
-meter, and the recording uploader. WS4 renames the sprint enum separately.
+literal.** WS4 renames the sprint enum separately.
+
+**How dangerous is a wrong sweep, measured rather than assumed:** all four
+sibling enums are covered — `sprints/actions.test.ts` (6 tests, and its
+harness captures on `values.status === 'done'` at `:40`, so a changed write
+empties the capture and fails loudly), `gemini/ai-meter.test.ts` (19),
+`meetings/segment-queue.test.ts` (16), `lib/escalation.test.ts` (16).
+Mis-sweeping any of them **fails the suite; it does not fail silently.** WS0 is
+therefore a lower-risk commit than its file count suggests.
+
+**The real hole is raw SQL, and the seam cannot close it.** `isTerminal()` is
+a TypeScript function and cannot be called inside a `sql` template, so these
+two sites are unreachable by the seam and must be handled by interpolating a
+shared terminal-status list instead:
+
+  - `apps/contribution-queries.ts:71-72` — both `= 'done'` and **`<> 'done'`**.
+    The `<>` is the dangerous one: it becomes wrong the moment `cancelled`
+    exists, silently counting cancelled tasks as open. Has a test file.
+  - `people/queries.ts:849` — `count(*) filter (where status = 'done')`, and
+    **`people/queries.ts` has no test file at all.** A characterization test
+    covering this query is a prerequisite of WS2, not optional.
+  - `schema.ts:486` — the partial index, handled by the rebuild in WS2.
 
 The discipline already exists in exactly one place and is the model:
 `checkins.ts:29-33` counts not-`'done'` as unfinished *specifically* so a new
