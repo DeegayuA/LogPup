@@ -266,7 +266,16 @@ export class LiveTranscriptionSession {
         break
 
       case 'resumption':
-        if (event.handle) this.resumptionHandle = event.handle
+        if (!event.resumable) {
+          // The server has disowned resumption for this session. `resumable`
+          // was parsed and typed but never read, so a handle the server said
+          // it would NOT take back was stored anyway — then pinned into the
+          // next token AND sent in the next setup frame. Both sides agreed
+          // with each other and both were wrong.
+          this.resumptionHandle = null
+        } else if (event.handle) {
+          this.resumptionHandle = event.handle
+        }
         break
 
       case 'goAway':
@@ -286,6 +295,20 @@ export class LiveTranscriptionSession {
     if (this.stopped || this.reconnectTimer) return
 
     this.reconnectAttempts += 1
+    // A resumption handle is an OPTIMISATION, not a requirement: it recovers
+    // the tail of the turn in flight across the ~10-minute socket cap. Nothing
+    // else in this class ever clears it, so before this, a handle that had
+    // gone stale was re-pinned into every subsequent mint and setup frame for
+    // the rest of the meeting. If the handle is itself what the server is
+    // rejecting, that makes the session unrecoverable — the mint 400s, walks
+    // every model, and drops to Web Speech permanently, where a fresh
+    // handle-less session would simply have connected.
+    //
+    // So: one attempt gets to try resuming, and every attempt after that
+    // starts clean. Losing a few seconds of replayed transcript is a trade
+    // worth making against losing live transcription for the whole meeting.
+    if (this.reconnectAttempts > 1) this.resumptionHandle = null
+
     const max = this.opts.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS
     if (this.reconnectAttempts > max) {
       this.fail('Live transcription kept dropping — falling back. Recording continues.')

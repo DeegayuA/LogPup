@@ -8,17 +8,36 @@ import {
   liveSocketUrl,
   parseDurationMs,
   parseServerEvent,
+  FALLBACK_LIVE_WS_VERSION,
+  LIVE_WS_ENDPOINT,
+  LIVE_WS_VERSION,
 } from './live-protocol'
 
 describe('liveSocketUrl', () => {
-  it('uses the constrained v1alpha endpoint with an access_token param', () => {
-    // Getting any of these three wrong (v1beta, BidiGenerateContent, ?key=)
+  it('uses the constrained v1beta endpoint with an access_token param', () => {
+    // Getting any of these three wrong (v1alpha, BidiGenerateContent, ?key=)
     // fails only at runtime against a real token, so pin them here.
+    //
+    // v1beta: Google's ephemeral-token guide says "If you are using ephemeral
+    // tokens, you need to connect to the v1beta endpoint." v1alpha also
+    // resolves today, which is why this went unnoticed — but it is the
+    // undocumented route, and undocumented routes disappear quietly.
     const url = liveSocketUrl('tok')
-    expect(url).toContain('v1alpha')
+    expect(url).toContain('v1beta')
+    expect(url).not.toContain('v1alpha')
     expect(url).toContain('BidiGenerateContentConstrained')
     expect(url).toContain('access_token=tok')
     expect(url).not.toContain('key=tok')
+  })
+
+  it('names v1alpha as the documented fallback, so a 2am debugger finds the switch', () => {
+    // The two routes disagree in Google's own material: the guide says v1beta
+    // for ephemeral tokens, their browser sample still uses v1alpha. Both
+    // resolve today. This asserts the escape hatch EXISTS and is spelled the
+    // way the comment says — a switch nobody can find is not a switch.
+    expect(FALLBACK_LIVE_WS_VERSION).toBe('v1beta')
+    expect(LIVE_WS_ENDPOINT).toContain(LIVE_WS_VERSION)
+    expect(LIVE_WS_ENDPOINT).toContain('BidiGenerateContentConstrained')
   })
 
   it('percent-encodes a token containing URL-significant characters', () => {

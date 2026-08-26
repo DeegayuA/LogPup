@@ -38,14 +38,44 @@ export const LIVE_MODEL_FALLBACK_ORDER: readonly string[] = [
   ...new Set([DEFAULT_LIVE_MODEL, SECONDARY_LIVE_MODEL]),
 ]
 
+/** API version the Live socket connects on when nothing overrides it. */
+export const FALLBACK_LIVE_WS_VERSION = 'v1beta'
+
 /**
- * Ephemeral-token WebSocket endpoint. Note this differs from the API-key
- * endpoint in three ways that are all easy to get wrong: it is **v1alpha**, the
- * service method is **BidiGenerateContentConstrained** (not BidiGenerateContent),
- * and the credential goes in `access_token` (not `key`).
+ * API version for the ephemeral-token WebSocket.
+ *
+ * READ THIS FIRST IF LIVE STOPS CONNECTING. The mint succeeds and then the
+ * socket closes? Set NEXT_PUBLIC_GEMINI_LIVE_WS_VERSION=v1alpha and try again
+ * before touching anything else. The evidence genuinely points both ways:
+ *
+ *   v1beta  — Google's ephemeral-token guide states "If you are using
+ *             ephemeral tokens, you need to connect to the v1beta endpoint."
+ *             This is the documented route, so it is the default.
+ *   v1alpha — Google's OWN browser sample for ephemeral tokens
+ *             (gemini-live-api-examples, frontend/geminilive.js) still
+ *             connects on v1alpha, and both SDKs still print "The SDK's
+ *             ephemeral token support is in v1alpha only".
+ *
+ * Both routes resolve today, which is why running on v1alpha looked fine for
+ * as long as it did. The documented one wins the default because an
+ * undocumented route is the one that disappears without a deprecation notice —
+ * but the disagreement is real, so this is a switch rather than a constant.
+ *
+ * Spelled out literally, like the model override above: Next.js inlines
+ * NEXT_PUBLIC_* by textual substitution at build time, so a computed lookup
+ * would be undefined in the browser bundle.
+ */
+export const LIVE_WS_VERSION =
+  process.env.NEXT_PUBLIC_GEMINI_LIVE_WS_VERSION || FALLBACK_LIVE_WS_VERSION
+
+/**
+ * Ephemeral-token WebSocket endpoint. It differs from the API-key endpoint in
+ * three ways that are all easy to get wrong: the service method is
+ * **BidiGenerateContentConstrained** (not BidiGenerateContent), the credential
+ * goes in `access_token` (not `key`), and the version is the one above.
  */
 export const LIVE_WS_ENDPOINT =
-  'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained'
+  `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${LIVE_WS_VERSION}.GenerativeService.BidiGenerateContentConstrained`
 
 export function liveSocketUrl(ephemeralToken: string): string {
   return `${LIVE_WS_ENDPOINT}?access_token=${encodeURIComponent(ephemeralToken)}`

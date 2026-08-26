@@ -42,7 +42,20 @@ export type MintedLiveToken = {
 
 type MintAttempt =
   | { ok: true; token: string }
-  | { ok: false; kind: 'auth' | 'quota' | 'overloaded' | 'bad'; message: string }
+  | {
+      ok: false
+      kind: 'auth' | 'quota' | 'overloaded' | 'bad' | 'no-identity'
+      message: string
+      /**
+       * Raw upstream body, truncated. Logged, never shown — it carries the
+       * only machine-readable statement of WHY a key was refused
+       * (PERMISSION_DENIED vs API_KEY_INVALID vs SERVICE_DISABLED), which is
+       * the difference between "add billing" and "paste a new key". The
+       * user-facing sentence cannot say which, so without this the whole
+       * diagnosis of a Live failure was one generic sentence.
+       */
+      detail?: string
+    }
 
 /**
  * One key's attempt at minting, with the project's standard retry policy
@@ -96,27 +109,74 @@ async function mintWithKey(
       return { ok: true, token: name }
     }
 
-    if (res.status === 401 || res.status === 403) {
-      // Also the signal that this key's tier has no Live access at all — the
-      // caller turns a 403 into a permanent fallback rather than a retry.
-      return { ok: false, kind: 'auth', message: `Key "${keyLabel}" got HTTP ${res.status}` }
-    }
-
     if (shouldRetry(res.status, attempt, MAX_ATTEMPTS)) {
       await sleep(backoffDelayMs(attempt, res.headers.get('retry-after')))
       continue
     }
 
-    if (res.status === 429) {
-      return { ok: false, kind: 'quota', message: `Key "${keyLabel}" is quota-limited (429)` }
-    }
-    if (res.status === 502 || res.status === 503 || res.status === 504) {
-      return { ok: false, kind: 'overloaded', message: `Live token service busy (${res.status})` }
-    }
-
     const body = await res.text().catch(() => '')
-    return { ok: false, kind: 'bad', message: `Token mint failed ${res.status}: ${body.slice(0, 300)}` }
+    return classifyMintFailure(res.status, body, keyLabel)
   }
+}
+
+/**
+ * What the auth_tokens endpoint's status codes ACTUALLY mean.
+ *
+ * Established by probing the live endpoint, not by reading the docs page —
+ * whose own curl example sends `liveConnectConstraints` and is rejected with a
+ * 400 before the key is ever looked at. The mapping is not the conventional
+ * REST one, and getting it wrong sends people to fix the wrong thing:
+ *
+ *   403 PERMISSION_DENIED  — NO IDENTITY REACHED GOOGLE. "Method doesn't allow
+ *                            unregistered callers." This is OUR bug: a blank
+ *                            or unsent x-goog-api-key. It is NOT evidence the
+ *                            key is bad, and blaming the user's key for it is
+ *                            how a header bug gets misfiled as a billing
+ *                            problem for weeks.
+ *   400 API_KEY_INVALID    — the key really is bad. Note the status: a
+ *                            rejected key answers 400 here, NOT 401/403.
+ *   400 FAILED_PRECONDITION— billing/region, not the key itself.
+ *   429                    — quota. The only status that means "come back
+ *                            later" for a key that is otherwise fine.
+ *   5xx                    — upstream.
+ *   400 anything else      — model or payload: a renamed preview, or a field
+ *                            name this build got wrong.
+ */
+export function classifyMintFailure(
+  status: number,
+  body: string,
+  keyLabel: string,
+): Extract<MintAttempt, { ok: false }> {
+  const detail = body.slice(0, 300)
+  const reason = /"reason"\s*:\s*"([A-Z_]+)"/.exec(body)?.[1] ?? ''
+  const rpcStatus = /"status"\s*:\s*"([A-Z_]+)"/.exec(body)?.[1] ?? ''
+
+  if (status === 429) {
+    return { ok: false, kind: 'quota', message: `Key "${keyLabel}" is quota-limited (429)`, detail }
+  }
+  if (status >= 500) {
+    return { ok: false, kind: 'overloaded', message: `Live token service busy (${status})`, detail }
+  }
+  if (status === 403) {
+    return {
+      ok: false,
+      kind: 'no-identity',
+      message: `The mint for key "${keyLabel}" carried no API key`,
+      detail,
+    }
+  }
+  if (status === 401 || reason === 'API_KEY_INVALID' || rpcStatus === 'UNAUTHENTICATED') {
+    return { ok: false, kind: 'auth', message: `Key "${keyLabel}" was rejected (${status})`, detail }
+  }
+  if (rpcStatus === 'FAILED_PRECONDITION') {
+    return {
+      ok: false,
+      kind: 'auth',
+      message: `Key "${keyLabel}" needs billing or is region-blocked`,
+      detail,
+    }
+  }
+  return { ok: false, kind: 'bad', message: `Token mint failed ${status}: ${detail}`, detail }
 }
 
 /**
@@ -207,10 +267,17 @@ export async function mintLiveToken(
 
   let sawAuthFailure = false
   let sawTransientBusy = false
+  // Google refused the request as an UNREGISTERED CALLER. Tracked separately
+  // from auth because the remedy is the opposite: nothing the user can do to
+  // their keys fixes it.
+  let sawNoIdentity = false
 
   // Remembered so the terminal error can say something specific when every
   // (key, model) pair failed with a non-retriable mint rejection.
   let lastBadMessage: string | null = null
+  // Ditto for auth: the upstream reason behind the last 401/403, logged (never
+  // shown) so a support question about "no Live API access" has an answer.
+  let lastAuthDetail: string | null = null
 
   for (const key of keys) {
     let apiKey: string
@@ -219,6 +286,19 @@ export async function mintLiveToken(
     } catch {
       continue // corrupted row — nothing to bump, try the next key
     }
+
+    // A key that decrypts to nothing is the most likely way the mint ends up
+    // sending no credential at all, which Google answers with a 403 that reads
+    // as "your key was rejected". Caught here so it is named as what it is: a
+    // broken stored key, not a Gemini entitlement problem.
+    if (apiKey.trim().length === 0) {
+      console.error(`[live-token] key "${key.label}" decrypted to an empty string — skipping it`)
+      continue
+    }
+
+    // Set when a model on THIS key answered 401/403/429. Only meaningful once
+    // every model has been tried — see the auth/quota branch below.
+    let keyLevelFailure = false
 
     for (const model of models) {
       const result = await mintWithKey(apiKey, key.label, model, opts?.resumptionHandle)
@@ -260,18 +340,96 @@ export async function mintLiveToken(
         continue
       }
 
+      if (result.kind === 'no-identity') {
+        // Deliberately does NOT set keyLevelFailure: the key was never
+        // presented, so nothing was learned about it. Bumping failCount here
+        // would mark every key in the pool as failing over a bug in this file.
+        sawNoIdentity = true
+        if (result.detail) lastAuthDetail = result.detail
+        continue
+      }
+
       if (result.kind === 'auth' || result.kind === 'quota') {
-        sawAuthFailure = true
-        await db
-          .update(geminiKeys)
-          .set({ failCount: sql`${geminiKeys.failCount} + 1`, lastUsedAt: new Date() })
-          .where(eq(geminiKeys.id, key.id))
-        break // key-level failure — no model on this key will do better
+        // NOT key-level on the spot — the same correction client.ts already
+        // carries for callGeminiCore, which this function claims parity with
+        // and did not have.
+        //
+        // Gemini gates access and rate-limits PER MODEL. A 403 from a project
+        // without access to the primary Live preview says nothing about the
+        // secondary one — and SECONDARY_LIVE_MODEL exists precisely because
+        // free-tier keys have had it longer (see live-protocol.ts). Breaking
+        // here made that second rung of the fallback ladder unreachable on
+        // exactly the failure it was built for: a perfectly good free-tier key
+        // reported "…is out of quota, or has no Live API access" two seconds
+        // into every recording, and never once tried the model that works.
+        //
+        // The bookkeeping is deferred, not dropped: if no model on this key
+        // succeeds, failCount is bumped once after the loop.
+        keyLevelFailure = true
+        if (result.detail) lastAuthDetail = result.detail
+        continue
       }
 
       // 'overloaded' — try the next model on this key.
       sawTransientBusy = true
     }
+
+    // Every model on this key was refused with an auth/quota error, so the key
+    // really is the problem — bumped here, ONCE, rather than once per model.
+    //
+    // A key that minted on ANY model must never land here. failCount is what
+    // readiness.ts thresholds on (FAILING_KEY_THRESHOLD = 3), so blaming a key
+    // for a model-level 403 made three recording attempts enough to turn every
+    // readiness surface into "all Gemini keys available to you keep failing" —
+    // while meeting-intel, worklog drafts and read-aloud were still working on
+    // that same key.
+    if (keyLevelFailure) {
+      sawAuthFailure = true
+      await db
+        .update(geminiKeys)
+        .set({ failCount: sql`${geminiKeys.failCount} + 1`, lastUsedAt: new Date() })
+        .where(eq(geminiKeys.id, key.id))
+    }
+  }
+
+  // EVERYTHING learned about why, emitted before whichever terminal branch
+  // wins — deliberately NOT inside one of them.
+  //
+  // The branches are ordered by what to TELL THE USER (auth, then busy, then
+  // bad), which is the opposite of the order by what a developer can ACT on.
+  // A 400 is a protocol regression somebody can fix; a 403 is a key the user
+  // must replace. When `lastBadMessage` was only read inside the BAD_RESPONSE
+  // branch, a realistic BYOK pool — one key without Live access answering 403,
+  // plus a real 400 — reported "your key was rejected" AND logged nothing at
+  // all about the 400. That is precisely how the `liveConnectConstraints`
+  // field-name regression stayed invisible: the one actionable signal was
+  // ranked last, behind the two that blame the user.
+  //
+  // Bodies are logged, never shown: they carry endpoint paths and project ids,
+  // and they mean nothing to the person sitting in the meeting.
+  if (lastBadMessage) {
+    console.error('[live-token] a model rejected the mint outright:', lastBadMessage)
+  }
+  if (lastAuthDetail) {
+    console.error('[live-token] a key was refused; upstream reason:', lastAuthDetail)
+  }
+
+  // Ranked ABOVE auth on purpose: if the request never carried a key, nothing
+  // downstream learned anything about the user's keys, and telling them to go
+  // check Profile sends them to fix something that was never broken.
+  if (sawNoIdentity) {
+    console.error(
+      '[live-token] auth_tokens refused the request as an unregistered caller. '
+        + 'The API key header did not reach Google — this is a bug on our side, not the user\'s key.',
+    )
+    throw recordFailure(
+      userId,
+      models,
+      new GeminiError(
+        'BAD_RESPONSE',
+        'Live transcription could not authenticate with Google — that is a problem on our side, not your key. Recording continues without it.',
+      ),
+    )
   }
 
   if (sawAuthFailure) {
@@ -304,11 +462,9 @@ export async function mintLiveToken(
     )
   }
   if (lastBadMessage) {
-    // The raw upstream body is logged, never shown: it can carry endpoint
-    // paths and project identifiers, and it means nothing to the person in
-    // the meeting. What they need is that the recording is unaffected and
-    // that this is not something retrying will fix.
-    console.error('[live-token] every model rejected the mint:', lastBadMessage)
+    // Already logged above, unconditionally — see the emitter. What the user
+    // needs here is that the recording is unaffected and that this is not
+    // something retrying will fix.
     throw recordFailure(
       userId,
       models,
