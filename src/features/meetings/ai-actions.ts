@@ -67,6 +67,8 @@ import { updateMeetingNotes } from '@/features/meetings/actions'
 import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { createTask } from '@/features/sprints/task-actions'
+import { MAX_TASK_ASSIGNEES, primaryAssigneeId } from '@/features/sprints/task-assignees'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 import {
   buildFollowupRows,
   selectCarriedForward,
@@ -681,7 +683,7 @@ async function fetchAttendeeAppLists(attendeeIds: string[]): Promise<Map<string,
     .select({ userId: liveTasks.assigneeId, id: liveApps.id, name: liveApps.name })
     .from(liveTasks)
     .innerJoin(liveApps, eq(liveTasks.appId, liveApps.id))
-    .where(and(inArray(liveTasks.assigneeId, attendeeIds), ne(liveTasks.status, 'done')))
+    .where(and(inArray(liveTasks.assigneeId, attendeeIds), inArray(liveTasks.status, OPEN_STATUSES)))
 
   for (const row of [...assignmentRows, ...taskRows]) {
     if (!row.userId) continue
@@ -3942,6 +3944,17 @@ const updateSuggestionInput = z
     text: z.string().trim().min(1).max(140),
     suggestedUserId: z.uuid().nullable(),
     suggestedDueDate: z.iso.date().nullable(),
+    // Alongside the scalar above, never instead of it: when both arrive the
+    // array wins, and its FIRST id is what `suggested_user_id` becomes.
+    //
+    // THE REST ARE NOT PERSISTED HERE, and that is a statement about the row
+    // rather than an oversight. A suggestion is not a task: it has one
+    // `suggested_user_id` column and no join rows to hang a set on, and
+    // `task_assignees` is keyed by a task_id this suggestion does not have
+    // yet. The full set reaches the database when the suggestion becomes a
+    // task — acceptTaskSuggestion takes the same field and passes it to
+    // createTask, which writes every id.
+    assigneeIds: z.array(z.uuid()).max(MAX_TASK_ASSIGNEES),
   })
   .partial()
 
@@ -3983,7 +3996,14 @@ export async function updateTaskSuggestion(suggestionId: string, input: unknown)
 
   const set: Record<string, unknown> = {}
   for (const key of Object.keys(parsed.data) as (keyof typeof parsed.data)[]) {
-    set[key] = parsed.data[key]
+    // `assigneeIds` is not a column on this table — it collapses to the one
+    // below, and letting it through would put an array where drizzle expects
+    // a field.
+    if (key !== 'assigneeIds') set[key] = parsed.data[key]
+  }
+  // After the loop, so "the array wins" cannot depend on zod's key order.
+  if (parsed.data.assigneeIds !== undefined) {
+    set.suggestedUserId = primaryAssigneeId(parsed.data.assigneeIds)
   }
   if (Object.keys(set).length === 0) return err('Nothing to update')
 
@@ -4011,6 +4031,11 @@ const acceptSuggestionInput = z.object({
   assigneeId: z.uuid().nullable().optional(),
   dueDate: z.iso.date().nullable().optional(),
   priority: z.number().int().min(0).max(3).optional(),
+  // Everyone the accepter put on this item. Additive: `assigneeId` above is
+  // untouched and a one-click accept still goes through it; when both arrive
+  // the array wins and its first id is the one createTask puts in
+  // `tasks.assignee_id`.
+  assigneeIds: z.array(z.uuid()).max(MAX_TASK_ASSIGNEES).optional(),
 })
 
 /**
@@ -4021,7 +4046,13 @@ const acceptSuggestionInput = z.object({
  */
 export async function acceptTaskSuggestion(
   suggestionId: string,
-  overrides?: { title?: string; assigneeId?: string | null; dueDate?: string | null; priority?: number },
+  overrides?: {
+    title?: string
+    assigneeId?: string | null
+    dueDate?: string | null
+    priority?: number
+    assigneeIds?: string[]
+  },
 ): Promise<ActionResult<{ taskId: string }>> {
   const parsed = acceptSuggestionInput.safeParse({ suggestionId, ...overrides })
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -4058,7 +4089,11 @@ export async function acceptTaskSuggestion(
     },
   )
 
-  const result = await createTask(payload)
+  // The set rides along beside the scalar the payload already carries;
+  // createTask is the one place that decides between them, so accept and
+  // quick-add cannot drift apart on what "the accountable person" means.
+  const assigneeIds = parsed.data.assigneeIds
+  const result = await createTask({ ...payload, assigneeIds })
   if (!result.ok) return err(result.error)
 
   await db
@@ -4076,7 +4111,14 @@ export async function acceptTaskSuggestion(
   // separately from task creation above so a lookup/write failure here can
   // never undo a task that was already accepted.
   try {
-    await linkFollowupToTask(payload.assigneeId, suggestion.text, result.data.taskId)
+    // The task's ACCOUNTABLE person, which is the array's first id whenever
+    // one was sent — matching a follow-up against the scalar the array just
+    // overrode would link it to somebody who is not on the task.
+    await linkFollowupToTask(
+      assigneeIds ? primaryAssigneeId(assigneeIds) : payload.assigneeId,
+      suggestion.text,
+      result.data.taskId,
+    )
   } catch (error) {
     console.error(`[meeting-followups] link on suggestion accept failed for suggestion ${suggestion.id}:`, error)
   }

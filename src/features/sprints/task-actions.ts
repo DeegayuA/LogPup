@@ -18,6 +18,13 @@ import { rankForAppend } from '@/features/sprints/task-rank'
 import { decideFollowupResolutionOnTaskStatusChange } from '@/features/meetings/followups'
 import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
 import { isAdminRole } from '@/features/auth/capabilities'
+import {
+  MAX_TASK_ASSIGNEES,
+  getTaskAssignees,
+  primaryAssigneeId,
+  setTaskAssignees,
+  withPrimaryAssignee,
+} from '@/features/sprints/task-assignees'
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
@@ -50,6 +57,10 @@ const taskInput = z.object({
   // working unchanged — omitting it leaves the task with no due date, same
   // as before this field existed on the input.
   dueDate: z.iso.date().nullable().optional(),
+  // EVERYONE on the task, first = the accountable one. Additive: `assigneeId`
+  // above is untouched and still the column every board reads; when both
+  // arrive the array wins. Bounded — one element is one row.
+  assigneeIds: z.array(z.uuid()).max(MAX_TASK_ASSIGNEES).optional(),
 })
 
 // Deliberately no `.default()` on any field, mirroring apps/update-input.ts:
@@ -67,6 +78,8 @@ const taskUpdateInput = z
     // and the ⌘K quick-add could set a due date that no surface could ever
     // show or change again.
     dueDate: z.iso.date().nullable(),
+    // See taskInput: additive, and the array wins over `assigneeId`.
+    assigneeIds: z.array(z.uuid()).max(MAX_TASK_ASSIGNEES),
   })
   .partial()
 
@@ -316,6 +329,7 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const { appId, sprintId, title, description, assigneeId, priority, status, dueDate } = parsed.data
+  const { assigneeIds } = parsed.data
   if (sprintId !== null && !(await sprintIsInApp(sprintId, appId))) {
     return err('That sprint belongs to a different app')
   }
@@ -330,7 +344,9 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
         sprintId,
         title,
         description: description || null,
-        assigneeId,
+        // The array wins when both are sent, and its FIRST id is the one that
+        // lands here — `assignee_id` is still "the accountable person".
+        assigneeId: assigneeIds ? primaryAssigneeId(assigneeIds) : assigneeId,
         priority,
         // Through transitionTaskStatus for the same reason the due date goes
         // through applyDueDate: a task created AS 'done' — the ⌘K "log the
@@ -350,6 +366,9 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
         ),
       })
       .returning({ id: tasks.id })
+    // Inside the try on purpose: an unknown user id is the same FK violation
+    // the insert above would have raised, and it reads the same to the caller.
+    if (assigneeIds) await setTaskAssignees(created.id, assigneeIds, session.user.id)
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid app, sprint, or assignee')
     return unexpected('createTask', error)
@@ -389,10 +408,15 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   for (const key of Object.keys(parsed.data) as (keyof typeof parsed.data)[]) {
     if (key === 'description') {
       set.description = parsed.data.description || null
-    } else {
+    } else if (key !== 'assigneeIds') {
       set[key] = parsed.data[key]
     }
   }
+  // The array wins over the scalar `assigneeId` when both are sent, and its
+  // first id is what lands in the column. Applied after the loop, not inside
+  // it, so the rule can never depend on which key zod emits first.
+  const assigneeIds = parsed.data.assigneeIds
+  if (assigneeIds !== undefined) set.assigneeId = primaryAssigneeId(assigneeIds)
   if (Object.keys(set).length === 0) return err('Nothing to update')
 
   // Only when the sprint actually CHANGES: the dialog sends every field on
@@ -441,6 +465,9 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
 
   try {
     await db.update(tasks).set(set).where(eq(tasks.id, taskId))
+    // After the column, so the set's first id and `assignee_id` agree; the
+    // join write is a no-op when the same people are re-sent.
+    if (assigneeIds !== undefined) await setTaskAssignees(taskId, assigneeIds, session.user.id)
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid sprint or assignee')
     return unexpected('updateTask', error)
@@ -602,6 +629,37 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
     detail,
     metadata,
   })
+
+  // A drop into an assignee column has to reach task_assignees too, or the
+  // join stops containing the accountable person — the one invariant the whole
+  // multi-assignee model rests on. `tasks.assignee_id` was already written
+  // above; this makes the set agree with it.
+  //
+  // The set is REORDERED, not replaced: dragging a card into someone's column
+  // says "this is now their task", not "take everyone else off it". A task
+  // with three people on it keeps all three; only the accountable one moves.
+  // Dropping on Unassigned is the exception and empties the set, because that
+  // is what unassigned means.
+  //
+  // Best-effort and logged, deliberately not fatal: the drag has already
+  // committed and the board has already moved the card. Failing the action
+  // here would show the user an error for a move that did happen, and the
+  // next assignee edit repairs the set anyway.
+  if (assigneeId !== undefined && assigneeId !== existing.assigneeId) {
+    try {
+      const current = (await getTaskAssignees([taskId])).get(taskId) ?? []
+      await setTaskAssignees(
+        taskId,
+        withPrimaryAssignee(
+          current.map((person) => person.id),
+          assigneeId,
+        ),
+        session.user.id,
+      )
+    } catch (error) {
+      console.error(`[sprints] assignee set sync failed for task ${taskId}:`, error)
+    }
+  }
 
   // Same best-effort follow-up sync as updateTask — a drag that changes
   // column is exactly the other way a task's status changes, and a linked

@@ -403,6 +403,18 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   // and by the one-control setMeetingApps.
   'src/features/meetings/actions.ts': ['updateMeeting', 'setMeetingApps'],
 
+  // why: `task_assignees` is the same shape of table as meeting_attendees and
+  // meeting_apps above, and gets the same answer. It is a pure (task_id,
+  // user_id) join row carrying no content of its own (verified in schema.ts:
+  // no deletedAt column, and not in SOFT_TABLES), so a tombstoned assignee row
+  // would mean nothing — somebody being OFF a task is the row's ABSENCE, and a
+  // "deleted" row left in place would either still render as a chip or need a
+  // filter in every reader. Who removed whom and when is already activity_log's
+  // job. setTaskAssignees is the one function that replaces a task's set (it
+  // deletes only the ids the new set drops, never the whole set); every other
+  // db.delete( in the file stays an offender.
+  'src/features/sprints/task-assignees.ts': 'setTaskAssignees',
+
   // why: the same hard delete of the same never-soft table, reached from the
   // per-attendee control rather than the edit form. Nothing is lost by it —
   // meeting_attendee_history keeps the interval this person was on the
