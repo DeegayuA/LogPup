@@ -68,10 +68,7 @@ describe('getPersonWorkload open/done pair', () => {
     ).toBe(doneUsesSeam)
   })
 
-  // it.fails until Task 6 converts :844 and :849. Vitest fails this test if the body
-  // ever PASSES, so the marker cannot be forgotten — the moment the literal
-  // is gone this goes red and the `.fails` must be removed. Self-deleting.
-  it.fails('never asks whether a status equals the bare string done', () => {
+  it('never asks whether a status equals the bare string done', () => {
     // Guards the shape the seam removes. `= 'done'` and `<> 'done'` are the two
     // spellings that silently miscount the moment the enum widens.
     const body = personWorkloadBody()

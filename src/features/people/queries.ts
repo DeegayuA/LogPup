@@ -1,9 +1,10 @@
 import { cache } from 'react'
-import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, ilike, inArray, isNull, lte, ne, notInArray, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
 import { liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import { meetingVisibleTo } from '@/features/meetings/visibility'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 import {
   activityLog,
   appRoleHistory,
@@ -841,12 +842,12 @@ export const getPersonWorkload = cache(async function getPersonWorkload(userId: 
       // Left: a task in the backlog has no sprint, and dropping those would
       // hide exactly the work nobody has scheduled yet.
       .leftJoin(liveSprints, eq(liveTasks.sprintId, liveSprints.id))
-      .where(and(eq(liveTasks.assigneeId, userId), ne(liveTasks.status, 'done')))
+      .where(and(eq(liveTasks.assigneeId, userId), inArray(liveTasks.status, OPEN_STATUSES)))
       .orderBy(asc(liveTasks.dueDate), desc(liveTasks.priority)),
     db
       .select({
         total: sql<number>`count(*)::int`,
-        done: sql<number>`count(*) filter (where ${liveTasks.status} = 'done')::int`,
+        done: sql<number>`count(*) filter (where ${notInArray(liveTasks.status, [...OPEN_STATUSES])})::int`,
       })
       .from(liveTasks)
       .where(eq(liveTasks.assigneeId, userId)),

@@ -1,5 +1,5 @@
 import { cache } from 'react'
-import { and, asc, count, eq, gte, isNotNull, lt, max, ne, sql, type SQL } from 'drizzle-orm'
+import { and, asc, count, eq, gte, inArray, isNotNull, lt, max, notInArray, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { addDays, startOfWeek } from 'date-fns'
 import { db } from '@/db'
@@ -15,6 +15,7 @@ import {
   type AppTaskCounts,
 } from '@/features/apps/app-health'
 import { buildRoleTimeline, type AppRoleKind } from '@/features/apps/role-history'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 
 export type AppMember = {
   userId: string
@@ -149,12 +150,12 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
           appId: liveTasks.appId,
           todo: countWhere(eq(liveTasks.status, 'todo')),
           inProgress: countWhere(eq(liveTasks.status, 'in_progress')),
-          done: countWhere(eq(liveTasks.status, 'done')),
+          done: countWhere(notInArray(liveTasks.status, [...OPEN_STATUSES])),
           // An overdue task is one that is NOT done and whose due date has
           // already passed. `tasks.due_date` is a plain calendar day, so this
           // compares against today-in-Colombo rather than a UTC instant.
           overdue: countWhere(
-            and(ne(liveTasks.status, 'done'), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),
+            and(inArray(liveTasks.status, OPEN_STATUSES), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),
           ),
           lastCreatedAt: max(liveTasks.createdAt),
         })
@@ -424,9 +425,9 @@ export async function getAppCounts(appId: string): Promise<AppCounts> {
       .select({
         todo: countWhere(eq(liveTasks.status, 'todo')),
         inProgress: countWhere(eq(liveTasks.status, 'in_progress')),
-        done: countWhere(eq(liveTasks.status, 'done')),
+        done: countWhere(notInArray(liveTasks.status, [...OPEN_STATUSES])),
         overdue: countWhere(
-          and(ne(liveTasks.status, 'done'), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),
+          and(inArray(liveTasks.status, OPEN_STATUSES), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),
         ),
         lastCreatedAt: max(liveTasks.createdAt),
       })

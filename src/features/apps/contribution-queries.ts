@@ -1,8 +1,9 @@
 import { cache } from 'react'
-import { and, count, eq, isNotNull, max, sql } from 'drizzle-orm'
+import { and, count, eq, inArray, isNotNull, max, notInArray, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveTasks } from '@/db/live'
 import { activityLog, assignments, users } from '@/db/schema'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 
 /** One member's standing on one app: who they are, and what they have done. */
 export type AppContribution = {
@@ -68,8 +69,8 @@ export const getAppContributions = cache(async function getAppContributions(
     db
       .select({
         assigneeId: liveTasks.assigneeId,
-        done: count(sql`case when ${liveTasks.status} = 'done' then 1 end`),
-        open: count(sql`case when ${liveTasks.status} <> 'done' then 1 end`),
+        done: count(sql`case when ${notInArray(liveTasks.status, [...OPEN_STATUSES])} then 1 end`),
+        open: count(sql`case when ${inArray(liveTasks.status, OPEN_STATUSES)} then 1 end`),
       })
       .from(liveTasks)
       .where(and(eq(liveTasks.appId, appId), isNotNull(liveTasks.assigneeId)))
