@@ -1,0 +1,28 @@
+-- meetings.next_meeting_at: "we'll pick this up on Thursday at 3."
+--
+-- Set from a meeting that has just ENDED, so the deadlines coming out of it
+-- have something to hang off: a task agreed in this meeting is, by default,
+-- due by the next one. Without it, every action item out of a meeting is born
+-- with no date and somebody has to invent one per row.
+--
+-- WHY A COLUMN AND NOT A MEETING ROW. There is already a notion of "your next
+-- meeting" — moveFollowupsToNextMeeting (features/meetings/followup-move-actions.ts)
+-- resolves it per person as their earliest upcoming meeting_attendees row. That
+-- one answers "where will I next see this person", and it can only see meetings
+-- that have actually been scheduled. This column answers a different question:
+-- "when did this room agree to reconvene", recorded at the moment it was said,
+-- before anything is in a calendar. The two are allowed to disagree, and a
+-- reader must not treat this as a meeting id — it references nothing, on
+-- purpose, because the meeting it describes usually does not exist yet.
+--
+-- Nullable, and null is the honest default: most meetings never name a next
+-- one, and a NOT NULL with a computed default would fabricate an agreement
+-- nobody made.
+--
+-- Timezone-aware, unlike meetings.starts_at/ends_at which are bare timestamps.
+-- Deliberate: those predate the Asia/Colombo convention this app now runs on
+-- (see lib/lk-holidays.ts and working-days.ts, where all day maths is
+-- business-timezone and never UTC slicing). A new column has no legacy to
+-- match, so it stores an unambiguous instant. Do NOT "make it consistent" by
+-- dropping the timezone.
+ALTER TABLE "meetings" ADD COLUMN IF NOT EXISTS "next_meeting_at" timestamp with time zone;

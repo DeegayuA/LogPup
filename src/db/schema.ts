@@ -486,6 +486,47 @@ export const tasks = pgTable('tasks', {
     .where(sql`${t.deletedAt} is null and ${t.status} <> 'done'`),
 ])
 
+// One task, several people.
+//
+// ADDITIVE OVER tasks.assignee_id, which is UNCHANGED and still means "the
+// accountable person" — the single name board-view, task-workload, app-health
+// and the dashboard tiles read, none of which change. This table is the FULL
+// set and ALWAYS CONTAINS that person: migration 0064 backfills every existing
+// assignee_id into it, so "everyone on it" is a join here and "whose is it" is
+// still the column read it always was.
+//
+// Dropping assignee_id instead would mean rewriting every one of those readers
+// in the same commit as a schema change, on a database where migrations are
+// applied by hand. That is the version of this change that breaks production.
+//
+// Composite primary key, same shape and the same reasons as meetingAttendees:
+// the key IS the invariant (a person is on a task at most once, so a
+// double-submit from the picker is a no-op rather than a duplicate) and it is
+// the access path for the dominant read, "who is on this task".
+// task_assignees_user_idx serves the reverse direction, "what is this person
+// on" — the workload and my-work read, which runs per page load per person —
+// and gives the user_id foreign key an index to check against.
+//
+// NO deletedAt, deliberately — meetingAttendees and meetingApps answered the
+// identical question the same way. Taking somebody off a task loses no
+// content and the row's absence IS the fact; who removed whom and when is
+// already activity_log's job. Liveness is the task's: these rows carry no
+// state of their own, so a soft-deleted task keeps its people and restoring it
+// brings them back untouched.
+export const taskAssignees = pgTable('task_assignees', {
+  taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  // Ordering the chips by when somebody joined the task beats ordering by
+  // name: it keeps the person who was there first in the first slot.
+  addedAt: timestamp('added_at', { withTimezone: true }).notNull().defaultNow(),
+  // Nullable: the rows the 0064 backfill created had no actor, and inventing
+  // one would attribute an assignment to somebody who never made it.
+  addedBy: uuid('added_by').references(() => users.id),
+}, (t) => [
+  primaryKey({ columns: [t.taskId, t.userId] }),
+  index('task_assignees_user_idx').on(t.userId),
+])
+
 /**
  * A recurring meeting's RULE, and the standing template its occurrences are
  * stamped from.
@@ -589,6 +630,24 @@ export const meetings = pgTable('meetings', {
   visibility: text('visibility', { enum: ['workspace', 'attendees'] })
     .notNull()
     .default('workspace'),
+  // "We'll pick this up on Thursday at 3." Recorded from a meeting that has
+  // just ENDED, so the deadlines coming out of it have something to hang off:
+  // a task agreed here is, by default, due by the next one.
+  //
+  // NOT A MEETING ID, and it references nothing on purpose — the meeting it
+  // describes usually does not exist yet. There is already a separate notion
+  // of "your next meeting" (moveFollowupsToNextMeeting in
+  // features/meetings/followup-move-actions.ts) which resolves, per person,
+  // the earliest meeting they are actually on. That answers "where will I next
+  // see this person"; this answers "when did this room agree to reconvene".
+  // The two are allowed to disagree and neither is derived from the other.
+  //
+  // Timezone-aware, unlike starts_at/ends_at above. Those are bare timestamps
+  // predating the Asia/Colombo convention this app now runs on (lk-holidays.ts,
+  // working-days.ts — all day maths is business-timezone, never UTC slicing).
+  // A new column has no legacy to match, so it stores an unambiguous instant.
+  // Do not "make it consistent" by dropping the timezone.
+  nextMeetingAt: timestamp('next_meeting_at', { withTimezone: true }),
   // Video-call link (Meet/Zoom/etc.) for one-click join. Optional.
   meetingUrl: text('meeting_url'),
   googleEventId: text('google_event_id'),
