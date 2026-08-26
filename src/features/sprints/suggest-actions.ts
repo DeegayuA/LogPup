@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { and, desc, eq, ne } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import { meetingAiNotes } from '@/db/schema'
@@ -10,6 +10,7 @@ import { ok, err, type ActionResult } from '@/lib/action-result'
 import { callGemini } from '@/features/gemini/client'
 import { resolveChain } from '@/features/gemini/model-choice'
 import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 
 export type SprintSuggestion = { name: string; goal: string }
 
@@ -62,7 +63,7 @@ export async function suggestSprint(appId: unknown): Promise<ActionResult<Sprint
     db
       .select({ title: liveTasks.title, status: liveTasks.status })
       .from(liveTasks)
-      .where(and(eq(liveTasks.appId, parsedId.data), ne(liveTasks.status, 'done')))
+      .where(and(eq(liveTasks.appId, parsedId.data), inArray(liveTasks.status, OPEN_STATUSES)))
       .orderBy(desc(liveTasks.createdAt))
       .limit(25),
     db

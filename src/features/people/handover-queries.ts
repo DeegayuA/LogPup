@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, ne } from 'drizzle-orm'
+import { and, eq, gt, isNull, inArray } from 'drizzle-orm'
 import { db } from '@/db'
 import {
   absences,
@@ -11,6 +11,7 @@ import {
 import { liveApps, liveMeetings, liveTasks } from '@/db/live'
 import { can, type Actor } from '@/features/auth/capabilities'
 import { NON_TRANSFERABLE, type TransferableGroup } from '@/features/people/handover-inventory'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 
 export type HandoverItem = {
   id: string
@@ -83,7 +84,7 @@ export async function getHandoverInventory(
       db
         .select({ id: liveTasks.id, title: liveTasks.title, appId: liveTasks.appId })
         .from(liveTasks)
-        .where(and(eq(liveTasks.assigneeId, userId), ne(liveTasks.status, 'done'))),
+        .where(and(eq(liveTasks.assigneeId, userId), inArray(liveTasks.status, OPEN_STATUSES))),
       db
         // liveMeetings, not meetings: a trashed meeting is not open work, and
         // handing one over would resurrect it into somebody's list.
@@ -174,7 +175,7 @@ export async function countTransferableWork(userId: string): Promise<number> {
     db
       .select({ id: liveTasks.id })
       .from(liveTasks)
-      .where(and(eq(liveTasks.assigneeId, userId), ne(liveTasks.status, 'done'))),
+      .where(and(eq(liveTasks.assigneeId, userId), inArray(liveTasks.status, OPEN_STATUSES))),
   ])
   return a.length + r.length + t.length
 }

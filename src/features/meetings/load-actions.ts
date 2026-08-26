@@ -1,6 +1,6 @@
 'use server'
 
-import { and, eq, inArray, isNotNull, lt, ne } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, lt } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
@@ -16,6 +16,7 @@ import { boardHref } from '@/features/apps/tabs'
 import { overdueAskText, overdueRowsByUserApp, stalledAskText } from '@/features/meetings/ask-derivation'
 import { purposeToken } from '@/features/meetings/series-key'
 import { coverAsks, type CoverAsk, type CoverageGroup } from '@/features/meetings/coverage'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 
 /**
  * The read and the two writes behind /meetings/load.
@@ -171,7 +172,7 @@ export async function getMeetingLoadSuggestions(): Promise<ActionResult<MeetingL
           eq(liveTasks.dueKind, 'committed'),
           isNotNull(liveTasks.dueDate),
           lt(liveTasks.dueDate, todayIso),
-          ne(liveTasks.status, 'done'),
+          inArray(liveTasks.status, OPEN_STATUSES),
           isNotNull(liveTasks.assigneeId),
         )),
       // Started, past its date, still not finished — the honest stand-in for

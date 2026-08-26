@@ -19,6 +19,7 @@ import { listApps } from '@/features/apps/queries'
 import { isBackfilled } from '@/features/apps/role-history'
 import { isSprintRunningNow } from '@/features/sprints/sprint-date-range'
 import { getCheckinsForSprints } from '@/features/sprints/checkin-queries'
+import { OPEN_STATUSES } from '@/features/sprints/board-view'
 import { canReadMeetingIntel } from '@/features/meetings/ai-actions'
 import {
   assembleMeetingPlan,
@@ -136,7 +137,7 @@ export async function getMeetingPlanner(meetingId: string): Promise<ActionResult
           dueDate: liveTasks.dueDate,
         })
         .from(liveTasks)
-        .where(and(inArray(liveTasks.appId, appIds), ne(liveTasks.status, 'done'))),
+        .where(and(inArray(liveTasks.appId, appIds), inArray(liveTasks.status, OPEN_STATUSES))),
       // Open follow-ups owed to an earlier meeting that ALSO serves one of
       // this meeting's projects. Three joins, three separate jobs:
       //
