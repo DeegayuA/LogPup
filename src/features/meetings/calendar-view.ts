@@ -26,9 +26,27 @@ import { LK_TIMEZONE } from '@/lib/lk-holidays'
 export const CALENDAR_VIEWS = ['list', 'day', 'week', 'month', 'agenda'] as const
 export type CalendarView = (typeof CALENDAR_VIEWS)[number]
 
-/** The page opens on the list, exactly as it does today — the new views are
- *  something you navigate to, not something that replaces what worked. */
-export const DEFAULT_VIEW: CalendarView = 'list'
+/**
+ * The view /meetings opens on with no `?view=` in the URL.
+ *
+ * The week grid, not the list: a meetings page is read to answer "what does
+ * my week look like", and the list answers "what exists" — a different and
+ * rarer question. The list is one click away and nothing about it changed.
+ */
+export const DEFAULT_VIEW: CalendarView = 'week'
+
+/**
+ * The one view with no focused date, kept SEPARATE from DEFAULT_VIEW on
+ * purpose.
+ *
+ * These were the same constant while the default happened to be the list, and
+ * calendarUrlPatch read DEFAULT_VIEW to decide whether to drop `date` from the
+ * URL. Moving the default to a dated view under that coupling would have
+ * silently stripped the date from every week link — Prev/Next would have
+ * snapped back to today on each press. The two ideas are unrelated; they only
+ * ever coincided.
+ */
+export const UNDATED_VIEW: CalendarView = 'list'
 
 /** The two views the scrollable time grid renders. */
 export const TIME_GRID_VIEWS = ['day', 'week'] as const
@@ -102,6 +120,11 @@ export function parseFocusedDate(raw: string | null | undefined, todayIso: strin
  * `date` is dropped in the list view, which has no focused date. Everywhere
  * else it is pinned explicitly — including when it is today — so a link means
  * the week it was copied from and not the reader's current week.
+ *
+ * That test is UNDATED_VIEW, never DEFAULT_VIEW. The two were the same
+ * constant while the default was the list; reading the default here would drop
+ * the date from every link in whatever view happens to be default, which for a
+ * dated view means Prev/Next snapping back to today on every press.
  */
 export function calendarUrlPatch(
   view: CalendarView,
@@ -109,7 +132,7 @@ export function calendarUrlPatch(
 ): Record<string, string | null> {
   return {
     view,
-    date: view === DEFAULT_VIEW ? null : focusedIso,
+    date: view === UNDATED_VIEW ? null : focusedIso,
   }
 }
 

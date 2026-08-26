@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_VIEW,
+  UNDATED_VIEW,
   addCalendarMonths,
   calendarUrlPatch,
   endOfMonthIso,
@@ -29,10 +30,27 @@ import { getLkHoliday, isLkSunday, toIsoDateInTimeZone } from '@/lib/lk-holidays
  * 2026-08-31 a Monday; 2026-12-01 a Tuesday.
  */
 
+describe('the undated view is not the default view', () => {
+  it('keeps the focused date in the URL for the default week view', () => {
+    // These were one constant while the default happened to be the list, and
+    // calendarUrlPatch used the default to decide whether to drop `date`.
+    // Under that coupling, moving the default to a dated view would strip the
+    // date from every link and make Prev/Next snap back to today on each press.
+    expect(UNDATED_VIEW).toBe('list')
+    expect(DEFAULT_VIEW).not.toBe(UNDATED_VIEW)
+    expect(calendarUrlPatch(DEFAULT_VIEW, '2026-08-12')).toEqual({
+      view: 'week',
+      date: '2026-08-12',
+    })
+  })
+})
+
 describe('parseCalendarView', () => {
-  it('opens on the list, exactly as the page does today', () => {
-    expect(parseCalendarView(null)).toBe('list')
+  it('opens on the week grid when the URL says nothing', () => {
+    // /meetings is read to answer "what does my week look like". The list
+    // answers "what exists" — a different, rarer question, one click away.
     expect(parseCalendarView(undefined)).toBe(DEFAULT_VIEW)
+    expect(parseCalendarView(null)).toBe('week')
   })
 
   it('accepts every view', () => {
@@ -43,8 +61,8 @@ describe('parseCalendarView', () => {
   })
 
   it('falls back rather than rendering a view that does not exist', () => {
-    expect(parseCalendarView('year')).toBe('list')
-    expect(parseCalendarView('')).toBe('list')
+    expect(parseCalendarView('year')).toBe(DEFAULT_VIEW)
+    expect(parseCalendarView('')).toBe(DEFAULT_VIEW)
   })
 
   it('knows which views the time grid renders', () => {
