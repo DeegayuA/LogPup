@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildActionList,
+  createActionItemPromoter,
   dueStatus,
   followupAge,
   glanceFromIntel,
   isSameNoteText,
   parseSpokenDueDate,
   reconcileActionItems,
+  resolveUntrackedDue,
+  type PromoteOutcome,
 } from './meeting-notes-model'
 
 const now = new Date('2026-08-12T10:00:00')
@@ -274,6 +277,173 @@ describe('reconcileActionItems', () => {
     expect(reconcileActionItems([], [])).toEqual({ tracked: [], untracked: [] })
     expect(reconcileActionItems([], [{ id: 's1', text: 'anything' }])).toEqual({ tracked: [], untracked: [] })
     expect(reconcileActionItems(rows, [])).toEqual({ tracked: [], untracked: rows })
+  })
+})
+
+describe('createActionItemPromoter', () => {
+  /** A promise whose settlement the test controls, so two writes can be
+   *  submitted while the promotion is genuinely still in the air. */
+  function deferred<T>() {
+    let settle!: (value: T) => void
+    let fail!: (reason: unknown) => void
+    const promise = new Promise<T>((resolve, reject) => {
+      settle = resolve
+      fail = reject
+    })
+    return { promise, settle, fail }
+  }
+
+  it('promotes once and applies both writes to that one row, however fast they land', async () => {
+    // The real pair: a title committed when the input blurred, and the "Add
+    // task" click that caused the blur, submitted before the promotion that
+    // the first one started has come back.
+    const gate = deferred<PromoteOutcome>()
+    let promotions = 0
+    const promoter = createActionItemPromoter(() => {
+      promotions += 1
+      return gate.promise
+    })
+
+    const done: string[] = []
+    const retitle = promoter.run(async (id) => {
+      done.push(`retitle:${id}`)
+      return { ok: true }
+    })
+    const accept = promoter.run(async (id) => {
+      done.push(`accept:${id}`)
+      return { ok: true }
+    })
+
+    expect(promoter.id).toBeNull()
+    gate.settle({ ok: true, id: 'suggestion-1' })
+
+    expect(await retitle).toEqual({ ok: true })
+    expect(await accept).toEqual({ ok: true })
+    expect(promotions).toBe(1)
+    expect(promoter.id).toBe('suggestion-1')
+    // Order, not just count: accepting first would file the task under the
+    // wording the retitle was replacing.
+    expect(done).toEqual(['retitle:suggestion-1', 'accept:suggestion-1'])
+  })
+
+  it('never promotes again once the row has an id', async () => {
+    let promotions = 0
+    const promoter = createActionItemPromoter(async () => {
+      promotions += 1
+      return { ok: true, id: 'suggestion-1' }
+    })
+
+    await promoter.run(async () => ({ ok: true }))
+    await promoter.run(async () => ({ ok: true }))
+    await promoter.run(async () => ({ ok: true }))
+
+    expect(promotions).toBe(1)
+  })
+
+  it('reports a failed promotion without running the write, and stays retryable', async () => {
+    let promotions = 0
+    const promoter = createActionItemPromoter(async () => {
+      promotions += 1
+      return promotions === 1 ? { ok: false, error: 'Not allowed' } : { ok: true, id: 'suggestion-1' }
+    })
+
+    let ran = 0
+    const first = await promoter.run(async () => {
+      ran += 1
+      return { ok: true }
+    })
+    expect(first).toEqual({ ok: false, error: 'Not allowed' })
+    expect(ran).toBe(0)
+    expect(promoter.id).toBeNull()
+
+    // A dropped request must not brick the row: the next edit tries again.
+    const second = await promoter.run(async () => {
+      ran += 1
+      return { ok: true }
+    })
+    expect(second).toEqual({ ok: true })
+    expect(promotions).toBe(2)
+    expect(ran).toBe(1)
+    expect(promoter.id).toBe('suggestion-1')
+  })
+
+  it('keeps taking writes after one of them throws', async () => {
+    const promoter = createActionItemPromoter(async () => ({ ok: true, id: 'suggestion-1' }))
+
+    await expect(
+      promoter.run(async () => {
+        throw new Error('network')
+      }),
+    ).rejects.toThrow('network')
+
+    await expect(promoter.run(async () => ({ ok: true }))).resolves.toEqual({ ok: true })
+  })
+
+  it('keeps taking writes after a promotion rejects outright', async () => {
+    let promotions = 0
+    const promoter = createActionItemPromoter(async () => {
+      promotions += 1
+      if (promotions === 1) throw new Error('network')
+      return { ok: true, id: 'suggestion-1' }
+    })
+
+    await expect(promoter.run(async () => ({ ok: true }))).rejects.toThrow('network')
+    await expect(promoter.run(async () => ({ ok: true }))).resolves.toEqual({ ok: true })
+    expect(promoter.id).toBe('suggestion-1')
+  })
+})
+
+describe('resolveUntrackedDue', () => {
+  const unparsed = { due: 'next Friday', dueDate: null, status: 'unparsed' as const }
+
+  it('keeps an unresolved phrase as the words it was, and claims no urgency', () => {
+    expect(resolveUntrackedDue(unparsed, undefined, now)).toEqual({
+      currentIso: null,
+      unresolvedDue: 'next Friday',
+      // NOT overdue, today or soon: 'unparsed' is the only honest answer when
+      // we refused to work out which Friday, and it is what keeps the row off
+      // the danger colour.
+      status: 'unparsed',
+    })
+  })
+
+  it('seeds the editable control from a due date that did resolve, keeping its urgency', () => {
+    const row = buildActionList(
+      { deadlines: [{ item: 'Send the quote', owner: 'Amali', due: 'August 10, 2026' }], perPerson: [] },
+      now,
+    )[0]
+    expect(resolveUntrackedDue(row, undefined, now)).toEqual({
+      currentIso: '2026-08-10',
+      unresolvedDue: null,
+      status: 'overdue',
+    })
+  })
+
+  it('says nothing at all for a row the write-up gave no due date', () => {
+    expect(resolveUntrackedDue({ due: null, dueDate: null, status: 'unscheduled' }, undefined, now)).toEqual({
+      currentIso: null,
+      unresolvedDue: null,
+      status: 'unscheduled',
+    })
+  })
+
+  it('lets a real date replace the phrase, and recomputes urgency from it', () => {
+    expect(resolveUntrackedDue(unparsed, '2026-08-13', now)).toEqual({
+      currentIso: '2026-08-13',
+      unresolvedDue: null,
+      status: 'soon',
+    })
+    expect(resolveUntrackedDue(unparsed, '2026-08-01', now).status).toBe('overdue')
+  })
+
+  it('tells "cleared" apart from "untouched"', () => {
+    // null is a decision — the phrase is gone, not restored.
+    expect(resolveUntrackedDue(unparsed, null, now)).toEqual({
+      currentIso: null,
+      unresolvedDue: null,
+      status: 'unscheduled',
+    })
+    expect(resolveUntrackedDue(unparsed, undefined, now).unresolvedDue).toBe('next Friday')
   })
 })
 

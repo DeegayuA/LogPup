@@ -321,14 +321,15 @@ export type ActionItemPromoter = {
  * Which leaves the sequencing, which is the part that can actually corrupt
  * something, so it lives here where it can be tested:
  *
- *  - `promote` runs AT MOST ONCE. Two edits landing together (a title
- *    committed on blur, then the click that caused the blur) share the single
- *    in-flight promotion instead of each starting one — two suggestion rows
- *    for one write-up line is the double-track this exists to prevent.
- *  - Writes run in the order they were submitted. The blur-then-click pair
- *    above is exactly a "retitle, then accept": accepting first would create
- *    the task under the OLD title and then edit a suggestion that is no
- *    longer the source of truth for it.
+ *  - Writes run STRICTLY IN THE ORDER THEY WERE SUBMITTED, one at a time.
+ *    That single rule is also what makes `promote` run at most once: a second
+ *    write cannot even look at the id until the first one — promotion
+ *    included — has finished. The pair this protects is a title committed on
+ *    blur followed instantly by the click that caused the blur, i.e. "retitle,
+ *    then accept". Run concurrently, that is two suggestion rows for one
+ *    write-up line; run out of order, it is a task filed under the old
+ *    wording with the edit landing on a row that is no longer its source of
+ *    truth. A fast double-click on "Add task" is the same shape.
  *  - A FAILED promotion is not remembered. The row stays promotable, so a
  *    dropped request is one more click to retry rather than a permanently
  *    dead row.
@@ -337,26 +338,14 @@ export type ActionItemPromoter = {
  */
 export function createActionItemPromoter(promote: () => Promise<PromoteOutcome>): ActionItemPromoter {
   let id: string | null = null
-  let promoting: Promise<PromoteOutcome> | null = null
   // Never rejects — see the `tail = ...` assignment below.
   let tail: Promise<unknown> = Promise.resolve()
 
-  function ensureId(): Promise<PromoteOutcome> {
-    if (id !== null) return Promise.resolve({ ok: true, id })
-    if (promoting !== null) return promoting
-    const started = promote().then(
-      (result) => {
-        promoting = null
-        if (result.ok) id = result.id
-        return result
-      },
-      (error: unknown) => {
-        promoting = null
-        throw error
-      },
-    )
-    promoting = started
-    return started
+  async function ensureId(): Promise<PromoteOutcome> {
+    if (id !== null) return { ok: true, id }
+    const result = await promote()
+    if (result.ok) id = result.id
+    return result
   }
 
   function run(work: (suggestionId: string) => Promise<ActionOutcome>): Promise<ActionOutcome> {

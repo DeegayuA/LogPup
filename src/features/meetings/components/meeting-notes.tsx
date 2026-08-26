@@ -1,18 +1,18 @@
 'use client'
 
-import { useRef, useState, useTransition, type ReactNode } from 'react'
+import { useId, useRef, useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import {
   AlertTriangle,
   BookOpen,
+  CheckIcon,
   CircleCheck,
   FileDown,
   ListChecks,
   Loader2Icon,
   PencilIcon,
   MessageCircleQuestion,
-  PlusCircle,
   ScrollText,
   Sparkles,
   Users,
@@ -28,7 +28,16 @@ import {
   MetaChip,
   SectionHeading,
 } from '@/features/meetings/components/meeting-chips'
-import type { ActionRow } from '@/features/meetings/components/meeting-notes-model'
+import {
+  createActionItemPromoter,
+  resolveUntrackedDue,
+  type ActionItemPromoter,
+  type ActionRow,
+} from '@/features/meetings/components/meeting-notes-model'
+import {
+  buildSuggestionUpdatePayload,
+  type ActionItemEditPatch,
+} from '@/features/meetings/components/note-timeline-model'
 import { SpeakButton } from '@/features/speech/components/speak-button'
 import { updateMeetingSummary } from '@/features/meetings/followup-move-actions'
 import { SelectionCorrector } from '@/features/meetings/components/correct-selection'
@@ -44,11 +53,20 @@ import {
 } from '@/features/meetings/components/meeting-panels'
 import { splitBilingualSummary, type SummaryLanguage } from '@/features/meetings/components/meeting-panels-model'
 import {
+  ActionItemAssignee,
+  ActionItemDueDate,
   ActionItemSuggestionsList,
+  ActionItemTitle,
   buildAssigneePool,
   useActionItemActions,
 } from '@/features/meetings/components/action-item-board'
-import { trackActionItem, type MeetingAiNotesView, type TaskSuggestionView } from '@/features/meetings/ai-actions'
+import {
+  acceptTaskSuggestion,
+  trackActionItem,
+  updateTaskSuggestion,
+  type MeetingAiNotesView,
+  type TaskSuggestionView,
+} from '@/features/meetings/ai-actions'
 import type { MentionUser } from '@/components/mention-textarea'
 
 /**
@@ -153,34 +171,35 @@ export function MeetingAiNotes({
     personNames: s.suggestedUserName ? [s.suggestedUserName] : [],
   }))
 
-  const [trackedKeys, setTrackedKeys] = useState<Set<string>>(new Set())
-  const [trackingKey, setTrackingKey] = useState<string | null>(null)
-  const [trackPending, startTrackPending] = useTransition()
-  const liveUntracked = untrackedActions.filter((row) => !trackedKeys.has(row.key))
+  // Rows this panel has turned into a real task. The server stops returning
+  // them as untracked on its next pass too (the accepted suggestion now
+  // matches the JSONB item — see reconcileActionItems), but that pass is a
+  // round trip away and the row must not flash back in the meantime.
+  const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set())
+  // Rows an inline edit has already promoted into a suggestion but which
+  // nobody has added as a task yet.
+  const [promotedKeys, setPromotedKeys] = useState<Set<string>>(new Set())
+  // …and this set is applied ONLY when a genuinely new `untrackedActions`
+  // lands, never at the moment a key joins it. Promotion happens DURING an
+  // edit, so dropping the row from the list right then would unmount the
+  // control under the hands of the person using it. By the time fresh data
+  // arrives the server has usually stopped returning the row anyway, which
+  // leaves this to catch one leftover: a title edited far enough that
+  // reconcileActionItems' similarity match no longer holds, where the row
+  // would otherwise come back as a duplicate of the suggestion it became.
+  // Same "adjust state during render" pattern as the suggestions override
+  // above, for the same reason an effect is wrong here.
+  const [prevUntrackedProp, setPrevUntrackedProp] = useState(untrackedActions)
+  const [untrackedRows, setUntrackedRows] = useState(untrackedActions)
+  if (untrackedActions !== prevUntrackedProp) {
+    setPrevUntrackedProp(untrackedActions)
+    setUntrackedRows(untrackedActions.filter((row) => !promotedKeys.has(row.key)))
+  }
+  const liveUntracked = untrackedRows.filter((row) => !addedKeys.has(row.key))
   const { visible: visibleUntracked } = useFilteredRows(liveUntracked, (row) => ({
     kind: 'action' as const,
     personNames: row.owner ? [row.owner] : [],
   }))
-
-  function handleTrack(row: ActionRow) {
-    setTrackingKey(row.key)
-    startTrackPending(async () => {
-      try {
-        const res = await trackActionItem({ meetingId, text: row.text, owner: row.owner, due: row.due })
-        if (!res.ok) {
-          toast.error(res.error)
-          return
-        }
-        setTrackedKeys((prev) => new Set(prev).add(row.key))
-        toast.success('Tracked — now editable below')
-        await onSuggestionsChanged()
-      } catch {
-        toast.error('Something went wrong — try again')
-      } finally {
-        setTrackingKey(null)
-      }
-    })
-  }
 
   const totalActionCount = liveSuggestions.length + liveUntracked.length
   const visibleActionCount = visibleSuggestions.length + visibleUntracked.length
@@ -442,18 +461,25 @@ export function MeetingAiNotes({
                     count={visibleUntracked.length}
                   />
                   <p className="text-2xs text-muted-foreground">
-                    The write-up mentions these, but they never became a suggestion card — track one to
-                    make it editable and acceptable like the rest.
+                    The write-up mentions these, but the suggestion pass never picked them up. They edit
+                    exactly like the cards above — the first edit is what saves one for good.
                   </p>
                   <ul className={cn('flex flex-col divide-y divide-border rounded-lg border', compact && 'text-sm')}>
                     {visibleUntracked.map((row) => (
                       <UntrackedActionRow
                         key={row.key}
                         action={row}
+                        meetingId={meetingId}
                         compact={compact}
                         canManage={canManage}
-                        pending={trackingKey === row.key && trackPending}
-                        onTrack={() => handleTrack(row)}
+                        attendees={attendees}
+                        assigneePool={assigneePool}
+                        appIds={appIds}
+                        onPromoted={() => setPromotedKeys((prev) => new Set(prev).add(row.key))}
+                        onAdded={async () => {
+                          setAddedKeys((prev) => new Set(prev).add(row.key))
+                          await onSuggestionsChanged()
+                        }}
                       />
                     ))}
                   </ul>
@@ -600,54 +626,250 @@ function resolveSummaryBlocks(
 
 /**
  * One JSONB-only commitment the suggestion pipeline never saw (see
- * reconcileActionItems) — what it is, who owes it, and when it is due, same
- * read-only layout the merged Action-items list used before this panel
- * switched to rendering identity-bearing suggestion rows, plus a "Track
- * this" button that turns it into one (trackActionItem). No inline editing
- * here — there is no row to edit until it is tracked.
+ * reconcileActionItems), rendered with the SAME controls a suggestion card
+ * has — editable title, the shared attendee-first assignee picker, an
+ * editable due date, and one "Add task" button that files it.
  *
- * Only a date that has actually passed gets the danger colour; a due date the
- * model wrote as a phrase ("next Friday") is shown as those words with no
- * colour at all, because we refused to guess which Friday (see
- * parseSpokenDueDate).
+ * It used to be plain text plus a "Track this" button, on the reasoning that
+ * there is no row to edit until it is tracked. That is true of the database
+ * and irrelevant to the person reading it: the panel offered a control that
+ * did the housekeeping and then made them find the row again somewhere else
+ * to do the thing they actually wanted. The two-step is gone —
+ * createActionItemPromoter (meeting-notes-model.ts) does the promotion on the
+ * first edit, once, in order, and its doc comment carries the full reasoning
+ * for promoting on edit rather than holding a draft.
+ *
+ * Preserved from the read-only version: only a date that has actually passed
+ * gets the danger colour, and a due date the model wrote as a phrase ("next
+ * Friday") is shown as those words with no colour at all, because we refused
+ * to guess which Friday (see parseSpokenDueDate / resolveUntrackedDue).
  */
 function UntrackedActionRow({
   action,
+  meetingId,
   compact,
   canManage,
-  pending,
-  onTrack,
+  attendees,
+  assigneePool,
+  appIds,
+  onPromoted,
+  onAdded,
 }: {
   action: ActionRow
+  meetingId: string
   compact?: boolean
   canManage: boolean
-  pending: boolean
-  onTrack: () => void
+  attendees: { id: string; name: string }[]
+  /** Attendees first, then the rest of the workspace — NOT a filter: the AI
+   *  routinely names somebody who was not in the room. */
+  assigneePool: MentionUser[]
+  /** The meeting's projects — `[]` is the app-less meeting, the one state
+   *  where the server has nowhere to file an unrouted item (see
+   *  acceptTaskSuggestion) and "Add task" would fail after promoting. */
+  appIds: string[]
+  /** Called the first time an edit turns this row into a real suggestion. */
+  onPromoted: () => void
+  /** Called once "Add task" has created the task — reloads the parent's intel. */
+  onAdded: () => Promise<void>
 }) {
-  const overdue = action.status === 'overdue'
+  // `action.key` is normalized write-up text (spaces, punctuation) and is not
+  // safe as a DOM id; the due editor needs one for its label association.
+  const rowId = useId()
+
+  const [title, setTitle] = useState(action.text)
+  const [assigneeId, setAssigneeId] = useState<string | null>(null)
+  const [assigneeName, setAssigneeName] = useState<string | null>(null)
+  // `undefined` = nobody has touched the date, so the write-up's own words
+  // still stand; `null` = explicitly cleared. See resolveUntrackedDue.
+  const [dueEdit, setDueEdit] = useState<string | null | undefined>(undefined)
+  const [promoted, setPromoted] = useState(false)
+
+  const [saving, startSaving] = useTransition()
+  const [adding, startAdding] = useTransition()
+  const addingRef = useRef(false)
+  const promotedRef = useRef(false)
+
+  const promoter = useRef<ActionItemPromoter | null>(null)
+  if (promoter.current === null) {
+    promoter.current = createActionItemPromoter(async () => {
+      // Promoted with what the WRITE-UP said, never the current draft: that
+      // original wording is what reconcileActionItems matches this JSONB item
+      // against on the next load, and any edit is applied to the row that
+      // comes back moments later anyway (the promoter runs queued writes in
+      // submission order). Assignee is deliberately not sent — trackActionItem
+      // refuses to record a first-name guess as a confirmed attribution.
+      const res = await trackActionItem({
+        meetingId,
+        text: action.text,
+        owner: action.owner,
+        due: action.due,
+      })
+      return res.ok ? { ok: true, id: res.data.id } : { ok: false, error: res.error }
+    })
+  }
+
+  function notePromotion() {
+    if (promotedRef.current || !promoter.current?.id) return
+    promotedRef.current = true
+    setPromoted(true)
+    onPromoted()
+  }
+
+  /**
+   * One inline edit, promoting the row first if it is still JSONB-only.
+   * Optimistic, with the same discipline as the suggestion cards': the
+   * control shows the new value immediately and `revert` puts the old one
+   * back if the write did not land.
+   */
+  function saveEdit(patch: ActionItemEditPatch, revert: () => void) {
+    startSaving(async () => {
+      try {
+        const res = await promoter.current!.run((suggestionId) =>
+          updateTaskSuggestion(suggestionId, buildSuggestionUpdatePayload(patch)),
+        )
+        notePromotion()
+        if (!res.ok) {
+          toast.error(res.error)
+          revert()
+        }
+      } catch {
+        toast.error('Something went wrong — try again')
+        revert()
+      }
+    })
+  }
+
+  function handleAdd() {
+    // The button is disabled while this runs, but a double click can land
+    // both presses inside one frame — and two accepts means one real task
+    // plus one "already handled" error, so the guard is a ref, not a render.
+    if (addingRef.current) return
+    addingRef.current = true
+    startAdding(async () => {
+      try {
+        // Queued behind any edit still in flight — notably the title commit
+        // that this very click caused by blurring the input. Accepting first
+        // would file the task under the old wording.
+        const res = await promoter.current!.run((suggestionId) => acceptTaskSuggestion(suggestionId))
+        notePromotion()
+        if (!res.ok) {
+          toast.error(res.error)
+          addingRef.current = false
+          return
+        }
+        toast.success('Task created')
+        // Left latched: the row is about to be dropped from the list, and a
+        // click during the reload has nothing left to accept.
+        await onAdded()
+      } catch {
+        toast.error('Something went wrong — try again')
+        addingRef.current = false
+      }
+    })
+  }
+
+  const rowDisabled = saving || adding
+  // One clock read per render; only the day matters to dueStatus.
+  const due = resolveUntrackedDue(action, dueEdit, new Date())
+  const noApp = appIds.length === 0
+
   return (
     <li
       className={cn(
-        'flex flex-wrap items-start gap-x-3 gap-y-1 px-3 py-2',
+        'flex flex-wrap items-start justify-between gap-x-3 gap-y-1 px-3 py-2',
         compact && 'px-2.5 py-1.5',
-        overdue && 'bg-destructive/5',
+        due.status === 'overdue' && 'bg-destructive/5',
       )}
     >
-      <span className={cn(bilingualText, 'min-w-0 flex-1 basis-48')}>{action.text}</span>
-      <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-        {action.owner ? (
-          <span className="text-xs font-medium text-muted-foreground">{action.owner}</span>
-        ) : (
-          <span className="text-xs text-muted-foreground italic">Unassigned</span>
-        )}
-        <DueChip action={action} />
+      <div className="flex min-w-0 flex-1 basis-48 flex-col gap-1">
         {canManage ? (
-          <Button variant="outline" size="sm" type="button" disabled={pending} onClick={onTrack}>
-            {pending ? <Loader2Icon className="animate-spin" aria-hidden /> : <PlusCircle aria-hidden />}
-            Track this
-          </Button>
-        ) : null}
-      </span>
+          <ActionItemTitle
+            value={title}
+            disabled={rowDisabled}
+            onSave={(next) => {
+              const previous = title
+              setTitle(next)
+              saveEdit({ title: next }, () => setTitle(previous))
+            }}
+            ariaLabel={`Edit title: ${title}`}
+          />
+        ) : (
+          <p className={cn(bilingualText, 'text-foreground')}>{title}</p>
+        )}
+        <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          {/* Says the thing the section heading above cannot: this row now HAS
+              a suggestion row, so the edit just made survives a reload. */}
+          {promoted ? <MetaChip>Now tracked</MetaChip> : null}
+          {canManage ? (
+            <>
+              {/* The write-up's own attribution — free text ("Nadeesha"), never
+                  a resolved user id, which is exactly why it cannot be the
+                  picker's value. Kept beside the picker so the choice is made
+                  WITH what was said, and dropped once somebody has chosen. */}
+              {action.owner && !assigneeId ? <MetaChip>Write-up: {action.owner}</MetaChip> : null}
+              <ActionItemAssignee
+                attendees={attendees}
+                currentId={assigneeId}
+                currentName={assigneeName}
+                people={assigneePool}
+                disabled={rowDisabled}
+                onChange={(id) => {
+                  const previousId = assigneeId
+                  const previousName = assigneeName
+                  setAssigneeId(id)
+                  setAssigneeName(id ? (assigneePool.find((p) => p.id === id)?.name ?? null) : null)
+                  saveEdit({ assigneeId: id }, () => {
+                    setAssigneeId(previousId)
+                    setAssigneeName(previousName)
+                  })
+                }}
+                label={`Assignee for "${title}"`}
+              />
+              <ActionItemDueDate
+                id={rowId}
+                currentIso={due.currentIso}
+                // No hint lookup: for an untracked row the write-up's phrase
+                // IS this row's due date, and it goes through `unresolvedDue`
+                // (quoted, no tone) rather than the warning-toned hint chip.
+                hint={null}
+                unresolvedDue={due.unresolvedDue}
+                disabled={rowDisabled}
+                onSave={(iso) => {
+                  const previous = dueEdit
+                  setDueEdit(iso)
+                  saveEdit({ dueDate: iso }, () => setDueEdit(previous))
+                }}
+                label={`Due date for "${title}"`}
+              />
+            </>
+          ) : (
+            <>
+              {action.owner ? (
+                <span className="font-medium">{action.owner}</span>
+              ) : (
+                <span className="italic">Unassigned</span>
+              )}
+              <DueChip action={action} />
+            </>
+          )}
+        </p>
+      </div>
+      {canManage ? (
+        <Button
+          size="sm"
+          type="button"
+          className="shrink-0"
+          // Same gate the suggestion cards use, and it matters more here: an
+          // accept that fails for want of an app would leave behind the
+          // suggestion the click had just created.
+          disabled={adding || noApp}
+          title={noApp ? 'Link this meeting to an app first' : undefined}
+          onClick={handleAdd}
+        >
+          {adding ? <Loader2Icon className="animate-spin" aria-hidden /> : <CheckIcon aria-hidden />}
+          Add task
+        </Button>
+      ) : null}
     </li>
   )
 }
