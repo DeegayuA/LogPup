@@ -13,6 +13,7 @@ import { requireCapability } from '@/features/auth/actor'
 import { countTransferableWork } from '@/features/people/handover-queries'
 import { EMPLOYMENT_TYPES, can, USER_ROLES, type UserRole } from '@/features/auth/capabilities'
 import { hashPassword } from '@/lib/password'
+import { resetPasswordFor } from '@/features/admin/starter-password'
 import { emailAllowed, allowedDomains } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { normalizePhone } from '@/lib/phone'
@@ -365,6 +366,64 @@ export async function setUserActive(
   })
   revalidateAdminPaths()
   return ok(undefined)
+}
+
+/**
+ * Puts the shared starter password back on an account, and forces the owner to
+ * replace it on their next sign-in.
+ *
+ * The point is the second half. `mustChangePassword` is not decoration here:
+ * the proxy (src/proxy.ts) pins a session carrying it to /profile until
+ * setOwnPassword clears it, so the reset password is only ever usable to set a
+ * real one. Removing that flag would leave a workspace-wide known password on
+ * a live account indefinitely.
+ *
+ * SELF-RESET IS REFUSED, via the same canEditUser guard setUserRole and
+ * setUserActive use. An admin resetting their OWN password to the shared
+ * constant would lock the workspace's own operator behind a password everyone
+ * knows, and they already have a real way to change it in /profile.
+ *
+ * The password is returned so the caller can show it — a reset nobody can
+ * read out is a reset that strands somebody. It is the same value every time
+ * TODAY (see starter-password.ts); returning it rather than assuming it is
+ * what makes switching to a random per-user value a one-line change.
+ */
+export async function resetUserPassword(
+  userId: string,
+): Promise<ActionResult<{ password: string }>> {
+  const actor = await requireCapability('user.password.reset')
+  if (!actor) return err('Admins only')
+  if (!canEditUser(actor.id, userId)) {
+    return err('Use Profile to change your own password')
+  }
+
+  const [target] = await db
+    .select({ name: users.name, active: users.active })
+    .from(users)
+    .where(eq(users.id, userId))
+  if (!target) return err('User not found')
+
+  const password = resetPasswordFor()
+  await db
+    .update(users)
+    .set({ passwordHash: hashPassword(password), mustChangePassword: true })
+    .where(eq(users.id, userId))
+
+  // Logged because this is somebody taking control of another person's
+  // account, which is exactly the class of act an audit trail exists for.
+  // The password itself is NEVER written to the log — it would put a live
+  // credential in a table half the workspace can read.
+  await logActivity({
+    actorId: actor.id,
+    verb: 'updated',
+    entityType: 'user',
+    entityId: userId,
+    entityLabel: target.name,
+    pagePath: `/people/${userId}`,
+    detail: 'password reset to the starter password',
+  })
+  revalidateAdminPaths()
+  return ok({ password })
 }
 
 // Every admin-created account starts with a RANDOM per-user starter password

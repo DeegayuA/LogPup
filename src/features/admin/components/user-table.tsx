@@ -10,6 +10,7 @@ import {
   Search,
   ShieldCheck,
   UserRoundCog,
+  KeyRound,
   UserRoundX,
   UsersRound,
 } from 'lucide-react'
@@ -53,6 +54,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  resetUserPassword,
   setUserActive,
   setUserOrgTags,
   setUserPersonalEmail,
@@ -661,6 +663,26 @@ export function UserTable({
           </Field>
         </dl>
 
+        {/* Sign-in access, kept ABOVE and apart from offboarding: resetting a
+            password is a routine "they're locked out" errand, and putting it
+            in the same group as Remove would make a common act sit under a
+            heading about ending somebody's employment. */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+          <div className="flex flex-col">
+            <span className="text-xs font-medium">Sign-in</span>
+            <span className="text-2xs text-muted-foreground">
+              Sets the starter password and makes them choose a new one on next sign-in.
+            </span>
+          </div>
+          {isSelf ? (
+            <span className="text-2xs text-muted-foreground">
+              Change your own password in Profile
+            </span>
+          ) : (
+            <ResetPasswordButton user={user} disabled={isPending} />
+          )}
+        </div>
+
         {/* Offboarding is separated by a rule and rendered as a control, not a
             sentence. Under the editable fields it read as a sixth field with a
             missing input; it is the one thing here that leaves this page. */}
@@ -1071,6 +1093,67 @@ export function UserTable({
  * comment, worklog and meeting keeps their name on it (see the table's
  * comment in src/db/schema.ts).
  */
+/**
+ * Puts the shared starter password back on somebody's account.
+ *
+ * Behind a confirm because it is not undoable and it is not quiet: it revokes
+ * whatever password that person currently uses, so a mis-click locks a
+ * colleague out until somebody reads them the new one. The dialog names the
+ * person for the same reason every destructive control in this table does —
+ * the rows are one line tall and the wrong one is one pixel away.
+ *
+ * The password is read back from the ACTION rather than printed from a
+ * constant in this file. It is the same value every time today, and hardcoding
+ * it here would silently start lying the day the server switches to a random
+ * per-user password — which is a one-line change by design.
+ */
+function ResetPasswordButton({ user, disabled }: { user: AdminUser; disabled: boolean }) {
+  const [pending, startResetting] = useTransition()
+
+  function handleReset() {
+    startResetting(async () => {
+      try {
+        const res = await resetUserPassword(user.id)
+        if (!res.ok) {
+          toast.error(res.error)
+          return
+        }
+        toast.success(`${user.name}'s password is now ${res.data.password}`, {
+          description: 'Tell them in person. They must change it on their next sign-in.',
+          duration: 15000,
+        })
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
+    })
+  }
+
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger render={<Button variant="outline" size="sm" disabled={disabled || pending} />}>
+        <KeyRound aria-hidden className="size-3.5" />
+        Reset password
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Reset {user.name}&rsquo;s password?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Their current password stops working immediately, and they will be asked to
+            choose a new one the next time they sign in. Until they do, anyone who knows
+            their email address can sign in as them &mdash; so tell them now, not later.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction disabled={pending} onClick={handleReset}>
+            Reset password
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
 function RemovePersonButton({ user, disabled }: { user: AdminUser; disabled: boolean }) {
   const [reason, setReason] = useState('')
   const [pending, startRemoving] = useTransition()

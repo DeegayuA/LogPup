@@ -89,6 +89,7 @@ export const ROLE_GRANTS = {
   // absent from IRREVERSIBLE_ACTIONS.
   'user.remove':                { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.profile.edit':          { superadmin: A, admin: A, manager: S, editor: O, member: O, stakeholder: O, auditor: N },
+  'user.password.reset':        { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.role.grant':            { superadmin: A, admin: A, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.role.grant.superadmin': { superadmin: A, admin: N, manager: N, editor: N, member: N, stakeholder: N, auditor: N },
   'user.schedule.edit':         { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
