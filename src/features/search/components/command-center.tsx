@@ -20,6 +20,7 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
 import { activityNavItem, navItems } from '@/components/shell/nav-items'
+import { setSidebarState, useSidebarState } from '@/components/shell/sidebar-store'
 import { ShortcutsOverlay } from '@/components/shell/shortcuts-overlay'
 import { cn } from '@/lib/utils'
 import { createDeduper } from '@/lib/dedupe'
@@ -252,6 +253,12 @@ export function CommandCenterProvider({
      so nothing here is rendered on the server and there is no first paint to
      get wrong. The toggle below is the only thing that writes it. */
   const [goShortcutsOn, setGoShortcutsOn] = React.useState(goShortcutsEnabled)
+  /* Whether the desktop sidebar is wide or a rail, so its row can name the
+     move it will make. Read through the same external store the sidebar
+     itself renders from — not a second copy of the localStorage read — so the
+     row and the column can never disagree about which way the switch is
+     pointing, and so a toggle from either surface re-renders both. */
+  const sidebar = useSidebarState()
   const goPrefix = React.useRef<number | null>(null)
   const paletteGoPrefix = React.useRef<number | null>(null)
   const paletteGoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -494,6 +501,11 @@ export function CommandCenterProvider({
       setTheme,
       setAccent,
       setGoShortcuts,
+      /* Straight through: the store writes storage, keeps its own memory
+         fallback when storage refuses, and broadcasts — there is nothing for
+         the palette to add, and a toast for a change you are watching happen
+         would be noise. */
+      setSidebar: setSidebarState,
       invalidateSearch: () => {
         searchDeduper.clear()
         intentDeduper.clear()
@@ -506,7 +518,7 @@ export function CommandCenterProvider({
      Which rows exist, what they are called, who may see them and what matches
      them all live in features/search/registry/commands.ts — this file only
      renders what comes back, so a new feature never has to be added here. */
-  const paletteCtx: PaletteContext = { user, theme, accent, goShortcutsOn }
+  const paletteCtx: PaletteContext = { user, theme, accent, goShortcutsOn, sidebar }
   const commands = paletteCommands(paletteCtx, query)
   const createCommands = commands.filter((command) => command.group === 'create')
   const navCommands = commands.filter((command) => command.group === 'navigate')

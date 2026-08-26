@@ -149,6 +149,9 @@ function ctx(role: PaletteContext['user']['role'] = 'member'): PaletteContext {
     theme: 'system',
     accent: 'pine',
     goShortcutsOn: true,
+    /* The default the sidebar store answers on the server, so the rows resolved
+       here are the ones a first load actually offers. */
+    sidebar: 'expanded',
   }
 }
 
@@ -592,6 +595,29 @@ describe('paletteCommands', () => {
       .find((label) => label.includes('go-to shortcuts'))
     expect(whenOn).toContain('Turn off')
     expect(whenOff).toContain('Turn on')
+  })
+
+  it('names the state the sidebar row will leave you in', () => {
+    // Same rule as the shortcuts row above, and the same reason: a palette row
+    // reading "Toggle sidebar" makes you press it to find out where you are.
+    const whenWide = paletteCommands({ ...ctx(), sidebar: 'expanded' })
+      .map((command) => command.label)
+      .find((label) => label.toLowerCase().includes('sidebar'))
+    const whenRail = paletteCommands({ ...ctx(), sidebar: 'rail' })
+      .map((command) => command.label)
+      .find((label) => label.toLowerCase().includes('sidebar'))
+    expect(whenWide).toBe('Collapse the sidebar')
+    expect(whenRail).toBe('Expand the sidebar')
+  })
+
+  it('offers the sidebar row in both states — it is the way back', () => {
+    /* Unlike the theme and colourway rows, this one must NEVER hide itself on
+       the state it is in: the rail is the state where the palette is the most
+       reliable way to reach a control the column has shrunk to an icon. */
+    for (const sidebar of ['expanded', 'rail'] as const) {
+      const ids = paletteCommands({ ...ctx(), sidebar }).map((command) => command.id)
+      expect(ids).toContain('settings.sidebar')
+    }
   })
 
   it('matches on keywords the label does not contain', () => {

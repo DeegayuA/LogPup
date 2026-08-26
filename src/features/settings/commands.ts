@@ -1,15 +1,16 @@
-import { Keyboard, Monitor, Moon, Palette, Sun } from 'lucide-react'
+import { Keyboard, Monitor, Moon, PanelLeft, Palette, Sun } from 'lucide-react'
 import { ACCENTS, type Accent, type Theme } from '@/components/shell/theme-provider'
+import { nextSidebarState, sidebarCommandLabel } from '@/components/shell/sidebar-model'
 import type { CommandDescriptor } from '@/features/search/registry/types'
 
 /**
  * The appearance and keyboard switches, owned by the feature that owns the
  * Settings page rather than left inline in the palette.
  *
- * These are the two rows that need to know what state they are ALREADY in —
- * which is why PaletteContext carries `theme` and `goShortcutsOn`. A switch
- * that says "toggle" makes you press it to find out; one that says "Turn off
- * go-to shortcuts" is also the answer to "are they on right now?".
+ * These are the rows that need to know what state they are ALREADY in — which
+ * is why PaletteContext carries `theme`, `goShortcutsOn` and `sidebar`. A
+ * switch that says "toggle" makes you press it to find out; one that says
+ * "Turn off go-to shortcuts" is also the answer to "are they on right now?".
  */
 
 const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [
@@ -59,6 +60,23 @@ export const commands: CommandDescriptor[] = [
       visible: (ctx) => ctx.theme !== theme.value,
     }),
   ),
+  {
+    /* The sidebar switch, reachable without finding the 28px button that
+       normally throws it — which matters most in the state where that button
+       is the only labelled thing left in a 64px column.
+       `sidebarCommandLabel` is the same declaration the button's own
+       accessible name comes from, so the two cannot end up describing
+       opposite moves. */
+    id: 'settings.sidebar',
+    label: (ctx) => sidebarCommandLabel(ctx.sidebar),
+    keywords: ['sidebar', 'navigation', 'nav', 'collapse', 'expand', 'rail', 'layout', 'hide'],
+    group: 'command',
+    icon: PanelLeft,
+    run: ({ setSidebar, close }, ctx) => {
+      setSidebar(nextSidebarState(ctx.sidebar))
+      close()
+    },
+  },
   {
     id: 'settings.go-shortcuts',
     label: (ctx) =>

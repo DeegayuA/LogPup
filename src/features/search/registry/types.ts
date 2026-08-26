@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import type { Session } from 'next-auth'
 import type { Accent, Theme } from '@/components/shell/theme-provider'
+import type { SidebarState } from '@/components/shell/sidebar-model'
 
 /**
  * The shapes every feature fills in to appear in the command center.
@@ -25,7 +26,7 @@ export type SearchContext = {
 /**
  * What the palette knows when it decides which rows to show.
  *
- * `user` is presentation only — see `visible`. The two shell fields are here
+ * `user` is presentation only — see `visible`. The shell fields are here
  * so a row can NAME the state it will leave you in ("Turn off go-to
  * shortcuts") instead of the verb "toggle"; without them those rows could not
  * live in a feature module and would have to stay hardcoded in the palette,
@@ -36,6 +37,11 @@ export type PaletteContext = SearchContext & {
   /** Which colourway is on, so the row for it can hide itself. */
   accent: Accent
   goShortcutsOn: boolean
+  /**
+   * Whether the desktop sidebar is wide or an icon rail, so its row can say
+   * which way it will move you. Same reason the two fields above are here.
+   */
+  sidebar: SidebarState
 }
 
 export type CommandGroupId =
@@ -66,6 +72,7 @@ export type CommandApi = {
   setTheme: (theme: Theme) => void
   setAccent: (accent: Accent) => void
   setGoShortcuts: (on: boolean) => void
+  setSidebar: (state: SidebarState) => void
   /**
    * Drops every retained search answer. Any command that WRITES must call
    * this: the palette caches results for 30s (see the deduper comment in

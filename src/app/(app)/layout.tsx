@@ -118,6 +118,13 @@ export default async function AppLayout({
               adminSections={adminSections}
               approvals={approvals}
               account={<AccountMenu user={user} role={session.user.role} variant="sidebar" />}
+              /* The same menu in its avatar-only form, for when the sidebar is
+                 collapsed to an icon rail. Both are built here because
+                 AccountMenu is a server component and the client Sidebar can
+                 only pick between variants it is handed — it mounts exactly
+                 one. Not optional chrome: the header's copy is `md:hidden`, so
+                 on desktop this is the only way to reach sign-out. */
+              accountCompact={<AccountMenu user={user} role={session.user.role} variant="compact" />}
             />
             <div className="flex flex-1 flex-col">
               <Header
