@@ -250,6 +250,79 @@ describe('suggestionToTaskPayload', () => {
   })
 })
 
+describe('suggestionToTaskPayload — the next meeting as a default deadline', () => {
+  const withNext = { appId: 'app1', sprintId: null, defaultDueDate: '2026-09-01' }
+
+  it('dates an item the model left dateless', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Check UK suppliers for ECC RAM', suggestedUserId: null, suggestedDueDate: null },
+      withNext,
+    )
+    expect(payload.dueDate).toBe('2026-09-01')
+  })
+
+  it('dates an item whose only date was a phrase the parser refused', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Research ISO compliance', suggestedUserId: null, suggestedDueDate: 'next week' },
+      withNext,
+    )
+    expect(payload.dueDate).toBe('2026-09-01')
+  })
+
+  it('never overrides a date the model actually committed to', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Present the budget', suggestedUserId: null, suggestedDueDate: '2026-08-28' },
+      withNext,
+    )
+    expect(payload.dueDate).toBe('2026-08-28')
+  })
+
+  it('never overrides a date a human typed', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Present the budget', suggestedUserId: null, suggestedDueDate: null },
+      withNext,
+      { dueDate: '2026-08-27' },
+    )
+    expect(payload.dueDate).toBe('2026-08-27')
+  })
+
+  it('respects a human clearing the date rather than refilling it from the default', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Present the budget', suggestedUserId: null, suggestedDueDate: '2026-08-28' },
+      withNext,
+      { dueDate: null },
+    )
+    expect(payload.dueDate).toBeNull()
+  })
+
+  it('leaves the item dateless when the room never agreed a next meeting', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Check UK suppliers', suggestedUserId: null, suggestedDueDate: null },
+      { appId: 'app1', sprintId: null, defaultDueDate: null },
+    )
+    expect(payload.dueDate).toBeNull()
+  })
+
+  it('is unchanged for a caller that supplies no default at all', () => {
+    const payload = suggestionToTaskPayload(
+      { text: 'Check UK suppliers', suggestedUserId: null, suggestedDueDate: null },
+      { appId: 'app1', sprintId: null },
+    )
+    expect(payload.dueDate).toBeNull()
+  })
+
+  it('reconstructs identically from the same meeting row, so Undo stays eligible', () => {
+    // undoAutoAcceptedSuggestion rebuilds this payload and canUndoAutoAssign
+    // compares dueDate exactly. The same suggestion against the same meeting
+    // row has to give the same date however much later it is called — which is
+    // the whole reason the default may not come from a clock.
+    const suggestion = { text: 'Deploy the test server', suggestedUserId: 'u1', suggestedDueDate: null }
+    const atCreation = suggestionToTaskPayload(suggestion, withNext)
+    const atUndo = suggestionToTaskPayload(suggestion, { ...withNext })
+    expect(atUndo.dueDate).toBe(atCreation.dueDate)
+  })
+})
+
 describe('orderNoteSegments', () => {
   function seg(overrides: Partial<OrderableSegment>): OrderableSegment {
     return {

@@ -38,6 +38,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import type { MentionUser } from '@/components/mention-textarea'
 import { cn } from '@/lib/utils'
 import { bilingualText, MetaChip, SectionHeading } from '@/features/meetings/components/meeting-chips'
+import { NEXT_MEETING_DUE_LABEL } from '@/features/meetings/next-meeting'
 import {
   buildSuggestionUpdatePayload,
   buildTaskUpdatePayload,
@@ -83,11 +84,17 @@ export const PRIORITY_OPTIONS = [
 
 type EditForm = { title: string; assigneeId: string; dueDate: string; priority: string }
 
-function toEditForm(suggestion: TaskSuggestionView): EditForm {
+function toEditForm(suggestion: TaskSuggestionView, defaultDueIso: string | null = null): EditForm {
   return {
     title: suggestion.text,
     assigneeId: suggestion.suggestedUserId ?? UNASSIGNED,
-    dueDate: suggestion.suggestedDueDate ?? '',
+    // Seeded with the next meeting when the model gave no date. Without it the
+    // dialog is strictly WORSE than the card it opens from: the card offers
+    // "By next meeting", the dialog starts blank, and its submit sends
+    // `overrides.dueDate || null` — an explicit null that beats the server's
+    // own fallback. Opening the editor to check a title would silently strip
+    // the deadline the card had just promised.
+    dueDate: suggestion.suggestedDueDate ?? defaultDueIso ?? '',
     priority: '0',
   }
 }
@@ -211,6 +218,8 @@ export function ActionItemAssignee({
  *  - an UNRESOLVED DUE DATE OF ITS OWN (`unresolvedDue`) — the words this row
  *    itself carries as its due date, which never resolved to a day. See that
  *    prop.
+ *  - a DEFAULT nobody typed (`defaultDueIso`) — the day the room agreed to meet
+ *    again. See that prop.
  *  - nothing at all — a plain, clearly-labeled "No due date".
  */
 export function ActionItemDueDate({
@@ -218,6 +227,7 @@ export function ActionItemDueDate({
   currentIso,
   hint,
   unresolvedDue,
+  defaultDueIso,
   disabled,
   onSave,
   label,
@@ -242,16 +252,36 @@ export function ActionItemDueDate({
    * editor, so the words are a starting point rather than a dead end.
    */
   unresolvedDue?: string | null
+  /**
+   * The day the room agreed to meet again (`meetings.next_meeting_at`), as
+   * `YYYY-MM-DD` — the deadline this item WILL get if nobody touches it, since
+   * the server applies exactly the same fallback when the suggestion is
+   * accepted (see MeetingTaskContext.defaultDueDate in notes.ts).
+   *
+   * Shown as the rule, "By next meeting", with the date second and quieter.
+   * Never as a bare date: a bare date is indistinguishable from one somebody
+   * committed to, and this one is a default the page applied. Neutral tone for
+   * the same reason the `unresolvedDue` branch is neutral — nothing here needs
+   * attention, it is simply what will happen.
+   *
+   * Ranks BELOW `hint`: a phrase the model wrote about this specific item is
+   * more informative than a blanket default, and it is the branch that asks a
+   * human to decide.
+   */
+  defaultDueIso?: string | null
   disabled: boolean
   onSave: (iso: string | null) => void
   label: string
 }) {
   const [editing, setEditing] = useState(false)
   const currentDate = currentIso ? parseISO(currentIso) : null
-  const [pending, setPending] = useState<Date>(currentDate ?? roundUpToStep(new Date()))
+  const defaultDate = defaultDueIso ? parseISO(defaultDueIso) : null
+  const [pending, setPending] = useState<Date>(currentDate ?? defaultDate ?? roundUpToStep(new Date()))
 
   function openEditor(seed: Date | null) {
-    setPending(seed ?? currentDate ?? roundUpToStep(new Date()))
+    // Seeding from the next meeting turns "set a date" into "confirm a date"
+    // for the common case, without storing anything until the user says so.
+    setPending(seed ?? currentDate ?? defaultDate ?? roundUpToStep(new Date()))
     setEditing(true)
   }
 
@@ -343,6 +373,23 @@ export function ActionItemDueDate({
         aria-label={`${label} — unresolved hint from the write-up: "${classified.raw}", not a real date. Click to set one.`}
       >
         <MetaChip tone="warning">Unresolved: &ldquo;{classified.raw}&rdquo;</MetaChip>
+      </button>
+    )
+  }
+
+  if (defaultDate) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => openEditor(defaultDate)}
+        className={triggerClass}
+        aria-label={`${label} — no date was set, so this is due by the next meeting on ${format(defaultDate, 'MMMM d')}. Click to choose a different date.`}
+      >
+        <MetaChip>
+          {NEXT_MEETING_DUE_LABEL}{' '}
+          <span className="font-mono tabular-nums">{format(defaultDate, 'MMM d')}</span>
+        </MetaChip>
       </button>
     )
   }
@@ -620,6 +667,7 @@ function AutoAssignedActionCard({
   attendees,
   assigneePool,
   deadlines,
+  defaultDueIso,
   actions,
 }: {
   suggestion: TaskSuggestionView
@@ -628,6 +676,9 @@ function AutoAssignedActionCard({
   attendees: AttendeeRef[]
   assigneePool: MentionUser[]
   deadlines: DeadlineHintSource[]
+  /** The meeting's agreed next meeting as `YYYY-MM-DD` — the deadline a
+   *  dateless item inherits on accept. See ActionItemDueDate's prop. */
+  defaultDueIso: string | null
   actions: ActionItemActions
 }) {
   const busy = actions.undoBusyId === suggestion.id && actions.undoPending
@@ -707,6 +758,7 @@ function AutoAssignedActionCard({
               id={suggestion.id}
               currentIso={suggestion.suggestedDueDate}
               hint={suggestion.suggestedDueDate ? null : findDueDateHint(suggestion.text, deadlines)}
+              defaultDueIso={defaultDueIso}
               disabled={rowDisabled}
               onSave={(iso) => actions.handleActionItemEdit(suggestion, { dueDate: iso })}
               label={`Due date for "${titleText}"`}
@@ -742,6 +794,7 @@ function SuggestedActionCard({
   assigneePool,
   appIds,
   deadlines,
+  defaultDueIso,
   actions,
 }: {
   suggestion: TaskSuggestionView
@@ -752,6 +805,9 @@ function SuggestedActionCard({
   /** The meeting's projects — a set, none primary; `[]` is the app-less meeting. */
   appIds: string[]
   deadlines: DeadlineHintSource[]
+  /** The meeting's agreed next meeting as `YYYY-MM-DD` — the deadline a
+   *  dateless item inherits on accept. See ActionItemDueDate's prop. */
+  defaultDueIso: string | null
   actions: ActionItemActions
 }) {
   const busy = actions.suggestionBusyId === suggestion.id && actions.suggestionPending
@@ -803,6 +859,7 @@ function SuggestedActionCard({
               id={suggestion.id}
               currentIso={suggestion.suggestedDueDate}
               hint={suggestion.suggestedDueDate ? null : findDueDateHint(suggestion.text, deadlines)}
+              defaultDueIso={defaultDueIso}
               disabled={rowDisabled}
               onSave={(iso) => actions.handleActionItemEdit(suggestion, { dueDate: iso })}
               label={`Due date for "${suggestion.text}"`}
@@ -853,7 +910,7 @@ function SuggestedActionCard({
               disabled={rowDisabled}
               onClick={() => {
                 actions.setEditingSuggestion(suggestion)
-                actions.setSuggestionForm(toEditForm(suggestion))
+                actions.setSuggestionForm(toEditForm(suggestion, defaultDueIso))
               }}
             >
               <PencilIcon aria-hidden /> Edit &amp; add
@@ -898,6 +955,7 @@ export function ActionItemSuggestionsList({
   appIds,
   meetingTitle,
   deadlines,
+  defaultDueIso = null,
   canManage,
   compact = false,
   autoAssignCappedCount = 0,
@@ -910,6 +968,13 @@ export function ActionItemSuggestionsList({
   appIds: string[]
   meetingTitle: string
   deadlines: DeadlineHintSource[]
+  /**
+   * The day this room agreed to meet again, `YYYY-MM-DD`, or null when it never
+   * did. Every card with no date of its own shows it as the deadline it will
+   * inherit — matching what the server actually applies on accept, so the card
+   * is not describing one outcome while the action produces another.
+   */
+  defaultDueIso?: string | null
   canManage: boolean
   compact?: boolean
   autoAssignCappedCount?: number
@@ -941,6 +1006,7 @@ export function ActionItemSuggestionsList({
                 attendees={attendees}
                 assigneePool={assigneePool}
                 deadlines={deadlines}
+                defaultDueIso={defaultDueIso}
                 actions={actions}
               />
             ))}
@@ -969,6 +1035,7 @@ export function ActionItemSuggestionsList({
                 assigneePool={assigneePool}
                 appIds={appIds}
                 deadlines={deadlines}
+                defaultDueIso={defaultDueIso}
                 actions={actions}
               />
             ))}

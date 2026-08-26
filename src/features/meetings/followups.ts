@@ -356,6 +356,84 @@ export function findMatchingFollowup(
   return best?.id ?? null
 }
 
+/* --- placing an unattributed item beside the row it came from ----------- */
+
+/**
+ * The key two copies of one sentence are matched on.
+ *
+ * Lowercase, whitespace collapsed, trailing sentence punctuation dropped — the
+ * same rule meeting-notes-model's own `normalize` uses, so a question and the
+ * follow-up derived from it still agree when one picked up a full stop.
+ *
+ * NO WORD-SPLITTING, deliberately. Half this app's text is Sinhala, where a
+ * `\w`-based regex severs combining marks from their consonant and silently
+ * produces a different string for the same sentence. Case folding and
+ * whitespace are safe on every script; anything cleverer is not.
+ */
+function followupTextKey(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!;:?]+$/, '')
+}
+
+/**
+ * Indexes unattributed follow-ups by their text, so the write-up can render the
+ * "who said this?" picker BESIDE the sentence it belongs to instead of in a
+ * separate panel that repeats every row a second time.
+ *
+ * Keyed by kind AND text. The same words legitimately arrive as both a question
+ * and an action ("Deploy the test server" — asked of somebody, and committed to
+ * by them); merging the two would put one picker on two rows and leave the
+ * other unreachable.
+ *
+ * EXACT normalized text, never `followupTaskSimilarity`'s fuzzy score, and the
+ * asymmetry is deliberate. That threshold exists for linking a task to a
+ * follow-up, where a wrong link quietly resolves something. Here a wrong match
+ * offers to record that a NAMED PERSON said a sentence they did not say, and
+ * writes it through attributeFollowup. Both sides of this match come from the
+ * same analysis pass and are usually the identical string, so the strict rule
+ * costs almost nothing — and what it misses is not lost, it stays in the
+ * leftovers (see unplacedUnattributed).
+ */
+export function indexUnattributedByText<T extends { text: string; kind: FollowupKind }>(
+  items: readonly T[],
+): Map<string, T> {
+  const index = new Map<string, T>()
+  for (const item of items) {
+    const key = `${item.kind}:${followupTextKey(item.text)}`
+    // First one wins: two follow-ups with identical kind and text are
+    // indistinguishable to a reader, so offering the picker for the first and
+    // leaving the second to the leftovers beats picking arbitrarily between
+    // them and hiding the other.
+    if (!index.has(key)) index.set(key, item)
+  }
+  return index
+}
+
+/** The item to offer a picker for beside this line, or null. */
+export function matchUnattributed<T extends { text: string; kind: FollowupKind }>(
+  index: Map<string, T>,
+  kind: FollowupKind,
+  text: string,
+): T | null {
+  return index.get(`${kind}:${followupTextKey(text)}`) ?? null
+}
+
+/**
+ * The ones that could NOT be placed beside a row — what the "Needs attribution"
+ * panel is reduced to.
+ *
+ * It still exists because placement is not guaranteed: a follow-up whose
+ * wording drifted from the write-up's, or one added by hand, matches nothing on
+ * the page. Dropping the panel outright would make those unreachable, and that
+ * failure is silent — it loses somebody's commitment. Usually empty, and an
+ * empty panel is not rendered at all.
+ */
+export function unplacedUnattributed<T extends { id: string }>(
+  all: readonly T[],
+  placedIds: ReadonlySet<string>,
+): T[] {
+  return all.filter((item) => !placedIds.has(item.id))
+}
+
 /* --- task completion <-> follow-up resolution --------------------------- */
 
 export type TaskLikeStatus = 'todo' | 'in_progress' | 'done'

@@ -58,6 +58,7 @@ import {
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
+import { isTerminal, STATUS_LABEL } from '@/features/sprints/board-view'
 import { cn } from '@/lib/utils'
 
 /**
@@ -393,7 +394,7 @@ export function DayHoursCard({
       tasks.map((task) => ({
         value: task.id,
         label: task.title,
-        hint: task.status === 'done' ? `${task.appName} · Done` : task.appName,
+        hint: isTerminal(task.status) ? `${task.appName} · ${STATUS_LABEL[task.status]}` : task.appName,
       })),
     [tasks],
   )

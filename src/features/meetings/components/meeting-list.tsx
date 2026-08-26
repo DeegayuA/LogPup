@@ -524,6 +524,12 @@ function MeetingRow({
           currentUserId={currentUserId}
           attendees={meeting.attendees}
           appIds={meeting.apps.map((app) => app.id)}
+          // The two lists this row already holds for its own edit dialog,
+          // forwarded so the write-up's "Schedule it" opens the ordinary
+          // meeting form here rather than sending someone to the calendar to
+          // retype the same people and projects.
+          apps={apps}
+          activeUsers={users}
           mentionUsers={users}
           onGlanceChange={(next) => {
             setGlance(next)

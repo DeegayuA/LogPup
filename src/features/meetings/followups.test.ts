@@ -7,6 +7,9 @@ import {
   filterValidIds,
   followupTaskSimilarity,
   findMatchingFollowup,
+  indexUnattributedByText,
+  matchUnattributed,
+  unplacedUnattributed,
   decideFollowupResolutionOnTaskStatusChange,
   MAX_CARRIED_PER_PERSON,
   CARRY_STALE_DAYS,
@@ -432,5 +435,65 @@ describe('filterValidIds', () => {
 
   it('returns an empty array given no candidates', () => {
     expect(filterValidIds([], ['a', 'b'])).toEqual([])
+  })
+})
+
+describe('indexUnattributedByText / matchUnattributed', () => {
+  const items = [
+    { id: 'f1', kind: 'question' as const, text: 'Is the Ubuntu laptop configured as a Q Device?' },
+    { id: 'f2', kind: 'action' as const, text: 'Deploy the hosting platform on the test server.' },
+    { id: 'f3', kind: 'question' as const, text: 'Deploy the hosting platform on the test server.' },
+  ]
+
+  it('places a row whose text matches exactly', () => {
+    const index = indexUnattributedByText(items)
+    expect(
+      matchUnattributed(index, 'question', 'Is the Ubuntu laptop configured as a Q Device?')?.id,
+    ).toBe('f1')
+  })
+
+  it('still matches across case, spacing and a trailing full stop', () => {
+    const index = indexUnattributedByText(items)
+    expect(
+      matchUnattributed(index, 'action', '  deploy   the hosting platform on the test server  ')?.id,
+    ).toBe('f2')
+  })
+
+  it('keeps question and action apart even when the words are identical', () => {
+    const index = indexUnattributedByText(items)
+    expect(matchUnattributed(index, 'action', 'Deploy the hosting platform on the test server.')?.id).toBe('f2')
+    expect(matchUnattributed(index, 'question', 'Deploy the hosting platform on the test server.')?.id).toBe('f3')
+  })
+
+  it('refuses a near-miss rather than offering to attribute the wrong sentence', () => {
+    const index = indexUnattributedByText(items)
+    // Shares almost every word, and is a different commitment.
+    expect(
+      matchUnattributed(index, 'action', 'Deploy the hosting platform on the production server.'),
+    ).toBeNull()
+  })
+
+  it('matches Sinhala without severing combining marks', () => {
+    const si = [{ id: 'f4', kind: 'action' as const, text: 'සේවාදායකය පරීක්ෂා කරන්න.' }]
+    const index = indexUnattributedByText(si)
+    expect(matchUnattributed(index, 'action', 'සේවාදායකය පරීක්ෂා කරන්න')?.id).toBe('f4')
+  })
+
+  it('gives a duplicate pair one picker and leaves the other to the leftovers', () => {
+    const dupes = [
+      { id: 'a', kind: 'action' as const, text: 'Check UK prices' },
+      { id: 'b', kind: 'action' as const, text: 'Check UK prices' },
+    ]
+    const index = indexUnattributedByText(dupes)
+    expect(matchUnattributed(index, 'action', 'Check UK prices')?.id).toBe('a')
+    expect(unplacedUnattributed(dupes, new Set(['a'])).map((i) => i.id)).toEqual(['b'])
+  })
+
+  it('is empty when everything found a home', () => {
+    expect(unplacedUnattributed(items, new Set(['f1', 'f2', 'f3']))).toEqual([])
+  })
+
+  it('keeps an item nothing on the page matched', () => {
+    expect(unplacedUnattributed(items, new Set(['f1'])).map((i) => i.id)).toEqual(['f2', 'f3'])
   })
 })

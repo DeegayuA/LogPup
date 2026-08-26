@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { applyDueDate } from '@/features/sprints/due-date'
+import { isTerminal } from '@/features/sprints/board-view'
 import { transitionTaskStatus } from '@/features/sprints/task-status'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { meetingFollowups, tasks } from '@/db/schema'
@@ -481,7 +482,7 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   let detail: string | null = null
   let metadata: Record<string, unknown> | null = null
   if (nextStatus !== undefined && nextStatus !== existing.status) {
-    verb = nextStatus === 'done' ? 'completed' : existing.status === 'done' ? 'reopened' : 'moved'
+    verb = isTerminal(nextStatus) ? 'completed' : isTerminal(existing.status) ? 'reopened' : 'moved'
     if (verb === 'moved') detail = `to ${STATUS_LABELS[nextStatus]}`
     metadata = { status: { from: existing.status, to: nextStatus } }
   } else if (nextAssignee !== undefined && nextAssignee !== existing.assigneeId) {
@@ -609,7 +610,7 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
   let detail: string | null = null
   let metadata: Record<string, unknown> | null = null
   if (status !== undefined && status !== existing.status) {
-    verb = status === 'done' ? 'completed' : existing.status === 'done' ? 'reopened' : 'moved'
+    verb = isTerminal(status) ? 'completed' : isTerminal(existing.status) ? 'reopened' : 'moved'
     if (verb === 'moved') detail = `to ${STATUS_LABELS[status]}`
     metadata = { status: { from: existing.status, to: status } }
   } else if (assigneeId !== undefined && assigneeId !== existing.assigneeId) {

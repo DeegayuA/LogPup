@@ -102,6 +102,7 @@ import {
   type AppOption,
   type AttendeePrep,
 } from '@/features/meetings/notes'
+import { nextMeetingDueDate, parseColomboWallClock } from '@/features/meetings/next-meeting'
 import { getCheckinsForSprints } from '@/features/sprints/checkin-queries'
 import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { concatenateSegments } from '@/features/meetings/recording-segments'
@@ -263,6 +264,18 @@ export type MeetingIntel = {
   /** The per-meeting auto-assign toggle (meetings.autoAssignTasks) — see setMeetingAutoAssignTasks. */
   autoAssignTasks: boolean
   /**
+   * When this room agreed to meet again (`meetings.next_meeting_at`), or null
+   * when it never said. NOT a meeting id and NOT a link — the meeting it names
+   * usually does not exist yet. Distinct from `upcomingMeetings` below, which
+   * are real scheduled rows a follow-up can be pinned to; the two are allowed
+   * to disagree and neither is derived from the other.
+   *
+   * Free to carry: `meeting` is already a SELECT * over this row, so returning
+   * it costs no extra query. It is what every action item out of this meeting
+   * takes its default deadline from — see MeetingTaskContext.defaultDueDate.
+   */
+  nextMeetingAt: Date | null
+  /**
    * Open + auto-accepted task suggestions — the single source of truth for
    * "action items" in the write-up. Identical query to getMeetingNoteTimeline's
    * own suggestions (both call fetchTaskSuggestions), returned here too so the
@@ -372,7 +385,15 @@ function asActionItems(value: unknown): ActionItemOut[] {
  * can say "N more suggestions need review".
  */
 async function insertAutoNotesAndSuggestions(
-  meeting: { id: string; appId: string | null; title: string; autoAssignTasks: boolean },
+  meeting: {
+    id: string
+    appId: string | null
+    title: string
+    autoAssignTasks: boolean
+    /** The room's agreed next meeting — the default deadline every task this
+     *  pass creates inherits. Null leaves them dateless, as before. */
+    nextMeetingAt: Date | null
+  },
   recorder: { id: string; name: string | null },
   summary: string | null,
   speakerSegments: SpeakerSegmentOut[],
@@ -487,7 +508,11 @@ async function insertAutoNotesAndSuggestions(
       try {
         const payload = suggestionToTaskPayload(
           { text: item.text, suggestedUserId: assigneeId, suggestedDueDate: item.suggestedDueDate },
-          { appId: targetAppId, sprintId: null },
+          {
+            appId: targetAppId,
+            sprintId: null,
+            defaultDueDate: nextMeetingDueDate(meeting.nextMeetingAt),
+          },
         )
         const created = await createTask(payload)
         if (!created.ok) throw new Error(created.error)
@@ -1222,7 +1247,16 @@ lists were given.`
  */
 async function persistMeetingAnalysis(
   id: string,
-  meeting: { title: string; startsAt: Date; appId: string | null; autoAssignTasks: boolean },
+  meeting: {
+    title: string
+    startsAt: Date
+    appId: string | null
+    autoAssignTasks: boolean
+    /** Carried through only so the auto-assign pass can default a dateless
+     *  action item to the day the room agreed to meet again. Analysis itself
+     *  never reads or writes it. */
+    nextMeetingAt: Date | null
+  },
   author: { id: string; name?: string | null; role?: string | null },
   attendees: AttendeeRef[],
   raw: string,
@@ -1260,7 +1294,13 @@ async function persistMeetingAnalysis(
   let cappedCount = 0
   try {
     ;({ cappedCount } = await insertAutoNotesAndSuggestions(
-      { id, appId: meeting.appId, title: meeting.title, autoAssignTasks: meeting.autoAssignTasks },
+      {
+        id,
+        appId: meeting.appId,
+        title: meeting.title,
+        autoAssignTasks: meeting.autoAssignTasks,
+        nextMeetingAt: meeting.nextMeetingAt,
+      },
       { id: createdBy, name: author.name ?? null },
       summary,
       speakerSegments,
@@ -2135,6 +2175,7 @@ export async function getMeetingIntel(meetingId: string): Promise<ActionResult<M
       byteSize: row.byteSize,
     })),
     autoAssignTasks: meeting.autoAssignTasks,
+    nextMeetingAt: meeting.nextMeetingAt,
     suggestions: await fetchTaskSuggestions(id),
     untrackedActions,
     nextSegmentIndex: await fetchNextSegmentIndex(id),
@@ -2292,6 +2333,192 @@ export async function setMeetingAutoAssignTasks(
   revalidatePath('/meetings')
   return ok(undefined)
 }
+
+const setNextMeetingInput = z.object({
+  meetingId: z.uuid(),
+  // An INSTANT, not a day. "Thursday at 3" is a time somebody said out loud in
+  // a room, and the column is timestamptz precisely so it survives being read
+  // from a machine that is not in Colombo. Nullable because clearing it has to
+  // be possible: null is the honest state for the many meetings whose room
+  // never named a next one, and a control that can only ever set a date turns
+  // a mistyped year into something nobody can take back.
+  nextMeetingAt: z.iso.datetime().nullable(),
+})
+
+/**
+ * Records when this room agreed to meet again (`meetings.next_meeting_at`).
+ *
+ * NOT a meeting id, and it creates nothing — the meeting it describes usually
+ * does not exist yet, which is the whole reason the column references nothing.
+ * Scheduling the real thing stays a separate, deliberate act through the
+ * meeting form; this is the note somebody takes as the call ends.
+ *
+ * Its consequence is deadlines: an action item agreed here is, from now on,
+ * due by the next meeting unless somebody says otherwise (see
+ * MeetingTaskContext.defaultDueDate). Existing tasks are NOT rewritten — this
+ * seeds new ones, it does not re-derive old ones.
+ *
+ * Its own narrow action rather than a field on `updateMeeting`, deliberately.
+ * `meetingFields` is shared by createMeeting and updateMeeting and the update
+ * rewrites the whole row from the parsed input, so an optional field there
+ * would let the ordinary meeting form — which would not send it — blank this
+ * date on every unrelated edit. `visibility` already has that bug from the
+ * print page's side; this does not join it.
+ *
+ * Same `canManageMeeting` gate as recording and the auto-assign toggle: admin,
+ * the meeting's creator, or a PM of one of its projects. That is narrower than
+ * who can READ the write-up (every attendee), so the control renders read-only
+ * for the rest of the room.
+ */
+export async function setMeetingNextMeeting(
+  meetingId: string,
+  nextMeetingAt: string | null,
+): Promise<ActionResult> {
+  const parsed = setNextMeetingInput.safeParse({ meetingId, nextMeetingAt })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Not allowed')
+
+  const value = parsed.data.nextMeetingAt ? new Date(parsed.data.nextMeetingAt) : null
+  if (value && Number.isNaN(value.getTime())) return err('That is not a valid date and time')
+
+  await db
+    .update(meetings)
+    .set({ nextMeetingAt: value })
+    .where(eq(meetings.id, parsed.data.meetingId))
+
+  await logActivity({
+    actorId: ctx.session.user.id,
+    verb: 'updated',
+    entityType: 'meeting',
+    entityId: parsed.data.meetingId,
+    entityLabel: ctx.meeting.title,
+    pagePath: '/meetings',
+    detail: value ? `next meeting to ${toIsoDateInTimeZone(value)}` : 'to no next meeting',
+  })
+
+  revalidatePath('/meetings')
+  return ok(undefined)
+}
+
+/**
+ * "So we can get another meeting next week, same day or Monday" — read back out
+ * of the transcript and OFFERED, never saved.
+ *
+ * ON DEMAND rather than as a field on the analysis prompt, which was the
+ * obvious alternative. Three reasons, in order of weight:
+ *
+ *  1. It works on meetings that already happened. A prompt field only ever
+ *     helps meetings analysed AFTER the change; every write-up already in the
+ *     database would stay dateless forever, which is most of them.
+ *  2. Nothing new is persisted, so the proposal cannot be mistaken for the
+ *     agreement. `meetings.next_meeting_at` keeps meaning exactly one thing —
+ *     a date a human confirmed — and distinguishing "the model thinks" from
+ *     "the room agreed" needs no second column and no migration.
+ *  3. Provenance is unambiguous because somebody pressed a button. The result
+ *     is returned to the caller and displayed for confirmation; the only write
+ *     path remains setMeetingNextMeeting.
+ *
+ * The cost is one extra text call per press, on the same meeting-intel chain
+ * and ledger slug as the write-up itself — which is what it is.
+ */
+const suggestNextMeetingInput = z.object({ meetingId: z.uuid() })
+
+export type NextMeetingSuggestion = {
+  /** ISO instant, or null when the room never agreed one. */
+  at: string | null
+  /** The words that carried it, quoted back so a reader can judge the guess. */
+  heardAs: string | null
+}
+
+export async function suggestNextMeeting(
+  meetingId: string,
+): Promise<ActionResult<NextMeetingSuggestion>> {
+  const parsed = suggestNextMeetingInput.safeParse({ meetingId })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const ctx = await canManageMeeting(parsed.data.meetingId)
+  if (!ctx) return err('Not allowed')
+  const { session, meeting } = ctx
+
+  const disabled = await aiFeatureDisabledMessage(session.user.id, 'meeting-intel')
+  if (disabled) return err(disabled)
+
+  const [notesRow] = await db
+    .select({ transcript: meetingAiNotes.transcript, summary: meetingAiNotes.summary })
+    .from(meetingAiNotes)
+    .where(eq(meetingAiNotes.meetingId, parsed.data.meetingId))
+
+  // The agreement to reconvene is said as people are leaving, so the END of the
+  // transcript is where it lives. Taking the tail also bounds the call: a
+  // three-hour meeting's full transcript is a large, mostly irrelevant input
+  // for one date. Falls back to the summary for a meeting written up before
+  // transcripts were kept.
+  const source = notesRow?.transcript?.slice(-NEXT_MEETING_SOURCE_CHARS) ?? notesRow?.summary ?? null
+  if (!source?.trim()) {
+    return err('There is no transcript or write-up to read a date out of yet')
+  }
+
+  const prompt = `This meeting was held on ${format(meeting.startsAt, 'EEEE, d MMMM yyyy')} (Asia/Colombo).
+
+END OF THE MEETING RECORD:
+${source}
+
+Did the people in this room agree WHEN THEY WOULD MEET AGAIN?
+
+Reply with JSON only: {"at": "YYYY-MM-DDTHH:mm" or null, "heardAs": "the words they used" or null}
+
+Rules:
+- "at" is a wall-clock date and time in Asia/Colombo. Resolve relative words
+  ("next week", "same day", "Monday") against the meeting date above.
+- Return null unless somebody actually proposed meeting again. A deadline for a
+  task, a delivery date, or a date merely mentioned in passing is NOT a next
+  meeting. NEVER infer one, and never offer a date to be helpful — null is the
+  correct and expected answer for most meetings.
+- If a day was agreed but no time, use the time this meeting started.
+- If the room named alternatives ("same day or Monday"), take the EARLIEST and
+  put the whole phrase in "heardAs" so a human can see it was a choice.
+- "heardAs" quotes the speaker, in the language they said it (Sinhala in
+  Sinhala script). Never paraphrase it into a date.`
+
+  try {
+    const prefs = await getAiPrefs(session.user.id)
+    const { text } = await callGemini(session.user.id, [{ text: prompt }], {
+      models: resolveChain('meeting-intel', prefs['meeting-intel'].model),
+      feature: 'meeting.synthesis',
+    })
+    let payload: unknown
+    try {
+      payload = JSON.parse(text.replace(/^```(?:json)?\n?|```$/g, '').trim())
+    } catch {
+      // A model that did not answer in JSON has not found a date; saying so is
+      // better than surfacing a parser error over a question whose ordinary
+      // answer is "nothing was agreed".
+      return ok({ at: null, heardAs: null })
+    }
+
+    const row = payload as { at?: unknown; heardAs?: unknown }
+    const at = typeof row.at === 'string' ? parseColomboWallClock(row.at) : null
+    return ok({
+      at: at ? at.toISOString() : null,
+      // Dropped along with an unusable date: a quote with no date to explain
+      // would read as though something had been found.
+      heardAs: at && typeof row.heardAs === 'string' && row.heardAs.trim() ? row.heardAs.trim() : null,
+    })
+  } catch (error) {
+    if (error instanceof GeminiError) return err(error.message)
+    return err('Could not read a next meeting out of this one — set the date by hand')
+  }
+}
+
+/**
+ * How much of the transcript's tail the next-meeting read gets. Roughly the
+ * last few minutes of speech — enough to contain "so, next week then?" and its
+ * surrounding exchange, and small enough that pressing the button on a long
+ * meeting is not an expensive call.
+ */
+const NEXT_MEETING_SOURCE_CHARS = 6000
 
 const resolveFollowupInput = z.object({
   followupId: z.uuid(),
@@ -3927,8 +4154,15 @@ export async function trackActionItem(input: unknown): Promise<ActionResult<{ id
   // The owner's name is already in `text`; a human picks the assignee, and the
   // confirmed-speaker path (resolveSpeakerUserId) is the only thing allowed to
   // fill this column without one.
+  // A phrase the parser refuses ("next week", "before we meet again") leaves
+  // this null, which is why every tracked row used to be born dateless. It now
+  // falls back to the day the room agreed to meet again — the same default the
+  // suggestion cards above these rows get, so promoting an untracked item does
+  // not quietly produce a worse row than accepting one.
   const resolvedDue = due ? parseSpokenDueDate(due) : null
-  const suggestedDueDate = resolvedDue ? format(resolvedDue, 'yyyy-MM-dd') : null
+  const suggestedDueDate = resolvedDue
+    ? format(resolvedDue, 'yyyy-MM-dd')
+    : nextMeetingDueDate(ctx.meeting.nextMeetingAt)
 
   const [row] = await db
     .insert(meetingTaskSuggestions)
@@ -4080,7 +4314,14 @@ export async function acceptTaskSuggestion(
       suggestedUserId: suggestion.suggestedUserId,
       suggestedDueDate: suggestion.suggestedDueDate,
     },
-    { appId: targetAppId, sprintId: null },
+    {
+      appId: targetAppId,
+      sprintId: null,
+      // Only reached when the model dated the item vaguely or not at all AND
+      // the person accepting left the date field alone — an explicit date, and
+      // an explicit clear, both still win. See MeetingTaskContext.
+      defaultDueDate: nextMeetingDueDate(meeting.nextMeetingAt),
+    },
     {
       title: parsed.data.title,
       assigneeId: parsed.data.assigneeId,
@@ -4237,19 +4478,47 @@ export async function undoAutoAcceptedSuggestion(suggestionId: string): Promise<
       suggestedUserId: suggestion.suggestedUserId,
       suggestedDueDate: suggestion.suggestedDueDate,
     },
-    { appId: task.appId, sprintId: null },
-  )
-  const eligible = canUndoAutoAssign(
-    { status: task.status, title: task.title, assigneeId: task.assigneeId, dueDate: task.dueDate },
     {
-      status: 'todo',
-      title: original.title,
-      assigneeId: original.assigneeId,
-      dueDate: original.dueDate,
+      appId: task.appId,
+      sprintId: null,
+      // The SAME default the auto pass applied, recomputed from the same
+      // meeting row — that is what makes this a faithful reconstruction rather
+      // than a second opinion. It is also why the default may not be
+      // clock-derived (see MeetingTaskContext): a value that moved with the
+      // calendar would make every dated auto-assigned task look edited.
+      //
+      // It can still drift in one case: somebody changes the meeting's agreed
+      // next meeting after the auto pass ran. The due-date branch below exists
+      // so that case says what actually happened instead of blaming a person
+      // who touched nothing.
+      defaultDueDate: nextMeetingDueDate(meeting.nextMeetingAt),
     },
   )
-  if (!eligible) {
-    return err('This task has already been changed since it was auto-assigned — edit it directly instead')
+  const current = {
+    status: task.status,
+    title: task.title,
+    assigneeId: task.assigneeId,
+    dueDate: task.dueDate,
+  }
+  const asCreated = {
+    status: 'todo' as const,
+    title: original.title,
+    assigneeId: original.assigneeId,
+    dueDate: original.dueDate,
+  }
+  if (!canUndoAutoAssign(current, asCreated)) {
+    // Name the drift. "Already been changed" over a deadline the reader never
+    // touched — because the next meeting moved under it — is the kind of
+    // confident wrong answer this codebase spends comments avoiding.
+    const onlyTheDeadline =
+      current.status === asCreated.status &&
+      current.title === asCreated.title &&
+      current.assigneeId === asCreated.assigneeId
+    return err(
+      onlyTheDeadline
+        ? 'This task’s deadline no longer matches the one it was auto-assigned with — edit or delete the task directly instead'
+        : 'This task has already been changed since it was auto-assigned — edit it directly instead',
+    )
   }
 
   // Soft delete: `tasks` is one of the soft-deleted tables (see

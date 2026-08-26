@@ -100,11 +100,30 @@ export function WorklogForm({
    * function that WRITES a tag and the one that READS it back out of the note
    * cannot disagree about what a tag is.
    */
+  /**
+   * Focus the note and put the caret at the END of it.
+   *
+   * `focus()` alone leaves the caret wherever it last was — for an untouched
+   * box that is offset 0, so tagging a project dropped a `[Project]` marker at
+   * the bottom of the note and then parked the cursor at the top of it. The
+   * one thing a person is certain to do next is type what they did on that
+   * project, and they had to click into the right place first.
+   */
+  const caretToEnd = () => {
+    setTimeout(() => {
+      const field = textareaRef.current
+      if (!field) return
+      field.focus()
+      const end = field.value.length
+      field.setSelectionRange(end, end)
+      // A tag appended past the visible rows is off-screen in a 4-row box.
+      field.scrollTop = field.scrollHeight
+    }, 50)
+  }
+
   const handleTagProject = (appName: string) => {
     setNote((prev) => toggleNoteAppTag(prev, appName))
-    setTimeout(() => {
-      textareaRef.current?.focus()
-    }, 50)
+    caretToEnd()
   }
 
   // Split day across all unfilled assigned projects
@@ -126,10 +145,12 @@ export function WorklogForm({
       return updated
     })
 
-    setTimeout(() => {
-      textareaRef.current?.focus()
-    }, 50)
-    toast.success(`Added templates for ${unfilledApps.length} project(s)`)
+    caretToEnd()
+    toast.success(
+      unfilledApps.length === 1
+        ? `Added a line for ${unfilledApps[0].name} — say what you did`
+        : `Added a line for each of ${unfilledApps.length} projects — say what you did`,
+    )
   }
 
   function handleSave() {

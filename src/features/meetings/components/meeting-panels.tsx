@@ -82,15 +82,27 @@ function kindAccentClass(tagAccent: string | undefined): string | undefined {
 /* --- fixed panel identity (ids, order, defaults) ----------------------- */
 
 export const PANEL_IDS = [
-  'summary',
+  // First on purpose. It is the only panel whose value changes what the panels
+  // below it say: the agreed next meeting is the default deadline every
+  // dateless action item inherits (notes.ts, MeetingTaskContext).
+  'next-meeting',
+  // ORDER IS THE PAGE'S ARGUMENT, and it goes: what is owed, what happened,
+  // what is still open, what is next, what was said.
+  //
+  // Action items ahead of Summary is the one that looks wrong and is not: a
+  // reader who attended the meeting does not need it summarised, they need
+  // their own name and a date, and they were scrolling past the summary to
+  // find it. A reader who missed it reads the summary either way — one panel
+  // lower costs them a glance, where the reverse cost somebody their work.
   'action-items',
+  'summary',
   'discussion',
   'for-next-meeting',
   'glossary',
-  'plan-the-meeting',
-  'around-the-table',
-  'needs-attribution',
   'carried-forward',
+  'around-the-table',
+  'plan-the-meeting',
+  'needs-attribution',
   'record',
 ] as const
 export type PanelId = (typeof PANEL_IDS)[number]
@@ -99,6 +111,10 @@ export type PanelId = (typeof PANEL_IDS)[number]
  *  the spec's panel table for the reasoning behind Glossary and Record
  *  starting collapsed. */
 export const PANEL_DEFAULT_OPEN: Record<PanelId, boolean> = {
+  // Open, and cheap to be: it renders one date already loaded with the intel,
+  // and its whole job is to be answered rather than found. A collapsed default
+  // would hide the one field that governs the deadlines below it.
+  'next-meeting': true,
   summary: true,
   'action-items': true,
   discussion: true,

@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import {
   AlertCircle,
   AudioLines,
+  CalendarClock,
   Check,
   ChevronDown,
   CircleCheck,
@@ -82,6 +83,16 @@ import {
   type PanelId,
   type PanelNavItem,
 } from '@/features/meetings/components/meeting-panels'
+import { NextMeetingPanel } from '@/features/meetings/components/next-meeting-card'
+import { nextMeetingDueDate } from '@/features/meetings/next-meeting'
+import {
+  indexUnattributedByText,
+  matchUnattributed,
+  unplacedUnattributed,
+} from '@/features/meetings/followups'
+import type { AttributionContext } from '@/features/meetings/components/attribution-inline'
+import type { MeetingPrefill } from '@/features/meetings/components/meeting-form'
+import type { ActiveUser } from '@/features/people/queries'
 import type { ContentKind } from '@/features/meetings/components/meeting-panels-model'
 import {
   deleteFollowup,
@@ -409,6 +420,19 @@ const COMPOSER_COPY: Record<
 // follow-up has: no pin, so it surfaces wherever that person turns up next.
 const NEXT_MEETING = 'next'
 
+/**
+ * How many open items "Schedule it" carries into the new meeting's agenda
+ * before it stops.
+ *
+ * A cap rather than everything: a group with three months of unresolved
+ * follow-ups would otherwise open the form with a wall of text nobody reads
+ * and everybody deletes, and an agenda that has to be emptied before it can be
+ * written is worse than one that starts blank. Oldest-first ordering is already
+ * done upstream (selectCarriedForward), so the lines that survive the cut are
+ * the ones that have been waiting longest.
+ */
+const MAX_PREFILL_AGENDA_LINES = 12
+
 function draftKey(field: ComposerField, followupId: string): string {
   return `${field}:${followupId}`
 }
@@ -528,6 +552,8 @@ export function MeetingIntelPanel({
   attendees = [],
   autoOpen = false,
   appIds = [],
+  apps = [],
+  activeUsers = [],
   mentionUsers,
   onGlanceChange,
   isAdmin = false,
@@ -545,6 +571,15 @@ export function MeetingIntelPanel({
    * suggestion with nowhere to go.
    */
   appIds?: string[]
+  /**
+   * Projects and people the "Schedule it" form needs to offer — the same two
+   * lists the meetings page already hands MeetingList for its edit dialog, not
+   * a second fetch. Empty defaults keep every other caller (the app page's
+   * Meetings tab, the calendar) compiling: the form simply opens with nothing
+   * preselected there, which is the honest result of not having the lists.
+   */
+  apps?: { id: string; name: string }[]
+  activeUsers?: ActiveUser[]
   /** Wider mention pool for the note composer; falls back to attendees. */
   mentionUsers?: MentionUser[]
   /**
@@ -2898,6 +2933,51 @@ export function MeetingIntelPanel({
   const people = intel?.people ?? []
   const approvedUsers = intel?.approvedUsers ?? []
   const unattributed = intel?.unattributed ?? []
+
+  /**
+   * Attribution moved ONTO the rows. Each unattributed follow-up is offered
+   * beside the sentence it came from — its question under For next meeting, its
+   * commitment under Action items — instead of being reprinted in a panel of
+   * its own. On a real meeting that panel repeated twelve sentences the page
+   * already showed, and put the fix furthest from the content it was about.
+   */
+  const attributionIndex = indexUnattributedByText(unattributed)
+  const attributionContext: AttributionContext = {
+    index: attributionIndex,
+    // Two tiers, not one flattened list: the picker heads attendees separately
+    // and dedupes the overlap. Everyone approved stays reachable — the model
+    // routinely names a client contact who was never in the room.
+    attendees: people,
+    people: approvedUsers,
+    canWrite: canRecord,
+    busyId: attributePending ? busyAttributeId : null,
+    onAttribute: handleAttribute,
+  }
+
+  /**
+   * The ones no row claimed — a follow-up whose wording drifted from the
+   * write-up's, or one added by hand. They keep the old panel, because they
+   * have nothing to sit beside and dropping them would lose a commitment
+   * silently. Usually empty, and then the panel does not render.
+   *
+   * Placement is computed from the SAME data the write-up renders from, rather
+   * than reported back by it, so nothing depends on render order. A row hidden
+   * by an active person/kind filter still counts as placed: clearing the filter
+   * brings both the row and its picker back, and listing it here as well would
+   * be the duplication this change removes.
+   */
+  const placedAttributionIds = new Set<string>()
+  for (const entry of notes?.questions ?? []) {
+    for (const question of entry.questions) {
+      const match = matchUnattributed(attributionIndex, 'question', question)
+      if (match) placedAttributionIds.add(match.id)
+    }
+  }
+  for (const row of intel?.untrackedActions ?? []) {
+    const match = matchUnattributed(attributionIndex, 'action', row.text)
+    if (match) placedAttributionIds.add(match.id)
+  }
+  const unplacedAttribution = unplacedUnattributed(unattributed, placedAttributionIds)
   const upcomingMeetings = intel?.upcomingMeetings ?? []
   // Resolved rows stay on screen as a record, so "is anything still owed?"
   // has to count open ones rather than trust the list being empty.
@@ -2957,11 +3037,54 @@ export function MeetingIntelPanel({
     term: totalTerms,
     'carried-forward': totalCarried,
   }
+  // Derived ONCE here and passed down, rather than each card converting the
+  // instant itself: the day depends on the business timezone (a 9am Colombo
+  // meeting is still yesterday in UTC), and two components disagreeing about
+  // which day a deadline falls on is exactly the class of bug lk-holidays.ts
+  // exists to prevent.
+  const nextMeetingDueIso = nextMeetingDueDate(intel?.nextMeetingAt ?? null)
+
+  // The rows the next meeting's date actually governs: an action item with no
+  // date OF ITS OWN. Suggestions carry a real `suggestedDueDate` column;
+  // untracked rows carry a parsed `dueDate` (null when the model wrote a phrase
+  // nobody could resolve — see parseSpokenDueDate). Both are counted, because
+  // both become tasks and both are what a reader sees saying "No due date".
+  const undatedActionCount =
+    (intel?.suggestions ?? []).filter((suggestion) => !suggestion.suggestedDueDate).length +
+    (intel?.untrackedActions ?? []).filter((row) => !row.dueDate).length
+
+  /**
+   * What the real next meeting starts as, if somebody presses "Schedule it":
+   * this meeting's own people and projects, and the work that has not been
+   * closed out as the agenda. Everything here is already on screen — nothing is
+   * invented, and the form is still a form, so every line stays editable before
+   * anyone is invited.
+   */
+  const nextMeetingPrefill: MeetingPrefill = {
+    title: meetingTitle,
+    appIds,
+    attendeeIds: attendees.map((attendee) => attendee.id),
+    agenda: [
+      ...prep.flatMap((group) => group.items.map((item) => `${group.person}: ${item.text}`)),
+      ...(notes?.questions ?? []).flatMap((entry) =>
+        entry.questions.map((question) => `${entry.person}: ${question}`),
+      ),
+    ]
+      .slice(0, MAX_PREFILL_AGENDA_LINES)
+      .join('\n'),
+  }
+
   const panelNavItems: PanelNavItem[] = [
-    ...(notes?.summary ? [{ id: 'summary' as PanelId, label: 'Summary', icon: Sparkles }] : []),
+    // Listed unconditionally, unlike every content panel below it. The others
+    // hide at zero because an empty section is noise; this one is a QUESTION,
+    // and the state most worth reaching is precisely the unanswered one.
+    { id: 'next-meeting' as PanelId, label: 'Next meeting', icon: CalendarClock },
+    // Mirrors PANEL_IDS exactly — the rail and the page saying different
+    // things about where a section is, is worse than either order.
     ...(totalActions > 0
       ? [{ id: 'action-items' as PanelId, label: KIND_META.action.label, icon: KIND_META.action.icon, count: totalActions }]
       : []),
+    ...(notes?.summary ? [{ id: 'summary' as PanelId, label: 'Summary', icon: Sparkles }] : []),
     ...(totalDiscussionPoints > 0
       ? [
           {
@@ -2985,17 +3108,24 @@ export function MeetingIntelPanel({
     ...(totalTerms > 0
       ? [{ id: 'glossary' as PanelId, label: KIND_META.term.label, icon: KIND_META.term.icon, count: totalTerms }]
       : []),
-    { id: 'plan-the-meeting' as PanelId, label: 'Plan this meeting', icon: UserPlus },
-    { id: 'around-the-table' as PanelId, label: 'Around the table', icon: Users },
-    ...(unattributed.length > 0
-      ? [{ id: 'needs-attribution' as PanelId, label: 'Needs attribution', icon: UserPlus, count: unattributed.length }]
-      : []),
     {
       id: 'carried-forward' as PanelId,
       label: KIND_META['carried-forward'].label,
       icon: KIND_META['carried-forward'].icon,
       count: openCount > 0 ? openCount : undefined,
     },
+    { id: 'around-the-table' as PanelId, label: 'Around the table', icon: Users },
+    { id: 'plan-the-meeting' as PanelId, label: 'Plan this meeting', icon: UserPlus },
+    ...(unplacedAttribution.length > 0
+      ? [
+          {
+            id: 'needs-attribution' as PanelId,
+            label: 'Needs attribution',
+            icon: UserPlus,
+            count: unplacedAttribution.length,
+          },
+        ]
+      : []),
     { id: 'record' as PanelId, label: 'Record', icon: NotebookPen },
   ]
 
@@ -3659,6 +3789,27 @@ export function MeetingIntelPanel({
               <PanelsLayout nav={<PanelNav items={panelNavItems} />}>
                 <FilterBar kindTotals={kindTotals} />
 
+                {/* Above the write-up because it is the only panel that changes
+                    what the ones below it say — every dateless action item is
+                    due by this date. Deliberately NOT inside MeetingAiNotes:
+                    that component's compact density puts its sections in a CSS
+                    multi-column flow, which would break a full-width band
+                    across a column boundary, and it renders only when there are
+                    AI notes at all — whereas a meeting nobody has analysed yet
+                    still has a next meeting worth agreeing. */}
+                <NextMeetingPanel
+                  meetingId={meetingId}
+                  nextMeetingAt={intel?.nextMeetingAt ?? null}
+                  now={now}
+                  canManage={canRecord}
+                  undatedCount={undatedActionCount}
+                  hasRecord={Boolean(notes?.transcript || notes?.summary)}
+                  prefill={nextMeetingPrefill}
+                  apps={apps}
+                  activeUsers={activeUsers}
+                  onSaved={() => loadIntel('refresh')}
+                />
+
                 {/* The write-up leads: it is what someone opening a past meeting
                     came for. The full record (transcript, typed notes, the
                     composer) sits underneath it. */}
@@ -3673,6 +3824,8 @@ export function MeetingIntelPanel({
                     mentionUsers={mentionUsers}
                     suggestions={intel?.suggestions ?? []}
                     untrackedActions={intel?.untrackedActions ?? []}
+                    defaultDueIso={nextMeetingDueIso}
+                    attribution={attributionContext}
                     onSuggestionsChanged={() => loadIntel('refresh')}
                   />
                 ) : (
@@ -3686,53 +3839,6 @@ export function MeetingIntelPanel({
                     </p>
                   </MeetingNotesEmpty>
                 )}
-
-                {/* Planning comes before the walk-through: who should be in
-                    the room for a meeting covering several projects, and what
-                    each of them is being asked — decided from live rows rather
-                    than from memory (see meeting-planner.tsx). */}
-                <PlannerWithNotesHandoff
-                  meetingId={meetingId}
-                  canManage={canRecord}
-                  onSeed={setNoteDraftSeed}
-                />
-
-                {/* One meeting covers every project its people work on — the
-                    per-attendee walk-through (their apps, sprint counts, and
-                    check-ins) loads its own board-derived data independently of
-                    the transcript-bearing intel above (see meeting-prep.tsx). */}
-                <AroundTheTablePanel
-                  meetingId={meetingId}
-                  currentUserId={currentUserId}
-                  isAdmin={isAdmin}
-                />
-
-                {unattributed.length > 0 ? (
-                  <Panel id="needs-attribution" title="Needs attribution" icon={UserPlus} count={unattributed.length}>
-                    <p className="text-xs text-muted-foreground">
-                      Heard from someone the notes couldn&rsquo;t match to a person — pick who it&rsquo;s
-                      for and it carries forward normally from here.
-                    </p>
-                    <ul className="flex flex-col gap-1.5">
-                      {unattributed.map((item) => (
-                        <UnattributedRow
-                          key={item.id}
-                          item={item}
-                          // Two tiers, not one flattened list: the picker
-                          // heads the attendees separately and dedupes the
-                          // overlap. Everyone approved stays reachable — the
-                          // model routinely names a client contact or somebody
-                          // who was never in the room.
-                          attendees={people}
-                          people={approvedUsers}
-                          canWrite={canRecord}
-                          busy={busyAttributeId === item.id && attributePending}
-                          onAttribute={(userId) => handleAttribute(item.id, userId)}
-                        />
-                      ))}
-                    </ul>
-                  </Panel>
-                ) : null}
 
                 <Panel
                   id="carried-forward"
@@ -3858,6 +3964,68 @@ export function MeetingIntelPanel({
                   ) : null}
                 </Panel>
 
+                {/* One meeting covers every project its people work on — the
+                    per-attendee walk-through (their apps, sprint counts, and
+                    check-ins) loads its own board-derived data independently of
+                    the transcript-bearing intel above (see meeting-prep.tsx). */}
+                <AroundTheTablePanel
+                  meetingId={meetingId}
+                  currentUserId={currentUserId}
+                  isAdmin={isAdmin}
+                />
+
+                {/* Last of the forward-looking three, and after the
+                    walk-through on purpose: who should be in the NEXT room is a
+                    question you answer having just read what each person is
+                    carrying, not before. Decided from live rows rather than
+                    from memory (see meeting-planner.tsx), and still collapsed
+                    by default — opening it runs a workspace-wide health pass
+                    (PANEL_DEFAULT_OPEN says why). */}
+                <PlannerWithNotesHandoff
+                  meetingId={meetingId}
+                  canManage={canRecord}
+                  onSeed={setNoteDraftSeed}
+                />
+
+                {/* ONLY the leftovers. Everything the write-up above could place
+                    now carries its own picker on the row that says the words —
+                    see attributionContext. What reaches here matched no rendered
+                    row (wording drifted, or somebody added the follow-up by
+                    hand), so it has nothing to sit beside and still has to be
+                    reachable. Usually empty. */}
+                {unplacedAttribution.length > 0 ? (
+                  <Panel
+                    id="needs-attribution"
+                    title="Needs attribution"
+                    icon={UserPlus}
+                    count={unplacedAttribution.length}
+                  >
+                    <p className="text-xs text-muted-foreground">
+                      Heard from someone the notes couldn&rsquo;t match to a person, and couldn&rsquo;t
+                      match to anything written up above either — pick who it&rsquo;s for and it
+                      carries forward normally from here.
+                    </p>
+                    <ul className="flex flex-col gap-1.5">
+                      {unplacedAttribution.map((item) => (
+                        <UnattributedRow
+                          key={item.id}
+                          item={item}
+                          // Two tiers, not one flattened list: the picker
+                          // heads the attendees separately and dedupes the
+                          // overlap. Everyone approved stays reachable — the
+                          // model routinely names a client contact or somebody
+                          // who was never in the room.
+                          attendees={people}
+                          people={approvedUsers}
+                          canWrite={canRecord}
+                          busy={busyAttributeId === item.id && attributePending}
+                          onAttribute={(userId) => handleAttribute(item.id, userId)}
+                        />
+                      ))}
+                    </ul>
+                  </Panel>
+                ) : null}
+
                 {/* The full record last: the transcript, the typed notes and the
                     composer are the raw material the write-up above was made
                     from, so they read as the appendix rather than the headline —
@@ -3919,6 +4087,7 @@ export function MeetingIntelPanel({
                     shownElsewhere={notes?.summary ?? null}
                     autoAssignCappedCount={notes?.autoAssignCappedCount ?? 0}
                     deadlines={notes?.deadlines ?? []}
+                    defaultDueIso={nextMeetingDueIso}
                     draftSeed={noteDraftSeed}
                   />
                   {/* Only once there is a record to ask about — an assistant

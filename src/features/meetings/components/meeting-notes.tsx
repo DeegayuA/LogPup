@@ -53,6 +53,11 @@ import {
 } from '@/features/meetings/components/meeting-panels'
 import { splitBilingualSummary, type SummaryLanguage } from '@/features/meetings/components/meeting-panels-model'
 import {
+  AttributionInline,
+  type AttributionContext,
+} from '@/features/meetings/components/attribution-inline'
+import { matchUnattributed } from '@/features/meetings/followups'
+import {
   ActionItemAssignee,
   ActionItemDueDate,
   ActionItemSuggestionsList,
@@ -99,6 +104,8 @@ export function MeetingAiNotes({
   mentionUsers,
   suggestions,
   untrackedActions,
+  defaultDueIso = null,
+  attribution,
   onSuggestionsChanged,
 }: {
   notes: MeetingAiNotesView
@@ -128,6 +135,24 @@ export function MeetingAiNotes({
    * list directly.
    */
   untrackedActions: ActionRow[]
+  /**
+   * The day this room agreed to meet again (`meetings.next_meeting_at`) as
+   * `YYYY-MM-DD`, or null when it never did. Every action item with no date of
+   * its own shows it as the deadline it will inherit — and the server applies
+   * exactly the same fallback on accept (notes.ts, MeetingTaskContext), so the
+   * card cannot promise one outcome while the button produces another.
+   */
+  defaultDueIso?: string | null
+  /**
+   * Lets a row whose speaker was never matched carry its own "who said this?"
+   * picker, instead of that row being reprinted in a separate panel.
+   *
+   * Optional: a read-only caller (the calendar's notes dialog) simply omits it
+   * and the rows render as they always did. Items this page finds no row for
+   * are NOT lost — meeting-intel keeps the leftovers panel for exactly those
+   * (unplacedUnattributed).
+   */
+  attribution?: AttributionContext
   /** Reloads the parent's getMeetingIntel fetch — called after any write
    *  here (accept/dismiss/undo/edit/track) so `suggestions`/`untrackedActions`
    *  catch up with what the server actually stored. */
@@ -286,6 +311,84 @@ export function MeetingAiNotes({
         'flex flex-col gap-3',
       )}
     >
+      {/* ACTION ITEMS LEAD THE WRITE-UP, and sit outside the two-column flow
+          below. Two reasons, both about the row rather than the panel: a row
+          here carries an owner picker, a due-date editor, a title editor and
+          two buttons, which is not a half-column of content; and this is the
+          only section anyone has to ACT on, so a reader scrolling past the
+          summary to find it was scrolling past it to find their own work.
+          Summary follows — what happened is the second question, not the
+          first. */}
+      {totalActionCount > 0 && kindIncluded('action') ? (
+        <Panel id="action-items" title="Action items" icon={ListChecks} kind="action" count={visibleActionCount}>
+          {visibleActionCount > 0 ? (
+            <div className="flex flex-col gap-3">
+              {/* The lead sentence every other panel here already had. Without
+                  it, the "Suggested" chip is the only thing saying these came
+                  out of a transcript rather than off somebody's board, and
+                  nothing said that adding one is what makes it real. */}
+              <p className="text-sm text-muted-foreground">
+                Commitments the AI heard in this meeting. Nothing here is a real task until
+                somebody adds it.
+              </p>
+              <ActionItemSuggestionsList
+                suggestions={visibleSuggestions}
+                attendees={attendees}
+                mentionUsers={mentionUsers}
+                appIds={appIds}
+                meetingTitle={meetingTitle}
+                deadlines={notes.deadlines}
+                defaultDueIso={defaultDueIso}
+                canManage={canManage}
+                compact={compact}
+                autoAssignCappedCount={notes.autoAssignCappedCount}
+                actions={actionItemActions}
+              />
+              {visibleUntracked.length > 0 ? (
+                <section className="flex flex-col gap-2">
+                  <SectionHeading
+                    as="h5"
+                    icon={AlertTriangle}
+                    title="Not tracked"
+                    count={visibleUntracked.length}
+                  />
+                  <p className="text-2xs text-muted-foreground">
+                    The write-up mentions these, but the suggestion pass never picked them up. They edit
+                    exactly like the cards above — the first edit is what saves one for good.
+                  </p>
+                  <ul className={cn('flex flex-col divide-y divide-border rounded-lg border', compact && 'text-sm')}>
+                    {visibleUntracked.map((row) => (
+                      <UntrackedActionRow
+                        key={row.key}
+                        action={row}
+                        meetingId={meetingId}
+                        compact={compact}
+                        canManage={canManage}
+                        attendees={attendees}
+                        assigneePool={assigneePool}
+                        appIds={appIds}
+                        defaultDueIso={defaultDueIso}
+                        attribution={attribution}
+                        onPromoted={() => setPromotedKeys((prev) => new Set(prev).add(row.key))}
+                        onAdded={async () => {
+                          setAddedKeys((prev) => new Set(prev).add(row.key))
+                          await onSuggestionsChanged()
+                        }}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+            </div>
+          ) : (
+            <EmptyFilterState
+              label={`No action items for ${filteredPersonName ?? 'this filter'} — clear filter`}
+              onClear={clearAllFilters}
+            />
+          )}
+        </Panel>
+      ) : null}
+
       {notes.summary ? (
         <Panel
           id="summary"
@@ -436,65 +539,6 @@ export function MeetingAiNotes({
           '[&>*]:mb-3 [&>*]:break-inside-avoid lg:[&>*:last-child]:mb-0',
         )}
       >
-      {totalActionCount > 0 && kindIncluded('action') ? (
-        <Panel id="action-items" title="Action items" icon={ListChecks} kind="action" count={visibleActionCount}>
-          {visibleActionCount > 0 ? (
-            <div className="flex flex-col gap-3">
-              <ActionItemSuggestionsList
-                suggestions={visibleSuggestions}
-                attendees={attendees}
-                mentionUsers={mentionUsers}
-                appIds={appIds}
-                meetingTitle={meetingTitle}
-                deadlines={notes.deadlines}
-                canManage={canManage}
-                compact={compact}
-                autoAssignCappedCount={notes.autoAssignCappedCount}
-                actions={actionItemActions}
-              />
-              {visibleUntracked.length > 0 ? (
-                <section className="flex flex-col gap-2">
-                  <SectionHeading
-                    as="h5"
-                    icon={AlertTriangle}
-                    title="Not tracked"
-                    count={visibleUntracked.length}
-                  />
-                  <p className="text-2xs text-muted-foreground">
-                    The write-up mentions these, but the suggestion pass never picked them up. They edit
-                    exactly like the cards above — the first edit is what saves one for good.
-                  </p>
-                  <ul className={cn('flex flex-col divide-y divide-border rounded-lg border', compact && 'text-sm')}>
-                    {visibleUntracked.map((row) => (
-                      <UntrackedActionRow
-                        key={row.key}
-                        action={row}
-                        meetingId={meetingId}
-                        compact={compact}
-                        canManage={canManage}
-                        attendees={attendees}
-                        assigneePool={assigneePool}
-                        appIds={appIds}
-                        onPromoted={() => setPromotedKeys((prev) => new Set(prev).add(row.key))}
-                        onAdded={async () => {
-                          setAddedKeys((prev) => new Set(prev).add(row.key))
-                          await onSuggestionsChanged()
-                        }}
-                      />
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-            </div>
-          ) : (
-            <EmptyFilterState
-              label={`No action items for ${filteredPersonName ?? 'this filter'} — clear filter`}
-              onClear={clearAllFilters}
-            />
-          )}
-        </Panel>
-      ) : null}
-
       {discussionPeople.length > 0 && kindIncluded('discussion') ? (
         <Panel id="discussion" title="Discussion" icon={Users} kind="discussion" count={visibleDiscussionPoints}>
           {visibleDiscussion.length > 0 ? (
@@ -540,12 +584,26 @@ export function MeetingAiNotes({
                     {entry.person}
                   </h5>
                   <ul className={cn('flex flex-col gap-1', compact && 'gap-0.5')}>
-                    {entry.questions.map((question) => (
-                      <li key={question} className={cn(bilingualText, 'flex gap-2')}>
-                        <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground/60" />
-                        <span className="min-w-0">{question}</span>
-                      </li>
-                    ))}
+                    {entry.questions.map((question) => {
+                      // The write-up groups this question under a NAME the model
+                      // heard. When that name never resolved to a person, the
+                      // heading above is a guess, and the fix belongs here
+                      // rather than in a panel that reprints the sentence.
+                      const unmatched = attribution
+                        ? matchUnattributed(attribution.index, 'question', question)
+                        : null
+                      return (
+                        <li key={question} className={cn(bilingualText, 'flex gap-2')}>
+                          <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-muted-foreground/60" />
+                          <span className="min-w-0">
+                            {question}
+                            {unmatched && attribution ? (
+                              <AttributionInline item={unmatched} context={attribution} />
+                            ) : null}
+                          </span>
+                        </li>
+                      )
+                    })}
                   </ul>
                 </li>
               ))}
@@ -652,6 +710,8 @@ function UntrackedActionRow({
   attendees,
   assigneePool,
   appIds,
+  defaultDueIso,
+  attribution,
   onPromoted,
   onAdded,
 }: {
@@ -667,6 +727,13 @@ function UntrackedActionRow({
    *  where the server has nowhere to file an unrouted item (see
    *  acceptTaskSuggestion) and "Add task" would fail after promoting. */
   appIds: string[]
+  /** The agreed next meeting as `YYYY-MM-DD` — same default the cards above
+   *  these rows show, so promoting an untracked item cannot produce a worse
+   *  row than accepting a suggestion. `trackActionItem` applies it server-side
+   *  too, so the chip is not a promise the write path breaks. */
+  defaultDueIso: string | null
+  /** Absent for a read-only caller; see MeetingAiNotes' own prop. */
+  attribution?: AttributionContext
   /** Called the first time an edit turns this row into a real suggestion. */
   onPromoted: () => void
   /** Called once "Add task" has created the task — reloads the parent's intel. */
@@ -772,6 +839,7 @@ function UntrackedActionRow({
   // One clock read per render; only the day matters to dueStatus.
   const due = resolveUntrackedDue(action, dueEdit, new Date())
   const noApp = appIds.length === 0
+  const unattributed = attribution ? matchUnattributed(attribution.index, 'action', action.text) : null
 
   return (
     <li
@@ -796,6 +864,10 @@ function UntrackedActionRow({
         ) : (
           <p className={cn(bilingualText, 'text-foreground')}>{title}</p>
         )}
+        {/* Matched on the row's ORIGINAL text, not the edited `title`: the
+            follow-up was derived from what the write-up said, so retitling this
+            row must not make its attribution prompt disappear. */}
+        {unattributed ? <AttributionInline item={unattributed} context={attribution!} /> : null}
         <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           {/* Says the thing the section heading above cannot: this row now HAS
               a suggestion row, so the edit just made survives a reload. */}
@@ -833,6 +905,7 @@ function UntrackedActionRow({
                 // (quoted, no tone) rather than the warning-toned hint chip.
                 hint={null}
                 unresolvedDue={due.unresolvedDue}
+                defaultDueIso={defaultDueIso}
                 disabled={rowDisabled}
                 onSave={(iso) => {
                   const previous = dueEdit

@@ -172,6 +172,19 @@ export type TaskSuggestionSource = {
 export type MeetingTaskContext = {
   appId: string
   sprintId: string | null
+  /**
+   * The deadline to give an item the model dated vaguely or not at all — in
+   * practice the day of the meeting's agreed next meeting, via
+   * `nextMeetingDueDate(meeting.nextMeetingAt)`. `YYYY-MM-DD`, or null when the
+   * room never named one, which leaves the item dateless exactly as before.
+   *
+   * MUST BE DERIVED FROM THE MEETING ROW, NEVER FROM A CLOCK.
+   * `undoAutoAcceptedSuggestion` re-runs this whole function to reconstruct
+   * what the auto pass created, and `canUndoAutoAssign` compares the due date
+   * exactly. A `today + 7` default would reconstruct differently tomorrow and
+   * make every auto-assigned task permanently un-undoable.
+   */
+  defaultDueDate?: string | null
 }
 
 export type TaskSuggestionOverrides = {
@@ -197,6 +210,10 @@ export type TaskCreatePayload = {
  * caller explicitly sets (including explicitly clearing it to null) wins
  * over the AI's original suggestion; an omitted (`undefined`) field falls
  * back to the suggestion as proposed.
+ *
+ * The due date has one more tier below that — `context.defaultDueDate`, the
+ * day the room agreed to meet again. See the field's comment for why it has to
+ * come from the meeting row rather than a clock.
  */
 export function suggestionToTaskPayload(
   suggestion: TaskSuggestionSource,
@@ -205,8 +222,17 @@ export function suggestionToTaskPayload(
 ): TaskCreatePayload {
   const title = (overrides.title ?? suggestion.text).trim()
   const assigneeId = overrides.assigneeId !== undefined ? overrides.assigneeId : suggestion.suggestedUserId
+  // Three tiers, most-specific first: what a human typed in the Edit form
+  // (including an explicit clear to null), then the strict `YYYY-MM-DD` the
+  // model emitted, then the meeting's agreed next meeting. The last tier is
+  // why a meeting that produced ten commitments no longer produces ten rows
+  // reading "No due date" — normalizeDueDate discards every looser phrase the
+  // model wrote ("next week", "before we meet again"), so without it the
+  // overwhelmingly common case is dateless.
   const dueDate =
-    overrides.dueDate !== undefined ? overrides.dueDate : normalizeDueDate(suggestion.suggestedDueDate)
+    overrides.dueDate !== undefined
+      ? overrides.dueDate
+      : (normalizeDueDate(suggestion.suggestedDueDate) ?? context.defaultDueDate ?? null)
   const priority = overrides.priority ?? 0
 
   return {

@@ -95,6 +95,7 @@ export function NoteTimeline({
   shownElsewhere = null,
   autoAssignCappedCount = 0,
   deadlines = [],
+  defaultDueIso = null,
   draftSeed = null,
 }: {
   meetingId: string
@@ -129,6 +130,11 @@ export function NoteTimeline({
    * suggestions and tasks, not the AI notes row.
    */
   deadlines?: DeadlineHintSource[]
+  /** The agreed next meeting as `YYYY-MM-DD`. This list is the SAME list the
+   *  write-up's Action items panel renders, at the other density — so it has to
+   *  show the same default deadline, or one row would answer "when is this
+   *  due?" two ways on one screen. */
+  defaultDueIso?: string | null
   /**
    * A line to drop into the composer, sent by another panel — today the
    * meeting planner's "Answer in notes", so the answer to a question gets
@@ -728,6 +734,7 @@ export function NoteTimeline({
         appIds={appIds}
         meetingTitle={meetingTitle}
         deadlines={deadlines}
+        defaultDueIso={defaultDueIso}
         canManage={canManage}
         compact={compact}
         autoAssignCappedCount={autoAssignCappedCount}

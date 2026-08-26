@@ -15,6 +15,7 @@ import {
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
+import { glanceAtDay } from '@/features/worklog/day-summary'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
 import type { UserAssignedApp } from '@/features/worklog/queries'
 
@@ -77,6 +78,18 @@ export function DayPanel({
 
   const anyAi = noteAiEnabled || entriesAiEnabled
   const meter = useAiMeter()
+
+  // What this day already says, for the disclosure's own label. Read from the
+  // props rather than from either card's state: those two cards each own an
+  // optimistic copy of half of it, and a summary that tracked one of them
+  // would disagree with the other the moment somebody saved.
+  const glance = glanceAtDay({
+    percent: initial?.percent ?? null,
+    note: initial?.note ?? null,
+    loggedMinutes: entries.reduce((total, entry) => total + entry.minutes, 0),
+    scheduledMinutes,
+    entryCount: entries.length,
+  })
 
   async function fillMyDay(source?: MeterOriginSource) {
     const origin = meterOrigin(source)
@@ -180,9 +193,47 @@ export function DayPanel({
         />
       ) : null}
 
-      <details open={!canEdit || entries.length > 0 || initial != null}>
-        <summary className="w-fit cursor-pointer text-2xs text-muted-foreground hover:text-foreground">
-          The day in detail
+      {/* Open only for somebody who cannot type in the line above — they have
+          no fast path, so the detail IS their view of the day.
+
+          It used to also open for any day with content, which meant every day
+          you ever came back to. That defeated the collapse entirely: returning
+          to yesterday put a slider, four preset pills, a chip row, a textarea,
+          a duration box and two selects in front of a person who came to read
+          one number. Now the label carries what was logged and the controls
+          stay folded until somebody wants to correct something. */}
+      <details open={!canEdit}>
+        <summary className="cursor-pointer list-none text-2xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+          {glance.empty ? (
+            <span>The day in detail</span>
+          ) : (
+            /* The facts first, the affordance last. A person checking what
+               they logged gets their answer from the closed state and never
+               opens this at all. */
+            <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              {glance.percent !== null ? (
+                <span className="font-mono text-xs font-bold tabular-nums text-primary">
+                  {glance.percent}%
+                </span>
+              ) : null}
+              {glance.hours ? (
+                <span className="font-mono tabular-nums text-foreground">{glance.hours}h</span>
+              ) : null}
+              {glance.entryCount > 0 ? (
+                <span className="font-mono tabular-nums">
+                  {glance.entryCount} {glance.entryCount === 1 ? 'entry' : 'entries'}
+                </span>
+              ) : null}
+              {glance.snippet ? (
+                /* min-w-0 + truncate so a long note shortens instead of
+                   pushing "Edit" off the end of the row on a narrow screen. */
+                <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                  {glance.snippet}
+                </span>
+              ) : null}
+              <span className="shrink-0 underline decoration-dotted underline-offset-2">Edit</span>
+            </span>
+          )}
         </summary>
         <div className="mt-3 flex flex-col gap-3">
       <WorklogForm
