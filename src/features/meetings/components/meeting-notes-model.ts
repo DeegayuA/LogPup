@@ -473,6 +473,13 @@ type IntelLike = {
   prep: {
     items: { status: 'open' | 'resolved'; fromDate: Date }[]
   }[]
+  /** When the room agreed to meet again (`meetings.next_meeting_at`) — a
+   *  human-confirmed date or null, never an AI proposal. Carried through to
+   *  the glance so a list row can say "Reconvenes …" without the full intel
+   *  payload. Required, not optional: every real intel source already has it
+   *  (MeetingIntel returns the column), and an optional field here would let
+   *  a new caller silently produce glances that always say "never". */
+  nextMeetingAt: Date | null
 }
 
 export type MeetingGlance = {
@@ -486,6 +493,10 @@ export type MeetingGlance = {
   /** Open follow-ups carried past FOLLOWUP_STALE_DAYS. */
   staleFollowups: number
   questions: number
+  /** The room's agreed next meeting, or null — see IntelLike.nextMeetingAt.
+   *  NOT viewer-scoped (no glance field may be): the same glance is shown to
+   *  every viewer the permission gate admits. */
+  nextMeetingAt: Date | null
 }
 
 /**
@@ -517,5 +528,6 @@ export function glanceFromIntel(intel: IntelLike, now: Date): MeetingGlance {
       (total, entry) => total + entry.questions.length,
       0,
     ),
+    nextMeetingAt: intel.nextMeetingAt,
   }
 }

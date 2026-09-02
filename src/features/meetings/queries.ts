@@ -1,10 +1,11 @@
 import { cache } from 'react'
-import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { meetingVisibleTo } from '@/features/meetings/visibility'
 import { liveApps, liveMeetings } from '@/db/live'
 import { meetingApps, meetingAttendees, users } from '@/db/schema'
 import type { MeetingApp } from '@/features/meetings/app-labels'
+import { parseColomboWallClock } from '@/features/meetings/next-meeting'
 
 export type MeetingAttendee = {
   id: string
@@ -182,6 +183,177 @@ export async function listMeetings(viewerId: string): Promise<MeetingSummary[]> 
 }
 
 /**
+ * Where a "Show earlier meetings" page picks up. `endsAt` is the ISO instant
+ * of the last row already shown, `id` its meeting id — the tiebreak for two
+ * meetings ending at the same instant, without which a page boundary landing
+ * inside a tie would repeat or skip a row.
+ */
+export type PastMeetingCursor = { endsAt: string; id: string }
+
+/** How many past meetings the docket serves before "Show earlier meetings". */
+const PAST_PAGE_SIZE = 20
+
+/**
+ * The /meetings docket's read: every not-yet-ended meeting, plus one PAGE of
+ * past ones — where listMeetings above returns the viewer's entire meeting
+ * history on every load and grows forever.
+ *
+ * The upcoming/past line is splitByUpcoming's rule (a meeting is past once it
+ * has ENDED), applied in SQL so the page never fetches years of history to
+ * throw most of it away. The boundary uses one clock read, so the two halves
+ * cannot both claim the same meeting; a meeting that ends between this read
+ * and the client's own render is the client's split to re-file.
+ *
+ * `past` is keyset-paged on (endsAt, id) — an OFFSET page drifts when a
+ * meeting is created or trashed between two clicks, silently skipping or
+ * repeating a row at the seam. Ordered by endsAt (newest-ended first) rather
+ * than listMeetings' startsAt so the cursor and the ordering agree about
+ * what "earlier" means. `pastTotal` is counted separately so the "Past (N)"
+ * header can tell the truth while only a page is loaded.
+ */
+export async function listMeetingsWindowed(
+  viewerId: string,
+  opts?: {
+    pastLimit?: number
+    pastCursor?: PastMeetingCursor
+  },
+): Promise<{ upcoming: MeetingSummary[]; past: MeetingSummary[]; pastTotal: number }> {
+  const pastLimit = opts?.pastLimit ?? PAST_PAGE_SIZE
+  const cursor = opts?.pastCursor
+  const cursorEndsAt = cursor ? new Date(cursor.endsAt) : null
+  // A cursor that does not name a real instant would otherwise become an
+  // invalid-date comparison Postgres rejects mid-request; the first page is
+  // the only honest fallback.
+  const validCursor = cursor && cursorEndsAt && !Number.isNaN(cursorEndsAt.getTime())
+  const now = new Date()
+
+  const [upcomingRows, pastRows, [countRow]] = await Promise.all([
+    db
+      .select(meetingColumns)
+      .from(liveMeetings)
+      .where(and(meetingVisibleTo(viewerId), gt(liveMeetings.endsAt, now)))
+      // Soonest first — the order splitByUpcoming would put them in anyway.
+      .orderBy(asc(liveMeetings.startsAt)),
+    db
+      .select(meetingColumns)
+      .from(liveMeetings)
+      .where(
+        and(
+          meetingVisibleTo(viewerId),
+          lte(liveMeetings.endsAt, now),
+          validCursor
+            ? or(
+                lt(liveMeetings.endsAt, cursorEndsAt),
+                and(eq(liveMeetings.endsAt, cursorEndsAt), lt(liveMeetings.id, cursor.id)),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(liveMeetings.endsAt), desc(liveMeetings.id))
+      .limit(pastLimit),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(liveMeetings)
+      .where(and(meetingVisibleTo(viewerId), lte(liveMeetings.endsAt, now))),
+  ])
+
+  // One hydrate over both halves keeps the attach pattern at exactly two
+  // extra queries for the whole read; hydrate preserves row order, so the
+  // combined list splits back apart by position.
+  const hydrated = await hydrate([...upcomingRows, ...pastRows])
+  return {
+    upcoming: hydrated.slice(0, upcomingRows.length),
+    past: hydrated.slice(upcomingRows.length),
+    pastTotal: countRow?.count ?? 0,
+  }
+}
+
+/**
+ * Every meeting STARTING on one Asia/Colombo calendar day — the targeted
+ * fetch behind a `?day` that falls outside the docket's loaded window.
+ *
+ * The day is a Colombo wall-clock day, not a UTC one: the naive
+ * `startsAt::date` comparison files an 8pm Colombo meeting under the next
+ * UTC day for an office 5:30 ahead. parseColomboWallClock also doubles as
+ * the format gate — anything that is not a real `YYYY-MM-DD` day answers []
+ * rather than becoming a cast error inside the query.
+ */
+export async function getMeetingsForDay(
+  viewerId: string,
+  day: string,
+): Promise<MeetingSummary[]> {
+  const dayStart = parseColomboWallClock(`${day}T00:00`)
+  if (!dayStart) return []
+  // Next midnight via UTC date arithmetic on the day STRING — safe because
+  // the string is a validated calendar day, and the result goes straight
+  // back through the same wall-clock parser.
+  const nextDayIso = new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000)
+    .toISOString()
+    .slice(0, 10)
+  const dayEnd = parseColomboWallClock(`${nextDayIso}T00:00`)
+  if (!dayEnd) return []
+
+  const rows = await db
+    .select(meetingColumns)
+    .from(liveMeetings)
+    .where(
+      and(
+        meetingVisibleTo(viewerId),
+        gte(liveMeetings.startsAt, dayStart),
+        lt(liveMeetings.startsAt, dayEnd),
+      ),
+    )
+    .orderBy(asc(liveMeetings.startsAt))
+
+  return hydrate(rows)
+}
+
+/** The widest range getMeetingsForRange serves — the month grid's 42-day
+ *  window plus slack. Anything larger is not a calendar view asking. */
+const MAX_RANGE_DAYS = 62
+
+/**
+ * Every meeting STARTING within an inclusive span of Asia/Colombo calendar
+ * days — the targeted fetch behind a calendar view (month/agenda/week/day)
+ * stepping back past the docket's windowed past. Same wall-clock day
+ * interpretation, validation and hydrate pattern as getMeetingsForDay above;
+ * a malformed, inverted or oversized range answers [] rather than becoming a
+ * cast error or an unbounded read.
+ */
+export async function getMeetingsForRange(
+  viewerId: string,
+  startDay: string,
+  endDay: string,
+): Promise<MeetingSummary[]> {
+  const rangeStart = parseColomboWallClock(`${startDay}T00:00`)
+  if (!rangeStart) return []
+  if (!parseColomboWallClock(`${endDay}T00:00`)) return []
+  // End is INCLUSIVE: the bound is the start of the day after endDay, via UTC
+  // date arithmetic on the validated day string (same trick as above).
+  const afterEndIso = new Date(Date.parse(`${endDay}T00:00:00Z`) + 86_400_000)
+    .toISOString()
+    .slice(0, 10)
+  const rangeEnd = parseColomboWallClock(`${afterEndIso}T00:00`)
+  if (!rangeEnd) return []
+  const spanDays = (rangeEnd.getTime() - rangeStart.getTime()) / 86_400_000
+  if (spanDays <= 0 || spanDays > MAX_RANGE_DAYS) return []
+
+  const rows = await db
+    .select(meetingColumns)
+    .from(liveMeetings)
+    .where(
+      and(
+        meetingVisibleTo(viewerId),
+        gte(liveMeetings.startsAt, rangeStart),
+        lt(liveMeetings.startsAt, rangeEnd),
+      ),
+    )
+    .orderBy(asc(liveMeetings.startsAt))
+
+  return hydrate(rows)
+}
+
+/**
  * The meetings on ONE project — the app page's Meetings tab.
  *
  * The innerJoin is pinned to a single app_id, so it still returns exactly one
@@ -223,6 +395,21 @@ export const getMeetingById = cache(
     return meeting ?? null
   },
 )
+
+/**
+ * One meeting by id, for a `?open=` deep link naming a meeting outside the
+ * docket's loaded window. The same read as getMeetingById — including its
+ * "visibility is part of exists" answer, so a private meeting a non-attendee
+ * deep-links answers null, not 403 — with the viewer-first argument order
+ * the other windowed reads here use, and sharing its per-request cache so a
+ * page that both lists and opens a meeting pays for it once.
+ */
+export async function getMeetingSummaryById(
+  viewerId: string,
+  id: string,
+): Promise<MeetingSummary | null> {
+  return getMeetingById(id, viewerId)
+}
 
 export async function getUpcomingMeetingsForUser(
   userId: string,

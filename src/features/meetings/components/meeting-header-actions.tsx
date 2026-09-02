@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, NotebookPen, Plus } from 'lucide-react'
+import { NotebookPen, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { MeetingForm } from '@/features/meetings/components/meeting-form'
@@ -40,16 +40,20 @@ export function MeetingHeaderActions({
   activeUsers,
   currentUserId,
   defaultOpenNewMeeting = false,
+  defaultQuickNote = false,
 }: {
   apps: { id: string; name: string }[]
   activeUsers: MentionUser[]
   currentUserId: string
   defaultOpenNewMeeting?: boolean
+  /** True when the page arrived on `?new-note=1` (the ⌘K "Quick note" row) —
+   *  fires the quick-note gesture once, exactly as if the pill were pressed. */
+  defaultQuickNote?: boolean
 }) {
   const router = useRouter()
   const [creating, startCreating] = React.useTransition()
 
-  function handleQuickNote() {
+  const handleQuickNote = React.useCallback(() => {
     startCreating(async () => {
       try {
         const start = new Date()
@@ -77,20 +81,45 @@ export function MeetingHeaderActions({
         toast.error('Something went wrong — try again')
       }
     })
-  }
+  }, [currentUserId, router])
+
+  // The ⌘K row can only hand this component a URL, so the URL asks for the
+  // click. Once per mount, and the param is scrubbed from the address bar
+  // BEFORE the write fires — otherwise Back (or a reload racing the create)
+  // lands on ?new-note=1 again and mints a second scratchpad.
+  const firedQuickNote = React.useRef(false)
+  React.useEffect(() => {
+    if (!defaultQuickNote || firedQuickNote.current) return
+    firedQuickNote.current = true
+    const params = new URLSearchParams(window.location.search)
+    params.delete('new-note')
+    const query = params.toString()
+    window.history.replaceState(
+      null,
+      '',
+      query ? `${window.location.pathname}?${query}` : window.location.pathname,
+    )
+    handleQuickNote()
+  }, [defaultQuickNote, handleQuickNote])
 
   return (
-    <div className="flex items-stretch overflow-hidden rounded-lg bg-primary text-primary-foreground shadow-sm">
+    // No shadow: the Dossier sheet is the page's only shadow and only
+    // floating layer — the filled primary ground already lifts the pill.
+    <div className="flex items-stretch overflow-hidden rounded-lg bg-primary text-primary-foreground">
       <SplitHalf
         onClick={handleQuickNote}
         disabled={creating}
         label={creating ? 'Opening…' : 'Quick note'}
         icon={
-          creating ? (
-            <Loader2 className="size-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
-          ) : (
-            <NotebookPen className="size-4 shrink-0" aria-hidden />
-          )
+          // A pulse, not a spinner (the motion vocabulary bans spinners) —
+          // the label already flips to "Opening…".
+          <NotebookPen
+            className={cn(
+              'size-4 shrink-0',
+              creating && 'animate-pulse motion-reduce:animate-none',
+            )}
+            aria-hidden
+          />
         }
       />
       <span aria-hidden className="my-1.5 w-px bg-primary-foreground/25" />

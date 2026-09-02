@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   durationLabel,
+  isAwaitingViewerRsvp,
   meetingTiming,
   noRsvpYet,
   summarizeMeetings,
@@ -50,6 +51,41 @@ describe('noRsvpYet', () => {
 
   it('does not flag a meeting with no invitees at all', () => {
     expect(noRsvpYet(tallyRsvps([]), 'upcoming')).toBe(false)
+  })
+})
+
+describe('isAwaitingViewerRsvp', () => {
+  it('flags a meeting where the viewer has not answered', () => {
+    const meeting = { attendees: [attendee('me', 'pending'), attendee('other', 'going')] }
+    expect(isAwaitingViewerRsvp(meeting, 'me')).toBe(true)
+  })
+
+  it('does not flag once the viewer has answered — any answer counts', () => {
+    for (const response of ['going', 'maybe', 'declined'] as const) {
+      expect(isAwaitingViewerRsvp({ attendees: [attendee('me', response)] }, 'me')).toBe(false)
+    }
+  })
+
+  it("ignores other people's pending replies", () => {
+    const meeting = { attendees: [attendee('other', 'pending')] }
+    expect(isAwaitingViewerRsvp(meeting, 'me')).toBe(false)
+  })
+
+  it('never flags a meeting the viewer is not invited to', () => {
+    expect(isAwaitingViewerRsvp({ attendees: [] }, 'me')).toBe(false)
+  })
+
+  it('agrees with summarizeMeetings — the tile and the row share one definition', () => {
+    const upcoming = [
+      {
+        startsAt: new Date('2026-08-14T09:00:00'),
+        endsAt: new Date('2026-08-14T10:00:00'),
+        attendees: [attendee('me', 'pending')],
+      },
+    ]
+    expect(summarizeMeetings(upcoming, [], 'me', now).awaitingYou).toBe(
+      upcoming.filter((meeting) => isAwaitingViewerRsvp(meeting, 'me')).length,
+    )
   })
 })
 

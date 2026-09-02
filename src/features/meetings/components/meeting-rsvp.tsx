@@ -48,22 +48,33 @@ export function MeetingRsvp({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(meetingUrl ?? '')
 
+  // Both wrapped in try/catch: a thrown action (offline tap, deploy
+  // mid-flight) is not an { ok: false }, and unhandled it would surface to
+  // the route error boundary instead of a toast.
   function respond(id: (typeof OPTIONS)[number]['id']) {
     startTransition(async () => {
-      const res = await respondToMeeting(meetingId, id)
-      if (res.ok) router.refresh()
-      else toast.error(res.error)
+      try {
+        const res = await respondToMeeting(meetingId, id)
+        if (res.ok) router.refresh()
+        else toast.error(res.error)
+      } catch {
+        toast.error('Something went wrong — try again')
+      }
     })
   }
 
   function saveLink() {
     startTransition(async () => {
-      const res = await setMeetingLink(meetingId, draft.trim())
-      if (res.ok) {
-        setEditing(false)
-        router.refresh()
-      } else {
-        toast.error(res.error)
+      try {
+        const res = await setMeetingLink(meetingId, draft.trim())
+        if (res.ok) {
+          setEditing(false)
+          router.refresh()
+        } else {
+          toast.error(res.error)
+        }
+      } catch {
+        toast.error('Something went wrong — try again')
       }
     })
   }

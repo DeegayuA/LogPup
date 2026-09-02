@@ -1,4 +1,4 @@
-import { Layers, Plus } from 'lucide-react'
+import { Layers, NotebookPen, Plus } from 'lucide-react'
 import type { CommandDescriptor } from '@/features/search/registry/types'
 
 /**
@@ -21,6 +21,18 @@ export const commands: CommandDescriptor[] = [
     href: '/meetings?new=1',
     // No `visible`: any authenticated member may create a meeting
     // (features/meetings/actions.ts says so at createMeeting).
+  },
+  {
+    id: 'meetings.quick-note',
+    label: 'Quick note',
+    keywords: ['note', 'notes', 'jot', 'scratchpad', 'notebook', 'capture'],
+    group: 'create',
+    icon: NotebookPen,
+    // The header's split pill owns the actual gesture (private-from-birth
+    // meeting, sole attendee: you, lands with the write-up open) — see
+    // MeetingHeaderActions.handleQuickNote. This href only asks it to fire:
+    // /meetings reads ?new-note=1 the same way it reads ?new=1.
+    href: '/meetings?view=list&new-note=1',
   },
   {
     id: 'meetings.load',

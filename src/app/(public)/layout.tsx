@@ -20,11 +20,20 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
     <div className="flex min-h-screen flex-col bg-background">
       {/* Sticky frosted glass header */}
       <header className="sticky top-0 z-50 border-b border-border/70 bg-background/80 backdrop-blur-md transition-all">
-        <div className="mx-auto flex w-full max-w-[76rem] items-center justify-between gap-4 px-6 py-3.5 md:px-10">
+        {/* `flex-wrap` and the smaller base padding are what keep this header
+            inside a 320px viewport. Measured at 320: `px-6` leaves 272px of
+            content for a ~130px brand mark beside a 228px nav, so the row
+            overflowed by 46px and took the whole page's horizontal scrollbar
+            with it. Wrapping puts the nav on its own line rather than hiding
+            links — Privacy and Terms are exactly what a verification reviewer
+            is sent here to read (see the note above this component), so
+            `sm:hidden` on them would fix the pixels by breaking the reason
+            this layout exists. */}
+        <div className="mx-auto flex w-full max-w-[76rem] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3.5 sm:px-6 md:px-10">
           <Link href="/home" aria-label="LogPup home" className="transition-opacity hover:opacity-90">
             <BrandMark />
           </Link>
-          <nav className="flex items-center gap-2 sm:gap-4 text-sm font-medium">
+          <nav className="flex items-center gap-1 text-sm font-medium sm:gap-4">
             <Link
               href="/privacy"
               className="rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-muted/50 text-xs sm:text-sm"

@@ -126,7 +126,21 @@ export default async function AppLayout({
                  on desktop this is the only way to reach sign-out. */
               accountCompact={<AccountMenu user={user} role={session.user.role} variant="compact" />}
             />
-            <div className="flex flex-1 flex-col">
+            {/* `min-w-0` is load-bearing, not tidying. A flex item's default
+                `min-width: auto` resolves to its CONTENT's intrinsic minimum,
+                so this column refuses to shrink below the widest thing any
+                page puts in it. The sidebar beside it is `shrink-0`, so that
+                overflow has nowhere to go: one wide child — a table, the
+                meetings time grid, a long unbroken URL, a Sinhala run with no
+                break opportunity — widens this column past the viewport and
+                THE WHOLE PAGE scrolls sideways, sidebar and header included.
+                With `min-w-0` the column may shrink to the viewport and the
+                wide child scrolls inside its own `overflow-x-auto` container,
+                which is what every table wrapper in the app already assumes
+                (see components/ui/table.tsx, which wraps every table in one).
+                Set on both this column and <main>: either one left at `auto`
+                re-establishes the floor for everything inside it. */}
+            <div className="flex min-w-0 flex-1 flex-col">
               <Header
                 user={user}
                 role={session.user.role}
@@ -137,7 +151,7 @@ export default async function AppLayout({
                   shell — the sidebar and header stay put across navigations,
                   which is what makes them read as the frame rather than part of
                   the page. */}
-              <main className="flex flex-1 flex-col">
+              <main className="flex min-w-0 flex-1 flex-col">
                 <RouteTransition>{children}</RouteTransition>
               </main>
               {/* Mounted once, outside <main>, so it floats over every page

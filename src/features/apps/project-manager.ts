@@ -3,6 +3,9 @@ import { db } from '@/db'
 import { assignments } from '@/db/schema'
 import { isProjectManagerRole } from '@/lib/project-roles'
 
+// Same guard class as visibility.ts's — see managedAppIdsFor below.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Whether this person runs this project — i.e. their assignment on the app
  * carries a manager-family role (see isProjectManagerRole, whose patterns
@@ -61,4 +64,25 @@ export async function managesAnyApp(
     .from(assignments)
     .where(and(eq(assignments.userId, userId), inArray(assignments.appId, [...appIds])))
   return rows.some((row) => isProjectManagerRole(row.role))
+}
+
+/**
+ * Every app this person runs, as ids — the batched form of the question
+ * above, for surfaces that must answer "may they read intel on THIS meeting"
+ * many times per page without a query per meeting. /meetings resolves this
+ * once and threads it into decideIntelReadable (glance-core.ts), which
+ * rebuilds canReadMeetingIntel's PM arm from it. Same definition of
+ * "manager" as managesApp — isProjectManagerRole, never a private check.
+ */
+export async function managedAppIdsFor(userId: string): Promise<string[]> {
+  // visibility.ts's rule, for visibility.ts's reason: comparing a non-uuid
+  // (the signed-out '' fallback especially) against a uuid column is a
+  // Postgres cast error, and /meetings runs this in parallel with the layout
+  // redirect — not-signed-in-enough must answer [], never become a 500.
+  if (!UUID_RE.test(userId)) return []
+  const rows = await db
+    .select({ appId: assignments.appId, role: assignments.role })
+    .from(assignments)
+    .where(eq(assignments.userId, userId))
+  return rows.filter((row) => isProjectManagerRole(row.role)).map((row) => row.appId)
 }

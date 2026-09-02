@@ -70,7 +70,9 @@ async function expandPastMeetingsIfCollapsed(page: Page): Promise<void> {
  *  attendee, the one non-empty attendee list createMeetingInput requires)
  *  and waits for it to land on /meetings. */
 async function createMeeting(page: Page, title: string): Promise<void> {
-  await page.goto('/meetings')
+  // ?view=list pinned: /meetings defaults to the week grid now, and every
+  // assertion below reads the list view's rows.
+  await page.goto('/meetings?view=list')
   await page.getByRole('button', { name: 'New meeting' }).click()
 
   // Named, not bare getByRole('dialog'): the attendee popover below is also
@@ -94,14 +96,15 @@ async function createMeeting(page: Page, title: string): Promise<void> {
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
 }
 
-/** Deletes a meeting from the /meetings list (the row-level trash-can icon +
- *  its confirm AlertDialog), assuming `page` is already on /meetings. */
+/** Deletes a meeting from the /meetings list (the row kebab's Delete item +
+ *  its confirm AlertDialog), assuming `page` is already on the list view.
+ *  The docket row keeps its actions behind an "Actions for <title>" kebab —
+ *  the standalone "Delete meeting" trash button now lives only in the
+ *  Dossier sheet. */
 async function deleteMeetingViaList(page: Page, title: string): Promise<void> {
   await expandPastMeetingsIfCollapsed(page)
-  const article = page
-    .locator('article')
-    .filter({ has: page.getByRole('heading', { name: title, exact: true }) })
-  await article.getByRole('button', { name: 'Delete meeting' }).click()
+  await page.getByRole('button', { name: `Actions for ${title}` }).click()
+  await page.getByRole('menuitem', { name: 'Delete' }).click()
 
   const confirmDialog = page.getByRole('alertdialog')
   await expect(confirmDialog.getByRole('heading', { name: 'Delete meeting?' })).toBeVisible()
@@ -149,8 +152,8 @@ test.describe('LogPup soft-delete e2e', () => {
     await expect(page.getByText('Restored')).toBeVisible()
     await expect(trashRow(page, MEETING_RESTORE)).toHaveCount(0)
 
-    // Back on /meetings.
-    await page.goto('/meetings')
+    // Back on /meetings (?view=list — the default is the week grid).
+    await page.goto('/meetings?view=list')
     await expandPastMeetingsIfCollapsed(page)
     await expect(page.getByRole('heading', { name: MEETING_RESTORE, exact: true })).toBeVisible()
 

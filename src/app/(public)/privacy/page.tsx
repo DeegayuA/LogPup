@@ -66,7 +66,14 @@ export default function PrivacyPolicyPage() {
         {/* 2-Column Layout with Sticky Quick-Nav on Desktop */}
         <div className="grid gap-12 lg:grid-cols-12">
           {/* Main Legal Content Column (8 cols) */}
-          <main className="lg:col-span-8">
+          {/* `min-w-0` for the same reason as the authed shell: a grid item's
+              default `min-width: auto` is its CONTENT's minimum, so this column
+              refused to shrink below the widest thing in the document and put a
+              horizontal scrollbar on the whole page — measured at 356px inside a
+              320px viewport, 60px over. The data table below is already in its
+              own `overflow-x-auto` wrapper; this is what lets that wrapper
+              actually do its job instead of being stretched from the outside. */}
+          <main className="min-w-0 lg:col-span-8">
             <article className={`w-full max-w-none ${LEGAL_PROSE}`}>
               <p className="lead text-base sm:text-lg leading-relaxed text-foreground">
                 LogPup (&ldquo;LogPup&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;) is an internal
@@ -115,7 +122,12 @@ export default function PrivacyPolicyPage() {
                 </div>
                 <p className="mt-1 text-xs text-foreground leading-relaxed">
                   With your explicit consent, LogPup requests the{' '}
-                  <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs font-semibold text-primary">
+                  {/* `break-all`, not `break-words`: this is a single monospace
+                      token with no spaces or hyphens, so `break-words` finds no
+                      opportunity and leaves it 322px wide — 43px past a 320px
+                      viewport, the last thing on this page putting a horizontal
+                      scrollbar on the whole document. */}
+                  <code className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-2xs font-semibold text-primary">
                     https://www.googleapis.com/auth/calendar.events
                   </code>{' '}
                   scope. We use it strictly to create, update, and cancel the calendar events for meetings you schedule in LogPup, and to invite the attendees you selected.

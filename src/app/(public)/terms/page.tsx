@@ -68,7 +68,12 @@ export default function TermsOfServicePage() {
         {/* 2-Column Layout with Sticky Quick-Nav on Desktop */}
         <div className="grid gap-12 lg:grid-cols-12">
           {/* Main Legal Content Column (8 cols) */}
-          <main className="lg:col-span-8">
+          {/* `min-w-0` — same grid-item rule as privacy/page.tsx and the authed
+              shell. Applied here too even though this page measures clean today:
+              the two share a layout and a content shape, so the one that happens
+              not to hold a wide element yet is one long URL away from the same
+              60px overflow. */}
+          <main className="min-w-0 lg:col-span-8">
             <article className={`w-full max-w-none ${LEGAL_PROSE}`}>
               <p className="lead text-base sm:text-lg leading-relaxed text-foreground">
                 These terms govern your use of LogPup, an internal engineering-operations application

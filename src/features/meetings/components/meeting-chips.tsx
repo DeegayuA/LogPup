@@ -1,5 +1,7 @@
 import type { ComponentType, ReactNode } from 'react'
+import { CalendarClockIcon, MessageCircleQuestionIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { describeNextMeeting } from '@/features/meetings/next-meeting'
 
 /**
  * The shared visual vocabulary for the meetings surfaces: one chip, one
@@ -94,19 +96,21 @@ export function MetaChip({
 export function CountChip({
   value,
   unit,
+  plural,
   tone = 'neutral',
   icon,
 }: {
   value: number
-  /** Singular; an "s" is appended for any count that is not exactly 1. */
+  /** Singular; `plural` (default unit + "s") is used for any other count. */
   unit: string
+  /** Explicit plural for adjectival units — "3 overdue", never "3 overdues". */
+  plural?: string
   tone?: ChipTone
   icon?: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
 }) {
   return (
     <MetaChip tone={tone} icon={icon}>
-      <span className="font-mono">{value}</span> {unit}
-      {value === 1 ? '' : 's'}
+      <span className="font-mono">{value}</span> {value === 1 ? unit : (plural ?? `${unit}s`)}
     </MetaChip>
   )
 }
@@ -149,46 +153,44 @@ export function SectionHeading({
   )
 }
 
+/* The header StatTile that used to live here was deleted with the stat-card
+   strip it served — the triage rail now uses the kit's ui/stat-tile, which
+   carries href/meta/tone. Nothing else imported it (checked at removal). */
+
 /**
- * One number in the page header's at-a-glance strip. The value leads at a size
- * nothing else on the page uses, because scanning four of these is the first
- * thing anyone does on arrival.
+ * How many chips a docket row may carry before the rest fold into "+N".
+ * Priority ordering is the CALLER's job (state chips first — see the row
+ * anatomy in meeting-list.tsx); this only enforces the ceiling, so a row's
+ * height and scan rhythm never depend on how eventful the meeting was.
  */
-export function StatTile({
-  value,
-  label,
-  tone = 'neutral',
-}: {
-  value: number
-  label: string
-  tone?: ChipTone
-}) {
-  const highlight = tone !== 'neutral' && value > 0
-  return (
-    <div
-      className={cn(
-        'flex min-w-16 flex-col rounded-lg border px-2.5 py-1.5',
-        highlight ? CHIP_TONE[tone] : 'border-border',
-      )}
-    >
-      <span
-        className={cn(
-          'font-mono text-xl leading-tight font-semibold',
-          highlight ? undefined : 'text-foreground',
-        )}
-      >
-        {value}
-      </span>
-      <span
-        className={cn(
-          'text-2xs leading-4 font-medium tracking-wide uppercase',
-          highlight ? undefined : 'text-muted-foreground',
-        )}
-      >
-        {label}
-      </span>
-    </div>
-  )
+export const ROW_CHIP_CAP_DESKTOP = 5
+export const ROW_CHIP_CAP_MOBILE = 3
+
+/** Pure cap: the first `cap` chips, plus how many were folded away. */
+export function capChips<T>(chips: readonly T[], cap: number): { shown: T[]; overflow: number } {
+  if (chips.length <= cap) return { shown: [...chips], overflow: 0 }
+  return { shown: chips.slice(0, cap), overflow: chips.length - cap }
+}
+
+/**
+ * The room's agreed next meeting, on the row — the date that governs every
+ * action item's default deadline, previously invisible at list level. Only
+ * ever fed the human-confirmed `next_meeting_at` (AI proposals stay
+ * offered-never-saved, by that column's contract). Renders nothing once the
+ * date is behind `now`: "Reconvenes" about a gone date presents a stale
+ * deadline as a plan — the `.past` flag exists exactly for this.
+ */
+export function ReconvenesChip({ nextMeetingAt, now }: { nextMeetingAt: Date; now: Date }) {
+  const next = describeNextMeeting(nextMeetingAt, now)
+  if (next.past) return null
+  return <MetaChip icon={CalendarClockIcon}>Reconvenes {next.day}</MetaChip>
+}
+
+/** Unanswered prep questions — computed on every intel load and, until the
+ *  docket, rendered nowhere. Neutral: a question is information, not alarm. */
+export function QuestionsChip({ count }: { count: number }) {
+  if (count <= 0) return null
+  return <CountChip value={count} unit="question" icon={MessageCircleQuestionIcon} />
 }
 
 /**

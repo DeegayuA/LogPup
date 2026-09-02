@@ -43,6 +43,27 @@ export function noRsvpYet(tally: RsvpTally, state: MeetingState): boolean {
   return state !== 'past' && tally.total > 0 && tally.pending === tally.total
 }
 
+/**
+ * Whether THIS viewer still owes this meeting an answer.
+ *
+ * THE one pending-RSVP source — the "Waiting on you" tile, the row's inline
+ * Yes/Maybe/No, and the waiting filter all call this. It existed twice before
+ * (summarizeMeetings' inline find, and getMyPendingInvites' own query), and
+ * the two could disagree on the same screen; a predicate with one definition
+ * cannot.
+ *
+ * Deliberately says nothing about timing: "a past meeting no longer needs a
+ * reply" is a decision about which meetings a caller feeds in (the tile
+ * counts upcoming only), not about what "your response is pending" means.
+ */
+export function isAwaitingViewerRsvp(
+  meeting: { attendees: { id: string; response: AttendeeResponse }[] },
+  viewerId: string,
+): boolean {
+  const mine = meeting.attendees.find((attendee) => attendee.id === viewerId)
+  return mine?.response === 'pending'
+}
+
 export type MeetingState = 'live' | 'soon' | 'today' | 'upcoming' | 'past'
 
 export type MeetingTiming = {
@@ -53,8 +74,10 @@ export type MeetingTiming = {
   days: number
 }
 
-/** Minutes before the start at which a meeting reads as "about to happen". */
-const SOON_MINUTES = 60
+/** Minutes before the start at which a meeting reads as "about to happen".
+ *  Exported so the boundary clock (useListNow) can arm a tick at the instant
+ *  a row's label flips to "Starting soon", not only at start/end. */
+export const SOON_MINUTES = 60
 
 function plural(count: number, unit: string): string {
   return `${count} ${unit}${count === 1 ? '' : 's'}`
@@ -150,8 +173,7 @@ export function summarizeMeetings(
   for (const meeting of upcoming) {
     const timing = meetingTiming(meeting.startsAt, meeting.endsAt, now)
     if (timing.days >= 0 && timing.days < 7) week += 1
-    const mine = meeting.attendees.find((attendee) => attendee.id === currentUserId)
-    if (mine?.response === 'pending') awaitingYou += 1
+    if (isAwaitingViewerRsvp(meeting, currentUserId)) awaitingYou += 1
   }
 
   // `today` and `live` are both counted across BOTH lists on purpose.

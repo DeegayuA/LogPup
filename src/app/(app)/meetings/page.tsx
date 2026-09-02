@@ -1,62 +1,69 @@
 import { Suspense } from 'react'
-import { CalendarDaysIcon } from 'lucide-react'
 import { getSession } from '@/lib/session'
-import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { toIsoDateInTimeZone } from '@/lib/lk-holidays'
-import { listMeetings } from '@/features/meetings/queries'
+import { getMeetingSummaryById, listMeetingsWindowed } from '@/features/meetings/queries'
 import { listApps } from '@/features/apps/queries'
 import { listActiveUsers } from '@/features/people/queries'
+import { managedAppIdsFor } from '@/features/apps/project-manager'
 import { parseCalendarView, parseFocusedDate } from '@/features/meetings/calendar-view'
-import { StatTile } from '@/features/meetings/components/meeting-chips'
-import { summarizeMeetings } from '@/features/meetings/components/meeting-glance'
-import { MeetingForm } from '@/features/meetings/components/meeting-form'
+import { getMeetingGlancesChunked } from '@/features/meetings/glance-batch'
+import { SkeletonBlock } from '@/features/meetings/components/meeting-chips'
 import { MeetingHeaderActions } from '@/features/meetings/components/meeting-header-actions'
 import { MeetingsViews } from '@/features/meetings/components/meetings-views'
+import { MeetingGlanceProvider } from '@/features/meetings/components/use-glance-map'
+import { TriageRail } from '@/features/meetings/components/triage-rail'
 import {
   MeetingLoadLink, MeetingLoadLinkFallback,
 } from '@/features/meetings/components/meeting-load-link'
-import { splitByUpcoming } from '@/features/meetings/split-upcoming'
-import { isAdminRole } from '@/features/auth/capabilities'
-import { getMyPendingInvites, getWeeklyLoadTable } from '@/features/meeting-load/queries'
+import { isAdminRole, type UserRole } from '@/features/auth/capabilities'
+import { getWeeklyLoadTable } from '@/features/meeting-load/queries'
 import { getSuggestionsForOrganizer } from '@/features/meeting-load/admin-queries'
 import { YourSeriesCard } from '@/features/meeting-load/components/your-series-card'
 
 export const metadata = { title: 'Meetings & Intelligence' }
 
-export default async function MeetingsPage(props: {
-  searchParams: Promise<{ new?: string; view?: string; date?: string; open?: string }>
-}) {
-  const [
-    { new: newParam, view: viewParam, date: dateParam, open: openParam },
-    session,
-    allMeetings,
-    apps,
-    activeUsers,
-  ] = await (async () => {
-    // Session FIRST: the meetings list is now viewer-scoped (attendees-only
-    // meetings exist), so the query cannot start before we know who is asking.
-    const session = await getSession()
-    const viewerId = session?.user?.id ?? ''
-    const [search, meetings, apps, users] = await Promise.all([
-      props.searchParams,
-      listMeetings(viewerId),
-      listApps(),
-      listActiveUsers(),
-    ])
-    return [search, session, meetings, apps, users] as const
-  })()
+// glance-actions' rule, applied before the by-id read: a hand-mangled ?open=
+// must degrade to "no such meeting", not become a Postgres uuid-cast error.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-  // `allMeetings` arrives newest-first, which is what the past side wants and
-  // the reverse of what upcoming does — splitByUpcoming owns that flip. Sorting
-  // either half again here would silently undo it.
-  const { upcoming, past } = splitByUpcoming(allMeetings)
+export default async function MeetingsPage(props: {
+  searchParams: Promise<{
+    new?: string
+    'new-note'?: string
+    view?: string
+    date?: string
+    open?: string
+    day?: string
+    f?: string
+  }>
+}) {
+  const [search, session, { upcoming, past, pastTotal }, apps, activeUsers, managedAppIds] =
+    await (async () => {
+      // Session FIRST: everything below is viewer-scoped (attendees-only
+      // meetings exist), so no query can start before we know who is asking.
+      const session = await getSession()
+      const viewerId = session?.user?.id ?? ''
+      const [search, windowed, apps, users, managed] = await Promise.all([
+        props.searchParams,
+        // The windowed read: every not-yet-ended meeting plus one page of
+        // past — where the old listMeetings fetched the viewer's entire
+        // history on every load, forever.
+        listMeetingsWindowed(viewerId),
+        listApps(),
+        listActiveUsers(),
+        // The PM arm of canReadMeetingIntel, resolved once for the whole
+        // page — MeetingsViews re-decides the gate per opened meeting via
+        // decideIntelReadable without another query.
+        managedAppIdsFor(viewerId),
+      ])
+      return [search, session, windowed, apps, users, managed] as const
+    })()
 
   const currentUserId = session?.user?.id ?? ''
   const isAdmin = session?.user ? isAdminRole(session.user.role) : false
+  const viewerRole = (session?.user?.role ?? 'member') as UserRole
   const appOptions = apps.map((app) => ({ id: app.id, name: app.name }))
-  const overview = summarizeMeetings(upcoming, past, currentUserId, new Date())
 
   // Today in Asia/Colombo, not UTC: an evening here is already tomorrow in
   // UTC, so a UTC-derived "today" would open the calendar on the wrong day
@@ -64,155 +71,163 @@ export default async function MeetingsPage(props: {
   // HERE, from the awaited searchParams, so every value the calendar starts
   // from is resolved in one place rather than re-derived per component.
   const todayIso = toIsoDateInTimeZone(new Date())
-  const initialView = parseCalendarView(viewParam)
-  const initialDate = parseFocusedDate(dateParam, todayIso)
-  const initialOpenMeetingId =
-    openParam && allMeetings.some((meeting) => meeting.id === openParam) ? openParam : undefined
+  // A bare `?open=` (palette, briefing and context-pack links — frozen
+  // producers that write no `view`) implies the LIST view: the Dossier sheet
+  // only mounts there, and landing such a link on the default week grid
+  // would open nothing. An explicit `?view=` keeps its meaning.
+  const initialView =
+    search.open && !search.view ? 'list' : parseCalendarView(search.view)
+  const initialDate = parseFocusedDate(search.date, todayIso)
+
+  // A ?open= naming a meeting outside the loaded window (a deep link into
+  // deep history) is resolved by id so the sheet can still show it — the
+  // docket deliberately does not grow a row for it.
+  const loadedIds = new Set([...upcoming, ...past].map((meeting) => meeting.id))
+  const openParam = search.open
+  const extraOpenMeeting =
+    openParam && !loadedIds.has(openParam) && UUID_RE.test(openParam)
+      ? await getMeetingSummaryById(currentUserId, openParam)
+      : null
+
+  // THE glance batch: fired once, over every id on the page, and NOT awaited
+  // — the docket paints from list facts immediately and the whole page's
+  // intelligence (tiles + row chips) fills in one repaint when this lands.
+  // Computed-only by page contract: nothing in it can reach Gemini.
+  const glanceIds = [
+    ...upcoming.map((meeting) => meeting.id),
+    ...past.map((meeting) => meeting.id),
+    ...(extraOpenMeeting ? [extraOpenMeeting.id] : []),
+  ]
+  // Chunked: getMeetingGlances caps one call at 100 ids and silently answers
+  // null past the cap — a heavy workspace's overflow rows would render
+  // chip-less forever without the split-and-merge wrapper.
+  const glancesPromise = getMeetingGlancesChunked(glanceIds)
 
   return (
-    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8 overflow-hidden">
-      {/* Background ambient lighting */}
-      <div
-        className="pointer-events-none absolute -top-40 right-1/4 -z-10 h-[450px] w-[600px] rounded-full bg-primary/8 blur-3xl"
-        aria-hidden
-      />
-      <div
-        className="pointer-events-none absolute top-1/2 -left-40 -z-10 h-[400px] w-[500px] rounded-full bg-chart-1/5 blur-3xl"
-        aria-hidden
-      />
-
+    <div className="relative flex flex-1 flex-col gap-6 p-6 md:p-8">
       <PageHeader
         title="Meeting Intelligence"
-        description="Everything the pack has scheduled — Google Calendar synced with Gemini 2.5 transcripts."
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Right-aligned mono summary — the one number the deleted
+                stat-card strip earned its keep with. Suspended: it is a
+                sweep, and this page must not wait on it to draw. */}
+            <Suspense fallback={<SkeletonBlock className="h-4 w-44" />}>
+              <WeekSummaryLine />
+            </Suspense>
             {/* Suspended on purpose: the label is a finding the sweep has to
                 compute, and this page must not wait on it to draw. */}
             <Suspense fallback={<MeetingLoadLinkFallback />}>
               <MeetingLoadLink />
             </Suspense>
             {/* One split pill for both creation gestures — quick note and
-                scheduled meeting — instead of a notebook button stranded in
-                the list toolbar two rows below the "New meeting" it rhymes
-                with. See MeetingHeaderActions. */}
+                scheduled meeting. ?new=1 opens the form, ?new-note=1 fires
+                the quick-note gesture (the ⌘K row's only way in). */}
             <MeetingHeaderActions
               apps={appOptions}
               activeUsers={activeUsers}
               currentUserId={currentUserId}
-              defaultOpenNewMeeting={newParam === '1'}
+              defaultOpenNewMeeting={search.new === '1'}
+              defaultQuickNote={search['new-note'] === '1'}
             />
           </div>
         }
       />
 
-      {overview.total > 0 ? (
-        <div className="flex flex-wrap gap-2.5 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm">
-          <StatTile value={overview.today} label="Today" />
-          <StatTile value={overview.week} label="Next 7 days" />
-          <StatTile value={overview.awaitingYou} label="Waiting on you" tone="warning" />
-          {overview.live > 0 ? <StatTile value={overview.live} label="Now" tone="active" /> : null}
-          <StatTile value={overview.past} label="Past" />
-          {/* Suspended: the invited-hours figure is a sweep, and the tiles it
-              sits beside are already computed. */}
-          <Suspense fallback={<StatTile value={0} label="Invited hours" />}>
-            <InvitedHoursTile />
-          </Suspense>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-dashed border-border/80 bg-card/40 p-8 backdrop-blur-sm">
-          <EmptyState
-            icon={CalendarDaysIcon}
-            title="Nothing scheduled yet."
-            description="A meeting keeps its notes, transcript and follow-ups long after it ends — schedule the first one and everyone invited gets a notification."
-            action={
-              <MeetingForm
-                apps={appOptions}
-                activeUsers={activeUsers}
-                trigger={
-                  <Button variant="outline" size="sm">
-                    Schedule the first meeting
-                  </Button>
-                }
-              />
-            }
-          />
-        </div>
-      )}
+      {/* ONE provider for the whole page's intelligence: the triage rail's
+          tiles and every row's chip line read the same store, so a tile can
+          never say "3 overdue" while the rows it filters to say nothing. */}
+      <MeetingGlanceProvider glancesPromise={glancesPromise} meetingIds={glanceIds}>
+        {upcoming.length + pastTotal > 0 ? (
+          <TriageRail upcoming={upcoming} past={past} currentUserId={currentUserId} />
+        ) : null}
 
-      {/* Suspended so a sweep over six months of meetings never delays the
-          calendar somebody came here to look at. */}
-      <Suspense fallback={null}>
-        <YourSeries userId={currentUserId} />
-      </Suspense>
+        {/* Suspended so a sweep over six months of meetings never delays the
+            docket somebody came here to look at. Organizer-private, and one
+            LINE until opened — the governance card no longer sits between
+            the header and the meetings on every visit. */}
+        <Suspense fallback={null}>
+          <YourSeries userId={currentUserId} />
+        </Suspense>
 
-      <MeetingsViews
-        upcoming={upcoming}
-        past={past}
-        currentUserId={currentUserId}
-        isAdmin={isAdmin}
-        users={activeUsers}
-        apps={appOptions}
-        initialView={initialView}
-        initialDate={initialDate}
-        todayIso={todayIso}
-        initialOpenMeetingId={initialOpenMeetingId}
-      />
+        <MeetingsViews
+          upcoming={upcoming}
+          past={past}
+          pastTotal={pastTotal}
+          extraOpenMeeting={extraOpenMeeting}
+          currentUserId={currentUserId}
+          isAdmin={isAdmin}
+          viewerRole={viewerRole}
+          managedAppIds={managedAppIds}
+          users={activeUsers}
+          apps={appOptions}
+          initialView={initialView}
+          initialDate={initialDate}
+          todayIso={todayIso}
+        />
+      </MeetingGlanceProvider>
     </div>
   )
 }
 
-/**
- * How much of this week is already spoken for.
- *
- * Warning tone above 1.25x the trailing four-week MEDIAN — median, so one
- * workshop week does not leave the tile amber for a month. Computed server-side
- * here, above the client MeetingsViews boundary, so the number and the meetings
- * it summarises come from the same render.
- */
-async function InvitedHoursTile() {
-  const rows = await getWeeklyLoadTable(new Date())
-  if (rows.length === 0) return <StatTile value={0} label="Invited hours" />
+/** "4h 30m" from a float of hours — mono-friendly, no decimals. */
+function hoursLabel(invitedHours: number): string {
+  const minutes = Math.round(invitedHours * 60)
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  if (hours === 0) return `${rest}m`
+  if (rest === 0) return `${hours}h`
+  return `${hours}h ${rest}m`
+}
 
+/**
+ * This week, in one mono line. The last row of the weekly load table is the
+ * current week (rows sort ascending and the sweep runs to `now`) — the same
+ * read the deleted InvitedHoursTile leaned on, minus the tile.
+ */
+async function WeekSummaryLine() {
+  const rows = await getWeeklyLoadTable(new Date())
   const thisWeek = rows[rows.length - 1]
-  const trailing = rows.slice(-5, -1).map((row) => row.invitedHours).sort((a, b) => a - b)
-  const median = trailing.length === 0
-    ? 0
-    : trailing.length % 2 === 0
-      ? (trailing[trailing.length / 2 - 1] + trailing[trailing.length / 2]) / 2
-      : trailing[Math.floor(trailing.length / 2)]
+  if (!thisWeek) return null
 
   return (
-    <StatTile
-      value={Math.round(thisWeek.invitedHours)}
-      label="Invited hours"
-      tone={median > 0 && thisWeek.invitedHours > 1.25 * median ? 'warning' : undefined}
-    />
+    <p className="font-mono text-xs text-muted-foreground tabular-nums">
+      This week: {thisWeek.meetingCount} meeting{thisWeek.meetingCount === 1 ? '' : 's'} ·{' '}
+      {hoursLabel(thisWeek.invitedHours)} invited
+    </p>
   )
 }
 
 /**
- * The organizer's own queue, and their own pending invitations.
+ * The organizer's own queue, demoted to a one-line disclosure.
  *
  * ORGANIZER-PRIVATE. `getSuggestionsForOrganizer` checks eligibility before it
  * reads any evidence, so a non-organizer's payload never contains the data at
  * all — filtering at render time would mean it had already been fetched.
+ * Renders nothing when there is nothing to ask (an empty governance card on
+ * every visit would be a standing reminder that the app is watching).
+ *
+ * The pending-invites paragraph that used to render here is gone: the triage
+ * rail's "Waiting on you" tile counts the same debt from the same attendee
+ * rows (isAwaitingViewerRsvp), so a second differently-sourced number could
+ * only ever agree or confuse.
  */
 async function YourSeries({ userId }: { userId: string }) {
   if (!userId) return null
-  const [suggestions, pending] = await Promise.all([
-    getSuggestionsForOrganizer(userId, new Date()),
-    getMyPendingInvites(userId),
-  ])
+  const suggestions = await getSuggestionsForOrganizer(userId, new Date())
+  if (suggestions.length === 0) return null
 
   return (
-    <div className="flex flex-col gap-4">
-      <YourSeriesCard suggestions={suggestions} />
-      {pending.length > 0 ? (
-        <p className="text-xs text-muted-foreground">
-          {pending.length} invite{pending.length === 1 ? '' : 's'} without an in-app reply —
-          replies may live in Google Calendar; a tap here helps planning.
-        </p>
-      ) : null}
-    </div>
+    <details className="group w-fit">
+      <summary className="cursor-pointer list-none rounded-md text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        Series suggestions{' '}
+        <span className="font-mono tabular-nums">({suggestions.length})</span>
+        <span className="ml-1 font-medium text-primary group-open:hidden"> — Review</span>
+        <span className="ml-1 hidden font-medium group-open:inline"> — Hide</span>
+      </summary>
+      <div className="pt-3">
+        <YourSeriesCard suggestions={suggestions} />
+      </div>
+    </details>
   )
 }

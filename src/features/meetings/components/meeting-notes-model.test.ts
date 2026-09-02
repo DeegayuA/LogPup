@@ -503,6 +503,7 @@ describe('glanceFromIntel', () => {
   }
 
   it('summarizes notes, actions, overdue actions and follow-ups', () => {
+    const nextMeetingAt = new Date('2026-09-12T15:00:00')
     const glance = glanceFromIntel(
       {
         notes,
@@ -515,6 +516,7 @@ describe('glanceFromIntel', () => {
             ],
           },
         ],
+        nextMeetingAt,
       },
       now,
     )
@@ -526,11 +528,12 @@ describe('glanceFromIntel', () => {
       openFollowups: 2,
       staleFollowups: 1,
       questions: 2,
+      nextMeetingAt,
     })
   })
 
   it('reports an un-analyzed meeting as having produced nothing', () => {
-    expect(glanceFromIntel({ notes: null, prep: [] }, now)).toEqual({
+    expect(glanceFromIntel({ notes: null, prep: [], nextMeetingAt: null }, now)).toEqual({
       hasNotes: false,
       analyzedAt: null,
       actions: 0,
@@ -538,6 +541,7 @@ describe('glanceFromIntel', () => {
       openFollowups: 0,
       staleFollowups: 0,
       questions: 0,
+      nextMeetingAt: null,
     })
   })
 })

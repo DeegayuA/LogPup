@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.505",
+  "current": "v0.0.537",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4040,6 +4040,262 @@
       "hash": "702dd68",
       "kind": "feat",
       "change": "takes become a thing the database knows about"
+    },
+    {
+      "version": "v0.0.506",
+      "date": "2026-08-22",
+      "at": "2026-08-22T12:46:32+05:30",
+      "hash": "007c37f",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.507",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:05:51+05:30",
+      "hash": "8c996d9",
+      "kind": "feat",
+      "change": "a mention notifies exactly once, and says so when it cannot"
+    },
+    {
+      "version": "v0.0.508",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:14:30+05:30",
+      "hash": "e73a38e",
+      "kind": "fix",
+      "change": "mint tokens with the REST field name, and pin the resumption handle"
+    },
+    {
+      "version": "v0.0.509",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:15:02+05:30",
+      "hash": "59873cc",
+      "kind": "feat",
+      "change": "a monthly AI budget — warn at 90%, refuse at 100%"
+    },
+    {
+      "version": "v0.0.510",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:20:44+05:30",
+      "hash": "514d33b",
+      "kind": "feat",
+      "change": "a meeting can belong to its attendees alone, and quick notes do"
+    },
+    {
+      "version": "v0.0.511",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:38:36+05:30",
+      "hash": "8d1b390",
+      "kind": "fix",
+      "change": "Sinhala survives every ASCII-shaped matcher"
+    },
+    {
+      "version": "v0.0.512",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:38:36+05:30",
+      "hash": "2607f59",
+      "kind": "fix",
+      "change": "read-aloud budgets and fallbacks learn that Sinhala is not English"
+    },
+    {
+      "version": "v0.0.513",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:45:29+05:30",
+      "hash": "5a95470",
+      "kind": "fix",
+      "change": "transcripts stop eating repeated words, and Sinhala meetings get full-depth minutes"
+    },
+    {
+      "version": "v0.0.514",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:50:12+05:30",
+      "hash": "d70c02b",
+      "kind": "fix",
+      "change": "bilingual live text survives a dead engine, and printed Sinhala gets room to breathe"
+    },
+    {
+      "version": "v0.0.515",
+      "date": "2026-08-22",
+      "at": "2026-08-22T13:53:48+05:30",
+      "hash": "817bf89",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.516",
+      "date": "2026-08-25",
+      "at": "2026-08-25T13:05:51+05:30",
+      "hash": "00ce430",
+      "kind": "feat",
+      "change": "bundle Noto Sans Sinhala so printed Sinhala looks the same on every machine"
+    },
+    {
+      "version": "v0.0.517",
+      "date": "2026-08-25",
+      "at": "2026-08-25T13:43:13+05:30",
+      "hash": "aefdc36",
+      "kind": "docs",
+      "change": "multi-discipline projects — EPC, hardware, networking"
+    },
+    {
+      "version": "v0.0.518",
+      "date": "2026-08-25",
+      "at": "2026-08-25T13:45:23+05:30",
+      "hash": "7323466",
+      "kind": "docs",
+      "change": "record confirmed migration slots, shell overlap, Gemini status mapping"
+    },
+    {
+      "version": "v0.0.519",
+      "date": "2026-08-25",
+      "at": "2026-08-25T13:47:34+05:30",
+      "hash": "6e082d3",
+      "kind": "docs",
+      "change": "measure the seam's real risk instead of asserting it"
+    },
+    {
+      "version": "v0.0.520",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:07:11+05:30",
+      "hash": "5e11dbf",
+      "kind": "docs",
+      "change": "WS0 terminal-status seam, and correct the spec's SQL claim"
+    },
+    {
+      "version": "v0.0.521",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:12:28+05:30",
+      "hash": "f823a54",
+      "kind": "feat",
+      "change": "correct a misheard word everywhere by selecting it"
+    },
+    {
+      "version": "v0.0.522",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:13:41+05:30",
+      "hash": "a9d31f4",
+      "kind": "refactor",
+      "change": "add isTerminal/OPEN_STATUSES seam beside TASK_STATUSES"
+    },
+    {
+      "version": "v0.0.523",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:20:23+05:30",
+      "hash": "94c35aa",
+      "kind": "fix",
+      "change": "un-rot the terminal-status seam comment's call-site claim"
+    },
+    {
+      "version": "v0.0.524",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:27:29+05:30",
+      "hash": "4ba83e6",
+      "kind": "test",
+      "change": "guard the open/done pair in getPersonWorkload"
+    },
+    {
+      "version": "v0.0.525",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:36:18+05:30",
+      "hash": "001694a",
+      "kind": "refactor",
+      "change": "express the completed_at rule against the terminal set"
+    },
+    {
+      "version": "v0.0.526",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:44:43+05:30",
+      "hash": "eb38ea0",
+      "kind": "fix",
+      "change": "stamp completed_at on the done literal, not isTerminal"
+    },
+    {
+      "version": "v0.0.527",
+      "date": "2026-08-25",
+      "at": "2026-08-25T15:54:14+05:30",
+      "hash": "c2bc5fd",
+      "kind": "refactor",
+      "change": "route in-memory status predicates through isTerminal"
+    },
+    {
+      "version": "v0.0.528",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:50:12+05:30",
+      "hash": "e8e9934",
+      "kind": "refactor",
+      "change": "query open work by OPEN_STATUSES, not ne(status, 'done')"
+    },
+    {
+      "version": "v0.0.529",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:56:18+05:30",
+      "hash": "17ab9cc",
+      "kind": "refactor",
+      "change": "route sql-template status filters through OPEN_STATUSES"
+    },
+    {
+      "version": "v0.0.530",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:58:00+05:30",
+      "hash": "563cc1c",
+      "kind": "fix",
+      "change": "stop blaming the user's key for our own bugs, and try the second model"
+    },
+    {
+      "version": "v0.0.531",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:58:16+05:30",
+      "hash": "abcd631",
+      "kind": "feat",
+      "change": "a task can have several people, and a meeting can name its next one"
+    },
+    {
+      "version": "v0.0.532",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:58:42+05:30",
+      "hash": "53262eb",
+      "kind": "feat",
+      "change": "several people can own one task"
+    },
+    {
+      "version": "v0.0.533",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:59:18+05:30",
+      "hash": "3dcd417",
+      "kind": "feat",
+      "change": "collapse the sidebar to an icon rail"
+    },
+    {
+      "version": "v0.0.534",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:59:36+05:30",
+      "hash": "929997a",
+      "kind": "feat",
+      "change": "/meetings opens on the week grid"
+    },
+    {
+      "version": "v0.0.535",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:59:36+05:30",
+      "hash": "e2090c6",
+      "kind": "feat",
+      "change": "\"Not tracked\" rows edit like every other suggestion"
+    },
+    {
+      "version": "v0.0.536",
+      "date": "2026-08-26",
+      "at": "2026-08-26T20:59:53+05:30",
+      "hash": "d8efe40",
+      "kind": "feat",
+      "change": "reset a teammate's password from the people table"
+    },
+    {
+      "version": "v0.0.537",
+      "date": "2026-08-26",
+      "at": "2026-08-26T23:33:40+05:30",
+      "hash": "3c0bc01",
+      "kind": "other",
+      "change": "No description recorded for this build."
     }
   ]
 }
