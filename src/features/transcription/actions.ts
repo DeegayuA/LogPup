@@ -58,7 +58,7 @@ export async function requestLiveToken(
     // GeminiError messages are written to be shown to the user and already say
     // "recording continues" — the live path failing must never read as though
     // the recording itself is in danger.
-    if (error instanceof GeminiError) return err(error.message)
+    if (error instanceof GeminiError) return err(error.message, error.code)
     return err('Could not start live transcription — recording continues without it.')
   }
 }

@@ -150,7 +150,7 @@ export async function draftWorklogNote(day: string): Promise<ActionResult<Worklo
     // activities"), so the person knows what the number was judged from.
     return ok({ note, activityCount: activity.length, suggestedPercent })
   } catch (error) {
-    if (error instanceof GeminiError) return err(error.message)
+    if (error instanceof GeminiError) return err(error.message, error.code)
     return err('Could not draft that right now — write it yourself or try again')
   }
 }

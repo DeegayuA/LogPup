@@ -110,6 +110,18 @@ export type MeterTask = {
   unrecorded: boolean
   /** The failure the user needs to see, verbatim from the action. */
   error: string | null
+  /**
+   * The machine-readable reason behind `error`, when the action supplied one
+   * (ActionResult.code). Null for a thrown exception, or an action that does
+   * not classify its failures.
+   *
+   * Kept BESIDE the message rather than read out of it. The card offers
+   * "check your keys" for a rejected key and must not offer it for a malformed
+   * response, and telling those apart by matching the English sentence would
+   * break the first time one is reworded — they are already written two ways,
+   * for a personal key and for a shared team pool.
+   */
+  errorCode: string | null
   /** Countable progress reported by the call site, or null for the normal
    *  single-opaque-call task. See MeterSteps. */
   steps: MeterSteps | null
@@ -356,4 +368,38 @@ export function flightDelta(
   // animating; treating it as one produces a twitch, not a movement.
   if (Math.abs(x) < 8 && Math.abs(y) < 8) return null
   return { x, y }
+}
+
+/**
+ * The GeminiErrorCode meaning the key was rejected or is spent.
+ *
+ * Duplicated from the union in client.ts because that module is server-side
+ * and this one is imported by the dock. `meter-retry.test.ts` asserts the two
+ * still agree — this repo has already shipped one constant twice under one
+ * name with two different values, and a test is what keeps that from being
+ * two here.
+ */
+export const KEY_FAILURE_CODE = 'AUTH_FAILED'
+
+/**
+ * Whether this task can be run again.
+ *
+ * Only a failure. A running task has not finished, a settling one is waiting
+ * on the ledger rather than on the model, and a done one succeeded — offering
+ * "try again" for any of those invites a second charge for work that either
+ * is not finished or did not go wrong.
+ */
+export function canRetry(task: Pick<MeterTask, 'phase'>): boolean {
+  return task.phase === 'failed'
+}
+
+/**
+ * Whether this failure is one that retrying alone will not fix.
+ *
+ * A rejected or exhausted key fails again in exactly the same way, after
+ * exactly the same wait, until somebody changes the key. The card pairs the
+ * retry with a link to the keys for this case and this case only.
+ */
+export function isKeyFailure(task: Pick<MeterTask, 'errorCode'>): boolean {
+  return task.errorCode === KEY_FAILURE_CODE
 }

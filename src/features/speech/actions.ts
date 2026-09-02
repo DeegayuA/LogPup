@@ -73,7 +73,7 @@ export async function transcribeDictation(formData: FormData): Promise<ActionRes
     )
     return ok({ text: text.trim() })
   } catch (error) {
-    if (error instanceof GeminiError) return err(error.message)
+    if (error instanceof GeminiError) return err(error.message, error.code)
     return err('Could not transcribe that — try again')
   }
 }
@@ -145,7 +145,7 @@ export async function synthesizeSpeech(
     })
     return ok({ ...spoken, truncated, chunkCount: chunks.length, index })
   } catch (error) {
-    if (error instanceof GeminiError) return err(error.message)
+    if (error instanceof GeminiError) return err(error.message, error.code)
     return err('Could not generate speech — try again')
   }
 }

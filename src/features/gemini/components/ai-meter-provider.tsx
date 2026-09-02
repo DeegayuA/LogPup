@@ -89,6 +89,12 @@ export type AiMeterApi = {
     origin: MeterOriginSource,
     work: (handle: MeterTaskHandle) => Promise<T>,
   ): Promise<T>
+  /**
+   * Runs a failed task's work again, as a NEW call with its own duration,
+   * cost and ledger rows. Does nothing for a task that did not fail or whose
+   * work is no longer held.
+   */
+  retry: (taskId: string) => void
   /** True while this tab has any AI call in flight. */
   busy: boolean
 }
@@ -97,6 +103,8 @@ const NOOP_HANDLE: MeterTaskHandle = { steps: () => undefined }
 
 const NOOP_API: AiMeterApi = {
   track: (_featureId, _origin, work) => work(NOOP_HANDLE),
+  // Nothing was tracked, so there is nothing to run again.
+  retry: () => undefined,
   busy: false,
 }
 
@@ -157,10 +165,17 @@ function originPoint(source: MeterOriginSource): MeterOriginPoint | null {
 const SETTLE_BACKOFF_MS = [350, 700, 1_200, 2_000, 3_000]
 
 /** Does this look like the repo's ActionResult failure shape? */
-function actionError(value: unknown): string | null {
+function actionError(value: unknown): { message: string; code: string | null } | null {
   if (typeof value !== 'object' || value === null) return null
-  const result = value as { ok?: unknown; error?: unknown }
-  if (result.ok === false && typeof result.error === 'string') return result.error
+  const result = value as { ok?: unknown; error?: unknown; code?: unknown }
+  if (result.ok === false && typeof result.error === 'string') {
+    return {
+      message: result.error,
+      // ActionResult.code is optional and most actions never set it; absent
+      // stays null rather than becoming a string like "undefined".
+      code: typeof result.code === 'string' ? result.code : null,
+    }
+  }
   return null
 }
 
@@ -251,6 +266,10 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
   }, [hasSettled, paused])
 
   const dismiss = React.useCallback((id: string) => {
+    // Forget how to re-run it too. The card is gone, so nothing can ask for a
+    // retry, and holding the closure would keep this call's arguments alive
+    // for as long as the tab is open.
+    retriesRef.current.delete(id)
     setTasks((current) => dropTask(current, id))
   }, [])
 
@@ -394,9 +413,13 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         settlement: null,
         unrecorded: false,
         error: null,
+        errorCode: null,
         steps: null,
         typical,
       }
+      // Kept BEFORE the work starts: the arguments are in hand here, and a
+      // call that throws must still be retryable.
+      retriesRef.current.set(task.id, { featureId, origin, work })
       setTasks((current) => addTask(current, task))
       setNow(startedAt)
 
@@ -469,12 +492,18 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         // by throwing, so a meter that only watched for exceptions would
         // paint a rejected key green.
         const failure = actionError(value)
-        finish(failure ? { phase: 'failed', error: failure } : { phase: 'settling' })
+        finish(
+          failure
+            ? { phase: 'failed', error: failure.message, errorCode: failure.code }
+            : { phase: 'settling' },
+        )
         return value
       } catch (error) {
         finish({
           phase: 'failed',
           error: error instanceof Error ? error.message : 'The AI call failed',
+          // A thrown exception carries no ActionResult, so nothing to classify.
+          errorCode: null,
         })
         throw error
       }
@@ -485,7 +514,40 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
     [settle, getHistory],
   )
 
-  const api = React.useMemo<AiMeterApi>(() => ({ track, busy }), [track, busy])
+  /**
+   * How to run each task again, kept only while it might be retried.
+   *
+   * A ref rather than state: holding a closure in MeterTask would put a
+   * function inside the pure task model that every reducer there copies and
+   * compares. Entries are dropped when the task leaves the dock, so a long
+   * session does not retain the arguments of every AI call it ever made.
+   */
+  const retriesRef = React.useRef(
+    new Map<
+      string,
+      { featureId: AiFeatureId; origin: MeterOriginSource; work: (handle: MeterTaskHandle) => Promise<unknown> }
+    >(),
+  )
+
+  const retry = React.useCallback(
+    (taskId: string) => {
+      const spec = retriesRef.current.get(taskId)
+      if (!spec) return
+      retriesRef.current.delete(taskId)
+      // The failed card goes and a fresh one takes its place, rather than the
+      // same row flipping back to running: the retry is a NEW call with its
+      // own duration, cost and ledger rows, and reusing the row would make one
+      // card stand for two calls.
+      setTasks((current) => dropTask(current, taskId))
+      // track() rethrows so its own caller can handle a failure. Here there is
+      // no caller — this is a button — and an unhandled rejection would reach
+      // the console as an error nobody can act on. The meter already shows it.
+      void track(spec.featureId, spec.origin, spec.work).catch(() => undefined)
+    },
+    [track],
+  )
+
+  const api = React.useMemo<AiMeterApi>(() => ({ track, retry, busy }), [track, retry, busy])
 
   return (
     <AiMeterContext.Provider value={api}>
@@ -496,6 +558,7 @@ export function AiMeterProvider({ children }: { children: React.ReactNode }) {
         context={context}
         anchorRef={dockAnchor}
         onDismiss={dismiss}
+        onRetry={retry}
         onHoverChange={setPaused}
         onFlightConsumed={consumeFlight}
       />

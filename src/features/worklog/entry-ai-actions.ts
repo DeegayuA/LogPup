@@ -191,7 +191,7 @@ export async function draftWorklogEntries(
       entries: entries.map((entry) => ({ ...entry, source: 'ai_suggested' as const })),
     })
   } catch (error) {
-    if (error instanceof GeminiError) return err(error.message)
+    if (error instanceof GeminiError) return err(error.message, error.code)
     return err('Could not draft that right now — fill it in yourself or try again')
   }
 }

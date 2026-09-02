@@ -57,7 +57,13 @@ import {
 import { formatUsd } from '@/features/gemini/pricing'
 import { AI_FEATURES, estimatePerUseCostUsd } from '@/features/gemini/ai-features'
 import { formatElapsed, meterView, type MeterView } from '@/features/gemini/ai-meter'
-import { dockView, stepPercent, type MeterTask } from '@/features/gemini/meter-tasks'
+import {
+  canRetry,
+  dockView,
+  isKeyFailure,
+  stepPercent,
+  type MeterTask,
+} from '@/features/gemini/meter-tasks'
 import type { MeterContext } from '@/features/gemini/meter-actions'
 import { cn } from '@/lib/utils'
 
@@ -78,6 +84,7 @@ export function AiMeterDock({
   context,
   anchorRef,
   onDismiss,
+  onRetry,
   onHoverChange,
   onFlightConsumed,
 }: {
@@ -86,6 +93,7 @@ export function AiMeterDock({
   context: MeterContext | null
   anchorRef: React.RefObject<HTMLDivElement | null>
   onDismiss: (id: string) => void
+  onRetry: (id: string) => void
   onHoverChange: (hovered: boolean) => void
   onFlightConsumed: (id: string) => void
 }) {
@@ -149,6 +157,7 @@ export function AiMeterDock({
               now={now}
               context={context}
               onDismiss={onDismiss}
+              onRetry={onRetry}
               onFlightConsumed={onFlightConsumed}
               /* Only a click's expansion moves focus — the clicked row is
                  about to unmount, and focus falling to <body> strands a
@@ -163,6 +172,7 @@ export function AiMeterDock({
               now={now}
               onExpand={() => setExpandedOverride(task.id)}
               onDismiss={onDismiss}
+              onRetry={onRetry}
             />
           ),
         )}
@@ -190,6 +200,7 @@ function MeterCard({
   now,
   context,
   onDismiss,
+  onRetry,
   onFlightConsumed,
   focusOnMount = false,
 }: {
@@ -197,6 +208,7 @@ function MeterCard({
   now: number
   context: MeterContext | null
   onDismiss: (id: string) => void
+  onRetry: (id: string) => void
   onFlightConsumed: (id: string) => void
   focusOnMount?: boolean
 }) {
@@ -328,6 +340,34 @@ function MeterCard({
         {view.progress ? <ProgressLine progress={view.progress} /> : null}
         {failed && task.error ? (
           <p className="text-destructive">{task.error}</p>
+        ) : null}
+
+        {/* The way back. A failed AI call used to leave nothing but a dismiss
+            X — the only route to trying again was to find whatever button
+            started it, which for a background draft is not on screen.
+
+            The keys link appears ONLY for a rejected or spent key, because
+            that is the one failure retrying cannot fix: it fails again, the
+            same way, after the same wait. Offering it for a malformed
+            response would send somebody to check a key that is working. */}
+        {canRetry(task) ? (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => onRetry(task.id)}
+              className="rounded-md border border-border px-2 py-1 font-medium transition-colors duration-(--dur-quick) hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              Try again
+            </button>
+            {isKeyFailure(task) ? (
+              <a
+                href="/profile"
+                className="rounded-md px-1.5 py-1 text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors duration-(--dur-quick) hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Check keys
+              </a>
+            ) : null}
+          </div>
         ) : null}
 
         {/* WHILE RUNNING, the feature's own published estimate — and the word

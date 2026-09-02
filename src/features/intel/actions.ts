@@ -165,7 +165,7 @@ export async function askWorkspace(question: string): Promise<ActionResult<AskAn
     }
     return ok({ answer, citations, grounded: true, model })
   } catch (error) {
-    if (error instanceof GeminiError) return err(error.message)
+    if (error instanceof GeminiError) return err(error.message, error.code)
     return err('Could not answer that — try again')
   }
 }
