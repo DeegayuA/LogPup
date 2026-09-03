@@ -78,25 +78,25 @@ export default function PersonDetailLoading() {
       </div>
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2" aria-hidden>
-        <CardSkeleton rows={3} />
+        {/* FOUR, matching the page exactly: Assignments | Follow-ups, then
+            Tasks | Meetings. This drew six and the page rendered seven, so
+            every load ended in a jump. The three history cards are not here at
+            all any more — they sit inside a closed disclosure, drawn below as a
+            single bar, because a skeleton for content nobody has opened invents
+            a wait that does not exist. */}
+        <CardSkeleton rows={4} />
         <CardSkeleton rows={4} />
         <CardSkeleton rows={3} />
         <CardSkeleton rows={3} />
-        <div className="flex flex-col gap-4 rounded-xl bg-card p-4 ring-1 ring-foreground/10 lg:col-span-2">
-          <div className="flex items-center justify-between gap-3">
-            <Skeleton className="h-5 w-20" />
-            <Skeleton className="h-3 w-32" />
-          </div>
-          {/* The contribution grid: 7 rows of blocks, not one big rectangle,
-              so the shape reads as a calendar while it loads. */}
-          <div className="flex flex-col gap-1">
-            {Array.from({ length: 7 }, (_, i) => (
-              <Skeleton key={i} className="h-3 w-full max-w-80 rounded-xs" />
-            ))}
-          </div>
-          <Skeleton className="h-3 w-56" />
-        </div>
-        <CardSkeleton rows={4} className="lg:col-span-2" />
+      </div>
+
+      {/* The collapsed History disclosure at its real resting height. */}
+      <div
+        className="flex items-center justify-between gap-3 rounded-xl bg-card px-4 py-3 ring-1 ring-foreground/10"
+        aria-hidden
+      >
+        <Skeleton className="h-4 w-20" />
+        <Skeleton className="size-4 rounded-sm" />
       </div>
     </div>
   )

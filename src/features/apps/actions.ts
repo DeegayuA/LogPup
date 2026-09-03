@@ -467,31 +467,55 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   // value is unchanged. Reuses the same pmChanging/leadChanging the batch
   // above used to decide what to write, so the activity-log detail and the
   // as-of history can never disagree about which fields actually changed.
-  const pmName = pmChanging ? await nameForUser(result.set.pmId as string) : null
-  const leadName =
-    leadChanging && typeof result.set.leadId === 'string'
-      ? await nameForUser(result.set.leadId)
-      : null
+  // EVERYTHING BELOW IS BOOKKEEPING, AND MUST NOT BE ABLE TO FAIL THE SAVE.
+  //
+  // The batch above has already committed: the app is renamed, paused,
+  // archived, reassigned. These two name lookups, the activity row and the
+  // revalidations are the record OF that change, not the change itself.
+  //
+  // Unwrapped, any of them throwing rejected the whole server action, and the
+  // dialog's catch turned that into "Something went wrong — try again" over a
+  // save that had actually succeeded. Somebody pauses an app, is told it
+  // failed, tries again, and the second attempt is a no-op that goes green —
+  // which is what made this read as intermittent rather than broken. The
+  // worst version is the one nobody notices: the admin believes the app is
+  // still active.
+  //
+  // So a failure here costs the activity trail one row and leaves a page
+  // needing a manual refresh. It does not lie about whether the write landed.
+  try {
+    const pmName = pmChanging ? await nameForUser(result.set.pmId as string) : null
+    const leadName =
+      leadChanging && typeof result.set.leadId === 'string'
+        ? await nameForUser(result.set.leadId)
+        : null
 
-  const { detail, metadata } = summarizeAppChanges(
-    { status: app.status, leadId: app.leadId, pmId: app.pmId },
-    result.set,
-    { pmName, leadName },
-  )
-  await logActivity({
-    actorId: actor.id,
-    verb: 'updated',
-    entityType: 'app',
-    entityId: parsedId.data,
-    entityLabel: name,
-    appId: parsedId.data,
-    appName: name,
-    pagePath: `/apps/${app.slug}`,
-    detail,
-    metadata,
-  })
-  revalidatePath('/apps')
-  revalidatePath(`/apps/${app.slug}`)
+    const { detail, metadata } = summarizeAppChanges(
+      { status: app.status, leadId: app.leadId, pmId: app.pmId },
+      result.set,
+      { pmName, leadName },
+    )
+    await logActivity({
+      actorId: actor.id,
+      verb: 'updated',
+      entityType: 'app',
+      entityId: parsedId.data,
+      entityLabel: name,
+      appId: parsedId.data,
+      appName: name,
+      pagePath: `/apps/${app.slug}`,
+      detail,
+      metadata,
+    })
+    revalidatePath('/apps')
+    revalidatePath(`/apps/${app.slug}`)
+  } catch (error) {
+    // Logged, never swallowed silently: an activity trail that quietly drops
+    // rows is worse than one that visibly failed, because it is the thing
+    // people later use to reconstruct who changed what.
+    console.error('[apps] updateApp bookkeeping failed after a committed write:', error)
+  }
+
   return ok(undefined)
 }
 

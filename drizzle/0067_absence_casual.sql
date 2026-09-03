@@ -1,0 +1,25 @@
+-- absence_kind gains 'casual' — casual leave.
+--
+-- Sri Lanka's Shop and Office Employees Act grants casual leave as its own
+-- statutory entitlement, separate from annual. Until now the honest options
+-- were 'annual' (wrong, and it spends the wrong entitlement) or 'other' (true
+-- but unreadable in any breakdown), so the list was forcing one of those.
+--
+-- NO DO $$ GUARD, deliberately, and for the same reason as 0037 and 0053:
+-- ALTER TYPE ... ADD VALUE is not permitted inside a function or transaction
+-- block on all paths, so the usual EXCEPTION WHEN duplicate_object idiom
+-- cannot wrap it. ADD VALUE IF NOT EXISTS gives the same replay safety alone.
+--
+-- APPENDED, not positioned with BEFORE/AFTER. Enum sort order is physical
+-- order, so placing this next to 'annual' would read tidily in psql — but the
+-- picker's order comes from SELF_DECLARABLE_KINDS in
+-- features/worklog/components/declare-absence-dialog.tsx, not from the type,
+-- and a BEFORE anchor ties this migration to a value somebody could later
+-- rename. Nothing in src/ orders by this column.
+--
+-- CARRIES NO ENTITLEMENT. This is a category, not a balance: nothing in the
+-- schema tracks a per-person allowance for 'annual' either, so a quota for
+-- casual alone would leave annual leave the odd one out. Balances are a
+-- separate design (a per-person allowance plus consumed-days maths), and this
+-- migration deliberately does not prejudge it.
+ALTER TYPE "public"."absence_kind" ADD VALUE IF NOT EXISTS 'casual';

@@ -17,7 +17,7 @@ import {
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
 import { glanceAtDay } from '@/features/worklog/day-summary'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
-import type { UserAssignedApp } from '@/features/worklog/queries'
+import type { PickerApp, UserAssignedApp } from '@/features/worklog/queries'
 
 /**
  * The whole day in one panel: the score, the note, and where the time went —
@@ -50,6 +50,7 @@ export function DayPanel({
   entries,
   scheduledMinutes,
   assignedApps,
+  otherApps = [],
   tasks,
   canEdit,
   noteAiEnabled,
@@ -60,6 +61,11 @@ export function DayPanel({
   entries: WorklogEntryRow[]
   scheduledMinutes: number | null
   assignedApps: UserAssignedApp[]
+  /**
+   * The studio's other active projects — logging never required assignment
+   * (createWorklogEntry takes any live app id), only the pickers implied it.
+   */
+  otherApps?: PickerApp[]
   /** Tasks a task entry may name — passed straight through to the hours card. */
   tasks: LoggableTask[]
   canEdit: boolean
@@ -78,6 +84,21 @@ export function DayPanel({
 
   const anyAi = noteAiEnabled || entriesAiEnabled
   const meter = useAiMeter()
+
+  // ASSIGNED FIRST, then the rest of the studio, for the one-line box and the
+  // hours card: both render flat lists (the card's Select scrolls), so the
+  // order IS the common case — a person's own projects stay two taps away
+  // while a guest project is still reachable by name. The line's one-tap
+  // suggestion chips draw from the assigned half ONLY: parsing must hear
+  // every project, but promoting alphabetically-first guests to chips styled
+  // like a person's own assignments would bury the projects they are actually
+  // expected on — the same reason WorklogForm keeps untagged guests behind a
+  // picker.
+  const assignedPickerApps = assignedApps.map((a) => ({ id: a.id, name: a.name }))
+  const pickerApps = [
+    ...assignedPickerApps,
+    ...otherApps.map((a) => ({ id: a.id, name: a.name })),
+  ]
 
   // What this day already says, for the disclosure's own label. Read from the
   // props rather than from either card's state: those two cards each own an
@@ -186,7 +207,8 @@ export function DayPanel({
       {canEdit ? (
         <DayOneLine
           day={day}
-          apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
+          apps={pickerApps}
+          suggestFrom={assignedPickerApps}
           tasks={tasks}
           savedNote={initial?.note ?? null}
           scored={initial != null}
@@ -247,13 +269,14 @@ export function DayPanel({
         aiDraftEnabled={noteAiEnabled && !anyAi}
         initialDraft={noteDraft}
         assignedApps={assignedApps}
+        otherApps={otherApps}
       />
 
       <DayHoursCard
         day={day}
         entries={entries}
         scheduledMinutes={scheduledMinutes}
-        apps={assignedApps.map((a) => ({ id: a.id, name: a.name }))}
+        apps={pickerApps}
         tasks={tasks}
         canEdit={canEdit}
         aiDraftEnabled={entriesAiEnabled}

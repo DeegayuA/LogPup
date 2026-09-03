@@ -48,6 +48,7 @@ export type AbsenceKind = MyAbsence['kind']
 export const ABSENCE_KIND_LABELS: Record<AbsenceKind, string> = {
   annual: 'Annual leave',
   sick: 'Sick leave',
+  casual: 'Casual leave',
   unpaid: 'Unpaid leave',
   training: 'Training',
   other_project: 'On another project',
@@ -68,6 +69,10 @@ export const ABSENCE_KIND_LABELS: Record<AbsenceKind, string> = {
 export const SELF_DECLARABLE_KINDS = [
   'annual',
   'sick',
+  // Beside sick and annual because that is how somebody thinks about it when
+  // they are filing — the three statutory kinds together, before the ones that
+  // are really "I was working, elsewhere".
+  'casual',
   'unpaid',
   'training',
   'other_project',

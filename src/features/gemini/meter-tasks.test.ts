@@ -28,6 +28,7 @@ const task = (over: Partial<MeterTask> = {}): MeterTask => ({
   settlement: null,
   unrecorded: false,
   error: null,
+  errorCode: null,
   steps: null,
   typical: null,
   ...over,

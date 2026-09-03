@@ -53,6 +53,7 @@ import {
   getTeamApprovedAbsences,
   getTeamRoster,
   getTeamWorklogs,
+  listAllLiveAppsForPicker,
   listAppTagTargets,
   getUserJoinDay,
 } from '@/features/worklog/queries'
@@ -456,6 +457,7 @@ async function CalendarZone({
       orgRows,
       aiPrefs,
       assignedApps,
+      allApps,
     ] = await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
@@ -469,6 +471,9 @@ async function CalendarZone({
         listOrgHolidays(),
         getAiPrefs(userId),
         getMyAssignedApps(userId),
+        // Every active project, not just this person's — logging work never
+        // required assignment, and the panel's pickers must stop implying it.
+        listAllLiveAppsForPicker(),
       ])
 
     const closed = closedStudioDays(orgRows, from, to)
@@ -577,6 +582,11 @@ async function CalendarZone({
       owedDays,
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
       assignedApps,
+      // The rest of the studio, for the day someone helped out elsewhere.
+      // Derived once here so every picker below agrees on what "other" means.
+      otherApps: allApps.filter(
+        (app) => !assignedApps.some((assigned) => assigned.id === app.id),
+      ),
     }
   }
 
@@ -605,6 +615,7 @@ async function CalendarZone({
     owedDays,
     aiDraftEnabled,
     assignedApps,
+    otherApps,
   } = data
 
   const selectedLkHoliday = getLkHoliday(new Date(`${selectedDay}T12:00:00Z`), LK_TIMEZONE)
@@ -694,6 +705,7 @@ async function CalendarZone({
           tasks={loggableTasks}
           scheduledMinutes={scheduledMinutes}
           assignedApps={assignedApps}
+          otherApps={otherApps}
           canEdit={canLogHours}
           noteAiEnabled={aiDraftEnabled}
           entriesAiEnabled={entriesAiEnabled}
@@ -757,6 +769,7 @@ async function CatchUpZone({
       orgRows,
       aiPrefs,
       assignedApps,
+      allApps,
     ] = await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
@@ -772,6 +785,9 @@ async function CatchUpZone({
         listOrgHolidays(),
         getAiPrefs(userId),
         getMyAssignedApps(userId),
+        // Same reason as CalendarZone: a caught-up day may name a project the
+        // person was never assigned to, and the form must be able to offer it.
+        listAllLiveAppsForPicker(),
       ])
     if (!joinedOn) return null
 
@@ -830,6 +846,9 @@ async function CatchUpZone({
       owedDays,
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
       assignedApps,
+      otherApps: allApps.filter(
+        (app) => !assignedApps.some((assigned) => assigned.id === app.id),
+      ),
     }
   }
 
@@ -843,8 +862,17 @@ async function CatchUpZone({
     return <ZoneError title="The catch-up list could not be read." retryHref={retryHref} />
   if (data === null) return null
 
-  const { gaps, pending, decided, canDeclare, filed, owedDays, aiDraftEnabled, assignedApps } =
-    data
+  const {
+    gaps,
+    pending,
+    decided,
+    canDeclare,
+    filed,
+    owedDays,
+    aiDraftEnabled,
+    assignedApps,
+    otherApps,
+  } = data
   // A decision keeps this section alive on its own. Somebody with no gaps and
   // nothing pending still has to be told their leave was refused.
   if (gaps.length === 0 && pending.length === 0 && decided.length === 0) return null
@@ -861,6 +889,7 @@ async function CatchUpZone({
           canDeclare={canDeclare}
           aiDraftEnabled={aiDraftEnabled}
           assignedApps={assignedApps}
+          otherApps={otherApps}
         />
       ) : null}
 

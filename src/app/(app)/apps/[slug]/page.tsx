@@ -49,6 +49,7 @@ import {
 import { getSprintCheckins, type SprintCheckinRow } from '@/features/sprints/checkin-queries'
 import { checkinGap, computeTaskProgress } from '@/features/sprints/checkins'
 import { planGaps, readSprint } from '@/features/sprints/plan-read'
+import { parseSprintGoal } from '@/features/sprints/goal-lines'
 import { parseZoom } from '@/features/sprints/roadmap-layout'
 import { RoadmapSpine } from '@/features/sprints/components/roadmap-spine'
 import { PlanReadStrip } from '@/features/sprints/components/plan-read-strip'
@@ -625,9 +626,30 @@ export default async function AppDetailPage(props: {
                   </Badge>
                 )}
               </div>
-              {selectedSprint.goal ? (
-                <p className="text-sm text-muted-foreground">{selectedSprint.goal}</p>
-              ) : null}
+              {/* The goal, in the shape it was typed. A bare <p> here collapsed
+                  every newline, so a goal entered as four bullets rendered as
+                  one run-on sentence with the hyphens loose inside it — the
+                  structure was in the column all along and was being discarded
+                  at render. `max-w-prose` because this card is as wide as the
+                  page, and a 1400px line is not a readable measure. */}
+              {(() => {
+                const goal = parseSprintGoal(selectedSprint.goal)
+                if (goal.kind === 'empty') return null
+                if (goal.kind === 'list') {
+                  return (
+                    <ul className="max-w-prose list-disc space-y-0.5 pl-5 text-sm text-muted-foreground marker:text-muted-foreground/50">
+                      {goal.items.map((item, i) => (
+                        <li key={`${i}-${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  )
+                }
+                return (
+                  <p className="max-w-prose text-sm whitespace-pre-line text-muted-foreground">
+                    {goal.text}
+                  </p>
+                )
+              })()}
               <p className="font-mono text-xs text-muted-foreground tabular-nums">
                 {format(parseCalendarDate(selectedSprint.startDate), 'MMM d, yyyy')} –{' '}
                 {format(parseCalendarDate(selectedSprint.endDate), 'MMM d, yyyy')}

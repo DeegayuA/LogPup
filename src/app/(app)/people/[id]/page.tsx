@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { getSession } from '@/lib/session'
 import { z } from 'zod'
+import { LazyDisclosure } from '@/components/shared/lazy-disclosure'
 import { AllocationHistoryCard } from '@/features/people/components/allocation-history-card'
 import { PersonAppRoleHistoryCard } from '@/features/people/components/app-role-history-card'
 import { AssignmentsCard } from '@/features/people/components/assignments-card'
@@ -170,17 +171,33 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
 
       {/*
         One flat grid, not two hand-built columns. DOM order IS the mobile
-        order — overloaded (Workload) → doing (Tasks) → owes (Follow-ups) →
-        calendar → history — and on a wide screen the same order flows
-        row-major into two columns. Two column <div>s would have read
-        correctly at 1440px and shuffled into nonsense at 375px, which is the
-        usual way this layout goes wrong.
+        order — overloaded (Workload) → owes (Follow-ups) → doing (Tasks) →
+        calendar — and on a wide screen the same order flows row-major into two
+        columns. Two column <div>s would have read correctly at 1440px and
+        shuffled into nonsense at 375px, which is the usual way this layout
+        goes wrong.
+
+        Obligations now precede current work in that order, where Tasks used to
+        come second. What somebody owes, and how long they have owed it, is the
+        thing a reader can act on; what they are doing is context for it.
 
         `items-start` keeps a short card from stretching to match a tall
-        neighbour; the last two span both columns because a 26-week grid and a
-        step chart both want the width.
+        neighbour — which is right, and is also why the PAIRING below has to do
+        the work instead. History is no longer in this grid at all: three
+        full-width bands of archive belong behind the disclosure underneath.
       */}
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        {/* PAIRED BY HOW THEY GROW, not by subject. Every card here is
+            data-driven, and which one is tall is a property of the PERSON, not
+            of the card: Assignments renders one row per app and Follow-ups
+            renders every open item — neither query carries a LIMIT — while
+            Tasks and Meetings both self-cap at five rows per group. The old
+            order paired unbounded with capped twice (Assignments|Tasks, then
+            Follow-ups|Meetings), and because a grid row is as tall as its
+            TALLEST cell, each pairing stranded the capped side's column empty
+            for the rest of the row. Pairing unbounded with unbounded and capped
+            with capped closes that gap with no layout machinery at all — no
+            masonry, no spans, no hand-built columns. */}
         <AssignmentsCard
           assignments={overview.assignments}
           totalPct={overview.totalPct}
@@ -193,6 +210,15 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
           assignableApps={canAssign ? assignableApps : []}
         />
 
+        <PersonFollowupsCard
+          followups={followups}
+          personName={overview.user.name}
+          /* Reading your own page is a normal thing to do — PersonHeader says
+             so — and without this the card addresses you in the third person
+             about yourself: "Deeghayu owes", "They aren't waiting on anyone". */
+          self={viewerId === userId}
+        />
+
         <PersonTasksCard
           openTasks={workload.openTasks}
           todayIso={workload.todayIso}
@@ -200,22 +226,31 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
           totalCount={workload.totalCount}
         />
 
-        <PersonFollowupsCard followups={followups} personName={overview.user.name} />
-
         <PersonMeetingsCard meetings={meetings} />
+      </div>
 
-        <div className="lg:col-span-2">
+      {/* HISTORY, BEHIND A DISCLOSURE.
+          These three were `lg:col-span-2` siblings inside the grid — three
+          full-width bands stacked below the fold, which is roughly three
+          screens of archival material sitting between the reader and nothing.
+          They answer "what happened" and never "what do I do now", so they
+          rank last; collapsing them is what lets the four live cards above own
+          the viewport.
+
+          LazyDisclosure rather than a bare <details>: its children are not
+          MOUNTED until it is opened, so a 26-week contribution grid, a 600-unit
+          step chart and the full role ledger cost nothing on a page nobody
+          scrolled. Native disclosure semantics, no client JS of our own. */}
+      <LazyDisclosure
+        summary="History"
+        hint="Contribution activity, allocation over time, and past project roles."
+      >
+        <div className="flex flex-col gap-6">
           <PersonActivityCard activity={activity} />
-        </div>
-
-        <div className="lg:col-span-2">
           <AllocationHistoryCard history={history} />
-        </div>
-
-        <div className="lg:col-span-2">
           <PersonAppRoleHistoryCard history={roleHistory} />
         </div>
-      </div>
+      </LazyDisclosure>
     </div>
   )
 }

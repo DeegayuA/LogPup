@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { CircleCheck, HelpCircle, ListChecks } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,9 +42,19 @@ function firstName(name: string): string {
 export function PersonFollowupsCard({
   followups,
   personName,
+  self = false,
 }: {
   followups: PersonFollowups
   personName: string
+  /**
+   * The reader IS this person.
+   *
+   * Defaults false, so the dashboard's mount and every colleague's page keep
+   * the third-person copy unchanged. Without it the card sits eight pixels
+   * under a tile reading "I owe" and says "Deeghayu owes" and "They aren't
+   * waiting on anyone" — about the person reading it.
+   */
+  self?: boolean
 }) {
   const { owed, awaiting } = followups
   const total = owed.length + awaiting.length
@@ -68,14 +79,14 @@ export function PersonFollowupsCard({
       ) : (
         <CardContent className="flex flex-col gap-4">
           <FollowupList
-            heading={`${firstName(personName)} owes`}
-            emptyLine="Nothing outstanding on their side."
+            heading={self ? 'You owe' : `${firstName(personName)} owes`}
+            emptyLine={self ? 'Nothing outstanding on your side.' : 'Nothing outstanding on their side.'}
             items={owed}
             showOwner={false}
           />
           <FollowupList
             heading="Waiting on others"
-            emptyLine="They aren't waiting on anyone."
+            emptyLine={self ? "You aren't waiting on anyone." : "They aren't waiting on anyone."}
             items={awaiting}
             showOwner
           />
@@ -176,7 +187,19 @@ function FollowupRow({ item, showOwner }: { item: PersonFollowupItem; showOwner:
             {item.ownerName}
           </Badge>
         ) : null}
-        <span className="truncate">{item.meetingTitle}</span>
+        {/* THE ONLY WAY OUT OF THIS CARD. Every control that can actually
+            close a follow-up — resolve, defer with a reason, reattribute —
+            lives in that meeting's write-up panel, and this row named the
+            meeting without offering it: `item.meetingId` was selected, typed
+            and thrown away, so a reader who saw what they owed had nowhere to
+            go. `?open=` is the meetings list's existing deep link; it costs no
+            query, because the id was already on the row. */}
+        <Link
+          href={`/meetings?open=${item.meetingId}`}
+          className="truncate rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {item.meetingTitle}
+        </Link>
         <span aria-hidden>·</span>
         {/* Business timezone, so the printed date and the age above it come
             from the same calendar. `ageDays` is measured in Colombo days

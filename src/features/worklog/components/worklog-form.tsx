@@ -16,7 +16,9 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { SearchSelect } from '@/components/ui/search-select'
 import { dayFormProblem } from '@/features/worklog/day-form'
+import { partitionGuestApps } from '@/features/worklog/guest-projects'
 import { noteHasAppTag, toggleNoteAppTag } from '@/features/worklog/note-app-tags'
 import { DictateButton } from '@/features/speech/components/dictate-button'
 import { upsertDailyWorklog } from '@/features/worklog/actions'
@@ -26,7 +28,7 @@ import {
   useAiMeter,
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
-import type { UserAssignedApp } from '@/features/worklog/queries'
+import type { PickerApp, UserAssignedApp } from '@/features/worklog/queries'
 
 type PercentSuggestion = { percent: number; activityCount: number }
 
@@ -52,12 +54,19 @@ export function WorklogForm({
   aiDraftEnabled,
   initialDraft,
   assignedApps = [],
+  otherApps = [],
 }: {
   day: string
   initial: { percent: number; note: string | null } | null
   aiDraftEnabled: boolean
   initialDraft?: WorklogDraft | null
   assignedApps?: UserAssignedApp[]
+  /**
+   * The studio's other active projects. Anyone can log work on any project —
+   * assignment is who is EXPECTED where, not who is ALLOWED where — so these
+   * feed the "+ Other project" picker and, once tagged, render as chips.
+   */
+  otherApps?: PickerApp[]
 }) {
   const [percent, setPercent] = useState<number | null>(initial?.percent ?? null)
   const [note, setNote] = useState(initialDraft?.note ?? initial?.note ?? '')
@@ -108,6 +117,11 @@ export function WorklogForm({
    * the bottom of the note and then parked the cursor at the top of it. The
    * one thing a person is certain to do next is type what they did on that
    * project, and they had to click into the right place first.
+   *
+   * 150ms, not 50: the "+ Other project" picker closes over a 100ms exit
+   * animation (popover.tsx), and Base UI returns focus to the trigger when
+   * the popup unmounts — a caret placed before that finishes would be stolen
+   * straight back out of the note on the picker path.
    */
   const caretToEnd = () => {
     setTimeout(() => {
@@ -118,7 +132,7 @@ export function WorklogForm({
       field.setSelectionRange(end, end)
       // A tag appended past the visible rows is off-screen in a 4-row box.
       field.scrollTop = field.scrollHeight
-    }, 50)
+    }, 150)
   }
 
   const handleTagProject = (appName: string) => {
@@ -214,7 +228,16 @@ export function WorklogForm({
 
   const singleProject = assignedApps.length === 1 ? assignedApps[0] : null
   const hasMultipleProjects = assignedApps.length > 1
+  // ASSIGNED ONLY, deliberately, here and in handleSplitUnfilled: "unfilled"
+  // means expected-and-empty, and a guest project is never expected. Counting
+  // guests would nag a tech lead to account for twenty projects they merely
+  // COULD have helped on.
   const unfilledCount = assignedApps.filter((a) => !getAppFillStatus(a.name)).length
+
+  // Guest projects — worked on, not assigned to. A tagged one earns a chip
+  // (same toggle back off); the untagged rest stay behind the picker so a
+  // person's own projects are not buried under the whole studio.
+  const guests = partitionGuestApps(note, otherApps)
 
   return (
     <section
@@ -342,7 +365,13 @@ export function WorklogForm({
           <div className="flex items-center gap-1.5">
             <Layers className="size-3.5 text-primary" />
             <span className="font-heading text-xs font-semibold text-foreground">
-              {singleProject ? 'Assigned project' : 'Projects today'}
+              {/* "Assigned project" only while the assignment is ALL the card
+                  shows — once a guest chip or the picker renders below it, the
+                  single assignment is no longer the card's whole contents and
+                  the wider name has to carry it. */}
+              {singleProject && guests.tagged.length === 0 && guests.available.length === 0
+                ? 'Assigned project'
+                : 'Projects today'}
             </span>
           </div>
 
@@ -413,7 +442,10 @@ export function WorklogForm({
                     type="button"
                     onClick={() => handleTagProject(app.name)}
                     className={cn(
-                      'group relative flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition-[background-color,border-color,color,box-shadow] motion-reduce:transition-none cursor-pointer text-left',
+                      /* pointer-coarse:min-h-11 here AND on the guest chips
+                         below — the 44px touch rule, applied to the whole row
+                         at once so a finger meets one height, not two. */
+                      'group relative flex items-center gap-2 rounded-lg border px-2.5 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-3 text-xs transition-[background-color,border-color,color,box-shadow] motion-reduce:transition-none cursor-pointer text-left',
                       isFilled
                         ? 'border-primary/40 bg-primary/10 text-foreground font-medium shadow-xs'
                         : 'border-border/60 bg-card/60 text-muted-foreground hover:border-primary/50 hover:bg-card hover:text-foreground',
@@ -494,6 +526,55 @@ export function WorklogForm({
                 </button>
               )
             })}
+          </div>
+        ) : null}
+
+        {/* Guest projects — helped on, not assigned to. A tagged one is a
+            fact about the day and gets the SAME chip contract as an assigned
+            project (toggle, aria-pressed, Logged pill), just quieter: no
+            allocation %, because a guest carries no expectation — which is
+            also why none of this feeds unfilledCount above. The dashed border
+            and the "Guest" label say so in shape and words, not hue: tint
+            alone is invisible to a colorblind reader and silent to a screen
+            reader (WCAG 1.4.1), and "guests read as guests" is the point of
+            this row. The untagged rest live behind a searchable picker rather
+            than a chip row: a studio has many more projects than any one
+            person has assignments. */}
+        {guests.tagged.length > 0 || guests.available.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {guests.tagged.map((app) => (
+              <button
+                key={app.id}
+                type="button"
+                aria-pressed={true}
+                onClick={() => handleTagProject(app.name)}
+                title={`Remove the [${app.name}] tag — a guest project, not one of your assignments`}
+                className="flex items-center gap-2 rounded-lg border border-dashed border-border/60 bg-card/60 px-2.5 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-3 text-left text-xs text-muted-foreground shadow-xs transition-[background-color,border-color,color,box-shadow] motion-reduce:transition-none cursor-pointer hover:border-border hover:bg-card"
+              >
+                <CheckCircle2 className="size-3.5 shrink-0 text-primary" />
+                <span className="font-medium text-foreground">{app.name}</span>
+                <span className="font-mono text-2xs text-muted-foreground">Guest</span>
+                <span className="rounded bg-primary/20 px-1.5 py-0.5 font-mono text-2xs font-semibold text-primary">
+                  Logged
+                </span>
+              </button>
+            ))}
+            {guests.available.length > 0 ? (
+              <SearchSelect
+                value=""
+                onValueChange={(id) => {
+                  const app = guests.available.find((candidate) => candidate.id === id)
+                  if (app) handleTagProject(app.name)
+                }}
+                options={guests.available.map((app) => ({ value: app.id, label: app.name }))}
+                size="sm"
+                placeholder="+ Other project"
+                searchPlaceholder="Type any project name…"
+                emptyText="No project by that name."
+                aria-label="Tag another project in this day's note"
+                className="w-44 pointer-coarse:min-h-11"
+              />
+            ) : null}
           </div>
         ) : null}
       </div>

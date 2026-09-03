@@ -26,7 +26,7 @@ import { overlaps } from '@/features/worklog/schedules'
 // someone work, not about them, so a manager files it — a person filing it
 // against themselves is a grievance the UI must not disguise as a form field.
 // 'other' is an admin escape hatch for the same reason.
-const SELF_DECLARABLE = ['annual', 'sick', 'unpaid', 'training', 'other_project'] as const
+const SELF_DECLARABLE = ['annual', 'sick', 'casual', 'unpaid', 'training', 'other_project'] as const
 
 const createInput = z.object({
   // Both bounds INCLUSIVE, unlike the half-open intervals elsewhere in the

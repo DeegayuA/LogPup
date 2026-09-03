@@ -22,7 +22,7 @@ import {
   useAiMeter,
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
-import type { UserAssignedApp } from '@/features/worklog/queries'
+import type { PickerApp, UserAssignedApp } from '@/features/worklog/queries'
 
 export type CatchUpGap = {
   day: string
@@ -53,6 +53,7 @@ export function CatchUpPanel({
   canDeclare,
   aiDraftEnabled,
   assignedApps = [],
+  otherApps = [],
 }: {
   gaps: CatchUpGap[]
   /** Pending and approved absences, for the dialog's clash naming. */
@@ -64,6 +65,9 @@ export function CatchUpPanel({
   canDeclare: boolean
   aiDraftEnabled: boolean
   assignedApps?: UserAssignedApp[]
+  /** The studio's other active projects — a caught-up day may name work on a
+      project the person was never assigned to. */
+  otherApps?: PickerApp[]
 }) {
   const [drafts, setDrafts] = useState<Record<string, { data: WorklogDraft; seq: number }>>({})
   const seqRef = useRef(0)
@@ -256,6 +260,7 @@ export function CatchUpPanel({
             aiDraftEnabled={aiDraftEnabled}
             initialDraft={drafts[currentGap.day]?.data ?? null}
             assignedApps={assignedApps}
+            otherApps={otherApps}
           />
         </div>
       ) : null}

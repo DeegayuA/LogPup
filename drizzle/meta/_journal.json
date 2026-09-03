@@ -456,6 +456,13 @@
       "when": 1787158100000,
       "tag": "0066_next_meeting",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1787158200000,
+      "tag": "0067_absence_casual",
+      "breakpoints": true
     }
   ]
 }

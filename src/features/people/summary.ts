@@ -108,8 +108,15 @@ export function derivePersonSummary(facts: PersonSummaryFacts): string {
   }
 
   if (facts.meetingsAttended > 0) {
+    // NOT "attended". The number is `meetings.attendedRecently`, which counts
+    // invitations this person did not decline — nothing in the schema records
+    // whether anybody actually turned up. The tile beside this sentence
+    // (person-stats.ts) and the card below it (person-meetings-card.tsx) both
+    // already say "not declined"; this line was the last place in the product
+    // still making the stronger claim, on the one subject — a colleague's
+    // reliability — where being wrong costs the most.
     sentences.push(
-      `Attended ${plural(facts.meetingsAttended, 'meeting', 'meetings')} in the last ${facts.meetingsWindowDays} days.`,
+      `Did not decline ${plural(facts.meetingsAttended, 'meeting', 'meetings')} in the last ${facts.meetingsWindowDays} days.`,
     )
   }
 
@@ -136,7 +143,10 @@ export function buildPersonSummaryPrompt(facts: PersonSummaryFacts): string {
     `Follow-ups owed: ${facts.followupsOwed}${
       facts.followupsOldestOwedDays !== null ? ` (oldest ${facts.followupsOldestOwedDays} days)` : ''
     }`,
-    `Meetings attended, last ${facts.meetingsWindowDays} days: ${facts.meetingsAttended}`,
+    // Worded for the model as carefully as for the page: handed "Meetings
+    // attended" it will write "attended", and the sheet is the only thing it
+    // is allowed to draw on.
+    `Meetings not declined, last ${facts.meetingsWindowDays} days: ${facts.meetingsAttended}`,
   ].filter((line): line is string => line !== null)
 
   return [

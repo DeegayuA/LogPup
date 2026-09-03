@@ -172,7 +172,6 @@ export function AiMeterDock({
               now={now}
               onExpand={() => setExpandedOverride(task.id)}
               onDismiss={onDismiss}
-              onRetry={onRetry}
             />
           ),
         )}

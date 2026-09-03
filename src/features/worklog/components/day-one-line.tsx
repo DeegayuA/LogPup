@@ -56,12 +56,22 @@ const TOKEN_CLASS: Record<LineToken['kind'], string> = {
 export function DayOneLine({
   day,
   apps,
+  suggestFrom,
   tasks,
   savedNote,
   scored,
 }: {
   day: string
   apps: { id: string; name: string }[]
+  /**
+   * Apps the suggestion chips may PROMOTE — defaults to `apps`. The parser
+   * always matches the full `apps` list, so any project is still reachable by
+   * typing its name; this only narrows the one-tap chips. Without it a person
+   * with one assignment met three alphabetically-first guest projects styled
+   * exactly like their own — parsing over the whole studio is the feature,
+   * suggesting the whole studio was a side effect.
+   */
+  suggestFrom?: { id: string; name: string }[]
   tasks: LoggableTask[]
   /** The day's existing note, so a score-only line does not erase it. */
   savedNote: string | null
@@ -75,6 +85,10 @@ export function DayOneLine({
     () => apps.map((app) => ({ id: app.id, name: app.name })),
     [apps],
   )
+  const suggestRefs = React.useMemo(
+    () => (suggestFrom ?? apps).map((app) => ({ id: app.id, name: app.name })),
+    [suggestFrom, apps],
+  )
   const taskRefs = React.useMemo(
     () => tasks.map((task) => ({ id: task.id, name: task.title })),
     [tasks],
@@ -83,7 +97,7 @@ export function DayOneLine({
   const parsed = parseEntryLine(line, { apps: appRefs, tasks: taskRefs })
   const tokens = describeLine(parsed)
   const intent = lineIntent(parsed)
-  const suggestions = lineSuggestions(parsed, appRefs)
+  const suggestions = lineSuggestions(parsed, suggestRefs)
 
   // Only asked of a line that is actually trying to log hours — a score-only
   // line has no entry to validate, and refusing it for a missing duration

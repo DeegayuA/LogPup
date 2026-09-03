@@ -401,10 +401,13 @@ export function AppFormDialog({
         }
         toast.success(isEdit ? 'App updated' : 'App created')
         handleOpenChange(false)
-      } catch {
-        // `updateApp` wraps nothing and `createApp` wraps only its insert, so
-        // a driver-level failure rejects instead of returning `{ ok: false }`.
-        // Without this catch Save would clear its spinner and do nothing.
+      } catch (error) {
+        // Both actions wrap their own writes and report a failed save as
+        // `{ ok: false }`, so reaching here means something outside those
+        // rejected — and the write may well have landed. Hence the log: this
+        // catch used to discard the error entirely, which left "sometimes I
+        // can't edit or pause an app" with no evidence to investigate at all.
+        console.error('[apps] app save rejected outside the action result:', error)
         toast.error('Something went wrong — try again')
       }
     })

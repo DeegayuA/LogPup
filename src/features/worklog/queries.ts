@@ -118,6 +118,30 @@ export async function listAppTagTargets(): Promise<{ name: string; slug: string 
   return db.select({ name: liveApps.name, slug: liveApps.slug }).from(liveApps)
 }
 
+/** One row of the any-project picker — id for the entry writes, name for the tag. */
+export type PickerApp = { id: string; name: string; slug: string }
+
+/**
+ * Every ACTIVE project, for the my-zone pickers on /worklog.
+ *
+ * `getMyAssignedApps` answers "what is expected of this person"; this answers
+ * "what exists to log work against", and they are different questions. The
+ * write paths have never required assignment — `createWorklogEntry` takes any
+ * live app id and the note tags are free text — so a tech lead who spent the
+ * afternoon unblocking a project they are not on could always LOG the work,
+ * they just could not PICK it: every picker was fed assignments only. Not
+ * `listAppTagTargets`, deliberately: tag *rendering* must keep resolving
+ * paused projects' names, while offering a paused project to log new work
+ * against would contradict what "paused" means.
+ */
+export async function listAllLiveAppsForPicker(): Promise<PickerApp[]> {
+  return db
+    .select({ id: liveApps.id, name: liveApps.name, slug: liveApps.slug })
+    .from(liveApps)
+    .where(eq(liveApps.status, 'active'))
+    .orderBy(asc(liveApps.name))
+}
+
 export async function getTeamWorklogs(fromIso: string, toIso: string): Promise<TeamWorklogRow[]> {
   return db
     .select({

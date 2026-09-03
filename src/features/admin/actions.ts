@@ -443,6 +443,33 @@ const orgTagsInput = z
   .max(8, 'Up to 8 organization tags per user')
   .transform((tags) => Array.from(new Set(tags)))
 
+/**
+ * What to say when the email is taken.
+ *
+ * Two situations, two sentences. An ACTIVE match is the admin's slip: the
+ * person is right there in the list, and naming them is what makes that
+ * obvious. A DEACTIVATED match is the trap — the account is invisible in the
+ * people table's default view, so the account "already exists" somewhere the
+ * admin cannot see, and the instinct is to conclude the check is broken and
+ * try a variant address. That would split one colleague's history across two
+ * rows, which is the actual harm here: their tasks, meetings and follow-ups
+ * all still hang off the deactivated row.
+ *
+ * The deactivated branch therefore says the state AND the way out, and says
+ * what is preserved — the same three-part shape the meeting Clear-notes
+ * dialog uses for destructive confirms.
+ */
+function duplicateUserMessage(existing: { name: string; active: boolean }): string {
+  if (existing.active) {
+    return `${existing.name} already has an account with that email.`
+  }
+  return (
+    `${existing.name} already has an account with that email — it is deactivated, not deleted. `
+    + 'Their tasks, meetings and follow-ups are still attached to it, so reactivate them from the '
+    + 'people table rather than creating a second account.'
+  )
+}
+
 const createUserInput = z.object({
   email: z.preprocess(
     (v) => String(v ?? '').trim().toLowerCase(),
@@ -488,8 +515,24 @@ export async function createUser(
     )
   }
 
-  const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email))
-  if (existing) return err('A user with that email already exists')
+  // `name` and `active` as well as `id`, because "already exists" is two
+  // different situations and only one of them is the admin's mistake.
+  //
+  // Nothing ever DELETES a user — no hard delete of that table exists anywhere
+  // in src/, and there is no deleted_at column on it; removing somebody sets
+  // active = false and leaves every task, meeting and follow-up attached to
+  // that row. So an admin re-adding a departed colleague met a bare "A user
+  // with that email already exists" for an account they could not see in the
+  // list, with nothing saying the person was deactivated rather than present
+  // and no route onward. Naming a state while offering none of its mechanism
+  // is the defect this codebase's own audit logs against itself; setUserActive
+  // is reachable from the people table (admin/components/user-table.tsx), so
+  // the message can say where to go.
+  const [existing] = await db
+    .select({ id: users.id, name: users.name, active: users.active })
+    .from(users)
+    .where(eq(users.email, email))
+  if (existing) return err(duplicateUserMessage(existing))
 
   // No org tags picked by hand — fall back to whatever the email domain implies
   // (see src/lib/org-from-domain.ts) rather than leaving the column empty.
@@ -520,8 +563,18 @@ export async function createUser(
       .returning({ id: users.id })
     createdId = created.id
   } catch {
-    // Unique-email race between the check above and the insert.
-    return err('A user with that email already exists')
+    // Unique-email race between the check above and the insert. Re-read rather
+    // than guessing: the row that won the race may be a deactivated account,
+    // and repeating the bare duplicate line here would put the dead end back
+    // for whichever admin lost by a few milliseconds. A failed re-read falls
+    // back to the plain sentence — by then the insert has already failed, and
+    // a second error about the error helps nobody.
+    const [raced] = await db
+      .select({ id: users.id, name: users.name, active: users.active })
+      .from(users)
+      .where(eq(users.email, email))
+      .catch(() => [])
+    return err(raced ? duplicateUserMessage(raced) : 'A user with that email already exists')
   }
 
   await logActivity({

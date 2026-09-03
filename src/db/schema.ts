@@ -40,7 +40,21 @@ export const changeRequestOp = pgEnum('change_request_op', ['edit', 'delete', 'r
 // are deliberately in here: both are real answers to "why is there no log",
 // and both are the studio's problem rather than the person's, so neither may
 // count against them.
-export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other'])
+// 'casual' is statutory here — Sri Lanka's Shop and Office Employees Act
+// grants casual leave separately from annual — so filing it as 'annual' spent
+// the wrong entitlement and filing it as 'other' made it invisible in every
+// breakdown. Added by drizzle/0067.
+//
+// LAST IN THIS LIST, not beside 'annual' where it reads better: ALTER TYPE ...
+// ADD VALUE appends, so physical enum order ends in 'casual', and this
+// declaration is kept in that same order so the two cannot be compared and
+// found to disagree. Display order does not come from here anyway — the picker
+// reads SELF_DECLARABLE_KINDS (worklog/components/declare-absence-dialog.tsx).
+//
+// It carries NO BALANCE. Nothing tracks a per-person allowance for 'annual'
+// either, so a quota for casual alone would leave annual the odd one out;
+// entitlements are their own design.
+export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other', 'casual'])
 export const absenceStatus = pgEnum('absence_status', ['pending', 'approved', 'rejected', 'withdrawn'])
 // What stage of employment somebody is at. NOT a seat — user_role answers what
 // they may do, this answers where they are in their career here. Kept separate
