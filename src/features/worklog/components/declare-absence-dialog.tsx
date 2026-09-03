@@ -17,15 +17,14 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import { createAbsence } from '@/features/worklog/absence-actions'
+import {
+  ABSENCE_KIND_LABELS,
+  selfDeclarableGroups,
+  type AbsenceKind,
+} from '@/features/worklog/absence-kinds'
 import type { MyAbsence } from '@/features/worklog/queries'
 import { overlaps } from '@/features/worklog/schedules'
 import { HelpNote } from '@/components/shared/help-note'
@@ -42,43 +41,22 @@ import { HelpNote } from '@/components/shared/help-note'
  * self-approval wearing a different hat.
  */
 
-export type AbsenceKind = MyAbsence['kind']
-
-/** Every kind the column can hold, for reading back what was filed. */
-export const ABSENCE_KIND_LABELS: Record<AbsenceKind, string> = {
-  annual: 'Annual leave',
-  sick: 'Sick leave',
-  casual: 'Casual leave',
-  unpaid: 'Unpaid leave',
-  training: 'Training',
-  other_project: 'On another project',
-  no_work_assigned: 'No work assigned',
-  other: 'Other',
-}
-
 /**
- * The five a person may declare ABOUT THEMSELVES, mirroring SELF_DECLARABLE in
- * absence-actions.ts — which validates the same list server-side, so this can
- * only ever be narrower than what is accepted, never wider.
+ * THE VOCABULARY LIVES IN absence-kinds.ts, not here.
  *
- * `no_work_assigned` is missing on purpose: it is a statement about the studio
- * failing to give someone work, and a person filing it against themselves
- * turns a grievance into a form field. `other` is the admin escape hatch.
- * Neither belongs in a self-service picker.
+ * The label map and the self-declarable list used to be defined in this file,
+ * which meant a client component owned a vocabulary a `'use server'` module had
+ * to duplicate in order to validate against it. Adding a kind meant editing
+ * both, and whichever copy fell behind decided whether the kind was merely
+ * unpickable or pickable-and-unsavable — a dead end at the last click.
+ *
+ * `AbsenceKind` is still checked against the column here: the pg enum is what
+ * the row can hold, and absence-kinds.test.ts asserts the two agree.
  */
-export const SELF_DECLARABLE_KINDS = [
-  'annual',
-  'sick',
-  // Beside sick and annual because that is how somebody thinks about it when
-  // they are filing — the three statutory kinds together, before the ones that
-  // are really "I was working, elsewhere".
-  'casual',
-  'unpaid',
-  'training',
-  'other_project',
-] as const satisfies readonly AbsenceKind[]
+type SelfDeclarableKind = AbsenceKind
 
-type SelfDeclarableKind = (typeof SELF_DECLARABLE_KINDS)[number]
+const _kindMirrorsColumn: MyAbsence['kind'] extends AbsenceKind ? true : never = true
+void _kindMirrorsColumn
 
 /** An absence already on file — pending or approved — that a new one may clash with. */
 export type FiledAbsence = {
@@ -109,6 +87,11 @@ export function DeclareAbsenceDialog({
   owedDays,
   knownFrom,
   knownTo,
+  endDay,
+  defaultKind,
+  triggerLabel = 'Not a working day',
+  triggerVariant = 'outline',
+  triggerClassName,
 }: {
   /** The catch-up day this button sits on. Pre-fills BOTH bounds. */
   day: string
@@ -119,11 +102,27 @@ export function DeclareAbsenceDialog({
   /** The window `owedDays` describes: [knownFrom, knownTo). */
   knownFrom: string
   knownTo: string
+  /**
+   * The last day, when the caller already knows the range — a run the reader
+   * pulled out of "sep 1 and aug 30", say. Defaults to `day`, which is the
+   * one-day case every existing caller wants.
+   */
+  endDay?: string
+  /**
+   * A kind to open on, when something upstream already worked out which one.
+   * STILL A SUGGESTION: it seeds the radio group and the person can change it
+   * before sending, exactly like a drafted note seeds a textarea.
+   */
+  defaultKind?: AbsenceKind
+  /** The trigger's words, so the page can make this the prominent half of a pair. */
+  triggerLabel?: string
+  triggerVariant?: 'outline' | 'secondary' | 'default'
+  triggerClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const [startDate, setStartDate] = useState(day)
-  const [endDate, setEndDate] = useState(day)
-  const [kind, setKind] = useState<SelfDeclarableKind | ''>('')
+  const [endDate, setEndDate] = useState(endDay ?? day)
+  const [kind, setKind] = useState<SelfDeclarableKind | ''>(defaultKind ?? '')
   const [reason, setReason] = useState('')
   const [serverError, setServerError] = useState<string | null>(null)
   const [saving, startSaving] = useTransition()
@@ -137,8 +136,8 @@ export function DeclareAbsenceDialog({
     // once at mount, and this instance outlives a filing: without this, a
     // second visit would show whatever was typed the first time.
     setStartDate(day)
-    setEndDate(day)
-    setKind('')
+    setEndDate(endDay ?? day)
+    setKind(defaultKind ?? '')
     setReason('')
     setServerError(null)
   }
@@ -209,16 +208,17 @@ export function DeclareAbsenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>
-        Not a working day
+      <DialogTrigger
+        render={<Button variant={triggerVariant} size="sm" className={triggerClassName} />}
+      >
+        {triggerLabel}
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Not a working day</DialogTitle>
           <DialogDescription>
-            You are saying you owed no work on{' '}
-            {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')}. It goes for approval — until
-            somebody approves it, the day still counts as unlogged.
+            Say what {format(new Date(`${day}T12:00:00`), 'EEEE, MMMM d')} actually was. It goes
+            for approval — until somebody approves it, the day still counts as unlogged.
           </DialogDescription>
         </DialogHeader>
 
@@ -262,36 +262,64 @@ export function DeclareAbsenceDialog({
               field rather than filling in two. */}
           <HelpNote>Both days count. Move the last day if it ran longer than one.</HelpNote>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${fieldId}-kind`}>What was it?</Label>
-            <Select value={kind} onValueChange={handleKindChange}>
-              <SelectTrigger id={`${fieldId}-kind`} className="w-full">
-                {/* Explicit label mapping — the enum value is the Select's
-                    `value`, so without this the trigger renders `other_project`
-                    at the person rather than "On another project". */}
-                <SelectValue placeholder="Choose one">
-                  {(value: string) =>
-                    value ? ABSENCE_KIND_LABELS[value as AbsenceKind] : 'Choose one'
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {SELF_DECLARABLE_KINDS.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {ABSENCE_KIND_LABELS[value]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          {/* CARDS UNDER HEADINGS, NOT A DROPDOWN.
+              At six kinds a Select was fine. At twelve it hides the list behind
+              a click and shows one label at a time, which is how somebody files
+              annual leave for what was really a short leave — the option they
+              wanted was never on screen next to the one they picked. The
+              headings carry the distinction that actually matters here: a whole
+              day off, part of a day, or a day spent working somewhere else. */}
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1.5 text-sm font-medium">What was it?</legend>
+            <div className="flex flex-col gap-3">
+              {selfDeclarableGroups().map((section) => (
+                <div key={section.group} className="flex flex-col gap-1.5">
+                  <span className="font-mono text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {section.group}
+                  </span>
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {section.kinds.map((option) => (
+                      <label
+                        key={option.id}
+                        className={cn(
+                          'flex cursor-pointer flex-col gap-0.5 rounded-lg border px-2.5 py-2 transition-[background-color,border-color] motion-reduce:transition-none',
+                          'focus-within:ring-2 focus-within:ring-ring',
+                          kind === option.id
+                            ? 'border-primary bg-primary/10'
+                            : 'border-border/60 bg-card/60 hover:border-border hover:bg-card',
+                        )}
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name={`${fieldId}-kind`}
+                            value={option.id}
+                            checked={kind === option.id}
+                            onChange={() => handleKindChange(option.id)}
+                            className="size-3.5 accent-primary"
+                          />
+                          <span className="text-xs font-medium text-foreground">{option.label}</span>
+                        </span>
+                        <span className="pl-5.5 text-2xs leading-snug text-muted-foreground">
+                          {option.hint}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
             {/* The absent options are the ones that raise a question. "No work
                 assigned" is a statement about the studio failing to give
                 somebody work, so a person filing it against themselves turns a
                 grievance into a form field; it is filed for you, not by you. */}
             <HelpNote>
-              Filed for approval either way. If nobody had work for you, an admin files that one —
-              it is not yours to declare about yourself.
+              Filed for approval either way. A <span className="font-medium">half day</span> or a{' '}
+              <span className="font-medium">short leave</span> still leaves the day on your log —
+              you worked part of it, so it is still yours to describe. If nobody had work for you,
+              an admin files that one; it is not yours to declare about yourself.
             </HelpNote>
-          </div>
+          </fieldset>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`${fieldId}-reason`}>Anything to add? (optional)</Label>

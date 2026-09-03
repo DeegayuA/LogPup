@@ -26,12 +26,9 @@ import {
   type CalendarDayFacts,
 } from '@/features/worklog/components/worklog-calendar'
 import { MonthSummary } from '@/features/worklog/components/month-summary'
-import { CatchUpPanel, type CatchUpGap } from '@/features/worklog/components/catch-up-panel'
-import {
-  ABSENCE_KIND_LABELS,
-  DeclareAbsenceDialog,
-  type FiledAbsence,
-} from '@/features/worklog/components/declare-absence-dialog'
+import { LogBox, type LogBoxGap } from '@/features/worklog/components/log-box'
+import { ABSENCE_KIND_LABELS, exemptingAbsences } from '@/features/worklog/absence-kinds'
+import { type FiledAbsence } from '@/features/worklog/components/declare-absence-dialog'
 import { PendingAbsenceList } from '@/features/worklog/components/pending-absence-list'
 import {
   DAY_STATE_LABEL,
@@ -194,6 +191,24 @@ export default async function WorklogPage(props: {
         <SummaryZone userId={session.user.id} month={month} today={today} retryHref={retryHref} />
       </Suspense>
 
+      {/* THE ONE BOX, ABOVE THE CALENDAR.
+          It used to be two panels in two places: a one-line field inside the
+          selected day's card, and a whole second copy of the day form under the
+          catch-up ledger's day chips, several screens further down. Whichever
+          one you found first decided how much work it was to log a week. The
+          box is now the first thing on the page after the month's numbers, it
+          covers today and every unlogged day at once, and "Not a working day"
+          sits beside it at the same weight rather than inside the ledger nobody
+          scrolled to. */}
+      <Suspense fallback={<LogSkeleton />}>
+        <LogZone
+          userId={session.user.id}
+          selectedDay={selectedDay}
+          today={today}
+          retryHref={retryHref}
+        />
+      </Suspense>
+
       <Suspense fallback={<CalendarSkeleton />}>
         <CalendarZone
           userId={session.user.id}
@@ -202,10 +217,6 @@ export default async function WorklogPage(props: {
           today={today}
           retryHref={retryHref}
         />
-      </Suspense>
-
-      <Suspense fallback={<CatchUpSkeleton />}>
-        <CatchUpZone userId={session.user.id} today={today} retryHref={retryHref} />
       </Suspense>
 
       {isAdmin ? (
@@ -309,7 +320,11 @@ async function SummaryZone({
     const closed = closedStudioDays(orgRows, from, to)
     const isHoliday = (iso: string) => closed.has(iso)
     const loggedDays = new Set(rows.map((row) => row.day))
-    const exemptDays = absenceDays(approved, from, toExclusive)
+    // WHOLE-DAY KINDS ONLY. A half day or a short leave is filed and approved
+    // like anything else and still leaves the day owed — two hours at the
+    // dentist must not write off a working day in the denominator. See
+    // exemptsWholeDay in absence-kinds.ts.
+    const exemptDays = absenceDays(exemptingAbsences(approved), from, toExclusive)
     const patternFor = (iso: string) => patternForDay(schedule, iso)
 
     /* The whole month's expectation, whatever today is: computeCoverage with
@@ -477,7 +492,8 @@ async function CalendarZone({
       ])
 
     const closed = closedStudioDays(orgRows, from, to)
-    const absent = absenceDays(approved, from, shiftDay(to, 1))
+    // Whole-day kinds only — the calendar must not paint a half day as absent.
+    const absent = absenceDays(exemptingAbsences(approved), from, shiftDay(to, 1))
     const facts: CalendarDayFacts = {
       loggedPercent: Object.fromEntries(
         rows
@@ -503,27 +519,11 @@ async function CalendarZone({
     const selectedHalf = isHalfDay(selectedDay, closed.has(selectedDay))
     const selectedHolidayName = closed.get(selectedDay) ?? null
 
-    // The same check createAbsence makes, so the control appears exactly when
-    // the action would accept it. loadActor is null for a deactivated
-    // account — the page still shows their own record, minus the button.
-    const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
-    const filed: FiledAbsence[] = [
-      ...pending.map((row) => ({
-        startDate: row.startDate,
-        endDate: row.endDate,
-        kind: row.kind,
-        status: 'pending' as const,
-      })),
-      ...approved.map((row) => ({
-        startDate: row.startDate,
-        endDate: row.endDate,
-        kind: row.kind,
-        status: 'approved' as const,
-      })),
-    ]
     /* Days in the viewed month the studio expected work on — fraction > 0,
-       schedule-aware via coverage, whatever each day's status. The dialog
-       uses these to refuse a filing that would exempt nothing. */
+       schedule-aware via coverage, whatever each day's status. Kept for the
+       selected day's scheduled length below; the declare control it used to
+       feed now lives in the log box at the top of the page, where "I worked"
+       and "I owed no work" sit side by side. */
     const monthCoverage = computeCoverage({
       from: monthStart,
       to: nextMonthStart,
@@ -534,7 +534,6 @@ async function CalendarZone({
       joinedOn: joinedOn ?? monthStart,
       today: nextMonthStart,
     })
-    const owedDays = monthCoverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
 
     // The selected day's logged hours. Fetched here rather than in a nested
     // Suspense: it is one indexed read on (user_id, day) and the panel it
@@ -577,9 +576,6 @@ async function CalendarZone({
       selectedState,
       selectedHalf,
       selectedHolidayName,
-      canDeclare,
-      filed,
-      owedDays,
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
       assignedApps,
       // The rest of the studio, for the day someone helped out elsewhere.
@@ -610,9 +606,6 @@ async function CalendarZone({
     selectedState,
     selectedHalf,
     selectedHolidayName,
-    canDeclare,
-    filed,
-    owedDays,
     aiDraftEnabled,
     assignedApps,
     otherApps,
@@ -662,15 +655,10 @@ async function CalendarZone({
             ) : null}
           </div>
 
-          {canDeclare && (selectedState === 'owed' || selectedState === 'partial') ? (
-            <DeclareAbsenceDialog
-              day={selectedDay}
-              filed={filed}
-              owedDays={owedDays}
-              knownFrom={monthStart}
-              knownTo={nextMonthStart}
-            />
-          ) : null}
+          {/* No second "Not a working day" here. It sits in the log box at the
+              top of the page, on the same day this panel is showing, beside the
+              field you would otherwise type into — two identical buttons on one
+              screen only raise the question of whether they do the same thing. */}
         </div>
 
         {selectedState === 'holiday' || selectedState === 'off' || selectedState === 'absence' ? (
@@ -717,36 +705,45 @@ async function CalendarZone({
 }
 
 // ---------------------------------------------------------------------------
-// Catch-up zone — owed days, and filings waiting on approval
+// Log zone — the one box, the owed days, and filings waiting on approval
 // ---------------------------------------------------------------------------
 
 /**
- * Earlier days with no entry, and what the person has already said about them.
+ * WHERE YOU TYPE. One field for today and for every day you have not logged,
+ * with "Not a working day" beside it at the same weight.
  *
- * TWO groups, because "I have not dealt with this day" and "I have dealt with
- * it and somebody else has not" are different states, and only the first is a
- * to-do list:
+ * THREE groups, because "I have not dealt with this day", "I have dealt with it
+ * and somebody else has not" and "somebody decided" are different states and
+ * only the first is a to-do list:
  *
- *   owed, nothing filed        a box to log it in
+ *   owed, nothing filed        chips over the box, and the box logs them
  *   filed, awaiting approval   named below, with its kind and its dates
- *   approved                   gone from the panel — the day is not owed
+ *   decided                    the reviewer's own sentence, verbatim
+ *   approved                   gone — the day is not owed
  *
- * Which days are owed comes from `computeCoverage`: approved leave, company
- * holidays and a person's own work schedule, each as a status per day, so ONE
- * filter (`status === 'missing'`) drops exempt, off and not-yet-due days at
- * once, today's own day included, by rule rather than by a special case.
+ * Which days are owed comes from `computeCoverage`: approved whole-day leave,
+ * company holidays and a person's own work schedule, each as a status per day,
+ * so ONE filter (`status === 'missing'`) drops exempt, off and not-yet-due days
+ * at once, today's own day included, by rule rather than by special case.
  *
- * Renders nothing when both groups are empty — a permanently-present panel
- * showing zero is noise that teaches people to ignore the area where the real
- * prompt appears. Deliberately not styled as a warning: people take leave and
- * spend days on other work, and a blank day is not a fault.
+ * The box itself renders whether or not there are gaps — it is the page's
+ * writing surface, not a warning — while the two groups below it appear only
+ * when they have something to say. A permanently-present panel showing zero is
+ * noise that teaches people to ignore the area where the real prompt appears.
  */
-async function CatchUpZone({
+async function LogZone({
   userId,
+  selectedDay,
   today,
   retryHref,
 }: {
   userId: string
+  /**
+   * The day the calendar is pointing at. A one-line entry with no date in it is
+   * about THIS day, and so is the leave dialog's default range — clicking a day
+   * on the calendar below and then typing must not file against today.
+   */
+  selectedDay: string
   today: string
   retryHref: string
 }) {
@@ -770,6 +767,7 @@ async function CatchUpZone({
       aiPrefs,
       assignedApps,
       allApps,
+      loggableTasks,
     ] = await Promise.all([
         loadActor(),
         getUserJoinDay(userId),
@@ -786,8 +784,12 @@ async function CatchUpZone({
         getAiPrefs(userId),
         getMyAssignedApps(userId),
         // Same reason as CalendarZone: a caught-up day may name a project the
-        // person was never assigned to, and the form must be able to offer it.
+        // person was never assigned to, and the box must be able to offer it.
         listAllLiveAppsForPicker(),
+        // The one-line reader matches a task by name, so the box needs the same
+        // list the hours card has. Day-independent — a task entry names work,
+        // not a date.
+        listLoggableTasks(userId),
       ])
     if (!joinedOn) return null
 
@@ -796,9 +798,11 @@ async function CatchUpZone({
       from,
       to,
       loggedDays: new Set(rows.map((row) => row.day)),
-      // APPROVED ONLY, deliberately. A pending absence exempts nothing, so
-      // nobody can lower their own denominator by typing.
-      exemptDays: absenceDays(approved, from, to),
+      // APPROVED AND WHOLE-DAY ONLY, deliberately. A pending absence exempts
+      // nothing, so nobody can lower their own denominator by typing; and a
+      // half day or a short leave exempts nothing either, because the rest of
+      // that day was worked and is still theirs to describe.
+      exemptDays: absenceDays(exemptingAbsences(approved), from, to),
       isHoliday: (iso) => closed.has(iso),
       patternFor: (iso) => patternForDay(schedule, iso),
       joinedOn,
@@ -810,7 +814,7 @@ async function CatchUpZone({
     // why the second group below says so out loud instead of letting it
     // disappear.
     const filedDays = absenceDays(pending, from, to)
-    const gaps: CatchUpGap[] = coverage.days
+    const gaps: LogBoxGap[] = coverage.days
       .filter((day) => day.status === 'missing' && !filedDays.has(day.day))
       // The most recent MAX_BACKFILL_DAYS, oldest first — an unclearable
       // backlog is indistinguishable from disengagement.
@@ -837,6 +841,11 @@ async function CatchUpZone({
     // mistaken for a no-op. A range containing none of them exempts nothing.
     const owedDays = coverage.days.filter((day) => day.fraction > 0).map((day) => day.day)
 
+    // The selected day's own record, for the box's fast path: a score-only line
+    // must not blank a note written earlier, and the button says "Update score"
+    // rather than "Score day" once the day already carries one.
+    const selectedRow = rows.find((row) => row.day === selectedDay) ?? null
+
     return {
       gaps,
       pending,
@@ -844,7 +853,13 @@ async function CatchUpZone({
       canDeclare,
       filed,
       owedDays,
-      aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
+      selectedNote: selectedRow?.note ?? null,
+      selectedScored: selectedRow !== null,
+      loggableTasks,
+      // A SEPARATE pref from the per-day drafters: this one reads text the
+      // person wrote rather than evidence LogPup gathered, and somebody may
+      // reasonably want one and not the other.
+      catchUpAiEnabled: aiPrefs['worklog-catch-up'].enabled,
       assignedApps,
       otherApps: allApps.filter(
         (app) => !assignedApps.some((assigned) => assigned.id === app.id),
@@ -856,10 +871,12 @@ async function CatchUpZone({
   try {
     data = await load()
   } catch (cause) {
-    console.error('[worklog] catch-up failed', cause)
+    console.error('[worklog] log zone failed', cause)
   }
   if (data === undefined)
-    return <ZoneError title="The catch-up list could not be read." retryHref={retryHref} />
+    return <ZoneError title="The log box could not be loaded." retryHref={retryHref} />
+  // No join day on record: there is no window to log against yet, and the empty
+  // state in the summary above already says so.
   if (data === null) return null
 
   const {
@@ -869,29 +886,37 @@ async function CatchUpZone({
     canDeclare,
     filed,
     owedDays,
-    aiDraftEnabled,
+    selectedNote,
+    selectedScored,
+    loggableTasks,
+    catchUpAiEnabled,
     assignedApps,
     otherApps,
   } = data
-  // A decision keeps this section alive on its own. Somebody with no gaps and
-  // nothing pending still has to be told their leave was refused.
-  if (gaps.length === 0 && pending.length === 0 && decided.length === 0) return null
+
+  // ASSIGNED FIRST, then the rest of the studio. The reader and the parser hear
+  // every project either way; the order only decides which one-tap chips are
+  // promoted, and somebody's own assignments are the ones they are expected on.
+  const assignedPickerApps = assignedApps.map((app) => ({ id: app.id, name: app.name }))
+  const pickerApps = [...assignedPickerApps, ...otherApps.map((app) => ({ id: app.id, name: app.name }))]
 
   return (
     <section className="flex flex-col gap-4">
-      {gaps.length > 0 ? (
-        <CatchUpPanel
-          gaps={gaps}
-          filed={filed}
-          owedDays={owedDays}
-          knownFrom={from}
-          knownTo={to}
-          canDeclare={canDeclare}
-          aiDraftEnabled={aiDraftEnabled}
-          assignedApps={assignedApps}
-          otherApps={otherApps}
-        />
-      ) : null}
+      <LogBox
+        day={selectedDay}
+        apps={pickerApps}
+        suggestFrom={assignedPickerApps}
+        tasks={loggableTasks}
+        savedNote={selectedNote}
+        scored={selectedScored}
+        gaps={gaps}
+        filed={filed}
+        owedDays={owedDays}
+        knownFrom={from}
+        knownTo={to}
+        canDeclare={canDeclare}
+        catchUpAiEnabled={catchUpAiEnabled}
+      />
 
       {pending.length > 0 ? (
         <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/40 p-5 shadow-xs backdrop-blur-sm">
@@ -1325,13 +1350,17 @@ function CalendarSkeleton() {
   )
 }
 
-function CatchUpSkeleton() {
+function LogSkeleton() {
   return (
-    <div className="flex flex-col gap-3 rounded-xl border bg-muted/40 p-4">
+    <div className="flex flex-col gap-3 rounded-2xl border bg-muted/40 p-4 sm:p-5">
       <span className="sr-only" role="status">
-        Loading the catch-up list…
+        Loading the log box…
       </span>
-      <Skeleton className="h-4 w-52" />
+      <div className="flex items-center justify-between gap-2">
+        <Skeleton className="h-5 w-28" />
+        <Skeleton className="h-9 w-40" />
+      </div>
+      <Skeleton className="h-12 rounded-xl" />
       <Skeleton className="h-16 rounded-lg" />
     </div>
   )

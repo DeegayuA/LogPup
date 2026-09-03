@@ -9,10 +9,8 @@ import { Reveal } from '@/components/motion/reveal'
 import { cn } from '@/lib/utils'
 import { bilingualText } from '@/features/meetings/components/meeting-chips'
 import { withdrawAbsence } from '@/features/worklog/absence-actions'
-import {
-  ABSENCE_KIND_LABELS,
-  formatAbsenceRange,
-} from '@/features/worklog/components/declare-absence-dialog'
+import { ABSENCE_KIND_LABELS } from '@/features/worklog/absence-kinds'
+import { formatAbsenceRange } from '@/features/worklog/components/declare-absence-dialog'
 import type { MyAbsence } from '@/features/worklog/queries'
 
 /**

@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.537",
+  "current": "v0.0.541",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4296,6 +4296,38 @@
       "hash": "3c0bc01",
       "kind": "other",
       "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.538",
+      "date": "2026-09-02",
+      "at": "2026-09-02T11:07:52+05:30",
+      "hash": "671c254",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.539",
+      "date": "2026-09-02",
+      "at": "2026-09-02T11:24:12+05:30",
+      "hash": "9cd44c8",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.540",
+      "date": "2026-09-03",
+      "at": "2026-09-03T15:44:56+05:30",
+      "hash": "a4b271b",
+      "kind": "other",
+      "change": "Improve leave types and worklog UX flows"
+    },
+    {
+      "version": "v0.0.541",
+      "date": "2026-09-03",
+      "at": "2026-09-03T20:06:38+05:30",
+      "hash": "c9a2906",
+      "kind": "other",
+      "change": "Centralize absence kinds and add missing kinds"
     }
   ]
 }

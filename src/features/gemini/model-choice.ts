@@ -43,6 +43,15 @@ import {
  *                         A heavier chain would buy reasoning this feature
  *                         must not have, on the save path of every day that
  *                         has something to say.)
+ * - worklog-catch-up  -> ANALYSIS_MODELS    (registry chain: 'Analysis' —
+ *                         catch-up-actions.ts readCatchUpText, one pass over a
+ *                         paragraph covering several days. Analysis and not
+ *                         Quick ON PURPOSE: it has to resolve dates written as
+ *                         "sep 1 and aug 30", fuzzy-match misspelt project
+ *                         nicknames against a list of ids, and keep hours only
+ *                         where hours were actually written — a Quick chain
+ *                         mangles exactly those and the person then corrects
+ *                         the app instead of recording their week)
  * - sprint-draft      -> ANALYSIS_MODELS    (suggest-actions.ts: ditto)
  * - app-metadata      -> QUICK_MODELS       (apps/actions.ts)
  * - workspace-ask     -> ANALYSIS_MODELS    (registry chain: 'Analysis' — one
@@ -63,6 +72,7 @@ const DEFAULT_CHAIN: Record<AiFeatureId, readonly string[]> = {
   'worklog-draft': ANALYSIS_MODELS,
   'worklog-entries-draft': ANALYSIS_MODELS,
   'worklog-entries-check': QUICK_MODELS,
+  'worklog-catch-up': ANALYSIS_MODELS,
   'sprint-draft': ANALYSIS_MODELS,
   'app-metadata': QUICK_MODELS,
   'workspace-ask': ANALYSIS_MODELS,

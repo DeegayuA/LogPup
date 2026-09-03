@@ -14,6 +14,7 @@ export type AiCallSlug =
   | 'worklog.draft'
   | 'worklog.entries-draft'
   | 'worklog.entries-check'
+  | 'worklog.catch-up'
   | 'sprint.draft'
   | 'app.metadata'
   | 'speech.dictation'
@@ -206,6 +207,26 @@ export const AI_FEATURES = [
       // feature about somebody's working hours both cheap and incapable of
       // finding anything on its own.
       tokens: { model: 'gemini-3.5-flash-lite', inputTokens: 900, outputTokens: 150 },
+    },
+  },
+  {
+    id: 'worklog-catch-up',
+    label: 'Catching up several days',
+    description: 'Reads a paragraph about several days at once back into days, hours and leave.',
+    chain: 'Analysis',
+    kind: 'text',
+    slugs: ['worklog.catch-up'],
+    estimate: {
+      label: 'per read',
+      // ONE call for the whole paste, however many days it covers — which is
+      // the point of the feature and also why the figure is bigger than the
+      // per-day drafters above. The prompt carries the person's own text (up to
+      // MAX_PASTE_CHARS), the candidate days it may file against, and every
+      // project it may name by id; the reply is a few days of small rows.
+      //
+      // No chosenModelApplies: one call, so a model choice reprices the whole
+      // shape, which is correct.
+      tokens: { model: 'gemini-3.6-flash', inputTokens: 5_000, outputTokens: 1_200 },
     },
   },
   {

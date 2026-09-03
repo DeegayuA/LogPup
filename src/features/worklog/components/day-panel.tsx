@@ -6,7 +6,6 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
-import { DayOneLine } from '@/features/worklog/components/day-one-line'
 import { WorklogForm } from '@/features/worklog/components/worklog-form'
 import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
 import {
@@ -182,9 +181,9 @@ export function DayPanel({
     <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-sm sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <h2 className="font-heading text-sm font-semibold">Your day</h2>
+          <h2 className="font-heading text-sm font-semibold">This day in detail</h2>
           <p className="text-2xs text-muted-foreground">
-            One line does it — a % scores the day, a time logs hours.
+            What is already recorded, and the controls to correct it.
           </p>
         </div>
         {canEdit && anyAi ? (
@@ -199,23 +198,15 @@ export function DayPanel({
         ) : null}
       </div>
 
-      {/* THE ONE FIELD, in front. Everything below it is the same day seen in
-          detail — what is already logged, and the full controls for correcting
-          it. Kept rather than deleted: the line is the fast path, not the only
-          path, and a day already logged still has to be readable and editable.
-          Collapsed by default so the fast path is what a person meets. */}
-      {canEdit ? (
-        <DayOneLine
-          day={day}
-          apps={pickerApps}
-          suggestFrom={assignedPickerApps}
-          tasks={tasks}
-          savedNote={initial?.note ?? null}
-          scored={initial != null}
-        />
-      ) : null}
+      {/* THE ONE FIELD MOVED OUT, to the log box at the top of the page — see
+          log-box.tsx. It was here, and a second copy of the whole day form sat
+          in the catch-up ledger several screens below, so how much work it was
+          to log a week depended on which of the two you found first. What is
+          left here is the same day seen IN DETAIL: what is already logged, and
+          the full controls for correcting it. Still collapsed by default,
+          because somebody coming back to yesterday came to read one number. */}
 
-      {/* Open only for somebody who cannot type in the line above — they have
+      {/* Open only for somebody who cannot type in the box above — they have
           no fast path, so the detail IS their view of the day.
 
           It used to also open for any day with content, which meant every day

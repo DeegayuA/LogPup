@@ -10,6 +10,7 @@ import { logActivity } from '@/features/activity/log'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
 import { overlaps } from '@/features/worklog/schedules'
+import { SELF_DECLARABLE_KINDS, type AbsenceKind } from '@/features/worklog/absence-kinds'
 
 /**
  * Why a person owed no work on a range of days.
