@@ -21,12 +21,15 @@ import { overlaps } from '@/features/worklog/schedules'
  * pending absence never exempts a day.
  */
 
-// What a person may declare about themselves. 'no_work_assigned' is
-// deliberately absent: it is a statement about the studio failing to give
-// someone work, not about them, so a manager files it — a person filing it
-// against themselves is a grievance the UI must not disguise as a form field.
-// 'other' is an admin escape hatch for the same reason.
-const SELF_DECLARABLE = ['annual', 'sick', 'casual', 'unpaid', 'training', 'other_project'] as const
+// What a person may declare about themselves, READ FROM THE ONE LIST rather
+// than restated here. This tuple and the dialog's picker were two hand-kept
+// copies of the same set, and the copy that fell behind decided whether a kind
+// was unpickable (harmless) or pickable and unsavable (a dead end at the last
+// click). 'no_work_assigned' and 'other' are excluded in absence-kinds.ts, not
+// here: the first is a statement about the studio failing to give someone work
+// — a grievance the UI must not disguise as a form field — and the second is
+// the admin escape hatch.
+const SELF_DECLARABLE = SELF_DECLARABLE_KINDS as readonly [AbsenceKind, ...AbsenceKind[]]
 
 const createInput = z.object({
   // Both bounds INCLUSIVE, unlike the half-open intervals elsewhere in the

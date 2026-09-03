@@ -45,16 +45,23 @@ export const changeRequestOp = pgEnum('change_request_op', ['edit', 'delete', 'r
 // the wrong entitlement and filing it as 'other' made it invisible in every
 // breakdown. Added by drizzle/0067.
 //
-// LAST IN THIS LIST, not beside 'annual' where it reads better: ALTER TYPE ...
-// ADD VALUE appends, so physical enum order ends in 'casual', and this
-// declaration is kept in that same order so the two cannot be compared and
-// found to disagree. Display order does not come from here anyway — the picker
-// reads SELF_DECLARABLE_KINDS (worklog/components/declare-absence-dialog.tsx).
+// APPEND-ORDERED, not beside 'annual' where each would read better: ALTER TYPE
+// ... ADD VALUE appends, so physical enum order ends with whatever was added
+// last, and this declaration is kept in that same order so the two cannot be
+// compared and found to disagree. Display order does not come from here anyway
+// — the picker reads ABSENCE_KIND_DEFINITIONS (worklog/absence-kinds.ts), which
+// is also where each kind's label, its group and whether it exempts a whole day
+// are decided. absence-kinds.test.ts asserts the two lists hold the same set.
 //
-// It carries NO BALANCE. Nothing tracks a per-person allowance for 'annual'
-// either, so a quota for casual alone would leave annual the odd one out;
+// The six after 'casual' (drizzle/0068) complete the leave vocabulary an LK
+// studio actually files: two part-day kinds, off-in-lieu, duty leave, and the
+// two life-event ones. 'half_day' and 'short_leave' deliberately do NOT exempt
+// a whole day from coverage — see exemptsWholeDay in absence-kinds.ts.
+//
+// They carry NO BALANCE. Nothing tracks a per-person allowance for 'annual'
+// either, so a quota for one kind alone would leave the rest the odd ones out;
 // entitlements are their own design.
-export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other', 'casual'])
+export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other', 'casual', 'half_day', 'short_leave', 'lieu', 'duty', 'bereavement', 'parental'])
 export const absenceStatus = pgEnum('absence_status', ['pending', 'approved', 'rejected', 'withdrawn'])
 // What stage of employment somebody is at. NOT a seat — user_role answers what
 // they may do, this answers where they are in their career here. Kept separate
