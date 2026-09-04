@@ -12,6 +12,7 @@ import {
   type EntryCategory,
 } from '@/features/worklog/entries'
 import { grammarForPrompt } from '@/features/worklog/entry-language'
+import { appPromptLine, type AliasedApp } from '@/features/apps/app-aliases'
 
 /**
  * SEVERAL DAYS OF WORK, WRITTEN THE WAY PEOPLE ACTUALLY WRITE THEM.
@@ -54,8 +55,14 @@ import { grammarForPrompt } from '@/features/worklog/entry-language'
  *     and no "accept all" for a caller to reach for.
  */
 
-/** A project the reply may name, by id. */
-export type CatchUpApp = { id: string; name: string }
+/**
+ * A project the reply may name, by id.
+ *
+ * `aliases` is what makes "ML model for SGX" reach Syntax Genie's project: the
+ * model is shown every name a project answers to, derived acronyms included
+ * (app-aliases.ts), and still has to answer with an id the fence recognises.
+ */
+export type CatchUpApp = AliasedApp
 
 /** One day the reply may file against, with what the studio already knows about it. */
 export type CatchUpCandidateDay = {
@@ -170,8 +177,13 @@ export function buildCatchUpPrompt(input: {
   text: string
 }): string {
   const days = input.candidateDays.map(dayLine).join('\n')
+  // Every name a project answers to, not just the one it was registered under.
+  // The line is built by app-aliases.ts so the model is shown exactly the
+  // vocabulary the instant one-line parser matches on — two readers of the same
+  // sentence disagreeing about which project it names is worse than either
+  // being wrong on its own.
   const apps = input.apps.length > 0
-    ? input.apps.map((app) => `- ${app.id} — ${app.name}`).join('\n')
+    ? input.apps.map(appPromptLine).join('\n')
     : '(no projects on record — every entry must have appId null)'
   const leave = SELF_DECLARABLE_KINDS
     .map((kind) => `${kind} (${ABSENCE_KIND_LABELS[kind]})`)
@@ -193,7 +205,7 @@ The only projects you may name — use the id, never the name:
 ${apps}
 
 Rules:
-- FUZZY MATCH THE PROJECTS. They write nicknames, abbreviations and typos: "attendace app", "attendance app" and "the attendance one" are all the project whose name contains Attendance. Match on meaning, not on spelling. If a phrase matches NO project on the list, leave appId null and put the phrase in "unresolved" — never pick a different project because it was the closest one on the list.
+- FUZZY MATCH THE PROJECTS. They write nicknames, abbreviations and typos: "attendace app", "attendance app" and "the attendance one" are all the project whose name contains Attendance. Match on meaning, not on spelling. The "also called" terms above are as good as the name itself — an abbreviation like SGX or CC IS the project. A word that is the front of a project's name is that project too ("Solar app" is Solarsim). If a phrase matches NO project on the list, leave appId null and put the phrase in "unresolved" — never pick a different project because it was the closest one on the list, and never guess between two that fit equally.
 - A DATE THEY WROTE ONCE CAN COVER SEVERAL DAYS. "sep 1 and aug 30" is two days; "sep 1 to sep 3" is three. Give each its own object. If the same work is described for several days, repeat it per day rather than dropping it on one.
 - NEVER INVENT A DURATION. minutes goes in ONLY where they wrote a time. Work described with no time at all belongs in that day's "note" and in no entry. A day of five things where they timed two has two entries and a note.
 - NEVER INVENT A SCORE. "percent" is their own judgement of how much of what they planned they got through. Return a number ONLY if their own words carry one ("80%", "finished everything", "barely got anything done"). Otherwise null — they will score it themselves.

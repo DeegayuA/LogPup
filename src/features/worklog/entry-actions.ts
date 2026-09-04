@@ -11,6 +11,7 @@ import { logActivity } from '@/features/activity/log'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
 import { WORK_DAY_PATTERN, isFutureWorkDay } from '@/features/worklog/worklog-day'
+import { syncAutoScore } from '@/features/worklog/auto-score-sync'
 import {
   ENTRY_CATEGORIES,
   ENTRY_MINUTES_MAX,
@@ -205,6 +206,13 @@ export async function createWorklogEntry(
       },
     })
 
+    /* THE DAY'S SCORE FOLLOWS ITS HOURS. Awaited rather than fired and
+       forgotten, so the revalidate below re-renders a page that already
+       reflects the new score — otherwise the entry appears and the day still
+       reads "hours in, no score" until the next navigation. It never throws and
+       it never overwrites a score the person typed; see auto-score-sync.ts. */
+    await syncAutoScore(actor.id, input.day)
+
     revalidatePath('/worklog')
     return ok({ id: row.id })
   } catch (error) {
@@ -260,7 +268,10 @@ export async function updateWorklogEntry(
     // Through the LIVE subquery: a soft-deleted entry must read as gone, or
     // "edit" would quietly resurrect a row the person had already removed.
     const [existing] = await db
-      .select({ id: liveWorklogEntries.id })
+      // `day` comes back too: the update never changes which day an entry is
+      // on, but the derived score for that day has to be recomputed afterwards
+      // and the client does not send the day on an edit.
+      .select({ id: liveWorklogEntries.id, day: liveWorklogEntries.day })
       .from(liveWorklogEntries)
       .where(and(
         eq(liveWorklogEntries.id, input.id),
@@ -284,6 +295,10 @@ export async function updateWorklogEntry(
       // and only this scoping makes the update itself incapable of touching
       // anybody else's row.
       .where(and(eq(worklogEntries.id, input.id), eq(worklogEntries.userId, actor.id)))
+
+    // Editing an entry's minutes changes the day's total, so the derived score
+    // has to move with it — see the same call in createWorklogEntry.
+    await syncAutoScore(actor.id, existing.day)
 
     revalidatePath('/worklog')
     return ok(undefined)
@@ -342,6 +357,11 @@ export async function deleteWorklogEntry(
       pagePath: '/worklog',
       metadata: { day: existing.day, minutes: existing.minutes, category: existing.category },
     })
+
+    // Removing hours lowers the day's total, so the derived score comes down
+    // with it. Removing the LAST entry leaves the previous derived score
+    // standing rather than deleting the row — see auto-score-sync.ts for why.
+    await syncAutoScore(actor.id, existing.day)
 
     revalidatePath('/worklog')
     return ok(undefined)

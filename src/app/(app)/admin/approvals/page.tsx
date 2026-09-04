@@ -7,6 +7,7 @@ import { listPendingUsers } from '@/features/admin/queries'
 import { ApprovalActions } from '@/features/admin/components/approval-actions'
 import { getApprovalsInbox, getMyRequests } from '@/features/admin/change-request-queries'
 import { listPendingAbsences } from '@/features/worklog/absence-queries'
+import { absenceKindLabel, exemptsWholeDay } from '@/features/worklog/absence-kinds'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
 
@@ -98,9 +99,24 @@ export default async function AdminApprovalsPage() {
               {pendingAbsences.map((a) => (
                 <li key={a.id} className="flex flex-col gap-0.5 text-sm">
                   <span className="font-medium">{a.userName}</span>
-                  <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                    {a.kind} · {a.startDate}
-                    {a.endDate !== a.startDate && ` to ${a.endDate}`}
+                  {/* The label, not the enum — see the same fix on
+                      /admin/absences. A part-day kind is called out because it
+                      does NOT exempt the day: approving a half day still leaves
+                      that day owing a log, and an approver reading `half_day`
+                      had no way to know that. */}
+                  <span className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">
+                      {absenceKindLabel(a.kind)}
+                    </span>
+                    {!exemptsWholeDay(a.kind) ? (
+                      <span className="ml-1.5 rounded bg-muted px-1 py-px font-mono text-2xs">
+                        part day — still owes a log
+                      </span>
+                    ) : null}
+                    <span className="ml-1.5 font-mono tabular-nums">
+                      {a.startDate}
+                      {a.endDate !== a.startDate && ` to ${a.endDate}`}
+                    </span>
                   </span>
                   {a.reason && <span className="text-muted-foreground">{a.reason}</span>}
                   <ApprovalActions id={a.id} kind="absence" />

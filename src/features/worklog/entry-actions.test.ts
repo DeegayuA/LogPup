@@ -251,12 +251,24 @@ describe('updateWorklogEntry: one person cannot edit another person’s hours', 
     expect(res).toEqual({ ok: true, data: undefined })
 
     // The read that decides the row exists is scoped to the actor, so a row
-    // belonging to somebody else simply is not there to be found.
-    expect(selectCalls).toHaveLength(1)
+    // belonging to somebody else simply is not there to be found. It is the
+    // FIRST read the action makes — nothing may look at the row before the
+    // predicate that proves it is theirs.
     expect(selectCalls[0].table).toBe(liveWorklogEntries)
     const read = readWhereSql(selectCalls[0].where)
     expect(read.sql.toLowerCase()).toContain('user_id')
     expect(read.params).toEqual([ENTRY, ME])
+
+    /* EVERY read of the entries table is scoped, not just the first.
+       This used to be `expect(selectCalls).toHaveLength(1)`, which pinned the
+       COUNT rather than the property — so it broke the moment the action grew
+       a legitimate second read (syncAutoScore totals the day's minutes to
+       derive its score) while saying nothing about whether that read was safe.
+       Counting reads was never the guarantee; scoping them is. */
+    for (const call of selectCalls) {
+      if (call.table !== liveWorklogEntries) continue
+      expect(readWhereSql(call.where).sql.toLowerCase()).toContain('user_id')
+    }
 
     // And the write REPEATS it rather than trusting the read. This is the
     // assertion a behaviour test cannot make: with the predicate dropped the

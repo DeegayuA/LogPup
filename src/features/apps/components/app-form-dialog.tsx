@@ -70,6 +70,8 @@ type FormState = {
   description: string
   repoUrl: string
   techTags: string[]
+  /** What people call this project instead of its name. See app-aliases.ts. */
+  aliases: string[]
   status: Status
   /** `NO_LEAD` sentinel or a user id — never an empty string. */
   leadId: string
@@ -86,6 +88,7 @@ const emptyState: FormState = {
   description: '',
   repoUrl: '',
   techTags: [],
+  aliases: [],
   status: 'active',
   leadId: NO_LEAD,
   pmId: '',
@@ -96,6 +99,9 @@ export type AppFormInitialValues = {
   description?: string | null
   repoUrl?: string | null
   techTags: string[]
+  /** Optional so a caller that predates the field still compiles and opens
+   *  the dialog with an empty list rather than an undefined one. */
+  aliases?: string[] | null
   status: Status
   leadId?: string | null
   /** Always present in practice — apps.pm_id is NOT NULL — but not typed as
@@ -111,6 +117,7 @@ function toFormState(values?: AppFormInitialValues): FormState {
     description: values.description ?? '',
     repoUrl: values.repoUrl ?? '',
     techTags: [...values.techTags],
+    aliases: [...(values.aliases ?? [])],
     status: values.status,
     leadId: values.leadId ?? NO_LEAD,
     pmId: values.pmId,
@@ -375,6 +382,10 @@ export function AppFormDialog({
               description: form.description,
               repoUrl: normalizedRepoUrl || undefined,
               techTags: form.techTags,
+              // Always sent in edit mode, for the same reason as description:
+              // buildAppUpdate only touches keys that are present, so omitting
+              // it would make removing the last alias impossible.
+              aliases: form.aliases,
               status: form.status,
               // Explicit null (not undefined) so "no lead" actually CLEARS the
               // column — buildAppUpdate only touches keys that are present.
@@ -386,6 +397,7 @@ export function AppFormDialog({
               description: form.description || undefined,
               repoUrl: normalizedRepoUrl || undefined,
               techTags: form.techTags,
+              aliases: form.aliases,
               status: form.status,
               leadId: form.leadId === NO_LEAD ? undefined : form.leadId,
               pmId: form.pmId,
@@ -632,6 +644,27 @@ export function AppFormDialog({
               error={errors.techTags}
               knownTags={knownTechTags}
             />
+          </div>
+          {/* WHAT PEOPLE CALL IT. Work logs are written in shorthand — "ML model
+              for SGX 2h", "CC deployment" — and until this field existed those
+              lines recorded the hours and lost the project, which is the worst
+              shape the defect can take: the row looks complete and only the
+              per-project totals are quietly short. Acronyms the name gives up on
+              its own (CareCode → CC) are derived without anybody typing them;
+              this is for the ones it does not. */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="app-aliases">Also called</Label>
+            <TechTagsInput
+              id="app-aliases"
+              value={form.aliases}
+              onChange={(aliases) => setField('aliases', aliases)}
+              error={errors.aliases}
+              knownTags={[]}
+            />
+            <p className="text-2xs text-muted-foreground">
+              Nicknames and client abbreviations people type in work logs — SGX, AV, CC. LogPup
+              already works out acronyms from the name itself; add the ones it cannot guess.
+            </p>
           </div>
           {/* Required — every app must have a PM, from the moment it's
               created. No "No PM" item (unlike Lead below): there is nothing

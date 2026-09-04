@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
+import { and, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/db'
 import { dailyWorklogs } from '@/db/schema'
@@ -55,11 +56,23 @@ export async function upsertDailyWorklog(
       userId: session.user.id,
       day: parsed.data.day,
       percent: parsed.data.percent,
+      // 'self' — A PERSON IS TYPING. This is the stamp that makes auto-scoring
+      // safe: syncAutoScore refuses to touch a row marked 'self', so the moment
+      // somebody scores their own day by hand, the derived score stops
+      // competing with them for that number — permanently, and for every later
+      // hour they log against it. Set on BOTH paths, so correcting a derived
+      // score also claims it.
+      scoreSource: 'self',
       note: noteValue,
     })
     .onConflictDoUpdate({
       target: [dailyWorklogs.userId, dailyWorklogs.day],
-      set: { percent: parsed.data.percent, note: noteValue, updatedAt: new Date() },
+      set: {
+        percent: parsed.data.percent,
+        scoreSource: 'self',
+        note: noteValue,
+        updatedAt: new Date(),
+      },
     })
 
   // The percentage goes into the metadata but the NOTE never does: the
@@ -84,4 +97,55 @@ export async function upsertDailyWorklog(
   revalidatePath('/worklog')
 
   return ok({ day: parsed.data.day })
+}
+
+const noteInput = z.object({
+  day: z.string().regex(WORK_DAY_PATTERN, 'That is not a day'),
+  note: z.string().trim().max(4000, 'That note is too long').nullable(),
+})
+
+/**
+ * Write a day's NOTE without saying anything about its score.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM upsertDailyWorklog. Since scores can be
+ * derived from hours, a person can legitimately describe a day in words and
+ * never state a number for it — the number comes from the hours they logged.
+ * `upsertDailyWorklog` cannot serve that: it requires a percent (the column is
+ * NOT NULL) and it stamps `score_source = 'self'`, which would mark a derived
+ * number as the person's own claim and permanently stop it being recomputed.
+ *
+ * So this touches ONE column. It also deliberately does NOT insert: a row with
+ * a note and no percent cannot exist, and inventing a percent here to make one
+ * would be the exact fabrication `score_source` was added to prevent. The
+ * caller writes the day's hours first — which creates the row through
+ * auto-scoring — and then writes the note onto it.
+ *
+ * Self only, like every other write in this file. No `targetUserId`, ever: the
+ * note is what somebody wrote about their own day.
+ */
+export async function setDayNote(
+  day: string,
+  note: string | null,
+): Promise<ActionResult<void>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+
+  const parsed = noteInput.safeParse({ day, note })
+  if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  const noteValue = parsed.data.note?.trim() ? parsed.data.note.trim() : null
+
+  const updated = await db
+    .update(dailyWorklogs)
+    .set({ note: noteValue, updatedAt: new Date() })
+    .where(and(eq(dailyWorklogs.userId, session.user.id), eq(dailyWorklogs.day, parsed.data.day)))
+    .returning({ day: dailyWorklogs.day })
+
+  // Zero rows means the day has no record yet — no hours were saved and no
+  // score was given — so there is nothing for a note to hang on. Said plainly
+  // rather than silently succeeding, because a lost note is invisible.
+  if (updated.length === 0) return err('That day has nothing recorded to attach a note to')
+
+  revalidatePath('/worklog')
+  return ok(undefined)
 }

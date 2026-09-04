@@ -16,6 +16,9 @@ import {
   type FiledAbsence,
 } from '@/features/worklog/components/declare-absence-dialog'
 import { ABSENCE_KIND_LABELS } from '@/features/worklog/absence-kinds'
+import { autoScoreFromHours } from '@/features/worklog/auto-score'
+import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
+import type { AliasedApp } from '@/features/apps/app-aliases'
 import {
   describeLine,
   lineIntent,
@@ -25,7 +28,7 @@ import {
 } from '@/features/worklog/entry-language'
 import { buildEntryPayload, entryFormProblem } from '@/features/worklog/entry-form'
 import { createWorklogEntry } from '@/features/worklog/entry-actions'
-import { upsertDailyWorklog } from '@/features/worklog/actions'
+import { setDayNote, upsertDailyWorklog } from '@/features/worklog/actions'
 import { createAbsence } from '@/features/worklog/absence-actions'
 import { readCatchUpText, type CatchUpDayFacts } from '@/features/worklog/catch-up-actions'
 import {
@@ -117,7 +120,8 @@ export function LogBox({
 }: {
   /** The selected day — what a one-line entry with no date is about. */
   day: string
-  apps: { id: string; name: string }[]
+  /** Projects, with the nicknames they answer to — see app-aliases.ts. */
+  apps: AliasedApp[]
   /**
    * Apps the suggestion chips may PROMOTE — defaults to `apps`. The parser
    * matches the full list either way, so any project is reachable by typing its
@@ -125,7 +129,7 @@ export function LogBox({
    * assignment should not meet three alphabetically-first guest projects styled
    * exactly like their own.
    */
-  suggestFrom?: { id: string; name: string }[]
+  suggestFrom?: AliasedApp[]
   tasks: LoggableTask[]
   /** The day's existing note, so a score-only line does not erase it. */
   savedNote: string | null
@@ -153,7 +157,10 @@ export function LogBox({
   const [busy, setBusy] = React.useState(false)
   const boxRef = React.useRef<HTMLTextAreaElement>(null)
 
-  const appRefs = React.useMemo(() => apps.map((a) => ({ id: a.id, name: a.name })), [apps])
+  const appRefs = React.useMemo(
+    () => apps.map((a) => ({ id: a.id, name: a.name, aliases: a.aliases })),
+    [apps],
+  )
   const suggestRefs = React.useMemo(
     () => (suggestFrom ?? apps).map((a) => ({ id: a.id, name: a.name })),
     [suggestFrom, apps],
@@ -303,6 +310,29 @@ export function LogBox({
     )
   }
 
+  /**
+   * Put a project on a row the reader could not place.
+   *
+   * THE MISSING HALF OF THE FENCE. catch-up-parse.ts drops a project it was not
+   * shown and lists the phrase under "could not place", which is the honest
+   * thing to do — but on its own it left somebody reading "Solar app" in the
+   * unresolved list with the hours sitting right there and no way to attach
+   * them. Every row carries the picker, so a wrong match is as correctable as a
+   * missing one, by hand, before anything is saved.
+   */
+  function setEntryApp(iso: string, index: number, appId: string | null) {
+    setReview((prev) =>
+      prev.map((row) =>
+        row.day === iso
+          ? {
+              ...row,
+              entries: row.entries.map((entry, i) => (i === index ? { ...entry, appId } : entry)),
+            }
+          : row,
+      ),
+    )
+  }
+
   function discard() {
     setReading(null)
     setReview([])
@@ -327,11 +357,11 @@ export function LogBox({
       if (!res.ok) return { ok: false, error: res.error }
     }
 
-    if (row.percent !== null) {
-      const res = await upsertDailyWorklog(row.day, row.percent, row.note)
-      if (!res.ok) return { ok: false, error: res.error }
-    }
-
+    /* HOURS BEFORE THE SCORE, now — the reverse of what this did originally.
+       Writing the entries is what creates the day's record, because saving
+       hours derives a score from them (auto-score.ts). A day the person left
+       unscored therefore has no row until its entries land, and the note write
+       below has nothing to attach to until then. */
     for (const entry of row.entries) {
       const res = await createWorklogEntry({
         day: row.day,
@@ -343,6 +373,21 @@ export function LogBox({
         // table looking like something the person typed out.
         source: 'ai_suggested',
       })
+      if (!res.ok) return { ok: false, error: res.error }
+    }
+
+    if (row.percent !== null) {
+      // A number the person picked. upsertDailyWorklog stamps it 'self', which
+      // also stops the derivation ever overwriting it.
+      const res = await upsertDailyWorklog(row.day, row.percent, row.note)
+      if (!res.ok) return { ok: false, error: res.error }
+    } else if (row.note) {
+      /* NO SCORE, BUT WORDS. The score is coming from the hours just saved, so
+         claiming it as the person's own would be a lie — but the note they
+         typed in this card is theirs and was being silently dropped, because
+         nothing else writes it. setDayNote touches that one column and says
+         nothing about the score. */
+      const res = await setDayNote(row.day, row.note)
       if (!res.ok) return { ok: false, error: res.error }
     }
 
@@ -387,7 +432,17 @@ export function LogBox({
   }
 
   const outstanding = review.filter((row) => !row.done && hasSomethingToSave(row))
-  const unscored = review.filter((row) => !row.done && row.percent === null && !row.absence)
+  /* Days that will STILL have no score after saving. A day with hours scores
+     itself, so counting it here was the warning crying wolf about the common
+     case — which is how a person stops reading the one day it is really about:
+     the day they described in words and put no hours against. */
+  const unscored = review.filter(
+    (row) =>
+      !row.done &&
+      row.percent === null &&
+      !row.absence &&
+      derivedScoreFor(row, reading?.facts.find((f) => f.day === row.day)) === null,
+  )
 
   return (
     <section
@@ -634,9 +689,10 @@ export function LogBox({
               this whole feature exists to clear. */}
           {unscored.length > 0 ? (
             <HelpNote>
-              {unscored.length} of these {unscored.length === 1 ? 'days is' : 'days are'} unscored.
-              Hours alone leave a day on the unlogged list — the score is the day record, and it is
-              yours to give, so LogPup will not guess it.
+              {unscored.length} of these {unscored.length === 1 ? 'days has' : 'days have'} no
+              hours to score from — you described {unscored.length === 1 ? 'it' : 'them'} in words
+              only. Days with hours score themselves; {unscored.length === 1 ? 'this one needs' : 'these need'}{' '}
+              a number, or {unscored.length === 1 ? 'it stays' : 'they stay'} on the unlogged list.
             </HelpNote>
           ) : null}
 
@@ -647,11 +703,16 @@ export function LogBox({
                 <span
                   key={phrase}
                   className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-2xs text-amber-700 dark:text-amber-400"
-                  title="Nothing on your project list answers to this — the note keeps the words"
+                  title="No project on your list answers to this — your words are kept in the note"
                 >
                   {phrase}
                 </span>
               ))}
+              {/* Named as fixable rather than left as a complaint. The hours are
+                  already on the right day; only the attribution is missing. */}
+              <span className="text-2xs text-muted-foreground">
+                — your words are kept. Set the project on the row itself if one fits.
+              </span>
             </div>
           ) : null}
 
@@ -724,11 +785,33 @@ export function LogBox({
                           <span className="rounded bg-tag-discussion/15 px-1 py-px text-2xs text-tag-discussion">
                             {entry.category}
                           </span>
-                          {entry.appId ? (
-                            <span className="rounded bg-event-3/20 px-1 py-px text-2xs">
-                              {apps.find((a) => a.id === entry.appId)?.name ?? 'Project'}
-                            </span>
-                          ) : null}
+                          {/* THE PROJECT IS EDITABLE, always — not a chip when
+                              the reader matched one and nothing when it did
+                              not. Both cases are a guess about somebody's
+                              afternoon, and the one that needs correcting most
+                              is the confident wrong one. */}
+                          <select
+                            value={entry.appId ?? ''}
+                            disabled={row.done}
+                            onChange={(event) =>
+                              setEntryApp(row.day, index, event.target.value || null)
+                            }
+                            aria-label="Project for this entry"
+                            className={cn(
+                              'max-w-40 shrink-0 cursor-pointer truncate rounded border-0 py-px pl-1 pr-4 text-2xs outline-none',
+                              'focus-visible:ring-2 focus-visible:ring-ring',
+                              entry.appId
+                                ? 'bg-event-3/20 text-foreground'
+                                : 'bg-muted/60 text-muted-foreground',
+                            )}
+                          >
+                            <option value="">No project</option>
+                            {apps.map((app) => (
+                              <option key={app.id} value={app.id}>
+                                {app.name}
+                              </option>
+                            ))}
+                          </select>
                           <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
                             {entry.note ?? '—'}
                           </span>
@@ -757,35 +840,59 @@ export function LogBox({
                     className="min-h-12 text-2xs"
                   />
 
-                  {/* THE SCORE IS THEIRS. It starts empty unless their own words
-                      carried one, and no amount of hours fills it in. */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-2xs text-muted-foreground">Score this day:</span>
-                    {SCORE_PRESETS.map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        disabled={row.done}
-                        onClick={() =>
-                          patch(row.day, { percent: row.percent === value ? null : value })
-                        }
-                        className={cn(
-                          'rounded border px-1.5 py-0.5 font-mono text-2xs cursor-pointer',
-                          'transition-colors motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                          row.percent === value
-                            ? 'border-primary bg-primary/15 text-primary'
-                            : 'border-border/60 text-muted-foreground hover:border-border hover:text-foreground',
-                        )}
-                      >
-                        {value}%
-                      </button>
-                    ))}
-                    {row.percent === null ? (
-                      <span className="text-2xs text-amber-600 dark:text-amber-400">
-                        unscored — the day stays on the list
-                      </span>
-                    ) : null}
-                  </div>
+                  {/* THE SCORE, AND WHERE IT IS COMING FROM.
+                      A day with hours no longer needs a number picked for it:
+                      saving the entries derives one (auto-score.ts), so this
+                      card says WHAT that number will be rather than demanding
+                      a tap and warning about a consequence that no longer
+                      happens. A day with no hours has nothing to derive from,
+                      so for that one the pills really are the only way to clear
+                      it, and the warning stays. The pills remain either way —
+                      picking one marks the score as the person's own and stops
+                      the derivation touching it again. */}
+                  {(() => {
+                    const derived = derivedScoreFor(row, facts)
+                    const chosen = row.percent
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-2xs text-muted-foreground">
+                          {chosen === null && derived !== null ? 'Scores itself at' : 'Score this day:'}
+                        </span>
+                        {chosen === null && derived !== null ? (
+                          <span
+                            className="rounded bg-chart-1/15 px-1.5 py-0.5 font-mono text-2xs font-semibold text-chart-1"
+                            title="Worked out from the hours on this day when you save it"
+                          >
+                            {derived}% from your hours
+                          </span>
+                        ) : null}
+                        {SCORE_PRESETS.map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            disabled={row.done}
+                            onClick={() =>
+                              patch(row.day, { percent: chosen === value ? null : value })
+                            }
+                            className={cn(
+                              'rounded border px-1.5 py-0.5 font-mono text-2xs cursor-pointer',
+                              'transition-colors motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                              chosen === value
+                                ? 'border-primary bg-primary/15 text-primary'
+                                : 'border-border/60 text-muted-foreground hover:border-border hover:text-foreground',
+                            )}
+                          >
+                            {value}%
+                          </button>
+                        ))}
+                        {chosen === null && derived === null ? (
+                          <span className="text-2xs text-amber-600 dark:text-amber-400">
+                            no hours to score from — pick one, or the day stays on the list
+                          </span>
+                        ) : null}
+                      </div>
+                    )
+                  })()}
                 </li>
               )
             })}
@@ -798,6 +905,27 @@ export function LogBox({
 
 function dayLabel(iso: string): string {
   return format(new Date(`${iso}T12:00:00`), 'EEEE, MMMM d')
+}
+
+/**
+ * The score this day's proposed hours will produce when saved, or null when
+ * they will produce none.
+ *
+ * THE SAME TWO FUNCTIONS THE SERVER USES, on the same inputs, so the number
+ * shown here and the number written afterwards cannot disagree — a preview that
+ * quoted a different figure from the one that lands would be worse than no
+ * preview. `fraction` is the day's owed share as coverage computed it, which is
+ * already holiday- and leave-folded; a day at 0 has no scheduled length and
+ * therefore nothing to derive from, which is exactly what `null` means here.
+ */
+function derivedScoreFor(
+  row: ReviewDay,
+  facts: CatchUpDayFacts | undefined,
+): number | null {
+  if (row.entries.length === 0) return null
+  if (!facts || facts.fraction <= 0) return null
+  const minutes = row.entries.reduce((total, entry) => total + entry.minutes, 0)
+  return autoScoreFromHours(minutes, scheduledMinutesForFraction(facts.fraction))
 }
 
 /** A day nobody scored, with no rows left and no leave to file, writes nothing. */

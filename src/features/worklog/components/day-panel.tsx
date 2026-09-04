@@ -6,8 +6,6 @@ import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { DayHoursCard } from '@/features/worklog/components/day-hours-card'
-import { WorklogForm } from '@/features/worklog/components/worklog-form'
-import { draftWorklogNote, type WorklogDraft } from '@/features/worklog/draft-actions'
 import {
   meterOrigin,
   useAiMeter,
@@ -15,6 +13,7 @@ import {
 } from '@/features/gemini/components/ai-meter-provider'
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
 import { glanceAtDay } from '@/features/worklog/day-summary'
+import type { ScoreSource } from '@/features/worklog/auto-score'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
 import type { PickerApp, UserAssignedApp } from '@/features/worklog/queries'
 
@@ -46,17 +45,23 @@ import type { PickerApp, UserAssignedApp } from '@/features/worklog/queries'
 export function DayPanel({
   day,
   initial,
+  scoreSource,
   entries,
   scheduledMinutes,
   assignedApps,
   otherApps = [],
   tasks,
   canEdit,
-  noteAiEnabled,
   entriesAiEnabled,
 }: {
   day: string
   initial: { percent: number; note: string | null } | null
+  /**
+   * Who said the score. 'from_hours' earns a chip beside it — a number derived
+   * by division must never render identically to one the person typed.
+   * Defaults to 'self' so a day with no row at all is never mislabelled.
+   */
+  scoreSource?: ScoreSource
   entries: WorklogEntryRow[]
   scheduledMinutes: number | null
   assignedApps: UserAssignedApp[]
@@ -68,20 +73,29 @@ export function DayPanel({
   /** Tasks a task entry may name — passed straight through to the hours card. */
   tasks: LoggableTask[]
   canEdit: boolean
-  noteAiEnabled: boolean
+  /**
+   * Whether the NOTE drafter is switched on for this person.
+   *
+   * Deliberately unread here. It stays in the signature because the pref is
+   * per-feature and the page passes both, and because a future surface in this
+   * panel may want it — but the note box lives in the log box at the top of the
+   * page now, so drafting prose from here would have nowhere to put it.
+   */
+  noteAiEnabled?: boolean
   entriesAiEnabled: boolean
 }) {
   const [filling, setFilling] = React.useState(false)
-  const [noteDraft, setNoteDraft] = React.useState<WorklogDraft | null>(null)
   const [entryDrafts, setEntryDrafts] = React.useState<DraftedEntry[] | null>(null)
   const [evidence, setEvidence] = React.useState(0)
-  // Bumped on every fill so WorklogForm re-seeds from the new draft. Its
-  // initialDraft is an OPENING VALUE, not a controlled prop — the person edits
-  // the box afterwards, and re-imposing the draft each render would fight them
-  // mid-sentence.
-  const [fillCount, setFillCount] = React.useState(0)
 
-  const anyAi = noteAiEnabled || entriesAiEnabled
+  /* HOURS ONLY, now that the note form has left this panel.
+     "Fill my day" used to draft the note and the hours together, because both
+     landed here. The note box is in the log box at the top of the page, so
+     drafting prose from here would produce a paragraph with nowhere to go — and
+     would spend somebody's Gemini quota to do it. `noteAiEnabled` still arrives
+     as a prop and is deliberately not consulted: the note drafter is reached
+     from the box that owns notes. */
+  const anyAi = entriesAiEnabled
   const meter = useAiMeter()
 
   // ASSIGNED FIRST, then the rest of the studio, for the one-line box and the
@@ -115,60 +129,32 @@ export function DayPanel({
     const origin = meterOrigin(source)
     setFilling(true)
     try {
-      // Both halves at once: independent reads, and running them in series
-      // would make one button feel like two.
-      //
-      // TWO meters, not one, because these are two registry features with
-      // separate estimates, separate model choices and separate ledger slugs.
-      // Folding them into one card would report a cost under a feature name
-      // that only paid for half of it — and a dock built for concurrency is
-      // exactly what makes showing both affordable.
-      const [noteRes, entryRes] = await Promise.all([
-        noteAiEnabled
-          ? meter.track('worklog-draft', origin, () => draftWorklogNote(day))
-          : null,
-        entriesAiEnabled
-          ? meter.track('worklog-entries-draft', origin, () => draftWorklogEntries(day))
-          : null,
-      ])
+      // ONE call now, and one meter. This used to run the note drafter beside
+      // the hours drafter because both landed in this panel; the note box has
+      // moved to the log box at the top of the page, so drafting prose here
+      // would spend a request producing a paragraph with nowhere to put it.
+      const entryRes = await meter.track('worklog-entries-draft', origin, () =>
+        draftWorklogEntries(day),
+      )
 
-      let filledNote = false
-      let filledRows = 0
-
-      if (noteRes) {
-        if (noteRes.ok) {
-          setNoteDraft(noteRes.data)
-          filledNote = noteRes.data.note.trim().length > 0
-        } else {
-          toast.error(noteRes.error)
-        }
+      if (!entryRes.ok) {
+        toast.error(entryRes.error)
+        return
       }
 
-      if (entryRes) {
-        if (entryRes.ok) {
-          setEntryDrafts(entryRes.data.entries)
-          setEvidence(entryRes.data.evidenceCount)
-          filledRows = entryRes.data.entries.length
-        } else {
-          toast.error(entryRes.error)
-        }
-      }
-
-      setFillCount((n) => n + 1)
+      setEntryDrafts(entryRes.data.entries)
+      setEvidence(entryRes.data.evidenceCount)
 
       // Say what actually happened rather than "Done". An empty day is a quiet
       // day, not a failure, and somebody who sees nothing appear needs to know
       // which of the two it was.
-      if (!filledNote && filledRows === 0) {
+      const filledRows = entryRes.data.entries.length
+      if (filledRows === 0) {
         toast.info('LogPup recorded nothing for that day — nothing to suggest.')
       } else {
-        const parts = [
-          filledNote ? 'drafted your note' : null,
-          filledRows > 0
-            ? `suggested ${filledRows} ${filledRows === 1 ? 'entry' : 'entries'}`
-            : null,
-        ].filter(Boolean)
-        toast.success(`Read your day — ${parts.join(' and ')}. Review before saving.`)
+        toast.success(
+          `Suggested ${filledRows} ${filledRows === 1 ? 'entry' : 'entries'} — review before saving.`,
+        )
       }
     } catch {
       toast.error('Could not read your day right now — try again')
@@ -198,71 +184,88 @@ export function DayPanel({
         ) : null}
       </div>
 
-      {/* THE ONE FIELD MOVED OUT, to the log box at the top of the page — see
-          log-box.tsx. It was here, and a second copy of the whole day form sat
-          in the catch-up ledger several screens below, so how much work it was
-          to log a week depended on which of the two you found first. What is
-          left here is the same day seen IN DETAIL: what is already logged, and
-          the full controls for correcting it. Still collapsed by default,
-          because somebody coming back to yesterday came to read one number. */}
+      {/* THE FACTS, IN FRONT, ALWAYS.
+          The one-line field moved out of this panel to the log box at the top
+          of the page, and what was left behind was a header, a button and a
+          collapsed <details> — a card that rendered as an empty box beside a
+          full calendar. The collapse earned its place while the fast path sat
+          directly above it; with the fast path gone it was hiding the only
+          content this panel has.
 
-      {/* Open only for somebody who cannot type in the box above — they have
-          no fast path, so the detail IS their view of the day.
-
-          It used to also open for any day with content, which meant every day
-          you ever came back to. That defeated the collapse entirely: returning
-          to yesterday put a slider, four preset pills, a chip row, a textarea,
-          a duration box and two selects in front of a person who came to read
-          one number. Now the label carries what was logged and the controls
-          stay folded until somebody wants to correct something. */}
-      <details open={!canEdit}>
-        <summary className="cursor-pointer list-none text-2xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
-          {glance.empty ? (
-            <span>The day in detail</span>
-          ) : (
-            /* The facts first, the affordance last. A person checking what
-               they logged gets their answer from the closed state and never
-               opens this at all. */
-            <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              {glance.percent !== null ? (
-                <span className="font-mono text-xs font-bold tabular-nums text-primary">
+          So the day's numbers are stated outright and the controls sit under
+          them. Somebody coming back to yesterday reads the answer without
+          opening anything, which is what the collapsed summary was for — it
+          just no longer has to summarise something hidden. */}
+      <dl className="grid grid-cols-3 gap-2">
+        <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2">
+          <dt className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
+            Score
+          </dt>
+          <dd className="flex flex-wrap items-baseline gap-1.5">
+            {glance.percent === null ? (
+              <span className="text-xs text-muted-foreground">Not scored</span>
+            ) : (
+              <>
+                <span className="font-mono text-base font-bold tabular-nums text-primary">
                   {glance.percent}%
                 </span>
-              ) : null}
-              {glance.hours ? (
-                <span className="font-mono tabular-nums text-foreground">{glance.hours}h</span>
-              ) : null}
-              {glance.entryCount > 0 ? (
-                <span className="font-mono tabular-nums">
-                  {glance.entryCount} {glance.entryCount === 1 ? 'entry' : 'entries'}
-                </span>
-              ) : null}
-              {glance.snippet ? (
-                /* min-w-0 + truncate so a long note shortens instead of
-                   pushing "Edit" off the end of the row on a narrow screen. */
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                  {glance.snippet}
-                </span>
-              ) : null}
-              <span className="shrink-0 underline decoration-dotted underline-offset-2">Edit</span>
-            </span>
-          )}
-        </summary>
-        <div className="mt-3 flex flex-col gap-3">
-      <WorklogForm
-        // Keyed by day AND by fill, so a new draft re-seeds the box while
-        // paging to another day still starts from that day's saved state.
-        key={`${day}-${fillCount}`}
-        day={day}
-        initial={initial}
-        // Its own Draft button is suppressed while this panel offers one:
-        // two triggers doing overlapping work is what this panel removes.
-        aiDraftEnabled={noteAiEnabled && !anyAi}
-        initialDraft={noteDraft}
-        assignedApps={assignedApps}
-        otherApps={otherApps}
-      />
+                {/* SAID OUT LOUD WHEN IT WAS DERIVED. A score computed by
+                    dividing hours by a scheduled day is not a claim the person
+                    made, and rendering it identically to one they typed is the
+                    single real harm in auto-scoring. See auto-score.ts. */}
+                {scoreSource === 'from_hours' ? (
+                  <span
+                    className="rounded bg-chart-1/15 px-1.5 py-px font-sans text-2xs text-chart-1"
+                    title="Worked out from the hours below. Score it yourself to replace it."
+                  >
+                    from your hours
+                  </span>
+                ) : null}
+              </>
+            )}
+          </dd>
+        </div>
+        <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2">
+          <dt className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
+            Hours
+          </dt>
+          <dd className="font-mono text-base font-bold tabular-nums text-foreground">
+            {glance.hours ? `${glance.hours}h` : <span className="text-muted-foreground">—</span>}
+          </dd>
+        </div>
+        <div className="flex flex-col gap-0.5 rounded-lg border border-border/50 bg-muted/20 px-2.5 py-2">
+          <dt className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
+            Entries
+          </dt>
+          <dd className="font-mono text-base font-bold tabular-nums text-foreground">
+            {glance.entryCount > 0 ? (
+              glance.entryCount
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
+          </dd>
+        </div>
+      </dl>
 
+      {glance.snippet ? (
+        <p className="rounded-lg border border-border/50 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
+          {glance.snippet}
+        </p>
+      ) : null}
+
+      {/* THE SCORE-AND-NOTE FORM IS GONE FROM HERE.
+          It was the third place on one screen to write the same two things.
+          The log box at the top of the page takes a score, a note, hours and a
+          whole week of them in one field; this panel repeated all of it as a
+          slider, four preset pills, a project chip row and a textarea, under a
+          heading that said the panel was for reading what is already recorded.
+          Two of the three even disagreed — this one refused a note without a
+          score ("Score the day first"), which stopped being true the moment
+          hours started scoring their own day.
+
+          What is left is the half that is genuinely detail and has nowhere else
+          to live: the hours, itemised, with the controls to correct them. */}
+      <div className="flex flex-col gap-3">
       <DayHoursCard
         day={day}
         entries={entries}
@@ -284,8 +287,7 @@ export function DayPanel({
         suggestions={anyAi ? entryDrafts : null}
         evidence={evidence}
       />
-        </div>
-      </details>
+      </div>
     </div>
   )
 }

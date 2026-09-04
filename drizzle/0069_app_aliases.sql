@@ -1,0 +1,29 @@
+-- apps.aliases — what people actually call a project.
+--
+-- Work logs are written in shorthand. "ML model for SGX 2h" is two hours on the
+-- Syntax Genie work; "bug fixes in Solar app" is Solarsim; "CC deployment" is
+-- CareCode. The matcher lowercased the full name and looked for a substring, so
+-- every one of those recorded the HOURS and lost the PROJECT — the worst shape
+-- a data defect can take, because the row looks complete and only the
+-- per-project totals are quietly short.
+--
+-- DERIVED WHERE IT CAN BE, STORED WHERE IT CANNOT.
+-- src/features/apps/app-aliases.ts derives acronyms from the name itself
+-- (CareCode -> CC, Attendance Web App -> AWA) and resolves unique prefixes
+-- (Solar -> Solarsim), all with no setup at all. This column exists for the
+-- ones no amount of reading the name produces: SGX for Syntax Genie, AV for
+-- Altavision. Those are facts about the client, not about the letters.
+--
+-- NOT NULL WITH AN EMPTY DEFAULT, so every existing row is correct the moment
+-- this lands and no backfill is needed. text[] rather than a join table: these
+-- are labels on one project, never entities in their own right, and nothing
+-- joins to them — app-aliases.ts reads the array and does the matching in pure
+-- code, which is also what makes the matching testable without a database.
+--
+-- NO UNIQUENESS. Two projects for the same client share a nickname all the
+-- time, and a constraint would make the honest data unrepresentable. Ambiguity
+-- is handled where it belongs: matchApp returns NOTHING when a term answers to
+-- more than one project, because attributing an afternoon to the wrong project
+-- is worse than leaving it unattributed — the unattributed case is the only one
+-- of the two anybody can see afterwards.
+ALTER TABLE "apps" ADD COLUMN IF NOT EXISTS "aliases" text[] DEFAULT '{}'::text[] NOT NULL;

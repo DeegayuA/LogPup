@@ -1,4 +1,5 @@
 import { ENTRY_MINUTES_MAX, type EntryCategory } from '@/features/worklog/entries'
+import { matchApp } from '@/features/apps/app-aliases'
 
 /**
  * One line of plain English becomes one hour entry.
@@ -109,7 +110,8 @@ export type ParsedEntryLine = {
   note: string
 }
 
-export type NamedRef = { id: string; name: string }
+/** `aliases` is read for projects only — see `matchApp` in app-aliases.ts. */
+export type NamedRef = { id: string; name: string; aliases?: readonly string[] }
 
 /**
  * Every duration spelling this understands, most specific first.
@@ -134,9 +136,15 @@ function escape(text: string): string {
 }
 
 /**
- * Longest name first, so "DERMS Mobile App" is not matched as "DERMS Web App"'s
- * shorter sibling and, more importantly, so a project whose name CONTAINS
- * another project's name resolves to the specific one.
+ * Longest name first, so a name that CONTAINS another name resolves to the
+ * specific one.
+ *
+ * TASKS ONLY, now. Projects go through `matchApp` (app-aliases.ts), which knows
+ * the same three tiers the catch-up reader is told about — stored alias,
+ * derived acronym, unique prefix — because "2h SGX" and "2h Solar app" were
+ * recording the hours and losing the project here exactly as they were there.
+ * A task carries no aliases and no acronym anybody says out loud, so it keeps
+ * this simpler rule.
  */
 function matchLongest(text: string, refs: readonly NamedRef[]): NamedRef | null {
   const haystack = text.toLowerCase()
@@ -202,7 +210,7 @@ export function parseEntryLine(
   }
 
   const task = matchLongest(text, refs.tasks ?? [])
-  const app = matchLongest(text, refs.apps ?? [])
+  const app = matchApp(text, refs.apps ?? [])?.app ?? null
 
   // Naming a task IS saying it was task work, and it is the stronger signal:
   // the words are a guess about intent, a named task is a reference to a real

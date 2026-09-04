@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmptyState } from '@/components/ui/empty-state'
 import { ApprovalActions } from '@/features/admin/components/approval-actions'
 import { listRecentAbsences } from '@/features/worklog/absence-queries'
+import { absenceKindLabel, exemptsWholeDay } from '@/features/worklog/absence-kinds'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
 
@@ -46,9 +47,25 @@ export default async function AdminAbsencesPage() {
                 <li key={a.id} className="flex flex-col gap-1.5 py-2 text-sm">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
                     <span className="font-medium">{a.userName}</span>
-                    <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                      {a.kind} · {a.startDate}
-                      {a.endDate !== a.startDate && ` to ${a.endDate}`} · {a.status}
+                    {/* THE LABEL, NOT THE ENUM. This printed `other_project`
+                        and `no_work_assigned` at whoever had to decide on it,
+                        and the vocabulary has since grown to fourteen kinds —
+                        `short_leave` and `half_day` among them. An approver who
+                        cannot tell a half day from annual leave at a glance is
+                        being asked to approve a string. */}
+                    <span className="text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {absenceKindLabel(a.kind)}
+                      </span>
+                      {!exemptsWholeDay(a.kind) ? (
+                        <span className="ml-1.5 rounded bg-muted px-1 py-px font-mono text-2xs">
+                          part day — still owes a log
+                        </span>
+                      ) : null}
+                      <span className="ml-1.5 font-mono tabular-nums">
+                        {a.startDate}
+                        {a.endDate !== a.startDate && ` to ${a.endDate}`} · {a.status}
+                      </span>
                     </span>
                   </div>
                   {a.reason ? (

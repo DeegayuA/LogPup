@@ -166,11 +166,14 @@ export async function readCatchUpText(text: string): Promise<ActionResult<CatchU
   // Assigned first, then the rest of the studio. The reader sees every project
   // either way — the order only decides which one wins a genuinely ambiguous
   // nickname, and somebody's own assignments are the better bet.
+  // `aliases` travels with each one: it is what turns "ML model for SGX" into a
+  // real project id, and a list without it is the list that lost the
+  // attribution in the first place.
   const apps = [
-    ...assignedApps.map((app) => ({ id: app.id, name: app.name })),
+    ...assignedApps.map((app) => ({ id: app.id, name: app.name, aliases: app.aliases })),
     ...allApps
       .filter((app) => !assignedApps.some((mine) => mine.id === app.id))
-      .map((app) => ({ id: app.id, name: app.name })),
+      .map((app) => ({ id: app.id, name: app.name, aliases: app.aliases })),
   ]
 
   const prompt = buildCatchUpPrompt({

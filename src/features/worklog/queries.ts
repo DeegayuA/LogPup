@@ -4,6 +4,7 @@ import { canHoldWork } from '@/features/people/removal-queries'
 import { absences, assignments, dailyWorklogs, orgHolidays, users, workSchedules } from '@/db/schema'
 import { liveApps } from '@/db/live'
 import type { ScheduleRow } from '@/features/worklog/schedules'
+import type { ScoreSource } from '@/features/worklog/auto-score'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { orgHolidaySet } from '@/features/worklog/org-holidays'
 
@@ -18,6 +19,12 @@ import { orgHolidaySet } from '@/features/worklog/org-holidays'
 export type WorklogRow = {
   day: string
   percent: number
+  /**
+   * Who said the percent — 'self' or 'from_hours'. Carried on every read so a
+   * DERIVED score can be labelled wherever it is shown. A division rendered as
+   * a self-assessment is the one real harm in auto-scoring; see auto-score.ts.
+   */
+  scoreSource: ScoreSource
   note: string | null
   updatedAt: Date
 }
@@ -65,6 +72,7 @@ export async function getMyWorklogs(userId: string, days: number): Promise<Workl
     .select({
       day: dailyWorklogs.day,
       percent: dailyWorklogs.percent,
+      scoreSource: dailyWorklogs.scoreSource,
       note: dailyWorklogs.note,
       updatedAt: dailyWorklogs.updatedAt,
     })
@@ -89,6 +97,7 @@ export async function getMyWorklogsInRange(
     .select({
       day: dailyWorklogs.day,
       percent: dailyWorklogs.percent,
+      scoreSource: dailyWorklogs.scoreSource,
       note: dailyWorklogs.note,
       updatedAt: dailyWorklogs.updatedAt,
     })
@@ -118,8 +127,16 @@ export async function listAppTagTargets(): Promise<{ name: string; slug: string 
   return db.select({ name: liveApps.name, slug: liveApps.slug }).from(liveApps)
 }
 
-/** One row of the any-project picker — id for the entry writes, name for the tag. */
-export type PickerApp = { id: string; name: string; slug: string }
+/**
+ * One row of the any-project picker — id for the entry writes, name for the
+ * tag, and `aliases` for everything people type INSTEAD of the name.
+ *
+ * The aliases travel with the picker rather than being fetched separately
+ * because the same list feeds three readers — the instant one-line parser, the
+ * catch-up prompt, and the review card's project select — and a vocabulary only
+ * one of them had is a vocabulary the other two disagree with.
+ */
+export type PickerApp = { id: string; name: string; slug: string; aliases: string[] }
 
 /**
  * Every ACTIVE project, for the my-zone pickers on /worklog.
@@ -136,7 +153,12 @@ export type PickerApp = { id: string; name: string; slug: string }
  */
 export async function listAllLiveAppsForPicker(): Promise<PickerApp[]> {
   return db
-    .select({ id: liveApps.id, name: liveApps.name, slug: liveApps.slug })
+    .select({
+      id: liveApps.id,
+      name: liveApps.name,
+      slug: liveApps.slug,
+      aliases: liveApps.aliases,
+    })
     .from(liveApps)
     .where(eq(liveApps.status, 'active'))
     .orderBy(asc(liveApps.name))
@@ -150,6 +172,7 @@ export async function getTeamWorklogs(fromIso: string, toIso: string): Promise<T
       avatarUrl: users.avatarUrl,
       day: dailyWorklogs.day,
       percent: dailyWorklogs.percent,
+      scoreSource: dailyWorklogs.scoreSource,
       note: dailyWorklogs.note,
       updatedAt: dailyWorklogs.updatedAt,
     })
@@ -308,6 +331,8 @@ export type TeamAbsenceRange = {
   /** INCLUSIVE, and so is `endDate` — see the `absences` table comment. */
   startDate: string
   endDate: string
+  /** Needed to tell a whole day off from a half day — see exemptsWholeDay. */
+  kind: MyAbsence['kind']
 }
 
 /**
@@ -327,6 +352,11 @@ export async function getTeamApprovedAbsences(
       userId: absences.userId,
       startDate: absences.startDate,
       endDate: absences.endDate,
+      // The KIND travels too, so callers can drop the part-day ones before
+      // they reach absenceDays. Without it an approved half day painted a
+      // whole day as leave on the team strip and exempted it in the nightly
+      // nudge — a day the person actually worked half of and still owes.
+      kind: absences.kind,
     })
     .from(absences)
     .where(
@@ -395,6 +425,8 @@ export type UserAssignedApp = {
   slug: string
   role: string
   allocationPct: number
+  /** What people call it instead of its name — see PickerApp. */
+  aliases: string[]
 }
 
 /**
@@ -407,6 +439,7 @@ export async function getMyAssignedApps(userId: string): Promise<UserAssignedApp
       id: liveApps.id,
       name: liveApps.name,
       slug: liveApps.slug,
+      aliases: liveApps.aliases,
       role: assignments.role,
       allocationPct: assignments.allocationPct,
     })
@@ -421,6 +454,7 @@ export async function getMyAssignedApps(userId: string): Promise<UserAssignedApp
         id: liveApps.id,
         name: liveApps.name,
         slug: liveApps.slug,
+        aliases: liveApps.aliases,
       })
       .from(liveApps)
       .where(eq(liveApps.status, 'active'))
@@ -431,6 +465,7 @@ export async function getMyAssignedApps(userId: string): Promise<UserAssignedApp
       id: a.id,
       name: a.name,
       slug: a.slug,
+      aliases: a.aliases,
       role: 'Contributor',
       allocationPct: 0,
     }))

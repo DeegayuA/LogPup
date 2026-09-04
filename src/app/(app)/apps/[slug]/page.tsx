@@ -422,6 +422,11 @@ export default async function AppDetailPage(props: {
                     description: app.description,
                     repoUrl: app.repoUrl,
                     techTags: app.techTags,
+                    // SEEDED, NOT OPTIONAL IN PRACTICE. Edit mode always sends
+                    // aliases so the last one can be removed, which means a
+                    // dialog opened without them would save an empty array and
+                    // silently erase every nickname the project had.
+                    aliases: app.aliases,
                     status: app.status,
                     leadId: app.leadId,
                     pmId: app.pmId,
@@ -831,6 +836,9 @@ export default async function AppDetailPage(props: {
                   description: app.description,
                   repoUrl: app.repoUrl,
                   techTags: app.techTags,
+                  // See the sibling dialog above: without this, saving from the
+                  // edit form would erase the project's nicknames.
+                  aliases: app.aliases,
                   status: app.status,
                   leadId: app.leadId,
                   pmId: app.pmId,

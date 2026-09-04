@@ -12,6 +12,11 @@ export const appCreateInput = z.object({
   description: z.string().max(500).optional(),
   repoUrl: z.union([z.url(), z.literal('')]).optional(),
   techTags: z.array(z.string().min(1)).max(10).default([]),
+  // What people call this project instead of its name — "SGX", "syntax genie".
+  // Trimmed, because an alias with a trailing space matches nothing and looks
+  // identical to one that works. Twelve is generous: past a dozen nicknames the
+  // project has an identity problem no field can fix.
+  aliases: z.array(z.string().trim().min(1).max(60)).max(12).default([]),
   status: z.enum(['active', 'paused', 'archived']).default('active'),
   leadId: z.uuid().optional(),
   // Required — every app must have a PM from the moment it is created,

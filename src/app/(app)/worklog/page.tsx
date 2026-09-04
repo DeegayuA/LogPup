@@ -16,9 +16,11 @@ import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { DayPanel } from '@/features/worklog/components/day-panel'
 import {
   getMyEntryDaysInRange,
+  getMyEntryTotalsInRange,
   listDayEntriesForDisplay,
   listLoggableTasks,
 } from '@/features/worklog/entry-queries'
+import { LoggedDaysList } from '@/features/worklog/components/logged-days-list'
 import { scheduledMinutesForFraction } from '@/features/worklog/schedules'
 import {
   WorklogCalendar,
@@ -119,7 +121,14 @@ export default async function WorklogPage(props: {
       ? rawDay
       : today
   const month = rawMonth && MONTH_PATTERN.test(rawMonth) ? rawMonth : selectedDay.slice(0, 7)
-  const retryHref = `/worklog?month=${month}&day=${selectedDay}`
+  /* WHICH VIEW OF THE MONTH. The calendar paints every square, gaps included,
+     which is what you want for spotting a hole and not what you want for
+     reading back what you logged. `?view=logged` swaps it for the days that
+     have a record and nothing else. In the URL, like the month and the day, so
+     the view is linkable and needs no client state. Anything unrecognised
+     degrades to the calendar rather than to an error. */
+  const view = firstParam(raw.view) === 'logged' ? 'logged' : 'calendar'
+  const retryHref = `/worklog?month=${month}&day=${selectedDay}&view=${view}`
 
   return (
     <div className="relative flex flex-1 flex-col gap-6 p-4 sm:p-6 md:p-8">
@@ -215,6 +224,7 @@ export default async function WorklogPage(props: {
           month={month}
           selectedDay={selectedDay}
           today={today}
+          view={view}
           retryHref={retryHref}
         />
       </Suspense>
@@ -442,12 +452,15 @@ async function CalendarZone({
   month,
   selectedDay,
   today,
+  view,
   retryHref,
 }: {
   userId: string
   month: string
   selectedDay: string
   today: string
+  /** 'calendar' paints the whole month; 'logged' lists only days with a record. */
+  view: 'calendar' | 'logged'
   retryHref: string
 }) {
   const monthStart = `${month}-01`
@@ -466,6 +479,7 @@ async function CalendarZone({
       joinedOn,
       rows,
       hourDays,
+      hourTotals,
       approved,
       pending,
       schedule,
@@ -480,6 +494,10 @@ async function CalendarZone({
         // The OTHER half of "did I log this day". Batched with the rest, one
         // distinct-day read over the same window the scores are read over.
         getMyEntryDaysInRange(userId, from, to),
+        // Per-day totals, for the logged-days list. One grouped read in the
+        // same batch — the calendar ignores it, and paying for it either way is
+        // cheaper than a second round trip when somebody switches view.
+        getMyEntryTotalsInRange(userId, from, to),
         getMyApprovedAbsences(userId, from, to),
         getMyPendingAbsences(userId),
         getMyWorkSchedule(userId),
@@ -576,6 +594,20 @@ async function CalendarZone({
       selectedState,
       selectedHalf,
       selectedHolidayName,
+      /* The month's logged days, for the `?view=logged` list. Built here rather
+         than in the component so the component stays a renderer — and filtered
+         to the VIEWED MONTH, unlike `rows`, whose window is stretched to cover
+         a selected day outside it. */
+      loggedDays: rows
+        .filter((row) => row.day >= monthStart && row.day <= monthEnd)
+        .map((row) => ({
+          day: row.day,
+          percent: row.percent,
+          scoreSource: row.scoreSource,
+          note: row.note,
+          minutes: hourTotals.get(row.day)?.minutes ?? 0,
+          entryCount: hourTotals.get(row.day)?.count ?? 0,
+        })),
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
       assignedApps,
       // The rest of the studio, for the day someone helped out elsewhere.
@@ -606,6 +638,7 @@ async function CalendarZone({
     selectedState,
     selectedHalf,
     selectedHolidayName,
+    loggedDays,
     aiDraftEnabled,
     assignedApps,
     otherApps,
@@ -618,13 +651,53 @@ async function CalendarZone({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
-      <WorklogCalendar
-        month={month}
-        today={today}
-        joinDay={joinedOn}
-        selectedDay={selectedDay}
-        facts={facts}
-      />
+      <div className="flex min-w-0 flex-col gap-3">
+        {/* TWO QUESTIONS, TWO VIEWS. The calendar answers "what does my month
+            look like" and has to paint the gaps to do it. This answers "what
+            have I actually logged", where a gap is not a fact but noise. Plain
+            links rather than a client toggle: the view is in the URL beside the
+            month and the day, so a particular view of a particular month is a
+            link somebody can send. */}
+        <div className="flex items-center gap-1 self-start rounded-lg border border-border/60 bg-card/40 p-0.5">
+          {(
+            [
+              { id: 'calendar', label: 'Calendar' },
+              { id: 'logged', label: 'Logged days' },
+            ] as const
+          ).map((option) => (
+            <Link
+              key={option.id}
+              href={`/worklog?month=${month}&day=${selectedDay}&view=${option.id}`}
+              aria-current={view === option.id ? 'page' : undefined}
+              className={cn(
+                'rounded-md px-2.5 py-1 text-2xs font-medium outline-none',
+                'transition-colors motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-ring',
+                view === option.id
+                  ? 'bg-primary/15 text-primary'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </Link>
+          ))}
+        </div>
+
+        {view === 'logged' ? (
+          <LoggedDaysList
+            days={loggedDays}
+            month={month}
+            monthLabel={format(new Date(`${monthStart}T12:00:00`), 'MMMM')}
+          />
+        ) : (
+          <WorklogCalendar
+            month={month}
+            today={today}
+            joinDay={joinedOn}
+            selectedDay={selectedDay}
+            facts={facts}
+          />
+        )}
+      </div>
 
       <section
         id="day-panel"
@@ -689,6 +762,7 @@ async function CalendarZone({
         <DayPanel
           day={selectedDay}
           initial={selectedRow ? { percent: selectedRow.percent, note: selectedRow.note } : null}
+          scoreSource={selectedRow?.scoreSource ?? 'self'}
           entries={dayEntries}
           tasks={loggableTasks}
           scheduledMinutes={scheduledMinutes}
@@ -897,8 +971,18 @@ async function LogZone({
   // ASSIGNED FIRST, then the rest of the studio. The reader and the parser hear
   // every project either way; the order only decides which one-tap chips are
   // promoted, and somebody's own assignments are the ones they are expected on.
-  const assignedPickerApps = assignedApps.map((app) => ({ id: app.id, name: app.name }))
-  const pickerApps = [...assignedPickerApps, ...otherApps.map((app) => ({ id: app.id, name: app.name }))]
+  // Aliases ride along so the INSTANT reader knows the same vocabulary the
+  // catch-up prompt is given — "2h SGX" typed as one line and the same words
+  // inside a week-long paste must reach the same project.
+  const assignedPickerApps = assignedApps.map((app) => ({
+    id: app.id,
+    name: app.name,
+    aliases: app.aliases,
+  }))
+  const pickerApps = [
+    ...assignedPickerApps,
+    ...otherApps.map((app) => ({ id: app.id, name: app.name, aliases: app.aliases })),
+  ]
 
   return (
     <section className="flex flex-col gap-4">
@@ -1061,7 +1145,10 @@ async function TeamZone({
     const people = [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name))
 
     const absentByUser = new Map<string, Set<string>>()
-    for (const range of teamAbsences) {
+    // Whole-day kinds only, the same rule the personal calendar follows: an
+    // approved half day left the person owing that day, and painting the strip
+    // square as leave would have this view disagreeing with their own page.
+    for (const range of exemptingAbsences(teamAbsences)) {
       const set = absentByUser.get(range.userId) ?? new Set<string>()
       for (const day of absenceDays([range], from, shiftDay(today, 1))) set.add(day)
       absentByUser.set(range.userId, set)

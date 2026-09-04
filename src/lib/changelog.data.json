@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.541",
+  "current": "v0.0.542",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4328,6 +4328,14 @@
       "hash": "c9a2906",
       "kind": "other",
       "change": "Centralize absence kinds and add missing kinds"
+    },
+    {
+      "version": "v0.0.542",
+      "date": "2026-09-03",
+      "at": "2026-09-03T22:19:35+05:30",
+      "hash": "419d875",
+      "kind": "other",
+      "change": "Unify worklog logging with AI catch-up box"
     }
   ]
 }

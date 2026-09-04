@@ -1,8 +1,13 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
+import { format } from 'date-fns'
 import { inArray, lt, or } from 'drizzle-orm'
 import { db } from '@/db'
 import { notifications } from '@/db/schema'
+import { createNotifications } from '@/features/notifications/notify'
+import { collectWorklogNudgeInputs } from '@/features/worklog/nudge-queries'
+import { nudgeBody, planWorklogNudges } from '@/features/worklog/nudge'
+import { backfillAutoScores } from '@/features/worklog/auto-score-sync'
 import {
   planRetention,
   retentionCutoffs,
@@ -20,7 +25,22 @@ import {
  * when they ship. Adding a third entry to vercel.json fails the deploy, and
  * finding that out at deploy time is why this paragraph exists.
  *
- * Retention pruning is the only step today.
+ * Three steps today, in this order:
+ *
+ *   1. Retention pruning — deletes rows that have outlived their window.
+ *   2. The worklog nudge — tells people with a real backlog of unlogged days
+ *      that they have one, with nobody logged in and nothing to open first.
+ *   3. The auto-score backfill — scores days that carry hours and no score.
+ *
+ * Pruning runs FIRST so the nudge's own rows are never candidates for deletion
+ * in the tick that wrote them. The backfill runs LAST because it removes days
+ * from the owed list, and doing it before the nudge would mean telling somebody
+ * about a backlog this same tick was about to clear.
+ *
+ * THE NUDGE WRITES NOTIFICATIONS AND NOTHING ELSE. No worklog is drafted,
+ * scored or filed on anybody's behalf here — a worklog is a first-person
+ * statement, and a background job that wrote one would be a machine's account
+ * of somebody's week wearing their name. See features/worklog/nudge.ts.
  *
  * Scheduled 03:30 UTC — half an hour behind the backup, so the morning's
  * snapshot still contains whatever this tick is about to delete, and 09:00 in
@@ -135,6 +155,61 @@ async function pruneExpiredNotifications(now: Date): Promise<PruneResult> {
   }
 }
 
+/**
+ * Tell people with a real backlog of unlogged days that they have one.
+ *
+ * WHY A CRON AND NOT A BANNER. The catch-up ledger only reaches somebody who
+ * opens /worklog, and the people it exists for are precisely the ones who have
+ * not opened it in a week. Nothing in the app could reach them until this step.
+ *
+ * ONE MESSAGE PER BACKLOG, NOT ONE PER NIGHT. The rung is armed on the oldest
+ * unlogged day (nudge.ts), so `createNotifications`' ladder dedupe collapses a
+ * re-run over an unchanged backlog to nothing at all, while a new gap opening
+ * in front of the old one re-arms it. Without that this handler would mail
+ * everybody behind, every night, forever.
+ *
+ * `createNotifications` is best-effort by contract and swallows its own
+ * failures, so this step cannot be what fails the tick — but the counts it
+ * returns are computed here, from what was actually planned, rather than
+ * assumed from the roster size.
+ */
+async function nudgeUnloggedDays(now: Date): Promise<{ considered: number; nudged: number }> {
+  const inputs = await collectWorklogNudgeInputs(now)
+  const nudges = planWorklogNudges(inputs)
+  if (nudges.length === 0) return { considered: inputs.length, nudged: 0 }
+
+  await createNotifications(
+    nudges.map((nudge) => ({
+      userId: nudge.userId,
+      // 'system' — the legacy discriminator. Nobody DID this; it is a fact
+      // about the person's own record, which is also why there is no actorId.
+      type: 'system' as const,
+      kind: 'worklog.gap',
+      title: `${nudge.owed} ${nudge.owed === 1 ? 'day' : 'days'} to log`,
+      body: nudgeBody(nudge, (iso) =>
+        format(new Date(`${iso}T12:00:00`), 'EEEE, MMMM d'),
+      ),
+      link: '/worklog',
+      // No `entity`: this is about the person, not about a row that could be
+      // trashed underneath them — which is also why it needs no visibility
+      // gate. dropDeadEntities would otherwise have nothing to check and
+      // `can()` nothing to ask about.
+      dedupe: {
+        mode: 'ladder' as const,
+        ladder: 'worklog.gap',
+        // The person is the subject, so they are the entity the ladder is
+        // keyed on. One ladder per person, one rung per oldest-unlogged-day.
+        entityId: nudge.userId,
+        step: 'backlog',
+        armedOn: nudge.armedOn,
+      },
+    })),
+    now,
+  )
+
+  return { considered: inputs.length, nudged: nudges.length }
+}
+
 export async function GET(request: Request) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -147,7 +222,32 @@ export async function GET(request: Request) {
 
   try {
     const retention = await pruneExpiredNotifications(ranAt)
-    return NextResponse.json({ ok: true, ranAt: ranAt.toISOString(), retention })
+    /* STEP TWO. Its own try/catch: a nudge that cannot be planned — one bad
+       schedule row, one unreachable read — must not throw away a prune that
+       already succeeded and already deleted rows. The tick reports what each
+       half did rather than reporting the whole thing failed. */
+    let nudge: { considered: number; nudged: number } | { error: true } = { error: true }
+    try {
+      nudge = await nudgeUnloggedDays(ranAt)
+    } catch (e) {
+      console.error('[notify-tick] worklog nudge failed:', e)
+    }
+
+    /* STEP THREE: score the days that carry hours and no score.
+       syncAutoScore runs on entry writes, so a day logged last week is never
+       touched again — this is what stops it sitting on the ledger reading
+       "hours in, no score" forever. Idempotent and capped, so a partial run
+       costs a day's delay and nothing else. Its own try/catch for the same
+       reason as the nudge: one failing step must not discard two that
+       already succeeded and already wrote. */
+    let scores: { found: number; scored: number } | { error: true } = { error: true }
+    try {
+      scores = await backfillAutoScores(ranAt)
+    } catch (e) {
+      console.error('[notify-tick] auto-score backfill failed:', e)
+    }
+
+    return NextResponse.json({ ok: true, ranAt: ranAt.toISOString(), retention, nudge, scores })
   } catch (e) {
     console.error('[notify-tick] failed:', e)
     return NextResponse.json({ error: 'Notify tick failed' }, { status: 500 })

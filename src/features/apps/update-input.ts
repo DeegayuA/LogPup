@@ -10,6 +10,8 @@ const appUpdateInput = z
     description: z.string().max(500),
     repoUrl: z.union([z.url(), z.literal('')]),
     techTags: z.array(z.string().min(1)).max(10),
+    // Mirrors appCreateInput — same ceiling, same trim. See create-input.ts.
+    aliases: z.array(z.string().trim().min(1).max(60)).max(12),
     status: z.enum(['active', 'paused', 'archived']),
     leadId: z.uuid().nullable(),
     // No `.nullable()`, unlike leadId: the PM is required, so there is no

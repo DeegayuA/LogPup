@@ -63,6 +63,9 @@ export const changeRequestOp = pgEnum('change_request_op', ['edit', 'delete', 'r
 // entitlements are their own design.
 export const absenceKind = pgEnum('absence_kind', ['annual', 'sick', 'unpaid', 'training', 'other_project', 'no_work_assigned', 'other', 'casual', 'half_day', 'short_leave', 'lieu', 'duty', 'bereavement', 'parental'])
 export const absenceStatus = pgEnum('absence_status', ['pending', 'approved', 'rejected', 'withdrawn'])
+// Who put a day's percent there — see the column comment on daily_worklogs.
+// Mirrored by SCORE_SOURCES in features/worklog/auto-score.ts.
+export const worklogScoreSource = pgEnum('worklog_score_source', ['self', 'from_hours'])
 // What stage of employment somebody is at. NOT a seat — user_role answers what
 // they may do, this answers where they are in their career here. Kept separate
 // because a trainee can be an editor and an intern can be a member; folding
@@ -241,6 +244,21 @@ export const apps = pgTable('apps', {
   // worth surfaces, which must not bill an internal project to anybody.
   internal: boolean('internal').notNull().default(false),
   description: text('description'),
+  // What people actually CALL this project, beyond its name. Free text, one
+  // nickname per element: "SGX", "syntax genie", "the attendance one".
+  //
+  // WHY IT HAS TO BE STORED. Some abbreviations are derivable from the name and
+  // app-aliases.ts derives those for free (CareCode gives CC, Attendance Web
+  // App gives AWA). "SGX" for Syntax Genie is not: it is a fact about the
+  // client that no amount of reading the app's own letters produces. Without
+  // this column every "ML model for SGX 2h" logged its hours against no project
+  // at all — the time was recorded and the attribution silently lost, which is
+  // a hole in every per-project total built on top of it.
+  //
+  // NOT unique and not checked against other apps: two projects for the same
+  // client legitimately share a nickname, and app-aliases.ts already refuses to
+  // guess when a term answers to more than one project.
+  aliases: text('aliases').array().notNull().default([]),
   status: appStatus('status').notNull().default('active'),
   repoUrl: text('repo_url'),
   techTags: text('tech_tags').array().notNull().default([]),
@@ -1568,6 +1586,21 @@ export const dailyWorklogs = pgTable('daily_worklogs', {
   // today", self-scored: it has to stay meaningful on a day of meetings,
   // review and debugging that closed no ticket.
   percent: integer('percent').notNull(),
+  // WHO SAID THE NUMBER ABOVE. 'self' is a person's own judgement; 'from_hours'
+  // was derived by dividing the day's logged minutes by its scheduled ones
+  // (features/worklog/auto-score.ts).
+  //
+  // THE COLUMN IS WHAT MAKES THE DERIVATION SAFE. Auto-scoring may only ever
+  // write over a row that is absent or already 'from_hours' — a measurement
+  // silently replacing somebody's own assessment of their day would be worse
+  // than the unclearable backlog it was added to fix. It is also what lets
+  // every surface LABEL a derived score, so a manager never reads a division
+  // as a claim the person made.
+  //
+  // DEFAULTS TO 'self', which describes every row written before this existed
+  // exactly: until auto-scoring shipped, the only way a percent got here was
+  // somebody typing it.
+  scoreSource: worklogScoreSource('score_source').notNull().default('self'),
   note: text('note'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),

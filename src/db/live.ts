@@ -75,6 +75,11 @@ export const liveAppColumns = {
   // from this set, so a column absent from it is a column no live read can see.
   internal: liveApps.internal,
   description: liveApps.description,
+  // The nicknames a project answers to. Here for the reason the comment above
+  // gives: AppPortfolioEntry is inferred from this set, so leaving it out would
+  // make the column unreadable by every live read and unrenderable by the form
+  // that edits it.
+  aliases: liveApps.aliases,
   status: liveApps.status,
   repoUrl: liveApps.repoUrl,
   techTags: liveApps.techTags,

@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lte, sql } from 'drizzle-orm'
+import { and, asc, count, eq, gte, lte, sql, sum } from 'drizzle-orm'
 
 import { db } from '@/db'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
@@ -167,4 +167,47 @@ export async function getMyEntryDaysInRange(
     )
 
   return new Set(rows.map((row) => row.day))
+}
+
+/**
+ * Minutes and entry count per day, for a range.
+ *
+ * The sibling above answers "which days have hours at all", which is what the
+ * calendar needs to paint a square. This answers "how much, and in how many
+ * pieces", which is what a list of logged days shows beside each score. One
+ * grouped read rather than a per-day fetch: the list renders a whole month, and
+ * thirty round trips to render thirty rows is how a page stops being worth
+ * opening.
+ */
+export async function getMyEntryTotalsInRange(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<Map<string, { minutes: number; count: number }>> {
+  const rows = await db
+    .select({
+      day: liveWorklogEntries.day,
+      minutes: sum(liveWorklogEntries.minutes),
+      count: count(),
+    })
+    .from(liveWorklogEntries)
+    .where(
+      and(
+        eq(liveWorklogEntries.userId, userId),
+        gte(liveWorklogEntries.day, fromIso),
+        lte(liveWorklogEntries.day, toIso),
+      ),
+    )
+    .groupBy(liveWorklogEntries.day)
+
+  // `sum` comes back as a string from pg (numerics can exceed a JS number) and
+  // as null for an empty group. Neither can happen here — a group exists
+  // because rows exist — but reading it defensively costs nothing, and a NaN in
+  // an hours total is the kind of thing nobody notices until a month-end.
+  return new Map(
+    rows.map((row) => [
+      row.day,
+      { minutes: Number(row.minutes ?? 0) || 0, count: Number(row.count) || 0 },
+    ]),
+  )
 }
