@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, lte } from 'drizzle-orm'
+import { and, eq, gte, isNull, lte, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { dailyWorklogs } from '@/db/schema'
 import { liveWorklogEntries } from '@/db/live'
@@ -96,11 +96,17 @@ export async function syncAutoScore(
   try {
     const [entries, existingRows] = await Promise.all([
       db
-        .select({ minutes: liveWorklogEntries.minutes })
+        // The notes come back too, to compose the day's own note from — see
+        // `noteFromEntries`.
+        .select({ minutes: liveWorklogEntries.minutes, note: liveWorklogEntries.note })
         .from(liveWorklogEntries)
         .where(and(eq(liveWorklogEntries.userId, userId), eq(liveWorklogEntries.day, day))),
       db
-        .select({ percent: dailyWorklogs.percent, source: dailyWorklogs.scoreSource })
+        .select({
+          percent: dailyWorklogs.percent,
+          source: dailyWorklogs.scoreSource,
+          note: dailyWorklogs.note,
+        })
         .from(dailyWorklogs)
         .where(and(eq(dailyWorklogs.userId, userId), eq(dailyWorklogs.day, day)))
         .limit(1),
@@ -126,20 +132,44 @@ export async function syncAutoScore(
        which also moves it permanently out of this function's reach. */
     if (percent === null) return { skipped: 'no-basis' }
 
-    // Nothing to do when the derived number has not moved. Skipping the write
-    // keeps `updatedAt` honest: it marks when the day last CHANGED, not when an
-    // entry was last touched.
-    if (existing && existing.percent === percent) return { wrote: percent }
+    /* THE DAY'S NOTE, COMPOSED FROM ITS OWN ENTRIES — but only ever into a
+       blank.
+
+       A day scored from its hours used to be written with `note: null`, so
+       every auto-scored day read "No note" on the team view and in the logged
+       list. The words were not missing: they were on the entries, where the
+       person actually wrote them. Joining them is not invention — it is the
+       same sentences, in one line, at the level that renders them.
+
+       NEVER OVER WORDS SOMEBODY WROTE. `coalesce` on the conflict path fills a
+       null and leaves anything else exactly as it was, so a note typed by hand
+       survives every later hour logged against that day. */
+    const composed = noteFromEntries(entries)
+
+    /* NOTHING TO DO only when NEITHER column would move.
+       This check used to be `existing.percent === percent` alone, and it sat
+       ABOVE the note composition — so every day already sitting at the right
+       score returned early and never gained the note it was missing, which is
+       precisely the state that made auto-scored days read "No note" and stay
+       that way. Both halves are asked now: the score has not moved AND there is
+       either already a note or nothing to write into one. */
+    if (existing && existing.percent === percent && (existing.note !== null || composed === null)) {
+      return { wrote: percent }
+    }
 
     await db
       .insert(dailyWorklogs)
-      .values({ userId, day, percent, scoreSource: 'from_hours', note: null })
+      .values({ userId, day, percent, scoreSource: 'from_hours', note: composed })
       .onConflictDoUpdate({
         target: [dailyWorklogs.userId, dailyWorklogs.day],
-        /* THE NOTE IS NOT TOUCHED. Somebody may have written a line about the
-           day without scoring it; deriving the score must not take their words
-           with it. Only the two columns this function owns are set. */
-        set: { percent, scoreSource: 'from_hours', updatedAt: new Date() },
+        set: {
+          percent,
+          scoreSource: 'from_hours',
+          note: composed === null
+            ? sql`${dailyWorklogs.note}`
+            : sql`coalesce(${dailyWorklogs.note}, ${composed})`,
+          updatedAt: new Date(),
+        },
       })
 
     return { wrote: percent }
@@ -196,8 +226,19 @@ export async function backfillAutoScores(
       and(
         gte(liveWorklogEntries.day, from),
         lte(liveWorklogEntries.day, today),
-        // The whole point: hours exist and no day record does.
-        isNull(dailyWorklogs.id),
+        /* TWO KINDS OF DAY NEED THIS PASS, not one.
+           The obvious one is hours with no day record at all. The second is a
+           day this function itself wrote before it composed notes: scored
+           `from_hours`, correct, and blank where its words should be. Those
+           rows are already at the right percent, so nothing else would ever
+           touch them again and every one of them would read "No note" forever.
+           A row somebody scored themselves is never a candidate either way —
+           syncAutoScore refuses it, and asking here first saves the round
+           trip. */
+        or(
+          isNull(dailyWorklogs.id),
+          and(eq(dailyWorklogs.scoreSource, 'from_hours'), isNull(dailyWorklogs.note)),
+        ),
       ),
     )
     // Oldest first, so a capped run clears the days that have waited longest
@@ -216,3 +257,34 @@ export async function backfillAutoScores(
 
 /** Matches the nudge's own window — see nudge-queries.ts. */
 const BACKFILL_WINDOW_DAYS = 60
+
+/**
+ * One line describing a day, built from the notes on its own entries.
+ *
+ * THE PERSON'S OWN WORDS, joined — nothing is generated, summarised or
+ * rephrased. Entries with no note contribute nothing, duplicates collapse (a
+ * day that gained the same line twice should not say it twice), and the result
+ * is capped at the column's limit.
+ *
+ * Returns null when the entries say nothing, so the caller writes a null rather
+ * than an empty string — "no note" and "a note that is blank" render the same
+ * but sort and count differently.
+ */
+function noteFromEntries(entries: readonly { note: string | null }[]): string | null {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const entry of entries) {
+    const note = entry.note?.trim()
+    if (!note) continue
+    const key = note.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    parts.push(note)
+  }
+  if (parts.length === 0) return null
+  const joined = parts.join(', ')
+  return joined.length > DAY_NOTE_MAX ? `${joined.slice(0, DAY_NOTE_MAX - 1).trimEnd()}…` : joined
+}
+
+/** Mirrors the ceiling upsertDailyWorklog validates against in actions.ts. */
+const DAY_NOTE_MAX = 4000

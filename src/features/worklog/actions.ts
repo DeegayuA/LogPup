@@ -9,6 +9,7 @@ import { dailyWorklogs } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { PERCENT_MAX, PERCENT_MIN, WORK_DAY_PATTERN, isFutureWorkDay } from './worklog-day'
+import { syncAutoScore } from '@/features/worklog/auto-score-sync'
 
 const worklogInput = z.object({
   // Taken from the client so somebody can still fill in yesterday, but never
@@ -145,6 +146,48 @@ export async function setDayNote(
   // score was given — so there is nothing for a note to hang on. Said plainly
   // rather than silently succeeding, because a lost note is invisible.
   if (updated.length === 0) return err('That day has nothing recorded to attach a note to')
+
+  revalidatePath('/worklog')
+  return ok(undefined)
+}
+
+/**
+ * Hand a day's score back to its hours.
+ *
+ * THE WAY OUT OF A SELF-SCORE, and the reason it needs one. Picking a number by
+ * hand stamps `score_source = 'self'`, which is deliberate and permanent — it is
+ * what stops a derived figure overwriting somebody's own judgement. But a
+ * mis-tap stamps it just as firmly, and without this the day would sit at that
+ * number forever however many hours were logged against it afterwards, with no
+ * control anywhere to undo it.
+ *
+ * Two steps, in this order: mark the row derivable again, then recompute. The
+ * recompute is `syncAutoScore` — the same function every entry write calls — so
+ * there is no second opinion about what hours are worth, and a day whose hours
+ * imply nothing (a Sunday, a holiday, an empty day) keeps the number it has
+ * rather than being blanked.
+ */
+export async function resetDayScoreToHours(day: string): Promise<ActionResult<void>> {
+  const session = await auth()
+  if (!session?.user) return err('Not signed in')
+  if (!WORK_DAY_PATTERN.test(day)) return err('That is not a day')
+
+  const updated = await db
+    .update(dailyWorklogs)
+    .set({ scoreSource: 'from_hours', updatedAt: new Date() })
+    .where(and(eq(dailyWorklogs.userId, session.user.id), eq(dailyWorklogs.day, day)))
+    .returning({ day: dailyWorklogs.day })
+
+  if (updated.length === 0) return err('That day has nothing recorded yet')
+
+  const result = await syncAutoScore(session.user.id, day)
+  // The row is derivable again either way; this only reports whether the hours
+  // actually moved the number, so the UI can say "no hours to score from"
+  // rather than claiming a change that did not happen.
+  if ('skipped' in result && result.skipped === 'no-basis') {
+    revalidatePath('/worklog')
+    return err('No hours on that day to score from — log some, or pick a number')
+  }
 
   revalidatePath('/worklog')
   return ok(undefined)

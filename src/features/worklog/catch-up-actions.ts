@@ -16,6 +16,7 @@ import { buildHolidayCalendar, closesTheStudio } from '@/features/worklog/holida
 import { listOrgHolidays } from '@/features/worklog/org-holiday-queries'
 import { patternForDay } from '@/features/worklog/schedules'
 import { resolveWorkDay } from '@/features/worklog/worklog-day'
+import { getMyEntryTotalsInRange } from '@/features/worklog/entry-queries'
 import {
   getMyApprovedAbsences,
   getMyAssignedApps,
@@ -67,6 +68,8 @@ export type CatchUpDayFacts = {
   fraction: number
   logged: boolean
   closedFor: string | null
+  /** Minutes already on the day — see CatchUpCandidateDay.loggedMinutes. */
+  loggedMinutes: number
 }
 
 export type CatchUpResult = CatchUpReading & {
@@ -112,11 +115,13 @@ export async function readCatchUpText(text: string): Promise<ActionResult<CatchU
   // Half-open on the right for coverage, which walks [from, to).
   const toExclusive = isoDayAdd(today, 1)
 
-  const [joinedOn, rows, approved, schedule, orgRows, assignedApps, allApps] = await Promise.all([
+  const [joinedOn, rows, approved, schedule, hourTotals, orgRows, assignedApps, allApps] =
+    await Promise.all([
     getUserJoinDay(actor.id),
     getMyWorklogsInRange(actor.id, windowStart, today),
     getMyApprovedAbsences(actor.id, windowStart, today),
     getMyWorkSchedule(actor.id),
+    getMyEntryTotalsInRange(actor.id, windowStart, today),
     listOrgHolidays(),
     getMyAssignedApps(actor.id),
     // Every live project, not just this person's: helping out on somebody
@@ -161,6 +166,7 @@ export async function readCatchUpText(text: string): Promise<ActionResult<CatchU
     // anywhere else on this page: the score is the day record.
     logged: loggedDays.has(day.day),
     closedFor: closed.get(day.day) ?? null,
+    loggedMinutes: hourTotals.get(day.day)?.minutes ?? 0,
   }))
 
   // Assigned first, then the rest of the studio. The reader sees every project
@@ -208,6 +214,7 @@ export async function readCatchUpText(text: string): Promise<ActionResult<CatchU
         fraction: day.fraction,
         logged: day.logged,
         closedFor: day.closedFor ?? null,
+        loggedMinutes: day.loggedMinutes,
       }))
 
     return ok({ ...reading, facts, candidateCount: candidateDays.length })

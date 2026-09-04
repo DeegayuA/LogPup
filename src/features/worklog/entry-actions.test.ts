@@ -424,7 +424,11 @@ describe('the category/task rule holds on update, not only on create', () => {
      * form does rather than the CLAIMED_APP the test above uses.
      */
     rowsByTable.set(liveTasks, [{ appId: TASKS_APP }])
-    rowsByTable.set(liveWorklogEntries, [{ id: ENTRY }])
+    /* EMPTY, because create now probes for an exact duplicate before inserting
+       and this mock ignores WHERE clauses — any seeded row would come back as
+       a clash and the action would correctly skip the insert this test is
+       about. Empty is "no identical entry exists", which is the case here. */
+    rowsByTable.set(liveWorklogEntries, [])
 
     const res = await createWorklogEntry({
       day: PAST_DAY,

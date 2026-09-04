@@ -34,9 +34,11 @@ import { readCatchUpText, type CatchUpDayFacts } from '@/features/worklog/catch-
 import {
   looksLikeSeveralDays,
   summarizeReading,
+  type CatchUpCandidateDay,
   type CatchUpDay,
   type CatchUpReading,
 } from '@/features/worklog/catch-up-parse'
+import { readCatchUpTextOffline } from '@/features/worklog/catch-up-offline'
 import {
   meterOrigin,
   useAiMeter,
@@ -117,6 +119,8 @@ export function LogBox({
   knownTo,
   canDeclare,
   catchUpAiEnabled,
+  candidateDays,
+  today,
 }: {
   /** The selected day — what a one-line entry with no date is about. */
   day: string
@@ -144,7 +148,18 @@ export function LogBox({
   knownFrom: string
   knownTo: string
   canDeclare: boolean
+  /** Whether the model-backed reader is available to this person. */
   catchUpAiEnabled: boolean
+  /**
+   * Every day the reader may file against, oldest first.
+   *
+   * Needed ON THE CLIENT because the offline reader runs here — it is the same
+   * date vocabulary the prompt is given, so both readers resolve "sep 3" to the
+   * same day and neither can invent one.
+   */
+  candidateDays: CatchUpCandidateDay[]
+  /** Today in Colombo, so "yesterday" and a weekday name have an anchor. */
+  today: string
 }) {
   const router = useRouter()
   const meter = useAiMeter()
@@ -188,7 +203,11 @@ export function LogBox({
 
   const canSaveLine =
     !several && !pending && (intent.scores || intent.logsHours) && entryProblem === null
-  const canRead = catchUpAiEnabled && text.trim().length > 0 && !busy
+  // NOT GATED ON THE KEY ANY MORE. The offline reader handles the same paste
+  // with no model at all, so a workspace without Gemini set up — or one that
+  // has spent its quota — still gets the fast path rather than a button that
+  // does nothing.
+  const canRead = text.trim().length > 0 && !busy
 
   function insert(fragment: string) {
     setText((prev) => (prev.trim() ? `${prev.trim()} ${fragment} ` : `${fragment} `))
@@ -264,30 +283,52 @@ export function LogBox({
     if (!canRead) return
     setBusy(true)
     try {
-      const res = await meter.track('worklog-catch-up', meterOrigin(source), () =>
-        readCatchUpText(text),
-      )
-      if (!res.ok) {
-        toast.error(res.error)
-        return
+      /* THE MODEL FIRST WHEN THERE IS ONE, THIS READER OTHERWISE — and this
+         reader again if the call fails. The offline path is not a degraded
+         mode to apologise for: it resolves the same dates, splits the same
+         days and fuzzy-matches the same project names, instantly and for
+         nothing. What it is worse at is unusual prose and Sinhala, so the
+         model leads when it is available. Either way the person ends up in the
+         same review panel, and nothing is saved without them pressing Save. */
+      let data: (CatchUpReading & { facts: CatchUpDayFacts[] }) | null = null
+      let usedOffline = false
+
+      if (catchUpAiEnabled) {
+        const res = await meter.track('worklog-catch-up', meterOrigin(source), () =>
+          readCatchUpText(text),
+        )
+        if (res.ok) data = res.data
+        else {
+          // The error is shown BEFORE falling back, so a quota that has run out
+          // or a key that has stopped working is news the person actually gets
+          // rather than something hidden by a silent downgrade.
+          toast.error(res.error)
+        }
       }
-      setReading(res.data)
+
+      if (!data) {
+        data = readOffline()
+        usedOffline = true
+      }
+
+      setReading(data)
       setReview(
-        res.data.days.map((proposed) => ({
+        data.days.map((proposed) => ({
           ...proposed,
           keepAbsence: proposed.absence !== null,
           done: false,
         })),
       )
-      if (res.data.days.length === 0) {
+      if (data.days.length === 0) {
         toast.info('No days came out of that — try naming the dates, like "sep 3 - …"')
       } else {
-        const sum = summarizeReading(res.data)
+        const sum = summarizeReading(data)
         toast.success(
           `Read ${sum.days} ${sum.days === 1 ? 'day' : 'days'}` +
             (sum.entries > 0
               ? ` and ${sum.entries} ${sum.entries === 1 ? 'entry' : 'entries'}`
               : '') +
+            (usedOffline && catchUpAiEnabled ? ' without AI' : '') +
             ' — check each one before saving.',
         )
       }
@@ -295,6 +336,37 @@ export function LogBox({
       toast.error('Could not read that right now — try again')
     } finally {
       setBusy(false)
+    }
+  }
+
+  /**
+   * The same reading, done here, with no model and no request.
+   *
+   * `facts` is rebuilt from the candidate days rather than fetched: the server
+   * builds exactly this from the same list, so the review cards carry the same
+   * half-day badges, holiday names and already-scored warnings whichever reader
+   * produced the days.
+   */
+  function readOffline(): CatchUpReading & { facts: CatchUpDayFacts[] } {
+    const reading = readCatchUpTextOffline({
+      text,
+      today,
+      candidateDays,
+      apps: appRefs,
+    })
+    const named = new Set(reading.days.map((row) => row.day))
+    return {
+      ...reading,
+      facts: candidateDays
+        .filter((candidate) => named.has(candidate.day))
+        .map((candidate) => ({
+          day: candidate.day,
+          label: candidate.label,
+          fraction: candidate.fraction,
+          logged: candidate.logged,
+          closedFor: candidate.closedFor ?? null,
+          loggedMinutes: candidate.loggedMinutes,
+        })),
     }
   }
 
@@ -344,7 +416,12 @@ export function LogBox({
    * is deliberately no bulk endpoint: a route that wrote a week in one
    * transaction would be a second, weaker copy of every check these three make.
    */
-  async function saveDay(row: ReviewDay): Promise<{ ok: true } | { ok: false; error: string }> {
+  async function saveDay(
+    row: ReviewDay,
+  ): Promise<{ ok: true; added: number; duplicates: number } | { ok: false; error: string }> {
+    let added = 0
+    let duplicates = 0
+
     // Leave first. It is the statement that changes what the day even IS, and
     // it is the one that goes to another human.
     if (row.absence && row.keepAbsence) {
@@ -374,6 +451,11 @@ export function LogBox({
         source: 'ai_suggested',
       })
       if (!res.ok) return { ok: false, error: res.error }
+      // An entry that already existed was not added. Counted rather than
+      // assumed, so the toast cannot claim six entries on a day that gained
+      // none — which is exactly what happened before the guard existed.
+      if (res.data.duplicate) duplicates += 1
+      else added += 1
     }
 
     if (row.percent !== null) {
@@ -391,7 +473,7 @@ export function LogBox({
       if (!res.ok) return { ok: false, error: res.error }
     }
 
-    return { ok: true }
+    return { ok: true, added, duplicates }
   }
 
   function saveAll() {
@@ -403,10 +485,12 @@ export function LogBox({
       // toast beside it is the run telling the truth and contradicting itself.
       const saved: string[] = []
       const failed: { day: string; error: string }[] = []
+      let duplicates = 0
       for (const row of rows) {
         const res = await saveDay(row)
         if (res.ok) {
           saved.push(row.day)
+          duplicates += res.duplicates
           patch(row.day, { done: true })
         } else {
           failed.push({ day: row.day, error: res.error })
@@ -418,6 +502,13 @@ export function LogBox({
       if (saved.length > 0) {
         toast.success(
           `Saved ${saved.length} ${saved.length === 1 ? 'day' : 'days'}` +
+            /* SAID, NOT SWALLOWED. Reading the same paste twice used to add
+               every entry a second time; now the duplicates are skipped, and
+               staying quiet about it would leave somebody wondering why the
+               hours did not double. */
+            (duplicates > 0
+              ? ` — ${duplicates} ${duplicates === 1 ? 'entry was' : 'entries were'} already logged`
+              : '') +
             (failed.length > 0 ? ` — ${failed.length} did not go through` : ''),
         )
       }
@@ -432,6 +523,18 @@ export function LogBox({
   }
 
   const outstanding = review.filter((row) => !row.done && hasSomethingToSave(row))
+  /* DAYS THAT CANNOT BE SAVED YET, and the reason the Save button read
+     "Save 0 days" while two filled cards sat under it.
+
+     A day the reader understood as prose only — words, no hours, no score, no
+     leave — has nothing that can be written: `daily_worklogs.percent` is NOT
+     NULL, so there is no row for the note to live on until somebody says how
+     the day went. That is a real requirement, but a disabled button counting
+     zero explains none of it and reads as the feature being broken. Counted
+     separately so the button can say what is missing instead. */
+  const blocked = review.filter(
+    (row) => !row.done && !hasSomethingToSave(row) && Boolean(row.note),
+  )
   /* Days that will STILL have no score after saving. A day with hours scores
      itself, so counting it here was the warning crying wolf about the common
      case — which is how a person stops reading the one day it is really about:
@@ -651,6 +754,56 @@ export function LogBox({
         )}
 
         {!several ? <EntryGrammarHelp showScore /> : null}
+
+        {/* WHAT TO PUT IN, so a day comes back complete.
+            The reader is honest about what it cannot invent — no time written
+            means no hours, no percent written means no score — which is right,
+            and which left people writing a paragraph and getting back half a
+            day with no idea what was missing. Four things fill a day; this says
+            which, and what each one is for. */}
+        <details className="group">
+          <summary className="cursor-pointer list-none text-2xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+            <span className="underline decoration-dotted underline-offset-2">
+              What to include to fill a day
+            </span>
+          </summary>
+          <dl className="mt-2 grid gap-1.5 rounded-lg border border-border/50 bg-muted/20 p-2.5 sm:grid-cols-2">
+            {[
+              {
+                term: 'The date',
+                detail: '“sep 3”, “3 sep”, “yesterday”, “monday”. Two at once works: “sep 1 and aug 30”.',
+              },
+              {
+                term: 'A time per thing',
+                detail: '“4h”, “1h30”, “90m”. No time means no hours — the words become the day’s note instead.',
+              },
+              {
+                term: 'The project',
+                detail: 'Its name, your nickname for it, or an abbreviation. Typos are fine.',
+              },
+              {
+                term: 'A % if you want one',
+                detail: 'Otherwise the score is worked out from the hours. Days with no hours need one.',
+              },
+              {
+                term: 'Or say it was leave',
+                detail: '“casual leave”, “half day”, “short leave” — it goes for approval instead.',
+              },
+              {
+                term: 'Separate things with commas',
+                detail: 'Each comma starts a new entry. Brackets are safe: “(chamari, multi tenet)” stays whole.',
+              },
+            ].map((row) => (
+              <div key={row.term} className="flex flex-col gap-0.5">
+                <dt className="font-heading text-2xs font-semibold text-foreground">{row.term}</dt>
+                <dd className="text-2xs leading-snug text-muted-foreground">{row.detail}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-1.5 font-mono text-2xs leading-relaxed text-muted-foreground">
+            sep 3 - attendance app fixes (chamari) 4h, ML model for SGX 2h
+          </p>
+        </details>
       </div>
 
       {/* WHAT IT HEARD, FOR SEVERAL DAYS. One card per day, every row
@@ -675,11 +828,19 @@ export function LogBox({
                 size="sm"
                 onClick={saveAll}
                 disabled={busy || outstanding.length === 0}
+                title={
+                  outstanding.length === 0 && blocked.length > 0
+                    ? 'Those days have words but no hours and no score — pick a score on each one'
+                    : undefined
+                }
               >
                 {busy ? (
                   <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
                 ) : null}
-                Save {outstanding.length} {outstanding.length === 1 ? 'day' : 'days'}
+                {/* NAMES WHAT IS MISSING rather than counting to zero. */}
+                {outstanding.length === 0 && blocked.length > 0
+                  ? `Score ${blocked.length} ${blocked.length === 1 ? 'day' : 'days'} to save`
+                  : `Save ${outstanding.length} ${outstanding.length === 1 ? 'day' : 'days'}`}
               </Button>
             </div>
           </div>
@@ -745,6 +906,18 @@ export function LogBox({
                       {facts?.logged ? (
                         <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">
                           already scored — saving replaces it
+                        </span>
+                      ) : null}
+                      {/* THE ACCIDENT THIS CATCHES. Reading the same paragraph
+                          twice does not produce the same rows twice — the
+                          wording shifts, so the exact-duplicate guard in
+                          entry-actions.ts sees new entries and lets them
+                          through. That is how a day ends up with 37 hours on
+                          it. Nobody can un-see this line before pressing Save. */}
+                      {facts && facts.loggedMinutes > 0 ? (
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-2xs text-amber-700 dark:text-amber-400">
+                          already has {Math.round((facts.loggedMinutes / 60) * 10) / 10}h — these
+                          add to it
                         </span>
                       ) : null}
                     </div>

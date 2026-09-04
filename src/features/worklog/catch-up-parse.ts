@@ -73,6 +73,17 @@ export type CatchUpCandidateDay = {
   fraction: number
   /** Whether a score is already on file, so the reply can correct rather than duplicate. */
   logged: boolean
+  /**
+   * Minutes ALREADY recorded against this day.
+   *
+   * Carried so the review panel can warn before a second save piles onto a day
+   * that is already full. The exact-duplicate guard in entry-actions.ts catches
+   * a byte-identical re-send; it cannot catch a re-read of the same paragraph
+   * that came back worded slightly differently, and those land as new rows. The
+   * only place that is catchable is in front of the person, before they press
+   * Save.
+   */
+  loggedMinutes: number
   /** A public holiday or a company closure, named. */
   closedFor?: string | null
 }

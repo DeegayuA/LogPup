@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '@/db'
 import { worklogEntries } from '@/db/schema'
 import { liveTasks, liveWorklogEntries } from '@/db/live'
@@ -127,7 +127,13 @@ async function resolveEntryAppId(
 
 export async function createWorklogEntry(
   raw: z.input<typeof createInput>,
-): Promise<ActionResult<{ id: string }>> {
+  /**
+   * `duplicate` is set when an identical entry already existed and nothing was
+   * inserted. Optional so every existing caller — which only reads `id` — is
+   * unaffected, and present so a batch save can report how many rows it really
+   * added rather than counting its own requests.
+   */
+): Promise<ActionResult<{ id: string; duplicate?: true }>> {
   const actor = await writer()
   if (!actor) return err('Not allowed')
 
@@ -167,6 +173,44 @@ export async function createWorklogEntry(
   }
 
   try {
+    /* THE SAME ENTRY, SENT TWICE, IS ONE ENTRY.
+       Nothing stopped a second identical row before this, and the ways to send
+       one are ordinary rather than exotic: a double-tap on Save, a retried
+       request, and — the one that actually bit — reading a paste, saving it,
+       then reading the same paste again because the page still showed it. That
+       produced a day with sixteen hours on an eight-hour schedule and every
+       line listed twice, which then derived a 200% day and clamped it to a
+       score nobody typed.
+
+       EXACT MATCH ONLY: same day, same minutes, same category, same project,
+       same note. Two genuinely different 2h meetings differ in their note, and
+       two with the same note on the same project are indistinguishable from the
+       accident this guards against. The person can still record both by saying
+       what the second one was.
+
+       IDEMPOTENT, NOT AN ERROR. The caller asked for this entry to exist and it
+       does — failing would make a partly-saved batch look broken and invite the
+       retry that caused this. `duplicate` travels back so a batch can report
+       honestly how many rows it actually added. */
+    const [clash] = await db
+      .select({ id: liveWorklogEntries.id })
+      .from(liveWorklogEntries)
+      .where(
+        and(
+          eq(liveWorklogEntries.userId, actor.id),
+          eq(liveWorklogEntries.day, input.day),
+          eq(liveWorklogEntries.minutes, input.minutes),
+          eq(liveWorklogEntries.category, input.category),
+          resolvedAppId.appId === null
+            ? isNull(liveWorklogEntries.appId)
+            : eq(liveWorklogEntries.appId, resolvedAppId.appId),
+          note === null ? isNull(liveWorklogEntries.note) : eq(liveWorklogEntries.note, note),
+        ),
+      )
+      .limit(1)
+
+    if (clash) return ok({ id: clash.id, duplicate: true as const })
+
     const [row] = await db
       .insert(worklogEntries)
       .values({

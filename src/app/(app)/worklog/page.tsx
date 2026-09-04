@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { HelpDetail, HelpNote } from '@/components/shared/help-note'
 import { DayPanel } from '@/features/worklog/components/day-panel'
 import {
+  getEntryAppsInRange,
   getMyEntryDaysInRange,
   getMyEntryTotalsInRange,
   listDayEntriesForDisplay,
@@ -480,6 +481,7 @@ async function CalendarZone({
       rows,
       hourDays,
       hourTotals,
+      dayApps,
       approved,
       pending,
       schedule,
@@ -498,6 +500,8 @@ async function CalendarZone({
         // same batch — the calendar ignores it, and paying for it either way is
         // cheaper than a second round trip when somebody switches view.
         getMyEntryTotalsInRange(userId, from, to),
+        // The projects each day's hours went to, for the logged-days list.
+        getEntryAppsInRange([userId], from, to),
         getMyApprovedAbsences(userId, from, to),
         getMyPendingAbsences(userId),
         getMyWorkSchedule(userId),
@@ -607,6 +611,7 @@ async function CalendarZone({
           note: row.note,
           minutes: hourTotals.get(row.day)?.minutes ?? 0,
           entryCount: hourTotals.get(row.day)?.count ?? 0,
+          apps: dayApps.get(`${userId}|${row.day}`) ?? [],
         })),
       aiDraftEnabled: aiPrefs['worklog-draft'].enabled,
       assignedApps,
@@ -832,7 +837,7 @@ async function LogZone({
       actor,
       joinedOn,
       rows,
-      hourDays,
+      hourTotals,
       pending,
       decided,
       approved,
@@ -846,7 +851,7 @@ async function LogZone({
         loadActor(),
         getUserJoinDay(userId),
         getMyWorklogsInRange(userId, from, today),
-        getMyEntryDaysInRange(userId, from, today),
+        getMyEntryTotalsInRange(userId, from, today),
         getMyPendingAbsences(userId),
         // Decided absences are bounded by DECISION time, not by the calendar
         // window: a refusal is news about the person, and scoping it to the
@@ -868,10 +873,11 @@ async function LogZone({
     if (!joinedOn) return null
 
     const closed = closedStudioDays(orgRows, from, today)
+    const loggedDaySet = new Set(rows.map((row) => row.day))
     const coverage = computeCoverage({
       from,
       to,
-      loggedDays: new Set(rows.map((row) => row.day)),
+      loggedDays: loggedDaySet,
       // APPROVED AND WHOLE-DAY ONLY, deliberately. A pending absence exempts
       // nothing, so nobody can lower their own denominator by typing; and a
       // half day or a short leave exempts nothing either, because the rest of
@@ -893,7 +899,11 @@ async function LogZone({
       // The most recent MAX_BACKFILL_DAYS, oldest first — an unclearable
       // backlog is indistinguishable from disengagement.
       .slice(-MAX_BACKFILL_DAYS)
-      .map(({ day, fraction }) => ({ day, fraction, hasHours: hourDays.has(day) }))
+      .map(({ day, fraction }) => ({
+        day,
+        fraction,
+        hasHours: (hourTotals.get(day)?.minutes ?? 0) > 0,
+      }))
 
     const canDeclare = actor !== null && can(actor, 'absence.create', { ownerId: actor.id })
     const filed: FiledAbsence[] = [
@@ -920,6 +930,20 @@ async function LogZone({
     // rather than "Score day" once the day already carries one.
     const selectedRow = rows.find((row) => row.day === selectedDay) ?? null
 
+    /* The date vocabulary BOTH readers share. The prompt is built from this
+       list server-side and the offline reader is handed the same one, so "sep
+       3" resolves to the same day whichever runs — and neither can name a day
+       the page has no facts for. Labels are formatted here because this file
+       owns the timezone. */
+    const candidateDays = coverage.days.map((entry) => ({
+      day: entry.day,
+      label: format(new Date(`${entry.day}T12:00:00`), 'EEE d MMM'),
+      fraction: entry.fraction,
+      logged: loggedDaySet.has(entry.day),
+      closedFor: closed.get(entry.day) ?? null,
+      loggedMinutes: hourTotals.get(entry.day)?.minutes ?? 0,
+    }))
+
     return {
       gaps,
       pending,
@@ -927,6 +951,7 @@ async function LogZone({
       canDeclare,
       filed,
       owedDays,
+      candidateDays,
       selectedNote: selectedRow?.note ?? null,
       selectedScored: selectedRow !== null,
       loggableTasks,
@@ -963,6 +988,7 @@ async function LogZone({
     selectedNote,
     selectedScored,
     loggableTasks,
+    candidateDays,
     catchUpAiEnabled,
     assignedApps,
     otherApps,
@@ -1000,6 +1026,8 @@ async function LogZone({
         knownTo={to}
         canDeclare={canDeclare}
         catchUpAiEnabled={catchUpAiEnabled}
+        candidateDays={candidateDays}
+        today={today}
       />
 
       {pending.length > 0 ? (
@@ -1111,12 +1139,17 @@ async function TeamZone({
   }
 
   const load = async () => {
-    const [roster, rows, teamAbsences, orgRows, apps] = await Promise.all([
-      getTeamRoster(),
+    const roster = await getTeamRoster()
+    const [rows, teamAbsences, orgRows, apps, dayApps] = await Promise.all([
       getTeamWorklogs(from, today),
       getTeamApprovedAbsences(from, today),
       listOrgHolidays(),
       listAppTagTargets(),
+      // WHICH PROJECTS EACH DAY'S HOURS WENT TO. From the entries' own app_id,
+      // which is what every per-project total already reads — the `[Project]`
+      // tags in a note are what somebody typed, and a day logged through the
+      // catch-up box sets app_id and writes no tag at all.
+      getEntryAppsInRange(roster.map((member) => member.userId), from, today),
     ])
 
     const closed = closedStudioDays(orgRows, from, today)
@@ -1154,7 +1187,7 @@ async function TeamZone({
       absentByUser.set(range.userId, set)
     }
 
-    return { people, absentByUser, closed, apps }
+    return { people, absentByUser, closed, apps, dayApps }
   }
 
   let data: Awaited<ReturnType<typeof load>> | null = null
@@ -1165,7 +1198,7 @@ async function TeamZone({
   }
   if (!data) return <ZoneError title="The team view could not be read." retryHref={retryHref} />
 
-  const { people, absentByUser, closed, apps } = data
+  const { people, absentByUser, closed, apps, dayApps } = data
 
   return (
       <section className="flex flex-col gap-3">
@@ -1311,7 +1344,10 @@ async function TeamZone({
                             {entry.percent}%
                           </span>
                         </span>
-                        <NoteWithAppTags note={entry.note} apps={apps} />
+                        <span className="flex min-w-0 flex-1 flex-col gap-1">
+                          <NoteWithAppTags note={entry.note} apps={apps} />
+                          <WorkedApps apps={dayApps.get(`${person.userId}|${iso}`) ?? []} />
+                        </span>
                       </li>
                     ))}
                 </ul>
@@ -1336,6 +1372,35 @@ async function TeamZone({
  * person wrote it, and a project renamed last month must not silently eat a
  * word out of their own account of their day.
  */
+/**
+ * The projects a day's hours actually went to.
+ *
+ * SEPARATE FROM the `[Project]` tags below, and not a duplicate of them. A tag
+ * is what somebody typed into their note; this is what the hours are attributed
+ * to in `worklog_entries.app_id` — the column every per-project total, cost
+ * figure and allocation report reads. They agree when a note names its project
+ * and diverge whenever it does not, which is most days logged through the box.
+ *
+ * Renders nothing for a day whose time went to no project: admin and learning
+ * hours legitimately belong to none, and an empty label would imply otherwise.
+ */
+function WorkedApps({ apps }: { apps: { id: string; name: string; slug: string }[] }) {
+  if (apps.length === 0) return null
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {apps.map((app) => (
+        <Link
+          key={app.id}
+          href={`/apps/${app.slug}`}
+          className="rounded border border-event-3/40 bg-event-3/15 px-1.5 py-px font-mono text-2xs text-foreground outline-none transition-colors hover:bg-event-3/25 focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {app.name}
+        </Link>
+      ))}
+    </span>
+  )
+}
+
 function NoteWithAppTags({ note, apps }: { note: string | null; apps: AppRef[] }) {
   const { text, tags } = splitNoteAppTags(note, apps)
 

@@ -16,10 +16,10 @@ const APP_B = '22222222-2222-4222-8222-222222222222'
 const NOT_MINE = '99999999-9999-4999-8999-999999999999'
 
 const DAYS: CatchUpCandidateDay[] = [
-  { day: '2026-08-30', label: 'Sun 30 Aug', fraction: 0, logged: false },
-  { day: '2026-09-01', label: 'Tue 1 Sep', fraction: 1, logged: false },
-  { day: '2026-09-02', label: 'Wed 2 Sep', fraction: 1, logged: false },
-  { day: '2026-09-03', label: 'Thu 3 Sep', fraction: 1, logged: false },
+  { day: '2026-08-30', label: 'Sun 30 Aug', fraction: 0, logged: false, loggedMinutes: 0 },
+  { day: '2026-09-01', label: 'Tue 1 Sep', fraction: 1, logged: false, loggedMinutes: 0 },
+  { day: '2026-09-02', label: 'Wed 2 Sep', fraction: 1, logged: false, loggedMinutes: 0 },
+  { day: '2026-09-03', label: 'Thu 3 Sep', fraction: 1, logged: false, loggedMinutes: 0 },
 ]
 
 const fences = {

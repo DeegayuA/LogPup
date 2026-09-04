@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gte, lte, sql, sum } from 'drizzle-orm'
+import { and, asc, count, eq, gte, inArray, lte, sql, sum } from 'drizzle-orm'
 
 import { db } from '@/db'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
@@ -210,4 +210,60 @@ export async function getMyEntryTotalsInRange(
       { minutes: Number(row.minutes ?? 0) || 0, count: Number(row.count) || 0 },
     ]),
   )
+}
+
+/** One project a day's hours went to. */
+export type DayApp = { id: string; name: string; slug: string }
+
+/**
+ * Which projects each person's hours went to, per day.
+ *
+ * FROM THE ENTRIES' OWN `app_id`, never from the note text. `splitNoteAppTags`
+ * reads `[Project Name]` tags somebody typed, which is a different and weaker
+ * fact: it is what they wrote, not what the hours are attributed to, and the
+ * two disagree the moment a project is renamed or a line is logged through the
+ * catch-up reader (which sets app_id and writes no tag at all). Every figure
+ * built on per-project time already reads this column; so should the thing that
+ * shows it.
+ *
+ * Keyed `userId|day` because the team view needs several people at once and a
+ * nested map is one more shape to get wrong at the call site.
+ */
+export async function getEntryAppsInRange(
+  userIds: readonly string[],
+  fromIso: string,
+  toIso: string,
+): Promise<Map<string, DayApp[]>> {
+  if (userIds.length === 0) return new Map()
+
+  const rows = await db
+    .selectDistinct({
+      userId: liveWorklogEntries.userId,
+      day: liveWorklogEntries.day,
+      id: liveApps.id,
+      name: liveApps.name,
+      slug: liveApps.slug,
+    })
+    .from(liveWorklogEntries)
+    // INNER join: an entry with no project is real and common — admin and
+    // learning time usually belongs to none — and it simply contributes no
+    // chip rather than a blank one.
+    .innerJoin(liveApps, eq(liveWorklogEntries.appId, liveApps.id))
+    .where(
+      and(
+        inArray(liveWorklogEntries.userId, [...userIds]),
+        gte(liveWorklogEntries.day, fromIso),
+        lte(liveWorklogEntries.day, toIso),
+      ),
+    )
+    .orderBy(asc(liveApps.name))
+
+  const byDay = new Map<string, DayApp[]>()
+  for (const row of rows) {
+    const key = `${row.userId}|${row.day}`
+    const list = byDay.get(key) ?? []
+    list.push({ id: row.id, name: row.name, slug: row.slug })
+    byDay.set(key, list)
+  }
+  return byDay
 }

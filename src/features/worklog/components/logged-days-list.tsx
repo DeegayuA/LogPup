@@ -36,6 +36,8 @@ export type LoggedDay = {
   /** Minutes recorded against the day, 0 when none. */
   minutes: number
   entryCount: number
+  /** The projects those hours went to. Empty when the time named none. */
+  apps: { id: string; name: string; slug: string }[]
 }
 
 export function LoggedDaysList({
@@ -119,6 +121,22 @@ export function LoggedDaysList({
               </div>
               {entry.note ? (
                 <p className={cn(bilingualText, 'text-2xs text-muted-foreground')}>{entry.note}</p>
+              ) : null}
+              {/* WHERE THE HOURS WENT, from the entries' own app_id. Not parsed
+                  out of the note: a day logged through the box sets the project
+                  and writes no `[Project]` tag, so reading the text would show
+                  nothing for exactly the days this list is mostly made of. */}
+              {entry.apps.length > 0 ? (
+                <span className="flex flex-wrap items-center gap-1">
+                  {entry.apps.map((app) => (
+                    <span
+                      key={app.id}
+                      className="rounded border border-event-3/40 bg-event-3/15 px-1.5 py-px font-mono text-2xs text-foreground"
+                    >
+                      {app.name}
+                    </span>
+                  ))}
+                </span>
               ) : null}
             </Link>
           </li>

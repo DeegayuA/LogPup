@@ -12,6 +12,13 @@ import {
   type MeterOriginSource,
 } from '@/features/gemini/components/ai-meter-provider'
 import { draftWorklogEntries, type DraftedEntry } from '@/features/worklog/entry-ai-actions'
+import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
+import {
+  resetDayScoreToHours,
+  setDayNote,
+  upsertDailyWorklog,
+} from '@/features/worklog/actions'
 import { glanceAtDay } from '@/features/worklog/day-summary'
 import type { ScoreSource } from '@/features/worklog/auto-score'
 import type { LoggableTask, WorklogEntryRow } from '@/features/worklog/entry-queries'
@@ -216,7 +223,7 @@ export function DayPanel({
                 {scoreSource === 'from_hours' ? (
                   <span
                     className="rounded bg-chart-1/15 px-1.5 py-px font-sans text-2xs text-chart-1"
-                    title="Worked out from the hours below. Score it yourself to replace it."
+                    title="Worked out from the hours below. Pick a number to say otherwise."
                   >
                     from your hours
                   </span>
@@ -247,7 +254,37 @@ export function DayPanel({
         </div>
       </dl>
 
-      {glance.snippet ? (
+      {/* THE SCORE, EDITABLE — the last thing this panel could not correct.
+          Removing the old form took the note AND the score with it, and only
+          the note came back. A day is three facts and the panel says it holds
+          "the controls to correct" them, so leaving one of the three read-only
+          made that sentence false. Four pills rather than a slider: those are
+          the values the rest of the product offers, and a slider invites a
+          precision nobody means. */}
+      {canEdit ? (
+        <DayScoreEditor
+          day={day}
+          percent={initial?.percent ?? null}
+          scoreSource={scoreSource ?? 'self'}
+          note={initial?.note ?? null}
+          hasHours={entries.length > 0}
+        />
+      ) : null}
+
+      {/* THE NOTE, EDITABLE. Removing the old score-and-note form from this
+          panel took the ONLY place a day's note could be written or corrected
+          with it — and a day scored from its hours arrives with no note at all,
+          so every auto-scored day read "No note" with nothing to do about it.
+          Just the note: the score belongs to the hours or to the box above, and
+          the four preset pills and project chip row that used to sit here were
+          the duplication that got removed. */}
+      {canEdit && initial !== null ? (
+        /* KEYED BY DAY so paging to another day re-seeds the box from that
+           day's note. The alternative — an effect calling setState — is a
+           cascading render React lints against, and this is the case keys are
+           for: a different day is a different note, not the same one changed. */
+        <DayNoteEditor key={day} day={day} initialNote={initial.note} />
+      ) : glance.snippet ? (
         <p className="rounded-lg border border-border/50 bg-background/40 px-2.5 py-2 text-xs text-muted-foreground">
           {glance.snippet}
         </p>
@@ -288,6 +325,163 @@ export function DayPanel({
         evidence={evidence}
       />
       </div>
+    </div>
+  )
+}
+
+/**
+ * One day's note, on its own.
+ *
+ * WRITES ONE COLUMN. `setDayNote` deliberately says nothing about the score, so
+ * correcting the words on a day scored from its hours does not claim that score
+ * as the person's own — which `upsertDailyWorklog` would, permanently, and
+ * would stop the hours ever updating it again.
+ *
+ * Only rendered for a day that HAS a record. `daily_worklogs.percent` is NOT
+ * NULL, so there is no row for a note to live on until the day has a score or
+ * some hours; offering an input that could only fail would be worse than not
+ * offering one.
+ */
+function DayNoteEditor({ day, initialNote }: { day: string; initialNote: string | null }) {
+  const [note, setNote] = React.useState(initialNote ?? '')
+  const [saving, startSaving] = React.useTransition()
+
+  const dirty = note.trim() !== (initialNote ?? '').trim()
+
+  function save() {
+    if (!dirty) return
+    startSaving(async () => {
+      const res = await setDayNote(day, note.trim() ? note.trim() : null)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      toast.success('Note saved')
+    })
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label
+        htmlFor={`day-note-${day}`}
+        className="font-mono text-2xs uppercase tracking-wider text-muted-foreground"
+      >
+        Note
+      </label>
+      <Textarea
+        id={`day-note-${day}`}
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        rows={2}
+        placeholder="One line about the day"
+        className="min-h-14 text-xs"
+      />
+      {dirty ? (
+        <Button type="button" size="sm" variant="outline" onClick={save} disabled={saving}>
+          {saving ? (
+            <Loader2Icon className="animate-spin motion-reduce:animate-none" aria-hidden />
+          ) : null}
+          Save note
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+/** The four values the rest of the product offers. A slider invites false precision. */
+const SCORE_PRESETS = [25, 50, 80, 100] as const
+
+/**
+ * One day's score, and the two ways it can be set.
+ *
+ * PICKING A NUMBER CLAIMS IT. `upsertDailyWorklog` stamps `score_source =
+ * 'self'`, so from then on the day keeps that number however many hours are
+ * logged against it — which is the point, and also why the way back has to
+ * exist beside it rather than in a settings page somewhere.
+ *
+ * The note is carried through the write UNCHANGED. `upsertDailyWorklog` sets
+ * both columns, so scoring a day without passing its existing note would blank
+ * words the person wrote — the same trap the one-line box handles by passing
+ * `savedNote` through.
+ */
+function DayScoreEditor({
+  day,
+  percent,
+  scoreSource,
+  note,
+  hasHours,
+}: {
+  day: string
+  percent: number | null
+  scoreSource: ScoreSource
+  note: string | null
+  hasHours: boolean
+}) {
+  const [saving, startSaving] = React.useTransition()
+
+  function pick(value: number) {
+    startSaving(async () => {
+      const res = await upsertDailyWorklog(day, value, note)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      toast.success(`Scored ${value}%`)
+    })
+  }
+
+  function backToHours() {
+    startSaving(async () => {
+      const res = await resetDayScoreToHours(day)
+      if (!res.ok) {
+        toast.error(res.error)
+        return
+      }
+      toast.success('Scored from your hours again')
+    })
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-2xs text-muted-foreground">
+        {percent === null ? 'Score this day:' : 'Change it:'}
+      </span>
+      {SCORE_PRESETS.map((value) => (
+        <button
+          key={value}
+          type="button"
+          disabled={saving}
+          onClick={() => pick(value)}
+          aria-pressed={percent === value && scoreSource === 'self'}
+          className={cn(
+            'rounded border px-2 py-0.5 font-mono text-2xs cursor-pointer',
+            'transition-colors motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'disabled:cursor-not-allowed disabled:opacity-60',
+            percent === value && scoreSource === 'self'
+              ? 'border-primary bg-primary/15 text-primary'
+              : 'border-border/60 text-muted-foreground hover:border-border hover:text-foreground',
+          )}
+        >
+          {value}%
+        </button>
+      ))}
+      {/* Only offered where it would DO something: a day already derived has
+          nothing to go back to, and a day with no hours has nothing to derive
+          from — offering it there would be a button whose only outcome is an
+          error message. */}
+      {scoreSource === 'self' && hasHours ? (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={backToHours}
+          className="rounded px-1.5 py-0.5 text-2xs text-muted-foreground underline decoration-dotted underline-offset-2 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+        >
+          use my hours instead
+        </button>
+      ) : null}
+      {saving ? (
+        <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" aria-hidden />
+      ) : null}
     </div>
   )
 }
