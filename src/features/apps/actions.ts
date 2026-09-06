@@ -383,13 +383,18 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   const result = buildAppUpdate(input)
   if (!result.ok) return err(result.error)
 
+  // Columns read off liveApps, the same object the FROM names. Naming
+  // `apps.slug` here typechecks (same column type) and throws at runtime —
+  // drizzle refuses a field whose table is not in the statement — which is
+  // how every pause/rename/PM change 500'd after the soft-delete conversion
+  // swapped only the FROM. db/live.test.ts check 8 now scans for the shape.
   const [app] = await db
     .select({
-      slug: apps.slug,
-      name: apps.name,
-      status: apps.status,
-      leadId: apps.leadId,
-      pmId: apps.pmId,
+      slug: liveApps.slug,
+      name: liveApps.name,
+      status: liveApps.status,
+      leadId: liveApps.leadId,
+      pmId: liveApps.pmId,
     })
     .from(liveApps)
     .where(eq(liveApps.id, parsedId.data))

@@ -58,8 +58,10 @@ export default function AppDetailLoading() {
       </div>
 
       <div className="flex items-center gap-4 border-b border-border pb-2">
-        {['w-20', 'w-14', 'w-20', 'w-24', 'w-20', 'w-16'].map((width) => (
-          <Shimmer key={width} className={`h-4 ${width}`} />
+        {/* Keyed by position, not width: three tabs share `w-20`, and a
+            duplicate key is a React error on every app page load. */}
+        {['w-20', 'w-14', 'w-20', 'w-24', 'w-20', 'w-16'].map((width, index) => (
+          <Shimmer key={index} className={`h-4 ${width}`} />
         ))}
       </div>
 

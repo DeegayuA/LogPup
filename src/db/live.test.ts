@@ -7,6 +7,10 @@ import * as schema from './schema'
 import {
   liveMeetings, liveMeetingsAs, MEETING_CHILD_TABLES, SOFT_TABLES,
 } from './live'
+// Namespace import alongside the named one: check 8 maps each SOFT_TABLES
+// entry's live subquery back to its EXPORT NAME by identity, which needs the
+// module object, not a hand-kept list of names.
+import * as live from './live'
 
 // ---------------------------------------------------------------------------
 // This file has two jobs:
@@ -673,4 +677,93 @@ describe('check 7: the legacy-notes probe is still called', () => {
       + 'keep the probe raw and keep these calls.',
     ).toBeGreaterThanOrEqual(2)
   })
+})
+
+// Check 8 ---------------------------------------------------------------
+//
+// A select that READS the live view but NAMES the raw table in its field map.
+//
+//   db.select({ slug: apps.slug }).from(liveApps)
+//
+// builds fine, typechecks fine, and throws at runtime: drizzle 0.45 refuses a
+// field whose table is not part of the statement ("Your \"slug\" field
+// references a column \"apps\".\"slug\", but the table \"apps\" is not part of
+// the query!"). Checks 1-3 cannot see it — the statement reads through live*
+// exactly as they ask — and tsc cannot either, because both column objects
+// carry the same column type. It shipped that way in updateApp: the soft-
+// delete conversion switched `.from(apps)` to `.from(liveApps)` and left the
+// five field references on `apps`, so every pause/rename/PM change threw a
+// 500 for two weeks while the tests stayed green.
+//
+// Statement-scoped on purpose (unlike check 3): the offending shape is one
+// `.select({ ... }).from(liveX)` chain, so the field map between `select({`
+// and `}).from(` is exactly the text to inspect. Comments are stripped first
+// — a `// tasks.due_date is a calendar day` explanation inside a field map is
+// not a reference.
+describe('check 8: select field map names the raw table while reading the live view', () => {
+  // live export name -> raw table export name, derived from SOFT_TABLES via
+  // the schema module so a new soft table is covered the moment it is
+  // registered, without a second list here to keep in step.
+  const liveToRaw = new Map<string, string>()
+  for (const soft of SOFT_TABLES) {
+    const rawName = Object.entries(schema).find(([, value]) => value === soft.table)?.[0]
+    const liveName = Object.entries(live).find(([, value]) => value === soft.live)?.[0]
+    if (rawName && liveName) liveToRaw.set(liveName, rawName)
+  }
+
+  it('sanity: derived at least one live -> raw pairing', () => {
+    expect(liveToRaw.size).toBeGreaterThan(0)
+  })
+
+  // Newlines inside a block comment are kept so the reported line number is
+  // the file's, not the stripped text's.
+  const stripComments = (text: string) =>
+    text
+      .replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, ''))
+      .replace(/\/\/[^\n]*/g, '')
+
+  // `.select({` ... `}).from(liveX)` — the field map is group 1, the live
+  // export group 2. `(?:(?!\.from\()[\s\S])*?` keeps the match inside ONE
+  // chain: a lazy `[\s\S]*?` on its own would happily bridge from an early
+  // select({ in the file to a later }).from(liveX) and blame the wrong code.
+  const SELECT_FROM_LIVE_RE = /\.select\(\s*\{((?:(?!\.from\()[\s\S])*?)\}\s*\)\s*\.from\((live\w+)\)/g
+
+  type Offender = { relPath: string; line: number; live: string; raw: string }
+  const offenders: Offender[] = []
+  for (const entry of entries) {
+    const text = stripComments(entry.text)
+    for (const match of text.matchAll(SELECT_FROM_LIVE_RE)) {
+      const [, fields, liveName] = match
+      const raw = liveToRaw.get(liveName)
+      if (!raw) continue
+      // `apps.slug` but not `liveApps.slug` (the preceding char must not be a
+      // word char) and not `something.apps.x` (nor a dot).
+      const rawRef = new RegExp(`(?<![\\w.])${raw}\\.\\w+`)
+      if (!rawRef.test(fields)) continue
+      offenders.push({
+        relPath: entry.relPath,
+        line: text.slice(0, match.index).split('\n').length,
+        live: liveName,
+        raw,
+      })
+    }
+  }
+
+  // See check 1's comment: registers one passing test for the empty case so
+  // this check can reach PASS instead of vitest failing the file with
+  // "No test found in suite" once offenders is empty.
+  if (offenders.length === 0) {
+    it('no offenders', () => {
+      expect(offenders).toEqual([])
+    })
+  } else {
+    it.each(offenders)('$relPath:$line', ({ relPath, line, live: liveName, raw }) => {
+      throw new Error(
+        `${relPath}:${line}: .select({ ... }).from(${liveName}) but the field map references ${raw}.<column>. `
+        + `The raw table is not part of that statement, so drizzle throws at runtime ("the table \\"${raw}\\" is `
+        + `not part of the query"). Read the columns off the live view instead — ${liveName}.<column> — or, if `
+        + `the raw table really is meant, join it explicitly.`,
+      )
+    })
+  }
 })
