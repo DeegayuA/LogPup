@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS "knowledge_nodes" (
   "embedding_model" text,
   "embedded_at"     timestamptz,
   "source_hash"     text NOT NULL,      -- hash(CHUNKER_VERSION, title, body) — gates embedding only
-  "source_seq"      bigint NOT NULL,    -- activity created_at (ms) or cron ranAt; last-writer guard
+  "source_seq"      bigint NOT NULL,    -- Date.now() captured in logActivity / cron ranAt; last-writer guard
   "updated_at"      timestamptz NOT NULL DEFAULT now(),
   "deleted_at"      timestamptz,
   UNIQUE ("kind", "entity_id", "chunk")
@@ -236,8 +236,11 @@ comment rewritten to four steps. `maxDuration` stays 60. Budget:
 
 1. **Reconcile per kind** (smallest kinds first): read all live rows →
    `toDrafts` → `source_hash`; read `(kind, entity_id, chunk, source_hash,
-   deleted_at)`; pure `planReconcile(existing, drafts)` yields upserts (hash
-   differs), tombstones (raw row soft-deleted), hard deletes (raw row gone),
+   deleted_at, owner_id, app_ids, meeting_id, status, occurred_at)`; pure
+   `planReconcile(existing, drafts)` yields upserts (content hash differs OR
+   any of those ACL/ranking columns differ — an app removed from a meeting
+   must stop granting reach that night, not when the body next changes),
+   tombstones (raw row soft-deleted), hard deletes (raw row gone),
    restores (`deleted_at` cleared), chunk trims. One raw-table probe per kind
    tells trashed from purged — `sync.ts` is the ONE allowlisted raw reader.
    Idempotent: a second run on an unchanged workspace plans nothing. This is
@@ -306,15 +309,29 @@ an infinite deadline; `--embed` uses the runner's own keys (`keyPolicy:
    sprint > meeting. Pinned by a test table built from the real dev titles.
 4. **Reach** (`acl.ts`): `ACL_ACTION: Record<Kind, Action>` — app/task/sprint/
    comment → `app.view` (what the ⌘K providers use), bug → `bug.view`, person →
-   `user.view.detail`, worklog → `worklog.view`, absence → `absence.view`,
-   meeting/note/followup → `meeting.intel.view` **plus** the visibility rule.
-   `kindReach(actor)` buckets kinds into all/scoped/own via `effectiveGrant`;
-   none-kinds omitted; scoped with empty scope collapses to own; nothing
-   reachable → skip the query. Meeting family always joins `liveMeetings`
-   and applies `meetingVisibleTo(actor.id)` for every seat, admins included;
-   followup adds `owner_id = me`. `reaches(actor, node)` is the pure
-   post-check mirroring the SQL; both are tested for agreement over
-   role × employment × kind × ownership fixtures.
+   `user.view.detail`, worklog → `worklog.view`, absence → `absence.view`.
+   `kindReach(actor)` buckets those kinds into all/scoped/own via
+   `effectiveGrant`; none-kinds omitted; scoped with empty scope collapses to
+   own; nothing reachable → skip the query.
+
+   The **meeting family** (meeting/note/followup) never uses the
+   `app_ids && scope` arm — that would hand every assigned member and client
+   stakeholder the transcript of meetings they were not invited to. It
+   mirrors the two live gates exactly: `meetingVisibleTo(actor.id)` (joined
+   on `liveMeetings`, applied to every seat, admins included) AND the intel
+   rule from `decideIntelReadable` — `effectiveGrant(meeting.intel.view) ===
+   'all'` OR `owner_id = me` OR `me` is an attendee OR `app_ids` intersects
+   `managedAppIds(me)` (free-text PM/lead roles via `managesApp`, resolved
+   once per ask beside `loadActor`). Followup adds `owner_id = me`
+   (assignee). Note/followup nodes inherit their meeting's `meeting_id`,
+   `app_ids` and owner arms at index time and re-inherit on every meeting
+   reindex.
+
+   `reaches(actor, node, ctx)` is the pure post-check mirroring the SQL;
+   both are tested for agreement over role × employment × kind × ownership
+   fixtures, including: attendees-only meeting invisible to a non-attendee
+   superadmin; attendee not assigned to the meeting's app still reaches it;
+   scoped member not on the meeting does not reach its notes.
 5. **Candidates**, one `Promise.all`:
    - FTS: `tsv @@ websearch_to_tsquery('simple', tokens joined ' OR ')` OR the
      `'english'` form, prefix (`tok:*`) on tokens ≥3 graphemes Latin / ≥2
