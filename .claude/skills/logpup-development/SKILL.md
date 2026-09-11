@@ -22,6 +22,32 @@ Use codebase-memory MCP first (`search_graph`, `trace_path`, `get_code_snippet`)
 | `--> statement-breakpoint` between statements, **never inside a comment** | The splitter is a plain string split; a marker in a comment truncates the file mid-comment. |
 | Dev DB proves nothing about prod | Dev carries hand-applied schema from every branch; prod/preview were never verified. |
 
+## Verification — when a rung is broken, not failing
+
+**`npx vitest run` cannot start in this tree (seen 2026-09-11).** Two separate faults, and the
+first hides the second:
+
+1. `@rolldown/binding-win32-x64-msvc` is absent from `node_modules`, so rolldown falls back to a
+   wasm binding that is also absent. Repair without touching the lockfile:
+   `npm install --no-save --no-package-lock @rolldown/binding-win32-x64-msvc@<rolldown version>`.
+2. Then `ERR_REQUIRE_ESM`: `vitest/dist/config.cjs` `require()`s `std-env`, and
+   **`package-lock.json` itself pins `std-env` 4.2.0, which is ESM-only.** vitest 4.1.10 needs
+   the 3.x line. This is a lockfile-level incompatibility, not a stale install — `npm ci` would
+   reproduce it exactly.
+
+Fixing (2) means changing `package-lock.json`, which is usually another session's in-flight
+work. Do not do it as a drive-by. Report `vitest BLOCKED: lockfile pins std-env 4.2.0 (ESM) vs
+vitest 4.1.10 CJS require` and verify with the rungs that DO work.
+
+**Substitute for the blocked rung, do not skip it.** A `tsx` script in the scratchpad that
+imports the changed modules and asserts their pure behaviour exercises the same logic the
+colocated tests would, catches import-time breakage, and produces a real exit code:
+`npx tsx --tsconfig tsconfig.json "$S/smoke.ts"`. Say in the recap that it stood in for vitest.
+
+**`tsc` reports `TS2304: Cannot find name 'LayoutProps'` in `src/app/layout.tsx` on a tree that
+has never been built.** It is a Next-generated global from `.next/types`, not a real error — one
+`npm run build` clears it. Do not "fix" layout.tsx.
+
 ## Multi-session coordination
 
 - **Never `git stash`** — the stash is shared across all worktrees; a pop has already clobbered another session's entry.

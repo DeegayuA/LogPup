@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.542",
+  "current": "v0.0.547",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4336,6 +4336,46 @@
       "hash": "419d875",
       "kind": "other",
       "change": "Unify worklog logging with AI catch-up box"
+    },
+    {
+      "version": "v0.0.543",
+      "date": "2026-09-04",
+      "at": "2026-09-04T15:54:21+05:30",
+      "hash": "9f936b5",
+      "kind": "other",
+      "change": "Add app aliases and auto-scored worklog flow"
+    },
+    {
+      "version": "v0.0.544",
+      "date": "2026-09-04",
+      "at": "2026-09-04T16:34:23+05:30",
+      "hash": "3ac9d68",
+      "kind": "other",
+      "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.545",
+      "date": "2026-09-06",
+      "at": "2026-09-06T17:08:38+05:30",
+      "hash": "4e4cf9f",
+      "kind": "other",
+      "change": "Ask LogPup: knowledge index, graph and grounded answers — design spec"
+    },
+    {
+      "version": "v0.0.546",
+      "date": "2026-09-06",
+      "at": "2026-09-06T17:09:07+05:30",
+      "hash": "a3168f0",
+      "kind": "other",
+      "change": "Ask LogPup spec: meeting-family reach mirrors the live gates; reconcile compares ACL columns"
+    },
+    {
+      "version": "v0.0.547",
+      "date": "2026-09-06",
+      "at": "2026-09-06T20:57:05+05:30",
+      "hash": "a8c5100",
+      "kind": "other",
+      "change": "No description recorded for this build."
     }
   ]
 }

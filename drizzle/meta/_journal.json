@@ -484,6 +484,13 @@
       "when": 1787158500000,
       "tag": "0070_worklog_score_source",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1787158600000,
+      "tag": "0071_sso_redemptions",
+      "breakpoints": true
     }
   ]
 }

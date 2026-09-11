@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "branchName": "main",
+  "worktreePath": "C:\\Users\\ASUS\\Documents\\GitHub\\LogPup",
+  "upstream": "origin/main",
+  "mergeBase": "a8c510046fff0465867385744204d2ee9f51b781",
+  "firstSeenHead": "a8c510046fff0465867385744204d2ee9f51b781",
+  "lastSeenHead": "a8c510046fff0465867385744204d2ee9f51b781",
+  "lastAnalyzedHead": "a8c510046fff0465867385744204d2ee9f51b781",
+  "stale": false,
+  "staleReason": null,
+  "staleSince": null,
+  "lifecycleEvent": null,
+  "createdAt": "2026-09-11T10:20:33.796Z",
+  "updatedAt": "2026-09-11T10:20:33.796Z"
+}

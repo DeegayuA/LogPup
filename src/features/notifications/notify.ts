@@ -89,24 +89,36 @@ export type NewNotification = {
 export async function createNotifications(
   rows: NewNotification[],
   now: Date = new Date(),
-): Promise<void> {
+): Promise<string[]> {
   try {
     const valid = rows.filter((r) => r.userId)
-    if (valid.length === 0) return
+    if (valid.length === 0) return []
 
     const withLiveEntities = await dropDeadEntities(valid)
-    if (withLiveEntities.length === 0) return
+    if (withLiveEntities.length === 0) return []
 
     const allowed = await dropIneligibleRecipients(withLiveEntities)
-    if (allowed.length === 0) return
+    if (allowed.length === 0) return []
 
     const built = mergeInBatch(allowed.map(toInsertRow))
     const dayIso = isoDayOf(now)
     const toWrite = await applyCap(built, dayIso)
     await insertAll(toWrite)
+    // WHO SURVIVED THE GATE, for a caller that has to tell the same people something
+    // ELSEWHERE — today the Attendance webhook, which pushes an assignment to a phone.
+    //
+    // Returned rather than recomputed by the caller ON PURPOSE. Every drop this function makes
+    // — deactivated, unapproved, removed, dead entity, and the `can()` visibility check — is
+    // the reason this is "the one door every notification comes through"; a second surface
+    // re-deriving eligibility is precisely the drift the single door exists to prevent, and
+    // getting it wrong means pushing a task title to somebody the in-app row was withheld from.
+    //
+    // Additive: the value was `void`, so no existing caller changes.
+    return [...new Set(allowed.map((r) => r.userId))]
   } catch (error) {
     // Swallowed on purpose, and logged rather than rethrown: see the docblock.
     console.error('[notifications] createNotifications failed:', error)
+    return []
   }
 }
 

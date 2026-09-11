@@ -5,10 +5,14 @@ import { and, eq, inArray, isNull, max, sql, type SQL } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { applyDueDate } from '@/features/sprints/due-date'
-import { isTerminal } from '@/features/sprints/board-view'
 import { transitionTaskStatus } from '@/features/sprints/task-status'
+// The two status-write pieces that were duplicated verbatim between updateTask and
+// moveTaskOnBoard, now shared with the Attendance bridge's writer. See task-status-write.ts
+// for why a status change is four steps rather than one.
+import { statusActivity, syncLinkedFollowups } from '@/features/sprints/task-status-write'
+import { notifyNewAssignees } from '@/features/sprints/assignment-notify'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
-import { meetingFollowups, tasks } from '@/db/schema'
+import { tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
@@ -16,7 +20,6 @@ import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
 import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
-import { decideFollowupResolutionOnTaskStatusChange } from '@/features/meetings/followups'
 import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
 import { isAdminRole } from '@/features/auth/capabilities'
 import {
@@ -29,13 +32,6 @@ import {
 
 const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
 type TaskStatus = (typeof TASK_STATUSES)[number]
-
-// How a status reads inside an activity detail: "moved X to In progress".
-const STATUS_LABELS: Record<TaskStatus, string> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  done: 'Done',
-}
 
 /**
  * A rank is a `double precision` column, so the only thing that must never
@@ -190,53 +186,38 @@ async function taskById(taskId: string) {
 }
 
 /**
- * The other half of closing the loop between meeting follow-ups and tasks
- * (see meetings/ai-actions.ts's linkFollowupToTask, which sets
- * meeting_followups.resolved_by_task_id when a task is created from a
- * suggestion that matches an open follow-up). A task moving TO 'done'
- * resolves the follow-up it's linked to; moving back OUT of 'done' reopens
- * it — decideFollowupResolutionOnTaskStatusChange is the pure decision,
- * this is just wiring it to a write.
+ * The assignment notification, with the app lookup it needs.
  *
- * Called from every path that can change a task's status (updateTask,
- * moveTaskOnBoard) AFTER that write has already succeeded, and always
- * wrapped in its own try/catch by the caller: follow-up bookkeeping must
- * NEVER fail the task move it's riding on. A task with no linked follow-up
- * (the overwhelming majority) costs one no-op UPDATE that matches zero rows.
+ * `buildAssignmentNotice` wants the app's NAME and SLUG (the notification says which app, and
+ * links to its board), and neither action has them in hand — both carry only `appId`. One
+ * query, and only when somebody was actually added: the common edit changes a title, not a
+ * person, and paying for a lookup on every save to notify nobody would be a waste on the path
+ * that runs most.
  */
-async function syncLinkedFollowups(
-  taskId: string,
-  fromStatus: TaskStatus,
-  toStatus: TaskStatus,
-): Promise<void> {
-  const decision = decideFollowupResolutionOnTaskStatusChange(fromStatus, toStatus)
-  if (decision === 'none') return
-
-  if (decision === 'resolve') {
-    await db
-      .update(meetingFollowups)
-      .set({
-        status: 'resolved',
-        resolvedAt: new Date(),
-        resolutionNote: 'Resolved automatically — the linked task was completed',
-      })
-      .where(and(eq(meetingFollowups.resolvedByTaskId, taskId), eq(meetingFollowups.status, 'open')))
-    return
+async function notifyAssignmentIfAny(input: {
+  taskId: string
+  taskTitle: string
+  appId: string
+  dueDate: string | null
+  dueKind: 'target' | 'committed'
+  actorId: string
+  actorName: string
+  assigneeIds: readonly string[]
+}): Promise<void> {
+  if (input.assigneeIds.length === 0) return
+  try {
+    const [app] = await db
+      .select({ name: liveApps.name, slug: liveApps.slug })
+      .from(liveApps)
+      .where(eq(liveApps.id, input.appId))
+      .limit(1)
+    if (!app) return
+    await notifyNewAssignees({ ...input, appName: app.name, appSlug: app.slug })
+  } catch (error) {
+    console.error(`[sprints] assignment notify lookup failed for task ${input.taskId}:`, error)
   }
-
-  // reopen: only undo what THIS auto-resolve did, not a manual resolve that
-  // happens to share the same linked task — resolutionNote is the marker.
-  await db
-    .update(meetingFollowups)
-    .set({ status: 'open', resolvedAt: null, resolutionNote: null })
-    .where(
-      and(
-        eq(meetingFollowups.resolvedByTaskId, taskId),
-        eq(meetingFollowups.status, 'resolved'),
-        eq(meetingFollowups.resolutionNote, 'Resolved automatically — the linked task was completed'),
-      ),
-    )
 }
+
 
 async function revalidateApps(appIds: readonly string[]) {
   const unique = [...new Set(appIds)]
@@ -384,6 +365,19 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
     appId,
   })
 
+  // Tell whoever this landed on. Best-effort inside notifyNewAssignees, which swallows and
+  // logs — the task is already saved and a lost notification must not report it as failed.
+  await notifyAssignmentIfAny({
+    taskId: created.id,
+    taskTitle: title,
+    appId,
+    dueDate: dueDate ?? null,
+    dueKind: 'target',
+    actorId: session.user.id,
+    actorName: session.user.name ?? 'Someone',
+    assigneeIds: assigneeIds ?? (assigneeId ? [assigneeId] : []),
+  })
+
   await revalidateApp(appId)
   return ok({ taskId: created.id })
 }
@@ -464,11 +458,17 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     Object.assign(set, transitionTaskStatus(existing.status, parsed.data.status, new Date()))
   }
 
+  // Who was NEWLY put on the task by this save, for the notification below. `diffAssignees`
+  // already computes it, so re-deriving it from the submitted array would be a second, weaker
+  // copy of that logic — and would notify people who were on the task before.
+  let addedAssignees: readonly string[] = []
   try {
     await db.update(tasks).set(set).where(eq(tasks.id, taskId))
     // After the column, so the set's first id and `assignee_id` agree; the
     // join write is a no-op when the same people are re-sent.
-    if (assigneeIds !== undefined) await setTaskAssignees(taskId, assigneeIds, session.user.id)
+    if (assigneeIds !== undefined) {
+      addedAssignees = (await setTaskAssignees(taskId, assigneeIds, session.user.id)).add
+    }
   } catch (error) {
     if (isForeignKeyViolation(error)) return err('Invalid sprint or assignee')
     return unexpected('updateTask', error)
@@ -482,9 +482,7 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   let detail: string | null = null
   let metadata: Record<string, unknown> | null = null
   if (nextStatus !== undefined && nextStatus !== existing.status) {
-    verb = isTerminal(nextStatus) ? 'completed' : isTerminal(existing.status) ? 'reopened' : 'moved'
-    if (verb === 'moved') detail = `to ${STATUS_LABELS[nextStatus]}`
-    metadata = { status: { from: existing.status, to: nextStatus } }
+    ({ verb, detail, metadata } = statusActivity(existing.status, nextStatus))
   } else if (nextAssignee !== undefined && nextAssignee !== existing.assigneeId) {
     verb = nextAssignee === null ? 'unassigned' : 'assigned'
     metadata = { assigneeId: { from: existing.assigneeId, to: nextAssignee } }
@@ -510,6 +508,21 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
       console.error(`[sprints] follow-up sync failed for task ${taskId}:`, error)
     }
   }
+
+  // Only the people this save ADDED. Re-saving a dialog with the same three names on it must
+  // not ring three bells again, which is exactly what notifying the whole array would do.
+  await notifyAssignmentIfAny({
+    taskId,
+    taskTitle: parsed.data.title ?? existing.title,
+    appId: existing.appId,
+    // Post-patch values: if this same save moved the deadline, the notification should name the
+    // new one, not the one it is replacing.
+    dueDate: ('dueDate' in set ? (set.dueDate as string | null) : existing.dueDate) ?? null,
+    dueKind: ('dueKind' in set ? (set.dueKind as 'target' | 'committed') : existing.dueKind),
+    actorId: session.user.id,
+    actorName: session.user.name ?? 'Someone',
+    assigneeIds: addedAssignees,
+  })
 
   await revalidateApp(existing.appId)
   return ok(undefined)
@@ -610,9 +623,7 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
   let detail: string | null = null
   let metadata: Record<string, unknown> | null = null
   if (status !== undefined && status !== existing.status) {
-    verb = isTerminal(status) ? 'completed' : isTerminal(existing.status) ? 'reopened' : 'moved'
-    if (verb === 'moved') detail = `to ${STATUS_LABELS[status]}`
-    metadata = { status: { from: existing.status, to: status } }
+    ({ verb, detail, metadata } = statusActivity(existing.status, status))
   } else if (assigneeId !== undefined && assigneeId !== existing.assigneeId) {
     verb = assigneeId === null ? 'unassigned' : 'assigned'
     metadata = { assigneeId: { from: existing.assigneeId, to: assigneeId } }
@@ -649,7 +660,7 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
   if (assigneeId !== undefined && assigneeId !== existing.assigneeId) {
     try {
       const current = (await getTaskAssignees([taskId])).get(taskId) ?? []
-      await setTaskAssignees(
+      const change = await setTaskAssignees(
         taskId,
         withPrimaryAssignee(
           current.map((person) => person.id),
@@ -657,6 +668,20 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
         ),
         session.user.id,
       )
+      // Dragging a card into somebody's column is the COMMONEST way work is handed over, and
+      // it was the one hand-off that said nothing. createTask and updateTask both notify; a
+      // notification that depends on which gesture the assigner used is an inconsistency
+      // nobody can explain later.
+      await notifyAssignmentIfAny({
+        taskId,
+        taskTitle: existing.title,
+        appId: existing.appId,
+        dueDate: existing.dueDate,
+        dueKind: existing.dueKind,
+        actorId: session.user.id,
+        actorName: session.user.name ?? 'Someone',
+        assigneeIds: change.add,
+      })
     } catch (error) {
       console.error(`[sprints] assignee set sync failed for task ${taskId}:`, error)
     }
@@ -792,6 +817,26 @@ export async function bulkUpdateTasks(
     appId: touchedAppIds.length === 1 ? touchedAppIds[0] : null,
     metadata: { patch, taskIds: allowed.map((row) => row.id) },
   })
+
+  // THE FOURTH STATUS WRITER, and the one that forgot. task-status.ts names four —
+  // createTask, updateTask, moveTaskOnBoard and this — and task-status-write.ts spells out that
+  // a status change is four steps, not one. This path did the UPDATE and the activity row but
+  // never the follow-up sync, so bulk-completing tasks left every linked meeting follow-up
+  // open: the meeting → task → resolution loop silently stopped closing for exactly the gesture
+  // somebody uses to clear a sprint.
+  //
+  // Per task and best-effort, same as the two single-task paths. A no-op UPDATE matching zero
+  // rows for the overwhelming majority that have no linked follow-up.
+  if (patch.status !== undefined) {
+    for (const row of allowed) {
+      if (row.status === patch.status) continue
+      try {
+        await syncLinkedFollowups(row.id, row.status, patch.status)
+      } catch (error) {
+        console.error(`[sprints] follow-up sync failed for task ${row.id}:`, error)
+      }
+    }
+  }
 
   // A multi-select can legitimately span apps (it cannot today, but the
   // action must not assume the UI's shape) — one batched slug lookup, not
