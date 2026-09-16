@@ -30,10 +30,14 @@ import { maintenanceMightBeArmed } from '@/features/maintenance/freeze-snapshot'
  * This is the `except` arm of the spec's rule, and every entry is a table
  * without which the window could not be ended or explained:
  *
- *  - users, webauthn_login_tokens — SIGNING IN IS A WRITE. Provisioning, the
- *    avatar refresh on a Google login and the single-use passkey token all
- *    touch these. Freeze them and the admin who needs to end the window cannot
- *    get in to end it, which is the one failure this feature must not have.
+ *  - users, webauthn_login_tokens, sso_redemptions — SIGNING IN IS A WRITE.
+ *    Provisioning, the avatar refresh on a Google login, the single-use
+ *    passkey token and the Attendance handoff's replay guard all touch these.
+ *    Freeze them and the admin who needs to end the window cannot get in to
+ *    end it, which is the one failure this feature must not have.
+ *    sso_redemptions is the sharpest case of the three: its write IS the
+ *    replay check, so a freeze would not merely refuse the sign-in, it would
+ *    refuse it at the exact step that makes the sign-in safe.
  *    Ordinary edits to a user are still refused, by requireCapability, which
  *    gates user.profile.edit and user.role.grant like every other write.
  *  - activity_log — an append-only record that must never fail the thing it
@@ -46,6 +50,7 @@ import { maintenanceMightBeArmed } from '@/features/maintenance/freeze-snapshot'
 const FREEZE_EXEMPT_TABLES: ReadonlySet<string> = new Set([
   'users',
   'webauthn_login_tokens',
+  'sso_redemptions',
   'activity_log',
   'notifications',
   'maintenance_window',

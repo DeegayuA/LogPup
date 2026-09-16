@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.547",
+  "current": "v0.0.548",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4376,6 +4376,14 @@
       "hash": "a8c5100",
       "kind": "other",
       "change": "No description recorded for this build."
+    },
+    {
+      "version": "v0.0.548",
+      "date": "2026-09-11",
+      "at": "2026-09-11T18:29:58+05:30",
+      "hash": "b3469c7",
+      "kind": "other",
+      "change": "intigrated with attendance app"
     }
   ]
 }

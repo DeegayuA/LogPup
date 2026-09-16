@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { format } from 'date-fns'
 import { inArray, lt, or } from 'drizzle-orm'
 import { db } from '@/db'
-import { notifications } from '@/db/schema'
+import { notifications, ssoRedemptions } from '@/db/schema'
 import { createNotifications } from '@/features/notifications/notify'
 import { collectWorklogNudgeInputs } from '@/features/worklog/nudge-queries'
 import { nudgeBody, planWorklogNudges } from '@/features/worklog/nudge'
@@ -28,6 +28,8 @@ import {
  * Three steps today, in this order:
  *
  *   1. Retention pruning — deletes rows that have outlived their window.
+ *      Two tables: notifications, and the spent Attendance SSO handoffs whose
+ *      replay-guard rows are dead once the tokens they guard cannot verify.
  *   2. The worklog nudge — tells people with a real backlog of unlogged days
  *      that they have one, with nobody logged in and nothing to open first.
  *   3. The auto-score backfill — scores days that carry hours and no score.
@@ -156,6 +158,42 @@ async function pruneExpiredNotifications(now: Date): Promise<PruneResult> {
 }
 
 /**
+ * How long a SPENT Attendance handoff stays on record after it expires.
+ *
+ * THIS IS NOT TIDINESS, IT IS THE REPLAY GUARD'S TAIL. The row's only job is
+ * to make a second redemption of the same jti lose a database race, and it is
+ * needed for exactly as long as the token could still verify. The verifier
+ * allows 30 seconds of clock skew past `exp` (CLOCK_SKEW_SECONDS in
+ * src/features/auth/attendance-sso.ts), so deleting a row the moment it
+ * expires would reopen a half-minute window in which a captured link verifies
+ * AND finds no record of having been spent — the one outcome this table
+ * exists to prevent. An hour is that margin with two orders of magnitude to
+ * spare, against rows that are a few dozen bytes and a few dozen a day.
+ */
+const SSO_REDEMPTION_GRACE_MS = 60 * 60 * 1000
+
+/**
+ * Delete spent handoff records that are past the grace above.
+ *
+ * A real DELETE, like the notifications prune: `sso_redemptions` carries no
+ * deletedAt and is not one of the soft-deleted tables (schema.ts says why) —
+ * a spent token is not somebody's work and there is no trash for it to sit in.
+ *
+ * Unbounded, unlike the prune above, and that is a considered difference: this
+ * table gains one row per SSO sign-in and sheds them within minutes, so the
+ * largest sweep imaginable is a busy day's worth. A cap here would be
+ * machinery guarding against a number that cannot occur.
+ */
+async function pruneExpiredSsoRedemptions(now: Date): Promise<{ deleted: number }> {
+  const cutoff = new Date(now.getTime() - SSO_REDEMPTION_GRACE_MS)
+  const deleted = await db
+    .delete(ssoRedemptions)
+    .where(lt(ssoRedemptions.expiresAt, cutoff))
+    .returning({ jti: ssoRedemptions.jti })
+  return { deleted: deleted.length }
+}
+
+/**
  * Tell people with a real backlog of unlogged days that they have one.
  *
  * WHY A CRON AND NOT A BANNER. The catch-up ledger only reaches somebody who
@@ -222,6 +260,18 @@ export async function GET(request: Request) {
 
   try {
     const retention = await pruneExpiredNotifications(ranAt)
+    /* STEP ONE, SECOND HALF: the spent Attendance handoffs. Part of retention
+       rather than a step of its own — it is the same concern (rows that have
+       outlived their window) against a second table, and the plan at the top
+       of this file is explicit that periodic work becomes an ordered step here
+       and never a second cron job. Its own try/catch so a sweep that fails
+       cannot discard a notifications prune that already deleted rows. */
+    let ssoRedemptionsPruned: { deleted: number } | { error: true } = { error: true }
+    try {
+      ssoRedemptionsPruned = await pruneExpiredSsoRedemptions(ranAt)
+    } catch (e) {
+      console.error('[notify-tick] sso redemption sweep failed:', e)
+    }
     /* STEP TWO. Its own try/catch: a nudge that cannot be planned — one bad
        schedule row, one unreachable read — must not throw away a prune that
        already succeeded and already deleted rows. The tick reports what each
@@ -247,7 +297,14 @@ export async function GET(request: Request) {
       console.error('[notify-tick] auto-score backfill failed:', e)
     }
 
-    return NextResponse.json({ ok: true, ranAt: ranAt.toISOString(), retention, nudge, scores })
+    return NextResponse.json({
+      ok: true,
+      ranAt: ranAt.toISOString(),
+      retention,
+      ssoRedemptions: ssoRedemptionsPruned,
+      nudge,
+      scores,
+    })
   } catch (e) {
     console.error('[notify-tick] failed:', e)
     return NextResponse.json({ error: 'Notify tick failed' }, { status: 500 })

@@ -1,0 +1,9 @@
+
+> logpup@0.1.0 db:migrate
+> node --env-file-if-exists=.env.local --env-file-if-exists=.env node_modules/drizzle-kit/bin.cjs migrate
+
+No config path provided, using default 'drizzle.config.ts'
+Reading config file 'C:\Users\ASUS\Documents\GitHub\LogPup\drizzle.config.ts'
+Using '@neondatabase/serverless' driver for database querying
+ Warning  '@neondatabase/serverless' can only connect to remote Neon/Vercel Postgres/Supabase instances through a websocket
+[⣷] applying migrations...[2K[1G[⣯] applying migrations...[2K[1G[⣟] applying migrations...[2K[1G[⡿] applying migrations...[2K[1G[✓] migrations applied successfully!

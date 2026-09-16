@@ -12,6 +12,8 @@ import { mayHoldSession } from '@/lib/access-gate'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { verifyPassword } from '@/lib/password'
 import { verifyGoogleIdToken } from '@/features/auth/google-one-tap'
+import { redeemAttendanceToken, verifyAttendanceToken } from '@/features/auth/attendance-sso'
+import { bridgeEmailAllowed } from '@/lib/bridge-auth'
 import { loginRateLimiter, RateLimitError, LOCKOUT_MESSAGE } from '@/lib/rate-limit'
 import {
   ACCOUNT_REMOVED_MESSAGE,
@@ -270,6 +272,66 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return { id: u.id, email: u.email, name: u.name }
       },
     }),
+    // The Attendance Web App's sign-in handoff. Modelled on the passkey
+    // provider above — a short-lived single-use token traded for a session —
+    // and it differs in exactly one way that matters: the token was minted by
+    // ANOTHER APPLICATION, so this provider trusts it to say WHO and nothing
+    // else. See docs/attendance-task-bridge.md, Part two.
+    //
+    // A SINGLE-SIGN-ON LINK IS A CONVENIENCE, NEVER A WAY IN. Every rule that
+    // governs who may enter LogPup applies unchanged to an SSO arrival, and
+    // the four refusals below are that rule spelled out. The one that is easy
+    // to get wrong by omission is the third: NO AUTO-PROVISIONING. Google
+    // sign-in provisions a pending row for any verified address; this must
+    // behave like Notion and GitHub instead and create nothing, or the
+    // Attendance app becomes a way to mint LogPup accounts and whoever holds
+    // the Attendance signing secret decides who works here.
+    //
+    // Registered only when LOGPUP_SSO_SECRET is set, the same conditional
+    // spread Notion and GitHub use below: constructing a provider around a
+    // possibly-undefined secret registers a broken sign-in route rather than
+    // simply omitting one. verifyAttendanceToken fails closed on the same
+    // variable, for the instance that loses it after boot.
+    ...(process.env.LOGPUP_SSO_SECRET
+      ? [Credentials({
+          id: 'attendance-sso',
+          name: 'Attendance',
+          credentials: { token: {} },
+          async authorize(creds) {
+            const identity = verifyAttendanceToken(String(creds?.token ?? ''))
+            if (!identity) return null
+
+            // The bridge's domain gate, checked before the lookup exactly as
+            // the task endpoints check it. DELIBERATELY NOT emailAllowed():
+            // that decides who may sign in and carries four domains, and
+            // widening sign-in must never silently widen what a handoff
+            // secret can reach.
+            if (!bridgeEmailAllowed(identity.email)) return null
+
+            // REPLAY. Spent here, BEFORE the lookup and before any refusal, so
+            // a token captured from browser history is burnt on its first
+            // presentation whatever the answer turns out to be. Deferring this
+            // until after the refusals would leave a refused token live and
+            // hand an attacker unlimited retries against it.
+            if (!(await redeemAttendanceToken(identity))) return null
+
+            const [u] = await selectUsers(eq(users.email, identity.email))
+            // NO AUTO-PROVISIONING, EVER. An address with no row here is
+            // simply refused; the token's `name` is display text from another
+            // application and is never written to users.name.
+            if (!u) return null
+            // Same refusal as the passkey provider, for the same reason: a
+            // rejected account's token redeems to nothing, while a DEACTIVATED
+            // one does mint a session — their session only reaches
+            // /deactivated, which is the screen that explains their situation.
+            // Refusing outright would show them a login failure instead of an
+            // answer.
+            if (u.status === 'rejected') return null
+            if (await isRemoved(u.id)) return null
+            return { id: u.id, email: u.email, name: u.name }
+          },
+        })]
+      : []),
     // Notion OAuth. Requires the public integration's client id/secret and an explicit
     // redirect URI. Sign-in only succeeds for a Notion account whose email matches an
     // existing allowed user (see the signIn callback) — never auto-provisioned.
@@ -360,7 +422,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // here. Falling through would be wrong as well as redundant: a
       // credentials sign-in carries no `profile`, so the Google branch below
       // would re-provision against an empty one.
-      if (provider === 'password' || provider === 'credentials' || provider === 'passkey' || provider === 'google-one-tap') {
+      //
+      // attendance-sso belongs in this list for a sharper version of the same
+      // reason. Its authorize() has already verified the signature, spent the
+      // jti, applied the bridge domain gate and refused anything without an
+      // existing row — and the branch it would otherwise fall through to is
+      // the one that PROVISIONS. That the provider only ever returns users it
+      // just found is what keeps the fall-through harmless today; naming it
+      // here is what keeps it harmless after somebody edits one of the two.
+      if (
+        provider === 'password' ||
+        provider === 'credentials' ||
+        provider === 'passkey' ||
+        provider === 'google-one-tap' ||
+        provider === 'attendance-sso'
+      ) {
         return true
       }
 

@@ -1,14 +1,16 @@
 # Attendance bridge — serving LogPup tasks to the Attendance Web App
 
-**Status: Parts one and three are BUILT here. Part two is BLOCKED on a migration only the user
-can apply.** The Attendance half is built too (`Attendance-Web-App/LOGPUP_TASKS_INTEGRATION.md`).
-The two files describe one feature, and the contract section below must stay identical in both.
+**Status: all three parts are BUILT here. Nothing works end to end until the secrets are set on
+both deployments.** The Attendance half is built too
+(`Attendance-Web-App/LOGPUP_TASKS_INTEGRATION.md`). The two files describe one feature, and the
+contract section below must stay identical in both.
 
 | Part | State |
 |---|---|
 | One — the task API (`/api/external/*`) | Built. tsc, lint, build all exit 0 |
 | Three — notifications, both directions | Built, including the in-app assignment notice LogPup never had |
-| Two — sign-in handoff | **Blocked.** `drizzle/0071_sso_redemptions.sql` is written and journalled but NOT applied, so the `schema.ts` declaration and the provider are deliberately held. See "Part two is held" below |
+| Two — sign-in handoff, Attendance → LogPup | Built. `0071_sso_redemptions` applied 2026-09-16; table, indexes and ledger row verified against Neon. Needs `LOGPUP_SSO_SECRET` on both sides |
+| Two — sign-in handoff, LogPup → Attendance | Built. `POST /api/sso/attendance-handoff` + the button, in the sidebar footer AND the mobile sheet |
 
 See "Built in this repo" near the end for the file list.
 
@@ -736,8 +738,20 @@ LOGPUP_WEBHOOK_SECRET=
 | `src/features/sprints/assignment-notify.ts` | Wires `assignment-notice.ts` up at last, and fans out |
 | `src/features/notifications/attendance-webhook.ts` | Signed outbound POST |
 | `src/features/sprints/task-actions.ts` | `createTask` / `updateTask` now notify; both actions share the extracted helpers |
-| `drizzle/0071_sso_redemptions.sql` + journal entry | Written, NOT applied — see below |
-| `.env.example` | Four vars, three distinct secrets |
+| `drizzle/0071_sso_redemptions.sql` + journal entry | **Applied** 2026-09-16 |
+| `src/db/schema.ts` — `ssoRedemptions` | The replay guard. Primary key IS the mechanism |
+| `src/db/write-gate.ts` | `sso_redemptions` added to `FREEZE_EXEMPT_TABLES` — signing in is a write |
+| `src/features/auth/attendance-sso.ts` + `.test.ts` | Hand-rolled HS256 verify + atomic redemption. 19 cases, happy paths minted with the real `jose` |
+| `src/lib/auth.ts` — `attendance-sso` provider | Conditionally registered; four refusals; added to the signIn callback's early-return list |
+| `src/lib/safe-next.ts` + `.test.ts` | Relative-path validation, shared by both directions |
+| `src/app/sso/attendance/page.tsx` + receiver component | Outside `(app)` and outside the proxy matcher |
+| `src/proxy.ts` | `sso` excluded from the matcher — the receiver runs signed OUT |
+| `src/app/api/cron/notify-tick/route.ts` | The expiry sweep, as step one's second half |
+| `src/features/auth/attendance-sso.ts` — `signAttendanceHandoff` | The outbound mint. Email is an argument; the route reads it from the session |
+| `src/app/api/sso/attendance-handoff/route.ts` | Session-required, returns the URL to open |
+| `src/components/shell/attendance-app-button.tsx` | The button. SolarAppButton's interaction model, LogPup's NavLink styling |
+| `src/components/shell/sidebar.tsx` + `mobile-nav.tsx` | Where it renders. BOTH — see below |
+| `.env.example` | Six vars, four distinct secrets |
 
 Also changed, as fixes review surfaced: `createNotifications` now RETURNS the recipient ids that
 survived its gate (it returned `void`; every existing caller ignores it), so the Attendance
@@ -805,26 +819,57 @@ changes how you should read `task_assignees` everywhere.
 
 Items 2, 3 and 4 are left as found and reported rather than fixed as drive-bys.
 
-### Part two is held, and this is why
+### Part two was held on the migration; it is not any more
 
-`drizzle/0071_sso_redemptions.sql` and its `_journal.json` entry are written. The table is
-**not** declared in `src/db/schema.ts` and the `attendance-sso` provider is **not** added, on
-purpose: this repo's rule is that a schema declaration whose migration is unapplied breaks reads
-for every session sharing the tree, so the declaration and the applied migration land together
-or not at all. `db:generate` is broken here and `db:migrate` is the user's to run.
+`0071_sso_redemptions` was applied on 2026-09-16 (`npm run db:migrate`), and the table, both
+indexes and the ledger row were verified against Neon afterwards. The five pieces that were
+deliberately held until then — the `schema.ts` declaration, the `FREEZE_EXEMPT_TABLES` entry, the
+retention sweep, the provider and the receiver page — all landed together with it.
 
-To unblock, run:
+`db:status` still reports `0050_worklog_entry_app.sql` as "edited after it was applied". That is
+a pre-existing hash mismatch on an unrelated migration, not drift: the schema change itself is
+applied and `db:migrate` is not the fix. `npm run db:drift` is clean.
 
-```bash
-npm run db:migrate
-npm run db:status      # confirm 0071 reads as applied
-```
+Four decisions inside those five pieces are worth knowing, because none is obvious from the
+spec above and each was made against a real alternative:
 
-Then the remaining Part two work is: declare `ssoRedemptions` in `schema.ts`, add it to
-`FREEZE_EXEMPT_TABLES` in `src/db/write-gate.ts` (signing in is a write), add the expiry sweep to
-the retention step in `src/app/api/cron/notify-tick/route.ts` (never a second cron — Hobby has
-two slots and both are taken), register the `attendance-sso` provider in `src/lib/auth.ts`, and
-add the receiver page at `src/app/sso/attendance/`. All of it is specified in Part two above.
+- **The token is verified by hand, not with `jose`.** `src/features/auth/google-one-tap.ts`
+  records the standing reason: jose is in `node_modules` only as a transitive dependency of
+  next-auth, so importing it directly makes LogPup break the day next-auth changes its
+  dependency tree. One Tap had a third option (Google's tokeninfo endpoint) and this has none,
+  so the choice was a lockfile write or thirty lines of HMAC. HS256 is a plain keyed hash — no
+  key discovery, no certificate chain, no algorithm negotiation. The one classic JWT mistake
+  that does apply, trusting the token's own `alg`, is refused before anything is computed.
+  The unit tests mint their happy-path tokens with `jose`'s `SignJWT` — the exact call
+  Attendance makes — so the hand-rolled verifier is proved against the real thing rather than
+  against itself.
+- **The jti is spent BEFORE the user lookup**, not after the refusals. A token captured from
+  browser history is therefore burnt on its first presentation whatever the answer turns out to
+  be; deferring the write would leave a refused token live and hand an attacker unlimited
+  retries against it.
+- **The sweep keeps a spent row for an hour past its expiry.** The row's job is to make a second
+  redemption lose a database race, and it is needed for as long as the token can still verify —
+  which, because the verifier allows 30 seconds of clock skew past `exp`, is slightly longer than
+  the token's own lifetime. Deleting on the stroke of expiry would reopen a half-minute window
+  in which a captured link verifies AND finds no record of having been spent.
+- **`safeNext` also rejects a leading backslash**, which the spec's "starts with a single `/`
+  and not `//`" rule does not. Browsers normalise `\` to `/` in URLs, so `/\evil.example`
+  becomes protocol-relative *after* a `//` check has already passed it. **The Attendance side's
+  copy does not have this rule yet** — see `Attendance-Web-App/src/app/api/logpup-sso/route.ts`.
+
+The other direction landed with it. Two notes on it that the spec above does not cover:
+
+- **The button renders in the mobile sheet as well as the desktop sidebar footer.** The spec says
+  "the app shell's sidebar footer", and shipping only that would have been defensible and wrong:
+  the touch branch of the interaction model — a top-level navigation, so an installed Attendance
+  PWA captures the link — only ever runs on a phone, which is the one device that never sees the
+  desktop sidebar. `mobile-nav.tsx`'s `<nav>` closes the sheet on `<a>` clicks only, so the
+  button sits outside it and closes the sheet itself through `onNavigate`.
+- **`ATTENDANCE_APP_URL` is new, optional, and deliberately not the only copy of that URL.** The
+  route reads it (defaulting to production, mirroring how Attendance names this repo with
+  `LOGPUP_APP_URL`). The BUTTON hardcodes the same URL, because its fallback is needed exactly
+  when the request to that route failed and so cannot come from the response. SolarAppButton
+  hardcodes its counterpart for the same reason. If the deployment moves, both change together.
 
 ---
 
@@ -861,10 +906,14 @@ visible freshness win.
 
 Part two ships after, and separately:
 
-5. Add `sso_redemptions` and run the migration by hand, the way every migration in this repo is
-   applied. Confirm it is in `FREEZE_EXEMPT_TABLES` and in the retention step before the
-   provider is registered — both are easier to add now than to discover missing later.
-6. Set `LOGPUP_SSO_SECRET` on both deployments, then the buttons.
+5. ~~Add `sso_redemptions` and run the migration.~~ **Done 2026-09-16.** It is in
+   `FREEZE_EXEMPT_TABLES` and in the retention step, both verified before the provider was
+   registered.
+6. Set `LOGPUP_SSO_SECRET` on both deployments — the same value on each, or the signature
+   verifies against nothing. **This is the only remaining step, and until it is done the
+   `attendance-sso` provider is not registered at all, arriving handoffs are refused, and the
+   outbound route answers 503 (which the button turns into its plain-URL fallback, so the button
+   keeps working — it just stops signing anybody in).** The buttons themselves are built.
 7. Test the two refusals that matter, deliberately, on a real deployment: **a replayed link**
    (open the same SSO URL twice — the second must fail), and **an unknown email** signed with a
    valid secret (must refuse, and must not create a user). If either succeeds, stop.

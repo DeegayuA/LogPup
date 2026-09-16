@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { NavLink } from '@/components/shell/sidebar'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { VersionBadge } from '@/components/shell/version-badge'
+import { AttendanceAppButton } from '@/components/shell/attendance-app-button'
 import { adminNavItems, navItems, progressNavItem } from '@/components/shell/nav-items'
 import { settingsNavItem } from '@/features/settings/nav'
 
@@ -178,6 +179,20 @@ export function MobileNav({
               44px hit area — this row just gives that invisible target room
               to live in, instead of cramming a sub-24px chip against the
               sheet's bottom edge. */}
+          {/* Attendance belongs here more than it belongs on the desktop rail,
+              and it would have been easy to ship to the sidebar alone. The
+              touch branch of this button's interaction model — a top-level
+              navigation, so an installed Attendance PWA captures the link and
+              opens in the installed app — only ever runs on a phone, which is
+              exactly the device that never sees the desktop sidebar.
+
+              It sits outside the <nav> above because that element's click
+              handler closes the sheet only for an <a>, and this is a <button>
+              that has async work to do first; it closes the sheet itself. */}
+          <div className="-mx-1 border-t border-sidebar-border pt-2">
+            <AttendanceAppButton onNavigate={() => setOpen(false)} />
+          </div>
+
           <div className="flex min-h-11 items-center border-t border-sidebar-border pt-3">
             <VersionBadge />
           </div>

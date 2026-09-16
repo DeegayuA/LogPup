@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { Kbd } from '@/components/ui/kbd'
 import { VersionBadge } from '@/components/shell/version-badge'
+import { AttendanceAppButton } from '@/components/shell/attendance-app-button'
 import { AltaVisionLogo } from '@/components/brand/alta-vision-logo'
 import { InstallButton } from '@/features/pwa/pwa'
 import { ADMIN_SECTION_ICONS, navItems, progressNavItem } from '@/components/shell/nav-items'
@@ -475,6 +476,12 @@ export function Sidebar({
           collapsed ? 'items-center px-2' : 'px-3',
         )}
       >
+        {/* The other half of this person's working day. It sits ABOVE the
+            account row rather than among the nav links because it leaves the
+            app entirely — everything in the list above navigates within
+            LogPup, and a row that opens another origin in another tab does not
+            belong in that set. */}
+        <AttendanceAppButton collapsed={collapsed} />
         <div className={cn('flex items-center gap-1.5', collapsed && 'flex-col')}>
           {collapsed ? (accountCompact ?? account) : account}
           <InstallButton surface="sidebar" />

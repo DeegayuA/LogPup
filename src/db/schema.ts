@@ -1744,6 +1744,34 @@ export const webauthnLoginTokens = pgTable('webauthn_login_tokens', {
   usedAt: timestamp('used_at', { withTimezone: true }),
 })
 
+// One row per REDEEMED sign-in handoff from the Attendance Web App (migration
+// 0071). The token travels in a URL, and URLs survive in browser history,
+// referrer headers and proxy logs, so the three-minute expiry narrows the
+// replay window without closing it — this table closes it.
+//
+// THE PRIMARY KEY IS THE WHOLE MECHANISM. Redemption is an INSERT, and a
+// replay violates the key, so two tabs opening the same link race in the
+// database and exactly one can win. A read-then-insert would let both through.
+//
+// DELIBERATELY NOT a reuse of webauthn_login_tokens above: that table means "a
+// passkey login is in flight", and rows in it that came from somewhere else
+// would make its name a lie.
+//
+// NO foreign key to users, and that is not an oversight. This records that a
+// TOKEN was spent, not that a person exists — the row must outlive an account
+// deletion, or deleting a user would un-spend their tokens. `email` is kept
+// for the audit trail only; nothing joins on it.
+//
+// NO deletedAt: a spent token is not somebody's work and has no trash bin to
+// sit in. Rows are dead the moment expiresAt passes and the notify-tick cron
+// sweeps them (see src/app/api/cron/notify-tick/route.ts).
+export const ssoRedemptions = pgTable('sso_redemptions', {
+  jti: text('jti').primaryKey(),
+  email: text('email').notNull(),
+  redeemedAt: timestamp('redeemed_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (t) => [index('sso_redemptions_expires_idx').on(t.expiresAt)])
+
 // ---------------------------------------------------------------------------
 // RBAC, approvals and non-daily logging (migrations 0037-0039)
 // ---------------------------------------------------------------------------

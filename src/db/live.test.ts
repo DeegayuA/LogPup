@@ -456,7 +456,14 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   // retention prune in the daily notify-tick cron is therefore a real DELETE,
   // and the rule deciding WHICH rows it takes is the pure, unit-tested
   // src/features/notifications/retention.ts rather than the WHERE clause here.
-  'src/app/api/cron/notify-tick/route.ts': 'pruneExpiredNotifications',
+  //
+  // pruneExpiredSsoRedemptions is the same answer for a second never-soft
+  // table in the same handler. `sso_redemptions` carries no deletedAt
+  // (verified in schema.ts) and holds spent sign-in tokens, not anybody's
+  // work — there is no trash bin for a redeemed handoff and nothing that
+  // could restore one. Both functions are named because resolving only the
+  // first would silently un-exempt the second.
+  'src/app/api/cron/notify-tick/route.ts': ['pruneExpiredNotifications', 'pruneExpiredSsoRedemptions'],
 }
 
 /**

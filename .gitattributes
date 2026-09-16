@@ -1,0 +1,8 @@
+# Drizzle records sha256(file bytes) for each applied migration in
+# drizzle.__drizzle_migrations. Migrations are applied from Linux (CI/deploy),
+# so those hashes are of LF content. A Windows checkout with core.autocrlf=true
+# rewrites them to CRLF, changing every hash and making `npm run db:status`
+# report dozens of already-applied migrations as "edited after it was applied".
+# Pin these files to LF so the bytes on disk match the bytes that were hashed.
+drizzle/**/*.sql text eol=lf
+drizzle/meta/*.json text eol=lf
