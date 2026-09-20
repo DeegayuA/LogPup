@@ -6,7 +6,6 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { appRoleHistory, apps, users } from '@/db/schema'
 import { requireCapability } from '@/features/auth/actor'
-import { managesApp } from '@/features/apps/project-manager'
 import { slugify } from '@/lib/slug'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -18,8 +17,7 @@ import { resolveChain } from '@/features/gemini/model-choice'
 import { aiFeatureDisabledMessage, getAiPrefs } from '@/features/gemini/prefs'
 import { fetchRepoContext, parseGitHubRepo, RepoFetchError } from '@/features/apps/repo-metadata'
 import { CURATED_TECH_TAGS, canonicalizeTag } from '@/lib/tech-tags'
-import { isAdminRole } from '@/features/auth/capabilities'
-import { liveApps } from '@/db/live'
+import { liveApps, liveAppColumns } from '@/db/live'
 
 // Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
 // other files. Every guard now names the capability it needs and the matrix
@@ -376,9 +374,6 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   // the caller could render.
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
-  if (!isAdminRole(actor.role) && !(await managesApp(actor.id, parsedId.data))) {
-    return err('Only an admin or this project’s manager can edit it')
-  }
 
   const result = buildAppUpdate(input)
   if (!result.ok) return err(result.error)
@@ -388,14 +383,14 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
   // drizzle refuses a field whose table is not in the statement — which is
   // how every pause/rename/PM change 500'd after the soft-delete conversion
   // swapped only the FROM. db/live.test.ts check 8 now scans for the shape.
+  //
+  // FULL ROW, not just the fields this function reads: a later phase files
+  // this pre-image as change_requests.payload.before, and a partial `before`
+  // would let a competing edit to a field missing from it be silently
+  // clobbered (detectConflict in admin/change-request-appliers.ts only
+  // diffs fields present in `before`).
   const [app] = await db
-    .select({
-      slug: liveApps.slug,
-      name: liveApps.name,
-      status: liveApps.status,
-      leadId: liveApps.leadId,
-      pmId: liveApps.pmId,
-    })
+    .select(liveAppColumns)
     .from(liveApps)
     .where(eq(liveApps.id, parsedId.data))
   if (!app) return err('App not found')
@@ -579,10 +574,14 @@ export async function deleteApp(appId: string): Promise<ActionResult> {
 }
 
 export async function archiveApp(appId: string): Promise<ActionResult> {
-  const actor = await requireCapability('app.archive')
-  if (!actor) return err('Admins only')
+  // Parsed BEFORE the guard: 'app.archive' is 'scoped' for manager, and
+  // `can()` denies a scoped grant with no resource — so a scoped manager was
+  // refused unconditionally until the resource (the id `can` scopes against)
+  // existed to pass.
   const parsedId = z.uuid().safeParse(appId)
   if (!parsedId.success) return err('Invalid app')
+  const actor = await requireCapability('app.archive', { appId: parsedId.data })
+  if (!actor) return err('Admins only')
   try {
     // `returning` rather than a blind update: it costs nothing extra, it tells
     // us whether the id matched anything at all (a no-op update is otherwise

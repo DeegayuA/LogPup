@@ -1,5 +1,5 @@
 import type { Action, Actor } from '@/features/auth/capabilities'
-import { can } from '@/features/auth/capabilities'
+import { can, effectiveGrant } from '@/features/auth/capabilities'
 
 /**
  * The admin area's sections, and the capability each one requires.
@@ -15,6 +15,15 @@ export type AdminSection = {
   capability: Action
   /** Rendered apart from the rest, below a rule. */
   danger?: boolean
+  /**
+   * This row's capability is scoped for a real seat (not staff-or-none), and
+   * the nav question is "does the seat hold it at all" — `effectiveGrant`,
+   * not `can()`, which fails closed on a scoped grant asked with no
+   * resource. Data-driven rather than a `s.href` string match in
+   * `visibleSections`, so a new scoped-for-manager row opts in here instead
+   * of at the call site.
+   */
+  navGrantOnly?: true
 }
 
 export const ADMIN_SECTIONS: readonly AdminSection[] = [
@@ -50,6 +59,7 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     label: 'Approvals',
     description: 'Signups, change requests and leave, in one queue',
     capability: 'request.review',
+    navGrantOnly: true,
   },
   {
     href: '/admin/apps',
@@ -103,5 +113,21 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
 
 /** Sections this actor may actually open. */
 export function visibleSections(actor: Actor): AdminSection[] {
-  return ADMIN_SECTIONS.filter((s) => can(actor, s.capability))
+  return ADMIN_SECTIONS.filter((s) =>
+    // request.review (Approvals) is NOT the only section capability scoped
+    // for a real seat rather than staff-or-none — app.edit (Apps),
+    // absence.view (Absences), audit.view (Audit trail) and trash.view
+    // (Trash) are all 'scoped' for manager too, and stay on the plain
+    // `can()` branch below (still invisible to a scoped manager) because
+    // fixing those is a separate change from this one. Approvals is marked
+    // `navGrantOnly` because its page (and getApprovalsInbox's own
+    // mayReview) already does the real row-by-row scoping — `can()` with no
+    // resource fails closed on ANY scoped grant, so the row was invisible to
+    // every manager even though the queue genuinely has entries for them.
+    // effectiveGrant answers "does this seat hold the capability at all",
+    // which is what a nav row is asking.
+    s.navGrantOnly
+      ? effectiveGrant(actor.role, actor.employmentType, s.capability) !== 'none'
+      : can(actor, s.capability),
+  )
 }

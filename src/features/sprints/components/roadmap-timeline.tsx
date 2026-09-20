@@ -226,12 +226,12 @@ function buildTicks(axis: TimelineWindow, zoom: Zoom): Tick[] {
 export function RoadmapTimeline({
   sprints,
   slug,
-  isAdmin,
+  canManageSprints,
   counts,
 }: {
   sprints: Sprint[]
   slug: string
-  isAdmin: boolean
+  canManageSprints: boolean
   /** Board counts per sprint id, raw. Scored into a read here rather than on
    *  the server — see the note on `readFor`. */
   counts: Record<string, StatusCounts>
@@ -437,9 +437,10 @@ export function RoadmapTimeline({
   /**
    * Writes a row's new position.
    *
-   * The grip that calls this is only shown to admins, and that is all the
-   * `isAdmin` gate is: `reorderSprint` re-checks for admin itself, exactly as
-   * `updateSprint` does for the dates. Hiding the control is a courtesy so
+   * The grip that calls this is only shown when `canManageSprints`, and that
+   * is all the gate is: `reorderSprint` re-checks `sprint.manage` itself
+   * (scoped — admin, or this app's PM/lead — via `requireCapability`), exactly
+   * as `updateSprint` does for the dates. Hiding the control is a courtesy so
    * nobody is offered an interaction that will fail; it is not the
    * permission, and nothing here should ever be written as though it were.
    */
@@ -826,7 +827,7 @@ export function RoadmapTimeline({
               header keeps the keyboard teaching; this line exists because a
               bar of solid colour says nothing about being draggable until
               something short and always-visible says so. */}
-          {isAdmin ? (
+          {canManageSprints ? (
             <span className="text-xs text-muted-foreground">
               Drag to move · edges resize · click to edit
             </span>
@@ -869,9 +870,9 @@ export function RoadmapTimeline({
           sentence as the spine's, because it is the same mark. */}
       <p className="text-xs text-muted-foreground">
         Each bar fills with the work done in it; the line is today.{' '}
-        {isAdmin
+        {canManageSprints
           ? 'Everything snaps to whole days. With a keyboard: tab to a bar and use ← →  to move it, or tab to its start/end handle to change that date. Hold shift for a week at a time. Press enter on a bar to edit everything at once.'
-          : 'Select a sprint to open its board. Only admins can reschedule sprints.'}
+          : 'Select a sprint to open its board. Only this project’s PM/lead or an admin can reschedule sprints.'}
       </p>
 
       <DndContext
@@ -942,7 +943,7 @@ export function RoadmapTimeline({
                     axis={axis}
                     zoom={zoom}
                     slug={slug}
-                    isAdmin={isAdmin}
+                    canManageSprints={canManageSprints}
                     dragKind={activeDrag?.sprintId === sprint.id ? activeDrag.kind : null}
                     onEdit={openEditor}
                     onNudge={nudge}
@@ -979,7 +980,7 @@ export function RoadmapTimeline({
       <div className="rounded-xl border">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-3 py-2">
           <h3 className="font-heading text-sm font-semibold">Every sprint</h3>
-          {isAdmin ? (
+          {canManageSprints ? (
             <div className="flex flex-wrap items-center gap-3">
               <p className="text-xs text-muted-foreground">
                 Drag a grip to reorder, or focus one and use ↑ ↓. Row order is yours to set and
@@ -1021,7 +1022,7 @@ export function RoadmapTimeline({
                     // dates beside it is a row arguing with itself.
                     read={readFor(sprint, range)}
                     slug={slug}
-                    isAdmin={isAdmin}
+                    canManageSprints={canManageSprints}
                     onFind={focusSprint}
                     onEdit={openEditor}
                     onNudgeRow={nudgeRow}
@@ -1052,7 +1053,7 @@ function SprintBar({
   axis,
   zoom,
   slug,
-  isAdmin,
+  canManageSprints,
   dragKind,
   onEdit,
   onNudge,
@@ -1065,7 +1066,7 @@ function SprintBar({
   axis: TimelineWindow
   zoom: Zoom
   slug: string
-  isAdmin: boolean
+  canManageSprints: boolean
   /** Which drag this bar is currently in, or null. The KIND matters, not just
    *  the fact of a drag: the date chip anchors to the edge being moved, and a
    *  resize names one date where a move names two. */
@@ -1163,11 +1164,11 @@ function SprintBar({
           </span>
         ) : null}
 
-        {isAdmin ? (
+        {canManageSprints ? (
           <ResizeHandle sprint={sprint} range={range} kind="start" onNudge={onNudge} />
         ) : null}
 
-        {isAdmin ? (
+        {canManageSprints ? (
           <BarBody
             sprint={sprint}
             label={label}
@@ -1191,7 +1192,7 @@ function SprintBar({
           </Link>
         )}
 
-        {isAdmin ? (
+        {canManageSprints ? (
           <ResizeHandle sprint={sprint} range={range} kind="end" onNudge={onNudge} />
         ) : null}
 
@@ -1418,7 +1419,7 @@ function SprintIndexRow({
   range,
   read,
   slug,
-  isAdmin,
+  canManageSprints,
   onFind,
   onEdit,
   onNudgeRow,
@@ -1428,7 +1429,7 @@ function SprintIndexRow({
   /** Scored on the committed range this row prints. */
   read: SprintRead
   slug: string
-  isAdmin: boolean
+  canManageSprints: boolean
   onFind: (sprintId: string) => void
   onEdit: (sprint: Sprint) => void
   onNudgeRow: (sprintId: string, direction: -1 | 1) => void
@@ -1439,7 +1440,7 @@ function SprintIndexRow({
   // ref access during render — which React 19 does not forgive. Same rule,
   // for the same reason, as BarBody and ResizeHandle above.
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } =
-    useSortable({ id: sprint.id, disabled: !isAdmin })
+    useSortable({ id: sprint.id, disabled: !canManageSprints })
 
   return (
     <li
@@ -1460,7 +1461,7 @@ function SprintIndexRow({
         isDragging && 'z-10 bg-card shadow-md',
       )}
     >
-      {isAdmin ? (
+      {canManageSprints ? (
         <button
           ref={setActivatorNodeRef}
           type="button"
@@ -1517,7 +1518,7 @@ function SprintIndexRow({
         <Button type="button" size="sm" variant="ghost" onClick={() => onFind(sprint.id)}>
           Find on timeline
         </Button>
-        {isAdmin ? (
+        {canManageSprints ? (
           <Button type="button" size="sm" variant="outline" onClick={() => onEdit(sprint)}>
             Edit
           </Button>

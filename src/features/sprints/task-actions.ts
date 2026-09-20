@@ -15,13 +15,12 @@ import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
+import { can } from '@/features/auth/capabilities'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
-import { canMoveTask } from '@/features/sprints/permissions'
 import { rankForAppend } from '@/features/sprints/task-rank'
 import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
-import { isAdminRole } from '@/features/auth/capabilities'
 import {
   MAX_TASK_ASSIGNEES,
   getTaskAssignees,
@@ -392,9 +391,15 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   const existing = await taskById(taskId)
   if (!existing) return err('Task not found')
 
-  const isAdmin = isAdminRole(session.user.role)
-  const isAssignee = existing.assigneeId !== null && existing.assigneeId === session.user.id
-  if (!isAdmin && !isAssignee) return err('Not allowed')
+  // task.edit is manager/editor: scoped, member: own — a PM/lead of the app
+  // reaches every task in it, not only ones assigned to themselves, so this
+  // asks the matrix instead of hard-coding the admin-or-assignee pair that
+  // under-granted every scoped seat.
+  const actor = await requireCapability('task.edit', {
+    appId: existing.appId,
+    ownerId: existing.assigneeId,
+  })
+  if (!actor) return err('Not allowed')
 
   const parsed = taskUpdateInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
@@ -430,6 +435,20 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   // separates "cleared the date" (null, a real change) from "did not mention
   // it" (absent, must not reset anything).
   if ('dueDate' in set) {
+    // task.edit (own/scoped) covers an ordinary due-date edit, but a
+    // COMMITTED deadline is a promise made to someone else — moving it is
+    // 'deadline.move.committed' (manager: scoped, editor: NONE), a strictly
+    // narrower seat. Gated on the date actually differing, not merely being
+    // present in `set`: the dialog can resend the same value, and that must
+    // not require a seat the plain editor doesn't hold.
+    const incomingDueDate = (set.dueDate as string | null) ?? null
+    if (
+      existing.dueKind === 'committed' &&
+      incomingDueDate !== existing.dueDate &&
+      !can(actor, 'deadline.move.committed', { appId: existing.appId, ownerId: existing.assigneeId })
+    ) {
+      return err('Not allowed')
+    }
     try {
       Object.assign(
         set,
@@ -440,7 +459,16 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
             originalDueDate: existing.originalDueDate,
             dueChangedCount: existing.dueChangedCount,
           },
-          { dueDate: (set.dueDate as string | null) ?? null },
+          {
+            dueDate: (set.dueDate as string | null) ?? null,
+            // taskUpdateInput has no note field — the dialog only ever sends
+            // a date. Without carrying the existing note forward, applyDueDate's
+            // own invariant ("a committed date needs a note") would refuse
+            // every legitimate committed-date move this block's permission
+            // check just approved, including one that only resends the same
+            // date.
+            note: existing.dueCommitmentNote,
+          },
         ),
       )
     } catch (error) {
@@ -555,9 +583,13 @@ export async function moveTaskOnBoard(input: unknown): Promise<ActionResult> {
   const existing = await taskById(taskId)
   if (!existing) return err('Task not found')
 
-  if (!canMoveTask(session.user.role, session.user.id, existing.assigneeId)) {
+  // task.move is manager/editor: scoped, member: own. canMoveTask (an empty
+  // scope set, for the CLIENT's disabled-drag presentation) used to be asked
+  // here too, which meant a PM/lead scoped to this app could never move a
+  // teammate's card server-side — the matrix said scoped, the server checked
+  // own. requireCapability resolves the real scope.
+  if (!(await requireCapability('task.move', { appId: existing.appId, ownerId: existing.assigneeId })))
     return err('You can only move your own tasks')
-  }
 
   const set: Record<string, unknown> = { sortOrder }
   // A drop into the 'Done' column is a completion, and it is the path most
@@ -740,9 +772,17 @@ export async function bulkUpdateTasks(
     .where(inArray(liveTasks.id, taskIds))
   if (rows.length === 0) return err('No tasks found')
 
-  const permitted = rows.filter((row) =>
-    canMoveTask(session.user.role, session.user.id, row.assigneeId),
+  // Per row, with the real scope — same fix as moveTaskOnBoard: canMoveTask's
+  // empty scope set used to under-grant every scoped manager/editor here too.
+  // requireCapability's own getSession()/loadActor calls are per-request
+  // memoised (react `cache()`), so this is one extra query for the scope set,
+  // not one per row.
+  const permittedFlags = await Promise.all(
+    rows.map((row) =>
+      requireCapability('task.move', { appId: row.appId, ownerId: row.assigneeId }),
+    ),
   )
+  const permitted = rows.filter((_row, index) => permittedFlags[index] !== null)
   if (permitted.length === 0) return err('You can only change your own tasks')
 
   // Moving a selection into a sprint is only meaningful for tasks of that
@@ -847,12 +887,23 @@ export async function bulkUpdateTasks(
 }
 
 export async function deleteTask(taskId: string): Promise<ActionResult> {
-  const actor = await requireCapability('task.delete')
-  if (!actor) return err('Admins only')
+  // Same shape as updateTask: the session guard sits ABOVE the read. Without
+  // it, an unauthenticated POST still ran taskById() and could tell 'Task not
+  // found' from 'Not allowed' apart — a read (and a leak) for free, before
+  // any capability was ever consulted.
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
   if (!z.uuid().safeParse(taskId).success) return err('Task not found')
 
   const existing = await taskById(taskId)
   if (!existing) return err('Task not found')
+
+  // task.delete is manager: scoped — asked with no resource (as this used to
+  // be, above the read that has the appId) it fails closed, denying every
+  // PM/lead the delete that updateTask's own scoped check already grants
+  // them. Read below, resource passed, same shape as updateTask.
+  const actor = await requireCapability('task.delete', { appId: existing.appId })
+  if (!actor) return err('Not allowed')
 
   let marked: { id: string }[]
   try {

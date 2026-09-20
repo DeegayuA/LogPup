@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveApps, liveSprints } from '@/db/live'
 import { sprints } from '@/db/schema'
+import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { getBoard, type Board, type TaskWithAssignee } from '@/features/sprints/queries'
@@ -13,6 +14,15 @@ import { NotionParentError, upsertSprintPage, type SprintExportData } from '@/fe
 // Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
 // other files. Every guard now names the capability it needs and the matrix
 // answers; the contract is unchanged (Actor on success, null on refusal).
+
+// Same local helper task-actions.ts's updateTask uses: a friendlier
+// "sign in" message ahead of the resource read below, distinct from the
+// capability refusal that follows it.
+async function requireSession() {
+  const session = await auth()
+  if (!session?.user) return null
+  return session
+}
 
 function columnItems(tasks: TaskWithAssignee[]) {
   return tasks.map((task) => ({ title: task.title, assignee: task.assignee?.name ?? null }))
@@ -38,10 +48,18 @@ function buildExportData(
 }
 
 export async function exportSprintToNotion(sprintId: string): Promise<ActionResult<{ pageUrl: string }>> {
-  if (!(await requireCapability('app.edit'))) return err('Admins only')
+  const session = await requireSession()
+  if (!session) return err('Sign in required')
 
   const [sprint] = await db.select().from(liveSprints).where(eq(liveSprints.id, sprintId))
   if (!sprint) return err('Sprint not found')
+
+  // READ THEN AUTHORISE, against the sprint's real appId — not the bare
+  // `requireCapability('app.edit')` this used to be. `app.edit` is SCOPED for
+  // manager, and asking with no appId at all fails closed for every one of
+  // them, which is why the Export button on apps/[slug] — now offered to
+  // canManageSprints, i.e. every PM — always said "Admins only" for a PM.
+  if (!(await requireCapability('app.edit', { appId: sprint.appId }))) return err('Not allowed')
 
   const [app] = await db.select({ name: liveApps.name, slug: liveApps.slug }).from(liveApps).where(eq(liveApps.id, sprint.appId))
   if (!app) return err('App not found')

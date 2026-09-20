@@ -1,6 +1,6 @@
 import { cache } from 'react'
 
-import { can, type Actor } from '@/features/auth/capabilities'
+import { can, effectiveGrant, type Actor } from '@/features/auth/capabilities'
 import { listPendingUsers } from '@/features/admin/queries'
 import { getApprovalsInbox } from '@/features/admin/change-request-queries'
 import { listPendingAbsences } from '@/features/worklog/absence-queries'
@@ -22,10 +22,12 @@ import { NO_APPROVALS, type ApprovalCounts } from '@/features/admin/approval-bad
  * the lists are of things awaiting a decision — a queue nobody lets grow to
  * thousands, by construction.
  *
- * ZERO QUERIES FOR MOST PEOPLE. `request.review` is the same predicate
- * /admin/approvals guards itself with, so a seat without it does no work here
- * and gets no row: a member navigating the app pays nothing for a feature they
- * cannot use.
+ * ZERO QUERIES FOR MOST PEOPLE. `request.review` is the same SEAT-LEVEL
+ * question /admin/approvals guards itself with (effectiveGrant, not `can()`
+ * with no resource — request.review is 'scoped' for manager, and a scoped
+ * grant asked with no resource always fails closed), so a seat without it
+ * does no work here and gets no row: a member navigating the app pays
+ * nothing for a feature they cannot use.
  *
  * `cache()` because the app layout runs on every navigation, and the dashboard's
  * approvals zone asks adjacent questions in the same render.
@@ -35,8 +37,14 @@ export const countPendingApprovals = cache(async function countPendingApprovals(
 ): Promise<ApprovalCounts> {
   // The row leads to /admin/approvals, and that page refuses anybody without
   // `request.review`. Asking the identical question here is what stops the
-  // sidebar ever offering a door that answers with a 404.
-  if (!actor || !can(actor, 'request.review')) return NO_APPROVALS
+  // sidebar ever offering a door that answers with a 404 — `effectiveGrant`,
+  // NOT `can(actor, 'request.review')`: that asks with no resource, and
+  // request.review is SCOPED for manager, so a scoped grant asked with no
+  // resource always fails closed and the badge stayed at 0 forever for a
+  // real reviewing manager even after the page itself was fixed.
+  if (!actor || effectiveGrant(actor.role, actor.employmentType, 'request.review') === 'none') {
+    return NO_APPROVALS
+  }
 
   const [users, absences, requests] = await Promise.all([
     // Signups are a narrower grant than the queue itself: a reviewer who may

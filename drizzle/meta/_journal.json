@@ -491,6 +491,13 @@
       "when": 1787158600000,
       "tag": "0071_sso_redemptions",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1787158660000,
+      "tag": "0072_app_change_policy",
+      "breakpoints": true
     }
   ]
 }

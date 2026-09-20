@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveApps } from '@/db/live'
 import { assignmentHistory, assignments, users } from '@/db/schema'
+import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
@@ -199,10 +200,13 @@ function openIntervalFromAssignment(input: {
 }
 
 export async function assignUser(input: unknown): Promise<ActionResult<{ warning?: string }>> {
-  const actor = await requireCapability('app.assign')
-  if (!actor) return err('Not allowed')
   const parsed = assignInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
+  // app.assign is 'scoped' for manager — asked with no resource, `can` fails
+  // closed even for the PM who runs this exact app, so the appId has to come
+  // along for a scoped seat to ever get through.
+  const actor = await requireCapability('app.assign', { appId: parsed.data.appId })
+  if (!actor) return err('Not allowed')
 
   const at = new Date()
   let assignmentId: string | undefined
@@ -248,8 +252,6 @@ export async function updateAssignment(
   assignmentId: string,
   input: unknown,
 ): Promise<ActionResult<{ warning?: string }>> {
-  const actor = await requireCapability('app.assign')
-  if (!actor) return err('Not allowed')
   const parsed = assignmentUpdateInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
@@ -259,8 +261,19 @@ export async function updateAssignment(
   }
   if (Object.keys(set).length === 0) return err('Nothing to update')
 
+  // Above the read: without this, an unauthenticated POST still ran the
+  // select below and could tell 'Assignment not found' from 'Not allowed'
+  // apart for free, same gap task-actions' deleteTask had.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
+
   const [existing] = await db.select().from(assignments).where(eq(assignments.id, assignmentId))
   if (!existing) return err('Assignment not found')
+
+  // The input carries only role/allocationPct, never the app — the existing
+  // row is the only place a scoped guard can get the appId it needs.
+  const actor = await requireCapability('app.assign', { appId: existing.appId })
+  if (!actor) return err('Not allowed')
 
   const at = new Date()
   // `existing` came from a separate round-trip, so by the time this batch runs
@@ -321,11 +334,17 @@ export async function updateAssignment(
 }
 
 export async function removeAssignment(assignmentId: string): Promise<ActionResult> {
-  const actor = await requireCapability('app.assign')
-  if (!actor) return err('Not allowed')
+  // Above the read — see updateAssignment's guard for why.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
 
   const [existing] = await db.select().from(assignments).where(eq(assignments.id, assignmentId))
   if (!existing) return err('Assignment not found')
+
+  // Same reasoning as updateAssignment: the caller passes only an id, so the
+  // existing row is where the appId a scoped guard needs comes from.
+  const actor = await requireCapability('app.assign', { appId: existing.appId })
+  if (!actor) return err('Not allowed')
 
   const at = new Date()
   const guard = assignmentStillExists(assignmentId)

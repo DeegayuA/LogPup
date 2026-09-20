@@ -82,12 +82,15 @@ async function slugForApp(appId: string): Promise<string | null> {
 }
 
 export async function createSprint(input: unknown): Promise<ActionResult<{ sprintId: string }>> {
-  const actor = await requireCapability('sprint.manage')
-  if (!actor) return err('Admins only')
   const parsed = sprintInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const { appId, name, goal, startDate, endDate } = parsed.data
+  // Guard moved BELOW the parse: sprint.manage is SCOPED for manager, and
+  // `can()` fails closed on 'scoped' with no resource — the appId has to come
+  // from validated input before the matrix can answer at all.
+  const actor = await requireCapability('sprint.manage', { appId })
+  if (!actor) return err('Not allowed')
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
   const status = initialSprintStatus(startDate, endDate, today)
 
@@ -157,16 +160,23 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
  * the person, via `updateSprintStatus`.
  */
 export async function updateSprint(sprintId: string, input: unknown): Promise<ActionResult> {
-  const actor = await requireCapability('sprint.manage')
-  if (!actor) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
 
   const parsed = sprintUpdateInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
   if (Object.keys(parsed.data).length === 0) return err('Nothing to update')
 
+  // Above the read: without this, an unauthenticated POST still ran the
+  // select below and could distinguish 'Sprint not found' from 'Not allowed'
+  // for free, same gap as deleteTask before this fix.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
+
   const [existing] = await db.select().from(liveSprints).where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
+
+  const actor = await requireCapability('sprint.manage', { appId: existing.appId })
+  if (!actor) return err('Not allowed')
 
   const startDate = parsed.data.startDate ?? existing.startDate
   const endDate = parsed.data.endDate ?? existing.endDate
@@ -231,15 +241,20 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
 export async function deleteSprint(
   sprintId: string,
 ): Promise<ActionResult<{ backlogTasks: number }>> {
-  const actor = await requireCapability('sprint.manage')
-  if (!actor) return err('Admins only')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
+
+  // Above the read — see updateSprint's guard for why.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
 
   const [existing] = await db
     .select({ appId: liveSprints.appId, name: liveSprints.name })
     .from(liveSprints)
     .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
+
+  const actor = await requireCapability('sprint.manage', { appId: existing.appId })
+  if (!actor) return err('Not allowed')
 
   // COUNT in SQL, over LIVE tasks only. The only thing this number is for is
   // a sentence in a toast, and pulling one row per task across the wire to
@@ -327,16 +342,21 @@ export async function updateSprintStatus(
   sprintId: string,
   status: SprintStatus,
 ): Promise<ActionResult> {
-  const actor = await requireCapability('sprint.manage')
-  if (!actor) return err('Admins only')
   if (!SPRINT_STATUSES.includes(status)) return err('Invalid status')
   if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
+
+  // Above the read — see updateSprint's guard for why.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
 
   const [existing] = await db
     .select({ appId: liveSprints.appId, name: liveSprints.name, status: liveSprints.status })
     .from(liveSprints)
     .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
+
+  const actor = await requireCapability('sprint.manage', { appId: existing.appId })
+  if (!actor) return err('Not allowed')
 
   try {
     if (status === 'active') {
@@ -392,15 +412,20 @@ export async function updateSprintDates(
   startDate: string,
   endDate: string,
 ): Promise<ActionResult> {
-  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
   const parsed = sprintDatesInput.safeParse({ startDate, endDate })
   if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  // Above the read — see updateSprint's guard for why.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
 
   const [existing] = await db
     .select({ appId: liveSprints.appId })
     .from(liveSprints)
     .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
+
+  if (!(await requireCapability('sprint.manage', { appId: existing.appId }))) return err('Not allowed')
 
   await db
     .update(sprints)
@@ -416,14 +441,19 @@ export async function updateSprintDates(
  *  `sortOrder` is computed client-side via `sortOrderForIndex`, same
  *  fractional-midpoint-with-fallback strategy as the board's task drag. */
 export async function reorderSprint(sprintId: string, sortOrder: number): Promise<ActionResult> {
-  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
   if (!Number.isInteger(sortOrder)) return err('Invalid sort order')
+
+  // Above the read — see updateSprint's guard for why.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
 
   const [existing] = await db
     .select({ appId: liveSprints.appId })
     .from(liveSprints)
     .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
+
+  if (!(await requireCapability('sprint.manage', { appId: existing.appId }))) return err('Not allowed')
 
   await db.update(sprints).set({ sortOrder }).where(eq(sprints.id, sprintId))
 
@@ -441,7 +471,7 @@ export async function reorderSprint(sprintId: string, sortOrder: number): Promis
  * one-time backfill).
  */
 export async function resortSprintsByDate(appId: string): Promise<ActionResult> {
-  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
+  if (!(await requireCapability('sprint.manage', { appId }))) return err('Not allowed')
 
   const rows = await db
     .select({ id: liveSprints.id })
@@ -469,15 +499,20 @@ export async function resortSprintsByDate(appId: string): Promise<ActionResult> 
 
 /** Roadmap/board inline-rename target for a sprint's name. */
 export async function renameSprint(sprintId: string, name: string): Promise<ActionResult> {
-  if (!(await requireCapability('sprint.manage'))) return err('Admins only')
   const parsed = z.string().min(2).max(60).safeParse(name)
   if (!parsed.success) return err(parsed.error.issues[0].message)
+
+  // Above the read — see updateSprint's guard for why.
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
 
   const [existing] = await db
     .select({ appId: liveSprints.appId })
     .from(liveSprints)
     .where(eq(liveSprints.id, sprintId))
   if (!existing) return err('Sprint not found')
+
+  if (!(await requireCapability('sprint.manage', { appId: existing.appId }))) return err('Not allowed')
 
   await db.update(sprints).set({ name: parsed.data }).where(eq(sprints.id, sprintId))
 

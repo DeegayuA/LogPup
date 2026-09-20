@@ -12,17 +12,25 @@ import { absences } from '@/db/schema'
  * Same mocked-action idiom as admin/trash-actions.test.ts: chainable stubs
  * with a per-table `.returning()` queue, then `await import` the module.
  */
-const { authMock, logActivityMock, whereSpy, setSpy } = vi.hoisted(() => ({
+const { authMock, logActivityMock, whereSpy, setSpy, canReviewAbsenceMock } = vi.hoisted(() => ({
   authMock: vi.fn(),
   logActivityMock: vi.fn(),
   whereSpy: vi.fn(),
   setSpy: vi.fn(),
+  canReviewAbsenceMock: vi.fn(),
 }))
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('@/features/activity/log', () => ({ logActivity: logActivityMock }))
 vi.mock('@/features/auth/actor', () => ({ loadActor: authMock }))
 vi.mock('@/features/auth/capabilities', () => ({ can: () => true }))
+// The real scoping logic (manager-vs-appId) is covered where it lives, by
+// absence-queries.test.ts's canReviewAbsence suite. Mocked here as a spy so
+// these tests pin what review() DOES with it — fetches the absent person's
+// own assignments, passes them through, and refuses when it says no —
+// without re-deriving `can()`'s matrix answer for actors this file never
+// gives a role or scope to.
+vi.mock('@/features/worklog/absence-queries', () => ({ canReviewAbsence: canReviewAbsenceMock }))
 
 let selectQueue: unknown[][] = []
 let updateReturning: unknown[][] = []
@@ -73,6 +81,8 @@ beforeEach(() => {
   logActivityMock.mockReset()
   whereSpy.mockReset()
   setSpy.mockReset()
+  canReviewAbsenceMock.mockReset()
+  canReviewAbsenceMock.mockReturnValue(true)
   selectQueue = []
   updateReturning = []
 })
@@ -152,6 +162,42 @@ describe('approveAbsence', () => {
     const res = await approveAbsence({ id: ID })
 
     expect(res).toEqual({ ok: false, error: 'Somebody already decided that one' })
+    expect(logActivityMock).not.toHaveBeenCalled()
+  })
+
+  /**
+   * THE BUG: review() used to ask `can(actor, 'absence.approve', { ownerId:
+   * row.userId })` — no appId, which 'scoped' (manager) always refuses — so a
+   * manager the list already scoped correctly to this row dead-ended right
+   * here. The fix resolves the absent person's OWN assignments and hands them
+   * to canReviewAbsence, same as the list does.
+   */
+  it('resolves the absent person’s own assignments and lets a scoped manager through', async () => {
+    authMock.mockResolvedValue({ id: 'mgr-1' })
+    selectQueue = [
+      [{ id: ID, userId: OWNER, status: 'pending', kind: 'annual' }],
+      [{ appId: 'app-1' }, { appId: 'app-2' }],
+    ]
+    updateReturning = [[{ id: ID }]]
+
+    const res = await approveAbsence({ id: ID })
+
+    expect(res.ok).toBe(true)
+    expect(canReviewAbsenceMock).toHaveBeenCalledWith(
+      { id: 'mgr-1' },
+      { userId: OWNER, appIds: ['app-1', 'app-2'] },
+    )
+  })
+
+  it('refuses, before touching the row, when canReviewAbsence says no', async () => {
+    authMock.mockResolvedValue({ id: 'mgr-1' })
+    selectQueue = [[{ id: ID, userId: OWNER, status: 'pending', kind: 'annual' }], []]
+    canReviewAbsenceMock.mockReturnValue(false)
+
+    const res = await approveAbsence({ id: ID })
+
+    expect(res).toEqual({ ok: false, error: 'Not allowed' })
+    expect(whereSpy).not.toHaveBeenCalled()
     expect(logActivityMock).not.toHaveBeenCalled()
   })
 })

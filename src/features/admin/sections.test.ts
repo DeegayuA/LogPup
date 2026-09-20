@@ -39,4 +39,12 @@ describe('visibleSections', () => {
     expect(seen).toContain('/admin/people')
     expect(seen).not.toContain('/admin/danger')
   })
+
+  it('gives a manager the approvals queue — request.review is scoped, and can() with no resource fails closed', () => {
+    // Regression: visibleSections used to ask can(actor, 'request.review')
+    // with no resource, which a SCOPED grant always fails — hiding the row
+    // from every manager even though the page itself (and getApprovalsInbox)
+    // grants them a real, row-scoped queue.
+    expect(hrefs('manager')).toContain('/admin/approvals')
+  })
 })

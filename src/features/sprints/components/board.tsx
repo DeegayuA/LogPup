@@ -44,7 +44,6 @@ import {
 import { compareRanked, planInsert } from '@/features/sprints/task-rank'
 import type { Board as BoardData, TaskWithAssignee } from '@/features/sprints/queries'
 import type { UserRole } from '@/features/auth/capabilities'
-import { isAdminRole } from '@/features/auth/capabilities'
 
 export type { TaskStatus }
 
@@ -108,6 +107,8 @@ export function Board({
   appId,
   sprintId,
   currentUser,
+  canManageTasks = false,
+  canDeleteTasks = false,
 }: {
   initialBoard: BoardData
   /** This app's members — the roster the cards' reassign menus offer. */
@@ -119,6 +120,18 @@ export function Board({
   appId: string
   sprintId: string | null
   currentUser: { id: string; role: UserRole }
+  /** `task.edit` resolved server-side WITH this app's id (page.tsx) — passed
+   *  straight through to TaskDialog, which cannot resolve a scoped grant on
+   *  its own (see the note there), and to BoardColumn so a PM/lead's drag
+   *  affordance isn't limited to the client-only owns-only answer
+   *  `canMoveTask` gives (task.move and task.edit are the same matrix row —
+   *  manager: scoped, editor: scoped, member: own — see capabilities.ts). */
+  canManageTasks?: boolean
+  /** `task.delete` resolved server-side WITH this app's id — its OWN row
+   *  (manager: scoped, editor: NONE), passed straight through to TaskDialog's
+   *  Delete control. `canManageTasks` (task.edit) is the wrong proxy: it
+   *  grants editor, which task.delete never does. */
+  canDeleteTasks?: boolean
 }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -504,6 +517,7 @@ export function Board({
               appId={appId}
               sprintId={sprintId}
               currentUser={currentUser}
+              canManageTasks={canManageTasks}
               todayIso={todayIso}
               selectedIds={selectedIds}
               selectionMode={selection.length > 0}
@@ -542,7 +556,9 @@ export function Board({
       <TaskDialog
         task={editingTask}
         team={team}
-        isAdmin={isAdminRole(currentUser.role)}
+        role={currentUser.role}
+        canManageTasks={canManageTasks}
+        canDeleteTasks={canDeleteTasks}
         currentUserId={currentUser.id}
         sprintOptions={sprintOptions}
         sprintOptionsFailed={sprintOptionsFailed}

@@ -11,9 +11,10 @@ import { can, type UserRole } from '@/features/auth/capabilities'
  * Consequence, stated rather than hidden: for a `manager` or `editor` whose
  * grant on `task.move` is 'scoped', this answers only the ownership half. It
  * therefore UNDER-grants — it can hide a control someone is in fact allowed to
- * use, and it can never show one they are not. The server action re-checks
- * with the real scope, which is where authorization actually happens; this is
- * presentation, and presentation is allowed to be conservative.
+ * use, and it can never show one they are not. moveTaskOnBoard and
+ * bulkUpdateTasks re-check server-side via requireCapability, which resolves
+ * the real scope set; this function is presentation only, and presentation is
+ * allowed to be conservative.
  */
 export function canMoveTask(
   role: UserRole,

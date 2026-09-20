@@ -37,6 +37,7 @@ export function BoardColumn({
   appId,
   sprintId,
   currentUser,
+  canManageTasks = false,
   todayIso,
   selectedIds,
   selectionMode,
@@ -56,6 +57,13 @@ export function BoardColumn({
   appId: string
   sprintId: string | null
   currentUser: { id: string; role: UserRole }
+  /** `task.edit` resolved server-side with the real app scope (board.tsx).
+   *  task.move and task.edit are the SAME matrix row — manager: scoped,
+   *  editor: scoped, member: own (see capabilities.ts) — so this is a valid
+   *  stand-in for the `task.move` scope `canMoveTask` below cannot resolve on
+   *  the client (empty scope, owns-only). Without it a PM/lead could not drag
+   *  a teammate's card even though the server (`moveTaskOnBoard`) allows it. */
+  canManageTasks?: boolean
   todayIso: string
   selectedIds: ReadonlySet<string>
   selectionMode: boolean
@@ -119,11 +127,10 @@ export function BoardColumn({
                 <TaskCard
                   key={task.id}
                   task={task}
-                  draggable={canMoveTask(
-                    currentUser.role,
-                    currentUser.id,
-                    task.assignee?.id ?? null,
-                  )}
+                  draggable={
+                    canManageTasks ||
+                    canMoveTask(currentUser.role, currentUser.id, task.assignee?.id ?? null)
+                  }
                   // The card's quick menu edits the same task the drag moves,
                   // so it is gated on the same `canMoveTask` answer — with the
                   // destructive item held back for admins, and the roster the

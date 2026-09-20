@@ -1,7 +1,7 @@
-import { and, desc, eq, gte, lte } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lte } from 'drizzle-orm'
 import { db } from '@/db'
-import { absences, users } from '@/db/schema'
-import { can, type Actor } from '@/features/auth/capabilities'
+import { absences, assignments, users } from '@/db/schema'
+import { can, effectiveGrant, type Actor } from '@/features/auth/capabilities'
 
 export type AbsenceRow = {
   id: string
@@ -31,10 +31,18 @@ const select = {
  * A `manager` sees their scope; admin and above see everything. Their OWN
  * pending absence is excluded unless they are a superadmin — nobody reviews
  * their own, and showing a row you cannot action is just noise.
+ *
+ * The SEAT check is `effectiveGrant`, not `can()` with no resource:
+ * absence.approve is 'scoped' for manager, and a scoped grant asked with no
+ * resource — `{ appId: null }` included, `appId` is nullish either way —
+ * always fails closed, which used to return [] for every manager regardless
+ * of who they actually manage. The real scoping happens per row below,
+ * against the absent person's OWN apps (assignments, same scope source
+ * worklog.review uses) — not the actor's — because the question here is
+ * "is this person on a project I run", not "do I reach this app".
  */
 export async function listPendingAbsences(actor: Actor): Promise<AbsenceRow[]> {
-  if (!can(actor, 'absence.approve', { appId: null })
-      && !can(actor, 'absence.approve')) return []
+  if (effectiveGrant(actor.role, actor.employmentType, 'absence.approve') === 'none') return []
 
   const rows = await db
     .select(select)
@@ -44,7 +52,54 @@ export async function listPendingAbsences(actor: Actor): Promise<AbsenceRow[]> {
     .orderBy(absences.startDate)
 
   const canReviewOwn = can(actor, 'request.review.self', { ownerId: actor.id })
-  return rows.filter((r) => canReviewOwn || r.userId !== actor.id)
+  const ownFiltered = rows.filter((r) => canReviewOwn || r.userId !== actor.id)
+
+  // `absence.approve` is 'all' for admin and up — can() answers true with no
+  // resource there, so the assignments read below is paid only by the
+  // 'scoped' case (manager) that actually needs it.
+  if (can(actor, 'absence.approve')) return ownFiltered
+
+  const userIds = [...new Set(ownFiltered.map((r) => r.userId))]
+  if (userIds.length === 0) return []
+
+  const memberships = await db
+    .select({ userId: assignments.userId, appId: assignments.appId })
+    .from(assignments)
+    .where(inArray(assignments.userId, userIds))
+  const appIdsByUser = new Map<string, string[]>()
+  for (const m of memberships) {
+    const list = appIdsByUser.get(m.userId)
+    if (list) list.push(m.appId)
+    else appIdsByUser.set(m.userId, [m.appId])
+  }
+
+  return ownFiltered.filter((r) =>
+    canReviewAbsence(actor, { userId: r.userId, appIds: appIdsByUser.get(r.userId) ?? [] }),
+  )
+}
+
+/**
+ * The ONE predicate for "may `actor` decide someone else's absence" — shared
+ * by the filter above and `review()` in absence-actions.ts, which used to ask
+ * a different question (`can(actor, 'absence.approve', { ownerId: row.userId
+ * })`, no appId at all). `absence.approve` is 'scoped' for manager, and a
+ * scoped grant asked with no appId/appIds always fails closed, so every
+ * manager saw the row here and then had review() refuse it.
+ *
+ * Scoped against the ABSENT PERSON's own apps (assignments), same as above —
+ * never the actor's — because the question is "is this person on a project I
+ * run", not "do I reach this app".
+ */
+export function canReviewAbsence(
+  actor: Actor,
+  target: { userId: string; appIds: readonly string[] },
+): boolean {
+  // Self-review is request.review.self's job, not this one's — callers gate
+  // isSelf separately before ever reaching here. A defensive `false`, not an
+  // assumption: this predicate must never be the thing that lets a 'scoped'
+  // grant's owns-shortcut turn into a manager signing their own row.
+  if (target.userId === actor.id) return false
+  return can(actor, 'absence.approve') || can(actor, 'absence.approve', { appIds: target.appIds })
 }
 
 /** Recent absences of every status, for the admin calendar view. */

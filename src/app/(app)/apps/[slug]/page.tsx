@@ -122,11 +122,32 @@ export default async function AppDetailPage(props: {
   // Filing is granted 'all' from member up and takes no resource: whoever hits
   // a bug reports it, including on a project they are not on.
   const canReportBugs = actor ? can(actor, 'bug.report') : false
-  // Settings is admin-only; Bugs needs bug.view on THIS app. Everything else
-  // is visible to any signed-in member. normalizeAppTab sends a link to a tab
-  // this viewer cannot open back to Overview rather than to a 403.
+  // app.edit is SCOPED for manager — asked WITH this app's id, so the manager
+  // who owns it (not isAdminRole) reaches Settings and the Edit dialog too.
+  // app.delete stays a separate, narrower question below: the matrix gives it
+  // no scoped arm at all, so it is admin-only regardless of app.edit.
+  const canEditApp = actor ? can(actor, 'app.edit', { appId: app.id }) : false
+  const canDeleteApp = actor ? can(actor, 'app.delete') : false
+  // sprint.manage and task.edit are both SCOPED for manager (and task.edit
+  // for editor too) — asked WITH this app's id, same shape as canEditApp
+  // above, so a PM/lead reaches the sprint controls and every task on their
+  // own board, not only isAdminRole (superadmin/admin).
+  const canManageSprints = actor ? can(actor, 'sprint.manage', { appId: app.id }) : false
+  const canManageTasks = actor ? can(actor, 'task.edit', { appId: app.id }) : false
+  // task.delete is its OWN row (manager: scoped, editor: NONE) — narrower than
+  // task.edit (editor: scoped), so canManageTasks is the wrong proxy for the
+  // Delete control. Asked separately, same appId shape as canManageTasks.
+  const canDeleteTasks = actor ? can(actor, 'task.delete', { appId: app.id }) : false
+  // app.assign is scoped for manager too — the Team panel's Add/Edit/Remove
+  // controls used to gate on isAdminRole alone, which under-granted this
+  // app's own PM/lead exactly the way people/[id]'s workload card did.
+  const canAssignTeam = actor ? can(actor, 'app.assign', { appId: app.id }) : false
+  // Settings needs app.edit on THIS app; Bugs needs bug.view on THIS app.
+  // Everything else is visible to any signed-in member. normalizeAppTab sends
+  // a link to a tab this viewer cannot open back to Overview rather than to a
+  // 403.
   const available = APP_TAB_IDS.filter((id) =>
-    id === 'settings' ? isAdmin : id === 'bugs' ? canViewBugs : true,
+    id === 'settings' ? canEditApp : id === 'bugs' ? canViewBugs : true,
   )
   const tab = normalizeAppTab(search.tab, available)
   const bugFilters = parseBugFilters({ bugStatus: search.bugStatus, bugSeverity: search.bugSeverity })
@@ -149,12 +170,15 @@ export default async function AppDetailPage(props: {
   // Bugs joins the list only for a viewer who can actually triage — the
   // assignee select is the sole thing on that tab that wants a roster, and a
   // member reading the list should not buy one.
+  // canEditApp, not isAdmin: both feed the AppFormDialog's Lead select and
+  // tag picker, and that dialog is now offered to a scoped manager too — an
+  // isAdmin-only fetch would open it for them with an empty roster.
   const needsUsers =
-    isAdmin
+    canEditApp
     || tab === 'roadmap'
     || (tab === 'bugs' && canTriageBugs)
     || TABS_NEEDING_USERS.includes(tab)
-  const needsTechTags = isAdmin || TABS_NEEDING_USERS.includes(tab)
+  const needsTechTags = canEditApp || TABS_NEEDING_USERS.includes(tab)
 
   // Overview shows a teaser; Activity shows the feed; every other tab needs
   // none of it, and 0 is how they say so.
@@ -197,10 +221,15 @@ export default async function AppDetailPage(props: {
     // Settings is the only tab that shows PM/lead history — it sits right
     // under the form that edits them (AppFormDialog below).
     tab === 'settings' ? getAppRoleHistory(app.id) : Promise.resolve([]),
-    // Only the dialogs below read this, and only admins ever see those
-    // dialogs — a member pays nothing for a preference lookup they have no
-    // control that needs it.
-    isAdmin && session?.user ? getAiPrefs(session.user.id) : Promise.resolve(null),
+    // Only the dialogs below read this, and only a viewer who can reach one
+    // of them (app.edit or sprint.manage, both scoped to manager) ever sees
+    // it — a member pays nothing for a preference lookup they have no
+    // control that needs it. isAdmin alone under-granted this: a scoped
+    // manager reaching AppFormDialog via canEditApp got a null aiPrefs and
+    // their own opt-out silently ignored (defaulted to enabled below).
+    (canEditApp || canManageSprints) && session?.user
+      ? getAiPrefs(session.user.id)
+      : Promise.resolve(null),
     // `null`, not a rethrow: one failed Neon read on the bug list should
     // degrade to BugList's own inline error (the admin queue already does
     // this), not blank the whole app page from the route boundary.
@@ -411,10 +440,10 @@ export default async function AppDetailPage(props: {
            everyone else that a bug is hit on the Roadmap or in Discussion,
            not on the Bugs tab. */
         actions={
-          canReportBugs || isAdmin ? (
+          canReportBugs || canEditApp ? (
             <>
               {canReportBugs ? <ReportBugDialog appId={app.id} appName={app.name} /> : null}
-              {isAdmin ? (
+              {canEditApp ? (
                 <AppFormDialog
                   appId={app.id}
                   initialValues={{
@@ -517,7 +546,7 @@ export default async function AppDetailPage(props: {
             appName={app.name}
             team={team}
             activeUsers={activeUsers}
-            isAdmin={isAdmin}
+            canAssign={canAssignTeam}
             pmUserId={app.pmId}
             leadUserId={app.leadId}
           />
@@ -561,13 +590,16 @@ export default async function AppDetailPage(props: {
               controls and no delete — so without this line the only way to
               learn where your reach ends is to try something. Both branches
               are the real server rules: createTask takes any session,
-              updateTask and canMoveTask take an admin OR the assignee, and
-              every sprint action takes an admin. */}
+              updateTask and canMoveTask take task.edit (admin, OR a scoped
+              manager/editor on this app, OR the assignee), and sprint actions
+              take sprint.manage (admin, or this app's scoped PM/lead). */}
           {board && session?.user ? (
             <p className="text-xs text-muted-foreground">
-              {isAdmin
+              {canManageSprints
                 ? 'You can change any task on this board, and the sprints themselves — dates, status and order.'
-                : 'You can add a task to any column and move or edit the ones assigned to you — sprints and their dates are set by an admin.'}
+                : canManageTasks
+                  ? 'You can change any task on this board — sprints and their dates are set by this project’s PM/lead or an admin.'
+                  : 'You can add a task to any column and move or edit the ones assigned to you — sprints and their dates are set by this project’s PM/lead or an admin.'}
             </p>
           ) : null}
 
@@ -607,10 +639,10 @@ export default async function AppDetailPage(props: {
               </Link>
             </div>
             <div className="flex items-center gap-2">
-              {isAdmin && !isBacklog && selectedSprint ? (
+              {canManageSprints && !isBacklog && selectedSprint ? (
                 <ExportButton sprintId={selectedSprint.id} />
               ) : null}
-              {isAdmin ? (
+              {canManageSprints ? (
                 <SprintFormDialog appId={app.id} aiDraftEnabled={sprintDraftEnabled} />
               ) : null}
             </div>
@@ -620,7 +652,7 @@ export default async function AppDetailPage(props: {
             <div className="flex flex-col gap-1 rounded-xl bg-card p-3 ring-1 ring-foreground/10">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h2 className="font-heading text-base font-semibold">{selectedSprint.name}</h2>
-                {isAdmin ? (
+                {canManageSprints ? (
                   <SprintStatusSelect
                     sprintId={selectedSprint.id}
                     status={selectedSprint.status}
@@ -692,18 +724,20 @@ export default async function AppDetailPage(props: {
               appId={app.id}
               sprintId={boardSprintId}
               currentUser={{ id: session.user.id, role: session.user.role }}
+              canManageTasks={canManageTasks}
+              canDeleteTasks={canDeleteTasks}
             />
           ) : (
             <div className="rounded-xl border border-dashed border-border">
               <EmptyState
                 title="Nothing to fetch here yet"
                 description={
-                  isAdmin
+                  canManageSprints
                     ? 'This app has no sprints. Create the first one and LogPup will keep watch over the board.'
                     : 'No sprints planned for this app yet. LogPup is keeping an eye out — check back soon.'
                 }
                 action={
-                  isAdmin ? (
+                  canManageSprints ? (
                     <SprintFormDialog appId={app.id} aiDraftEnabled={sprintDraftEnabled} />
                   ) : undefined
                 }
@@ -729,15 +763,20 @@ export default async function AppDetailPage(props: {
               // clicking, dragging and editing a sprint all live down here.
               // A closed <details> is right for detail you might want; it is
               // wrong for the only place an action exists.
-              defaultOpen={isAdmin}
-              summary={isAdmin ? 'Edit the schedule' : 'See the full schedule'}
+              defaultOpen={canManageSprints}
+              summary={canManageSprints ? 'Edit the schedule' : 'See the full schedule'}
               hint={
-                isAdmin
+                canManageSprints
                   ? 'click a sprint to edit it, or drag to move and resize'
                   : 'every sprint, with dates'
               }
             >
-              <Roadmap sprints={sprints} slug={slug} counts={sprintTaskCountsById} />
+              <Roadmap
+                sprints={sprints}
+                slug={slug}
+                counts={sprintTaskCountsById}
+                canManageSprints={canManageSprints}
+              />
             </LazyDisclosure>
           ) : null}
         </div>
@@ -862,11 +901,14 @@ export default async function AppDetailPage(props: {
           </div>
 
           {/* Deleting is the harder of the two, so it is read second — and it
-              is safe on the same gate as this whole tab, because `app.delete`
-              grants exactly the seats isAdminRole covers (superadmin, admin)
-              with no scoped arm. The action re-checks the capability
+              needs its OWN gate now that the tab itself opens on `app.edit`
+              (scoped to manager, not admin-only): `app.delete` has no scoped
+              arm at all, so a manager who can edit this app still may not see
+              the delete control. The action re-checks the capability
               regardless; this only decides what is offered. */}
-          <DeleteAppCard appId={app.id} appName={app.name} slug={slug} />
+          {canDeleteApp ? (
+            <DeleteAppCard appId={app.id} appName={app.name} slug={slug} />
+          ) : null}
         </div>
       ) : null}
     </div>

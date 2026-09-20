@@ -8,7 +8,8 @@ import { PersonAppRoleHistoryCard } from '@/features/people/components/app-role-
 import { AssignmentsCard } from '@/features/people/components/assignments-card'
 import { PersonActivityCard } from '@/features/people/components/person-activity-card'
 import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
-import { requireCapability } from '@/features/auth/actor'
+import { loadActor } from '@/features/auth/actor'
+import { can, effectiveGrant } from '@/features/auth/capabilities'
 import { PersonHeader } from '@/features/people/components/person-header'
 import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
 import { PersonStatRow } from '@/features/people/components/person-stat-row'
@@ -93,7 +94,7 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
     activity,
     history,
     roleHistory,
-    assignActor,
+    actor,
     assignableApps,
   ] = await Promise.all([
     getPersonOverview(userId),
@@ -103,10 +104,19 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
     getPersonActivity(userId),
     getPersonAllocationHistory(userId),
     getPersonAppRoleHistory(userId),
-    // Whether to OFFER the workload controls. The action checks `app.assign`
-    // again on every call — this only decides whether a door is drawn that
-    // would then be refused.
-    requireCapability('app.assign'),
+    // Whether to OFFER the workload controls AT ALL. NOT `can(actor,
+    // 'app.assign')` (no resource) or the old `requireCapability('app.assign')`
+    // (same thing): `app.assign` is SCOPED for manager, and asking a scoped
+    // grant with no resource fails closed — every manager lost this door even
+    // though `assignUser`/`updateAssignment`/`removeAssignment` (each asked
+    // WITH the real appId) would accept them. This page is per-PERSON, not
+    // per-app, so there is no single appId to ask `can()` with either; the
+    // door is therefore the SEAT question — does this role hold app.assign at
+    // all. Each row's actual controls DO stay app-scoped below, via
+    // `assignableAppIds` computed after this Promise.all (one `can()` per app,
+    // against its real id) — a manager who runs app-1 gets Edit/Remove only on
+    // that row and a picker limited to that project, not every one.
+    loadActor(),
     // Joined to the same fan-out rather than fetched behind the gate: it is a
     // small cached read, and awaiting it after `canAssign` would put a second
     // round trip in front of the one page section that needs it.
@@ -115,9 +125,27 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
 
   if (!overview) notFound()
 
-  // The same predicate assignUser/removeAssignment run, asked the same way with
-  // no resource — so the controls appear exactly when the action would accept.
-  const canAssign = assignActor !== null
+  const canAssign =
+    actor !== null && effectiveGrant(actor.role, actor.employmentType, 'app.assign') !== 'none'
+
+  // The PER-APP door, for the controls themselves. Admin/superadmin's grant is
+  // 'all', so `can()` answers true for every app with no scope lookup; a
+  // manager's is 'scoped', so this is exactly the ids `app.assign`'s scope
+  // arm actually reaches for THEM — never every live project, which is what
+  // canAssign alone used to leave every row and the picker offering.
+  //
+  // Candidates are `assignableApps` (the live projects the "Add" picker may
+  // offer) UNION every appId this person already has a row for — an existing
+  // assignment can sit on a paused or archived app, which `listAssignableApps`
+  // deliberately excludes, and `can()` only matches `appId` against the
+  // actor's scope; it does not care whether the app is live. Checking the
+  // live list alone would silently hide Edit/Remove on a manager's own
+  // archived-app row.
+  const candidateAppIds = new Set(assignableApps.map((app) => app.id))
+  for (const a of overview.assignments) candidateAppIds.add(a.appId)
+  const assignableAppIds = actor
+    ? [...candidateAppIds].filter((appId) => can(actor, 'app.assign', { appId }))
+    : []
 
   /**
    * The stat strip is derived from the SAME summaries the cards below render —
@@ -208,6 +236,9 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
           // Nothing to choose from when the reader cannot assign anyway, so the
           // project list is not shipped to their browser either.
           assignableApps={canAssign ? assignableApps : []}
+          // Per-row gate: a manager who runs app-1 only sees Edit/Remove on
+          // that row and only that project in either picker, not every one.
+          assignableAppIds={canAssign ? assignableAppIds : []}
         />
 
         <PersonFollowupsCard

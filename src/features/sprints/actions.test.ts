@@ -7,17 +7,29 @@ import { liveSprints, liveTasks } from '@/db/live'
 // deletedBy, never removed — and its tasks are deliberately left pointing at
 // it, so a restore is lossless. Nothing else is written; the tasks stay
 // visible through the backlog rule in backlog.ts, not through a mutation.
-// Same mocked-action idiom as src/features/admin/set-user-title.test.ts.
-const { authMock, writeSpy, deleteSpy, logActivityMock } = vi.hoisted(() => ({
-  authMock: vi.fn(),
+//
+// requireCapability is mocked directly (same idiom as
+// admin/bulk-actions.test.ts) rather than the session: sprint.manage is
+// SCOPED for manager, and the thing worth pinning here is that every guard
+// site hands it the sprint's REAL appId — not that the matrix agrees with
+// itself, which capabilities.test.ts already covers.
+const { requireCapabilityMock, writeSpy, deleteSpy, logActivityMock } = vi.hoisted(() => ({
+  requireCapabilityMock: vi.fn(),
   writeSpy: vi.fn(),
   deleteSpy: vi.fn(),
   logActivityMock: vi.fn(),
 }))
 
-vi.mock('@/lib/auth', () => ({ auth: authMock }))
+// D6 fix added a `requireSession()`-shaped `auth()` check ABOVE the read in
+// every guard here (updateSprint/deleteSprint/updateSprintStatus/
+// updateSprintDates/renameSprint) — see actions.ts. It only asks "is anyone
+// signed in", never which one, so a resolved session is the default and
+// `requireCapabilityMock` (below) stays the one mock that decides who is
+// allowed to act.
+vi.mock('@/lib/auth', () => ({ auth: vi.fn().mockResolvedValue({ user: { id: 'session-user' } }) }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('@/features/activity/log', () => ({ logActivity: logActivityMock }))
+vi.mock('@/features/auth/actor', () => ({ requireCapability: requireCapabilityMock }))
 
 let sprintQueue: unknown[][] = []
 let taskCountQueue: unknown[][] = []
@@ -82,15 +94,26 @@ vi.mock('@/db', () => ({
   },
 }))
 
-const { createSprint, deleteSprint, updateSprintStatus } = await import('./actions')
+const { createSprint, deleteSprint, renameSprint, updateSprintStatus } = await import('./actions')
 
 const SPRINT_ID = '33333333-3333-4333-8333-333333333333'
+const APP_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const APP_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
-const asAdmin = () => authMock.mockResolvedValue({ user: { id: 'admin-1', role: 'admin' } })
-const asMember = () => authMock.mockResolvedValue({ user: { id: 'member-1', role: 'member' } })
+const asAdmin = () => requireCapabilityMock.mockResolvedValue({ id: 'admin-1', role: 'admin' })
+const asNobody = () => requireCapabilityMock.mockResolvedValue(null)
+// D6 fix: sprint.manage is SCOPED for manager, and `can()` fails closed on
+// 'scoped' with no resource. This stands in for the real matrix's per-app
+// scope check without pulling in loadActor's own appRoleHistory query —
+// what's under test is which appId each guard site hands over, not whether
+// the matrix agrees with itself.
+const asManagerOf = (appId: string) =>
+  requireCapabilityMock.mockImplementation(async (_action: string, resource?: { appId?: string }) =>
+    resource?.appId === appId ? { id: 'manager-1', role: 'manager' } : null,
+  )
 
 beforeEach(() => {
-  authMock.mockReset()
+  requireCapabilityMock.mockReset()
   writeSpy.mockReset()
   deleteSpy.mockReset()
   logActivityMock.mockReset()
@@ -102,10 +125,11 @@ beforeEach(() => {
 })
 
 describe('deleteSprint', () => {
-  it('rejects a non-admin caller and writes nothing', async () => {
-    asMember()
+  it('rejects a refused caller and writes nothing', async () => {
+    asNobody()
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1' }]]
     const res = await deleteSprint(SPRINT_ID)
-    expect(res).toEqual({ ok: false, error: 'Admins only' })
+    expect(res).toEqual({ ok: false, error: 'Not allowed' })
     expect(writeSpy).not.toHaveBeenCalled()
     expect(deleteSpy).not.toHaveBeenCalled()
     expect(logActivityMock).not.toHaveBeenCalled()
@@ -113,7 +137,7 @@ describe('deleteSprint', () => {
 
   it('a second delete of an already-trashed sprint returns err and logs no activity', async () => {
     asAdmin()
-    sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1' }]]
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1' }]]
     taskCountQueue = [[{ total: 0 }]]
     // isNull(deletedAt) guard matched nothing — already trashed.
     sprintReturningQueue = [[]]
@@ -127,7 +151,7 @@ describe('deleteSprint', () => {
 
   it('marks the sprint deleted and NEVER writes the tasks table', async () => {
     asAdmin()
-    sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1' }]]
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1' }]]
     taskCountQueue = [[{ total: 3 }]]
     sprintReturningQueue = [[{ id: SPRINT_ID }]]
 
@@ -153,7 +177,7 @@ describe('deleteSprint', () => {
 
   it('a losing concurrent double-delete writes nothing at all', async () => {
     asAdmin()
-    sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1' }]]
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1' }]]
     taskCountQueue = [[{ total: 3 }]]
     // isNull(deletedAt) matched nothing — the other caller already trashed it.
     sprintReturningQueue = [[]]
@@ -166,6 +190,89 @@ describe('deleteSprint', () => {
     // telling the caller "Sprint not found". One guarded statement can't.
     expect(writeSpy).not.toHaveBeenCalledWith(tasks, expect.anything())
     expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  // D6: the guard used to call requireCapability('sprint.manage') with NO
+  // resource at all. sprint.manage is SCOPED for manager, and `can()` fails
+  // closed on 'scoped' with no resource — so every PM was refused on their
+  // own app's sprint. Fix reads the sprint's appId first and hands it over.
+  it('a manager scoped to the sprint app can delete it', async () => {
+    asManagerOf(APP_A)
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1' }]]
+    taskCountQueue = [[{ total: 0 }]]
+    sprintReturningQueue = [[{ id: SPRINT_ID }]]
+
+    const res = await deleteSprint(SPRINT_ID)
+
+    expect(res).toEqual({ ok: true, data: { backlogTasks: 0 } })
+    expect(requireCapabilityMock).toHaveBeenCalledWith('sprint.manage', { appId: APP_A })
+  })
+
+  it('a manager scoped to a DIFFERENT app is refused', async () => {
+    asManagerOf(APP_B)
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1' }]]
+
+    const res = await deleteSprint(SPRINT_ID)
+
+    expect(res).toEqual({ ok: false, error: 'Not allowed' })
+    expect(writeSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('createSprint', () => {
+  // The guard moved BELOW the input parse so the appId from validated input
+  // is what gets checked — the caller cannot be trusted to hand over an appId
+  // the actor actually reaches, but zod can be trusted to shape it.
+  it('a manager scoped to the target app can create a sprint', async () => {
+    asManagerOf(APP_A)
+    sprintInsertReturningQueue = [[]]
+
+    const res = await createSprint({
+      appId: APP_A,
+      name: 'Sprint A',
+      startDate: '2020-01-01',
+      endDate: '2020-01-14',
+    })
+
+    expect(res.ok).toBe(true)
+    expect(requireCapabilityMock).toHaveBeenCalledWith('sprint.manage', { appId: APP_A })
+  })
+
+  it('a manager scoped to a DIFFERENT app is refused before any write', async () => {
+    asManagerOf(APP_B)
+
+    const res = await createSprint({
+      appId: APP_A,
+      name: 'Sprint A',
+      startDate: '2020-01-01',
+      endDate: '2020-01-14',
+    })
+
+    expect(res).toEqual({ ok: false, error: 'Not allowed' })
+    expect(writeSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('renameSprint', () => {
+  it('a manager scoped to the sprint app can rename it', async () => {
+    asManagerOf(APP_A)
+    sprintQueue = [[{ appId: APP_A }]]
+
+    const res = await renameSprint(SPRINT_ID, 'New name')
+
+    expect(res).toEqual({ ok: true, data: undefined })
+    expect(requireCapabilityMock).toHaveBeenCalledWith('sprint.manage', { appId: APP_A })
+    expect(writeSpy).toHaveBeenCalledWith(sprints, { name: 'New name' })
+  })
+
+  it('a manager scoped to a DIFFERENT app is refused and writes nothing', async () => {
+    asManagerOf(APP_B)
+    sprintQueue = [[{ appId: APP_A }]]
+
+    const res = await renameSprint(SPRINT_ID, 'New name')
+
+    expect(res).toEqual({ ok: false, error: 'Not allowed' })
+    expect(writeSpy).not.toHaveBeenCalled()
   })
 })
 
@@ -189,7 +296,7 @@ describe('createSprint / updateSprintStatus: the demote-siblings guard excludes 
     sprintInsertReturningQueue = [[]]
 
     const res = await createSprint({
-      appId: '55555555-5555-4555-8555-555555555555',
+      appId: APP_A,
       name: 'Sprint born active',
       startDate: '2000-01-01',
       endDate: '2999-01-01',
@@ -204,7 +311,7 @@ describe('createSprint / updateSprintStatus: the demote-siblings guard excludes 
 
   it('updateSprintStatus(→active) demotes only LIVE active siblings', async () => {
     asAdmin()
-    sprintQueue = [[{ appId: 'app-1', name: 'Sprint 1', status: 'planned' }]]
+    sprintQueue = [[{ appId: APP_A, name: 'Sprint 1', status: 'planned' }]]
 
     const res = await updateSprintStatus(SPRINT_ID, 'active')
 

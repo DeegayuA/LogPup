@@ -8,6 +8,7 @@ import type { BatchItem } from 'drizzle-orm/batch'
 import { alias } from 'drizzle-orm/pg-core'
 import { put, get as getBlob } from '@vercel/blob'
 import { auth } from '@/lib/auth'
+import { loadActor } from '@/features/auth/actor'
 import { allowedDomains, emailAllowed } from '@/lib/allowed-domains'
 import { orgForEmail } from '@/lib/org-from-domain'
 import { db } from '@/db'
@@ -3761,11 +3762,12 @@ export type AssignSpeakerResult =
       /** Set when this write put the person over 100% across all their apps. */
       warning?: string
       /**
-       * An app assignment was missing but the caller isn't an admin, so the
-       * label mapping and meeting attendance were written and the assignment
-       * was left alone. Allocations are admin-only everywhere else
-       * (people/actions.ts assignUser), and this is not the place to make an
-       * exception — least of all by inventing the number.
+       * An app assignment was missing but the caller does not hold
+       * `app.assign` on this app, so the label mapping and meeting
+       * attendance were written and the assignment was left alone.
+       * `app.assign` is scoped — admin, or the app's PM/lead
+       * (people/actions.ts assignUser) — and this is not the place to make
+       * an exception — least of all by inventing the number.
        */
       assignmentDeferred?: { appName: string }
     }
@@ -3812,6 +3814,15 @@ export async function assignSpeaker(input: {
   if (!ctx) return err('Not allowed')
   const { session, meeting } = ctx
   const isAdmin = isAdminRole(session.user.role)
+  // Creating (or offering to create) the ASSIGNMENT this speaker attribution
+  // may need is a separate question from canManageMeeting above: app.assign
+  // is scoped (admin, or the app's PM/lead — people/actions.ts assignUser),
+  // and canManageMeeting alone (member: 'own', meeting.manage) does not speak
+  // for it. Without this, a member who created the meeting could grant
+  // anyone a project assignment through this path with no app.assign at all.
+  const actor = await loadActor()
+  const canAssignApp =
+    actor && meeting.appId ? can(actor, 'app.assign', { appId: meeting.appId }) : false
 
   // Statements are collected in FK-safe order: a new user row must precede
   // anything that references it.
@@ -3914,17 +3925,23 @@ export async function assignSpeaker(input: {
   // writes nothing at all, so a cancelled prompt leaves the meeting exactly as
   // it was rather than half-attributed.
   //
-  // Non-admins are the one case that proceeds without one: creating an
-  // assignment is admin-only everywhere else (people/actions.ts assignUser),
-  // so there is nothing to prompt them for. They still get the two claims they
-  // ARE allowed to make — the label mapping and the attendance row — and the
+  // Callers without `app.assign` on this meeting's app are the one case that
+  // proceeds without one — they cannot create the assignment, so there is
+  // nothing to prompt them for. They still get the two claims they ARE
+  // allowed to make — the label mapping and the attendance row — and the
   // caller is told the assignment is outstanding.
   const needsAssignment = plan.addAssignment && meeting.appId !== null && !parsed.data.assignment
-  const [appRow] = needsAssignment
-    ? await db.select({ name: liveApps.name }).from(liveApps).where(eq(liveApps.id, meeting.appId!))
-    : [undefined]
+  // Whenever the plan wants a new assignment but this caller cannot write
+  // one — whether they left role/allocation for the needs-assignment prompt
+  // above (`needsAssignment`) or supplied them anyway with no `app.assign` on
+  // this app. Both need the app's name for the same reason, so both fetch it.
+  const assignmentDropped = plan.addAssignment && meeting.appId !== null && !canAssignApp
+  const [appRow] =
+    needsAssignment || assignmentDropped
+      ? await db.select({ name: liveApps.name }).from(liveApps).where(eq(liveApps.id, meeting.appId!))
+      : [undefined]
 
-  if (needsAssignment && isAdmin) {
+  if (needsAssignment && canAssignApp) {
     return ok({
       status: 'needs-assignment',
       personName: targetUserName,
@@ -3933,7 +3950,12 @@ export async function assignSpeaker(input: {
     })
   }
 
-  const writeAssignment = plan.addAssignment && Boolean(parsed.data.assignment)
+  // canAssignApp, not merely "the caller supplied one": a member who created
+  // this meeting passes canManageMeeting (meeting.manage is 'own') but does
+  // not thereby hold app.assign, and a crafted `assignment` payload must not
+  // buy them a project assignment app.assign would have refused.
+  const writeAssignment =
+    plan.addAssignment && Boolean(parsed.data.assignment) && canAssignApp
 
   // ONE instant for every interval boundary this batch writes, so the closing
   // and opening rows abut exactly instead of leaving a gap or an overlap.
@@ -4000,9 +4022,10 @@ export async function assignSpeaker(input: {
         changeKind: 'assigned',
         changedBy: session.user.id,
         at,
-        // No "placeholder" caveat any more: an admin typed this role and this
-        // percentage when they attributed the speaker, so the history entry
-        // records a decision rather than a guess to be corrected later.
+        // No "placeholder" caveat any more: `canAssignApp` (app.assign) is
+        // admin OR this app's scoped PM/lead, so whichever of them attributed
+        // the speaker typed this role and percentage themselves — the history
+        // entry records a decision rather than a guess to be corrected later.
         note: `Set when this person was attributed as a speaker in “${meeting.title}”.`,
       }),
     )
@@ -4035,7 +4058,7 @@ export async function assignSpeaker(input: {
     status: 'assigned',
     userId: plan.userId,
     ...(totalPct > 100 ? { warning: `Now at ${totalPct}% allocation` } : {}),
-    ...(needsAssignment && !isAdmin
+    ...(assignmentDropped
       ? { assignmentDeferred: { appName: appRow?.name ?? 'this app' } }
       : {}),
   })

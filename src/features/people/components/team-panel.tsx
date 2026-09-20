@@ -30,7 +30,7 @@ export function TeamPanel({
   appName,
   team,
   activeUsers,
-  isAdmin,
+  canAssign,
   pmUserId = null,
   leadUserId = null,
 }: {
@@ -41,7 +41,10 @@ export function TeamPanel({
   appName?: string
   team: TeamMember[]
   activeUsers: ActiveUser[]
-  isAdmin: boolean
+  /** `app.assign`, resolved on the server WITH this app's id — scoped to
+   *  admin, or this app's own PM/lead (capabilities.ts). NOT `isAdminRole`:
+   *  that excludes the scoped manager the grant exists for. */
+  canAssign: boolean
   /**
    * Who holds the project's two tracked positions. Passed in rather than read
    * off the member rows because a PM or lead need not be ASSIGNED to the
@@ -103,7 +106,7 @@ export function TeamPanel({
               <Download aria-hidden /> CSV
             </Button>
           ) : null}
-          {isAdmin ? (
+          {canAssign ? (
           <AssignDialog
             appId={appId}
             activeUsers={activeUsers}
@@ -120,7 +123,7 @@ export function TeamPanel({
         <div className="flex flex-col gap-1 rounded-xl border border-dashed border-border px-4 py-8 text-center">
           <p className="text-sm font-medium">No one&apos;s on this app yet.</p>
           <p className="text-xs text-muted-foreground">
-            {isAdmin ? 'Add the first member to get things moving.' : 'Ask an admin to assign someone.'}
+            {canAssign ? 'Add the first member to get things moving.' : 'Ask an admin to assign someone.'}
           </p>
         </div>
       ) : (
@@ -155,7 +158,7 @@ export function TeamPanel({
                 </span>
               </div>
               <ContactButtons name={member.name} phone={member.phone} context={appName} />
-              {isAdmin ? (
+              {canAssign ? (
                 <div className="flex shrink-0 items-center gap-0.5">
                   <AssignDialog
                     appId={appId}

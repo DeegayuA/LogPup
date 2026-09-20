@@ -4,11 +4,12 @@ import { z } from 'zod'
 import { and, eq, inArray } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { absences } from '@/db/schema'
+import { absences, assignments } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { logActivity } from '@/features/activity/log'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
+import { canReviewAbsence } from '@/features/worklog/absence-queries'
 import { overlaps } from '@/features/worklog/schedules'
 import { SELF_DECLARABLE_KINDS, type AbsenceKind } from '@/features/worklog/absence-kinds'
 
@@ -131,9 +132,25 @@ async function review(
     // Separation of duties: nobody signs their own, except a superadmin —
     // otherwise a sole-superadmin workspace could never approve anything.
     const isSelf = row.userId === actor.id
-    const permitted = isSelf
-      ? can(actor, 'request.review.self', { ownerId: actor.id })
-      : can(actor, 'absence.approve', { ownerId: row.userId })
+    let permitted: boolean
+    if (isSelf) {
+      permitted = can(actor, 'request.review.self', { ownerId: actor.id })
+    } else {
+      // canReviewAbsence, not a bare `can(actor, 'absence.approve', {
+      // ownerId })` — that asked with no appId, and absence.approve is
+      // 'scoped' for manager, so a scoped grant with no resource always
+      // failed closed here even for the exact row listPendingAbsences had
+      // just shown them (it scopes against the absent person's OWN apps,
+      // below). Same predicate, same scope source, on both surfaces now.
+      const memberships = await db
+        .select({ appId: assignments.appId })
+        .from(assignments)
+        .where(eq(assignments.userId, row.userId))
+      permitted = canReviewAbsence(actor, {
+        userId: row.userId,
+        appIds: memberships.map((m) => m.appId),
+      })
+    }
     if (!permitted) return err('Not allowed')
 
     // COMPARE-AND-SET, AND THE RESULT IS READ. The predicate was always right;

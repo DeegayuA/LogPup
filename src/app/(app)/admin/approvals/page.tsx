@@ -9,7 +9,7 @@ import { getApprovalsInbox, getMyRequests } from '@/features/admin/change-reques
 import { listPendingAbsences } from '@/features/worklog/absence-queries'
 import { absenceKindLabel, exemptsWholeDay } from '@/features/worklog/absence-kinds'
 import { loadActor } from '@/features/auth/actor'
-import { can } from '@/features/auth/capabilities'
+import { can, effectiveGrant } from '@/features/auth/capabilities'
 
 /**
  * One queue, three sources: signups, change requests, and leave.
@@ -20,7 +20,15 @@ import { can } from '@/features/auth/capabilities'
  */
 export default async function AdminApprovalsPage() {
   const actor = await loadActor()
-  if (!actor || !can(actor, 'request.review')) notFound()
+  // NOT can(actor, 'request.review'): that asks with no resource, and
+  // request.review is SCOPED for manager — a scoped grant with no resource
+  // fails closed, so a real reviewing manager got notFound() here. This route
+  // question is only "does the seat hold the capability at all"; the actual
+  // row-by-row scoping already happens inside getApprovalsInbox via
+  // mayReview, so widening the route gate does not widen what a manager sees.
+  if (!actor || effectiveGrant(actor.role, actor.employmentType, 'request.review') === 'none') {
+    notFound()
+  }
 
   const [pendingUsers, pendingAbsences, requests, mine] = await Promise.all([
     can(actor, 'user.approve') ? listPendingUsers() : Promise.resolve([]),

@@ -59,6 +59,7 @@ export function AssignmentsCard({
   personId,
   personName,
   assignableApps = [],
+  assignableAppIds = [],
   canAssign = false,
 }: {
   assignments: PersonAssignment[]
@@ -69,6 +70,15 @@ export function AssignmentsCard({
   personName?: string
   /** Live, non-archived projects to choose from. Empty when the reader cannot assign. */
   assignableApps?: AssignableApp[]
+  /**
+   * The apps `app.assign` actually reaches for this actor — a SUBSET of
+   * `assignableApps` for a scoped manager, resolved server-side per app id
+   * (never derivable here: this component has no capability matrix). Gates
+   * both which existing rows show Edit/Remove and which apps either picker
+   * offers, so a manager who runs app-1 cannot see controls on someone's
+   * app-2 row even though the seat-level `canAssign` below is true.
+   */
+  assignableAppIds?: string[]
   /**
    * `app.assign`, resolved on the server. The controls are hidden without it
    * AND the action checks again — this gate is about not offering a door that
@@ -84,6 +94,9 @@ export function AssignmentsCard({
      one place today, but a caller that forgot to pass the person would
      otherwise get an "Add to a project" button that assigns nobody. */
   const editable = canAssign && personId !== undefined
+  // The picker's own list — every row's edit picker and the "Add to project"
+  // trigger draw from this, never the unfiltered `assignableApps`.
+  const pickableApps = assignableApps.filter((app) => assignableAppIds.includes(app.id))
 
   function handleRemove(assignmentId: string, appName: string) {
     startTransition(async () => {
@@ -111,7 +124,7 @@ export function AssignmentsCard({
           {editable ? (
             <AssignDialog
               userId={personId}
-              apps={assignableApps}
+              apps={pickableApps}
               personTotalPct={totalPct}
               trigger={
                 <Button variant="outline" size="sm">
@@ -136,7 +149,14 @@ export function AssignmentsCard({
       ) : (
         <>
           <CardContent className="flex flex-col divide-y divide-border">
-            {assignments.map((entry) => (
+            {assignments.map((entry) => {
+              // Per-row door: `editable` is the SEAT question (does this
+              // reader hold app.assign at all); this app's id must also be
+              // one `assignableAppIds` actually reaches, or a scoped manager
+              // would get Edit/Remove on a project they don't run just
+              // because they run some other one.
+              const rowEditable = editable && assignableAppIds.includes(entry.appId)
+              return (
               <div key={entry.appId} className="flex flex-col gap-1.5 py-2.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                   {/* Lands on the app's Team panel rather than the page top.
@@ -164,11 +184,11 @@ export function AssignmentsCard({
                   <span className={cn(PCT_CLASS, 'ml-auto text-xs')}>
                     {formatPct(entry.allocationPct)}
                   </span>
-                  {editable ? (
+                  {rowEditable ? (
                     <span className="flex shrink-0 items-center gap-0.5">
                       <AssignDialog
                         userId={personId}
-                        apps={assignableApps}
+                        apps={pickableApps}
                         personTotalPct={totalPct}
                         // The edit form wants the shape the app side passes it.
                         // appId/slug/appName are this card's language; assignmentId,
@@ -259,7 +279,8 @@ export function AssignmentsCard({
                   ) : null}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </CardContent>
 
           <CardContent className="flex flex-col gap-2 border-t border-border pt-4">

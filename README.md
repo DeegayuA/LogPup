@@ -13,6 +13,7 @@ LogPup is an internal engineering ops HQ for a small studio: track every app you
 - **Meetings** — schedule with Google Calendar invites, mini-calendar day filter, and **Meeting Intelligence**: record mic or screen+mic audio in the browser and Gemini transcribes it (English + සිංහල), extracting per-person notes, action items, deadlines, a software-terms glossary, and follow-up questions that surface as prep at the next meeting.
 - **⌘K Command Center** — Spotlight-style universal search over apps, people, tasks, sprints, and meetings, plus commands (theme, sign out) and `g`+`d/a/p/m` keyboard jumps.
 - **Roles** — admin (full control) and member (reads all, updates own tasks); every mutation enforced server-side.
+- **Project managers and leads** — Project managers and tech leads run their own projects: create and edit sprints, edit tasks, add or remove people, edit project details and archive — scoped to the projects they hold (`app_role_history` pm/lead); admins keep every right. Per-project change policy (`auto_save` today; `lead_approval` routing through the approvals queue lands with migration 0072).
 - **Per-user Gemini keys** — each user brings their own free-tier key (up to 5); requests roll across active keys on rate limits; keys are AES-256-GCM encrypted at rest.
 
 ## Stack

@@ -33,11 +33,16 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { updateTask, deleteTask } from '@/features/sprints/task-actions'
+import { can, type UserRole } from '@/features/auth/capabilities'
 import { STATUS_LABEL, TASK_STATUSES, type TaskStatus } from '@/features/sprints/board-view'
 import type { SprintOption } from '@/features/sprints/actions'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 
 const UNASSIGNED = '__unassigned__'
+
+// Same empty-scope trick as `canMoveTask`: no client-safe way to know which
+// apps a manager/editor reaches, so a scoped grant reduces to owns-only here.
+const EMPTY_SCOPE: ReadonlySet<string> = new Set()
 /** Sentinel for "no sprint" — a Select value must be a non-empty string, and
  *  the backlog is a real choice, not the absence of one. */
 const BACKLOG = '__backlog__'
@@ -87,7 +92,9 @@ function emptyForm(): FormState {
 export function TaskDialog({
   task,
   team,
-  isAdmin,
+  role,
+  canManageTasks = false,
+  canDeleteTasks = false,
   currentUserId,
   onOpenChange,
   mentionUsers,
@@ -97,10 +104,30 @@ export function TaskDialog({
 }: {
   task: TaskWithAssignee | null
   team: { userId: string; name: string }[]
-  isAdmin: boolean
-  /** Who is looking. `updateTask` allows an admin or the task's own assignee
-   *  and refuses everyone else — without this the dialog cannot tell which
-   *  one you are, so it offers a form that only fails on Save. */
+  /** The viewer's REAL role (board.tsx's `currentUser.role`), not a fabricated
+   *  admin/member pair. The old `isAdmin ? 'admin' : 'member'` forgery
+   *  over-showed for a stakeholder (task.edit: none, forged as member's
+   *  own-arm) and under-granted an editor (task.edit: scoped, forged down to
+   *  member's own-arm) — the local `can()` call below needs the real seat to
+   *  answer either question correctly. */
+  role: UserRole
+  /** `task.edit` resolved server-side with the real app scope
+   *  (page.tsx → Board → here). Manager and editor are 'scoped' for
+   *  task.edit, which this dialog's client-only `can()` call below cannot
+   *  answer for — it has no way to know which apps this actor reaches — so
+   *  without this a PM/lead saw every field on a teammate's card disabled
+   *  even though `updateTask` would accept the save. */
+  canManageTasks?: boolean
+  /** `task.delete` resolved server-side with the real app scope, same shape
+   *  as `canManageTasks`. task.delete is its OWN row — manager: scoped,
+   *  editor: NONE — so `canManageTasks` (task.edit) is the wrong proxy for
+   *  the Delete control: task.delete has no 'own' arm at any seat, so unlike
+   *  `canEdit` below there is no client-side owner fallback to add. */
+  canDeleteTasks?: boolean
+  /** Who is looking. `updateTask` allows an admin, this project's PM/lead or
+   *  editor, or the task's own assignee, and refuses everyone else — without
+   *  this the dialog cannot tell which one you are, so it offers a form that
+   *  only fails on Save. */
   currentUserId?: string
   onOpenChange: (open: boolean) => void
   /** Wider mention pool (e.g. all active users) — falls back to the app team. */
@@ -127,19 +154,31 @@ export function TaskDialog({
   }
 
   /*
-   * Exactly the rule `updateTask` enforces on the server: an admin, or the
-   * person the task is assigned to. Mirroring it here is not the permission
-   * (the action re-checks) — it is what stops the dialog from being a dead
-   * end: a member opening a teammate's card previously got every field
-   * enabled, typed a change, pressed Save and was told "Not allowed" with
-   * their edit still on screen and nowhere to go. `currentUserId` is optional
-   * for callers outside the board, which get the previous always-editable
-   * behaviour rather than a silently read-only dialog.
+   * The same matrix `updateTask` asks server-side, via `can()` rather than a
+   * hand-rolled admin-or-assignee pair — the earlier version under-granted
+   * every scoped seat (a PM/lead could not edit a task they had not assigned
+   * to themselves). This is presentation only (the action re-checks with the
+   * real scope), but the client-only `can()` call below still cannot tell a
+   * scoped manager/editor from an unscoped one — it has no way to know which
+   * apps this actor reaches — so `canManageTasks` (task.edit, resolved with
+   * the real appId in page.tsx) is checked FIRST, and the local `can()` call
+   * only has to cover the true owns-only case (a member on their own card).
+   * Mirroring the server's answer stops the dialog from being a dead end: a
+   * member opening a teammate's card previously got every field enabled,
+   * typed a change, pressed Save and was told "Not allowed" with their edit
+   * still on screen and nowhere to go.
+   * `currentUserId` is optional for callers outside the board, which get the
+   * previous always-editable behaviour rather than a silently read-only
+   * dialog.
    */
   const canEdit =
-    isAdmin ||
     currentUserId === undefined ||
-    (task?.assignee?.id != null && task.assignee.id === currentUserId)
+    canManageTasks ||
+    can(
+      { id: currentUserId, role, scopeAppIds: EMPTY_SCOPE },
+      'task.edit',
+      { ownerId: task?.assignee?.id ?? null },
+    )
 
   // Fetching the app's other sprints is a real request, so it waits until a
   // dialog is actually opened — a board nobody edits never pays for it.
@@ -205,8 +244,8 @@ export function TaskDialog({
             {canEdit
               ? 'Update the task’s details.'
               : task?.assignee
-                ? `Only ${task.assignee.name} or an admin can change this task.`
-                : 'Only an admin can change an unassigned task.'}
+                ? `Only an admin, this project's PM/lead or editor, or ${task.assignee.name} can change this task.`
+                : 'Only an admin, or this project’s PM/lead or editor, can change an unassigned task.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -399,7 +438,7 @@ export function TaskDialog({
             </div>
           </div>
           <DialogFooter className="justify-between sm:justify-between">
-            {isAdmin ? (
+            {canDeleteTasks ? (
               <AlertDialog>
                 <AlertDialogTrigger render={<Button type="button" variant="destructive" />}>
                   Delete

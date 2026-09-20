@@ -1,8 +1,6 @@
-import { getSession } from '@/lib/session'
 import { RoadmapTimeline } from '@/features/sprints/components/roadmap-timeline'
 import type { StatusCounts } from '@/features/sprints/plan-read'
 import type { Sprint } from '@/features/sprints/queries'
-import { isAdminRole } from '@/features/auth/capabilities'
 
 /**
  * Server shell for the roadmap.
@@ -12,8 +10,14 @@ import { isAdminRole } from '@/features/auth/capabilities'
  * exists so the ONE thing the timeline needs from the session, "may this
  * person reschedule sprints?", is resolved on the server rather than trusted
  * from the client. It is only an affordance either way: `updateSprint` and
- * `deleteSprint` both re-check for admin themselves, so hiding the handles
- * here is a courtesy, not the permission.
+ * `deleteSprint` both re-check `sprint.manage` themselves, so hiding the
+ * handles here is a courtesy, not the permission.
+ *
+ * `canManageSprints` is taken as a prop rather than resolved here from its
+ * own `getSession()` call — that used to mean `isAdminRole`, which excludes
+ * the scoped manager/PM `sprint.manage` actually grants. The page already
+ * computes it with the real appId (`can(actor, 'sprint.manage', {appId})`),
+ * so this stays the one place that answer is asked.
  *
  * `counts` is passed through RAW rather than as a precomputed read, and that
  * is deliberate. A sprint's read is a function of its DATES, and the dates the
@@ -28,10 +32,11 @@ import { isAdminRole } from '@/features/auth/capabilities'
  * query; taking them as a prop rather than fetching them here is what keeps
  * the route's single `Promise.all` the one place data is loaded.
  */
-export async function Roadmap({
+export function Roadmap({
   sprints,
   slug,
   counts,
+  canManageSprints,
 }: {
   sprints: Sprint[]
   slug: string
@@ -39,9 +44,14 @@ export async function Roadmap({
    *  the grouped query returns no row for a sprint with no tasks, and the gap
    *  is filled by the caller so no consumer has to invent an empty literal. */
   counts: Record<string, StatusCounts>
+  canManageSprints: boolean
 }) {
-  const session = await getSession()
-  const isAdmin = (session?.user?.role != null && isAdminRole(session?.user?.role))
-
-  return <RoadmapTimeline sprints={sprints} slug={slug} isAdmin={isAdmin} counts={counts} />
+  return (
+    <RoadmapTimeline
+      sprints={sprints}
+      slug={slug}
+      canManageSprints={canManageSprints}
+      counts={counts}
+    />
+  )
 }
