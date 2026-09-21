@@ -20,9 +20,15 @@ import { MIN_COST_CONTRIBUTORS, type CostBreakdown } from '@/features/finance/co
  *  - `state: 'denied'` renders NOTHING AT ALL. Not an empty card, not a
  *    padlock — somebody without `finance.view` should not learn that a money
  *    figure exists for this project, and a greyed-out card tells them.
- *  - `state: 'suppressed'` says so in words. Cost is withheld below
- *    MIN_COST_CONTRIBUTORS because a project with one contributor publishes
- *    that person's rate, and their salary is not a project metric.
+ *  - `state: 'suppressed'` with `contributorCount === 0` is a plain empty
+ *    state — nobody has logged hours here yet, which is not a privacy
+ *    question. `contributorCount >= 1` is the real withhold ("one
+ *    contributor's cost publishes their rate"), but `projectCost`/
+ *    `projectMargin` already skip it for anyone who reaches this card at
+ *    all: the `'denied'` branch above means every remaining viewer holds
+ *    `finance.view`, and nothing is "published" to them that the capability
+ *    system did not already grant. That branch stays below for a future
+ *    caller that has NOT made the same check first.
  *  - `fullyPriced === false` means the amount is NOT a smaller cost, it is a
  *    different claim. The unpriced hours are printed beside it every time.
  *  - `amount === null` and `amount === 0` are different sentences: nothing was
@@ -136,7 +142,15 @@ export async function ProjectFinanceCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {cost.state === 'suppressed' ? (
+        {/* The real withhold — contributorCount >= 1 — hides the whole grid,
+            cost and worth alike, on purpose: this branch is unreachable
+            through THIS card today (every viewer here holds `finance.view`,
+            so `projectCost`/`projectMargin` never suppress above zero — see
+            their docs), but stays for a future caller that reaches this
+            component without that guarantee. Zero contributors is NOT that
+            case — nobody has logged anything, which says nothing about
+            worth, so contract value and subscription still print below. */}
+        {cost.state === 'suppressed' && cost.contributorCount >= 1 ? (
           <p className="text-sm text-muted-foreground">
             Withheld —{' '}
             {cost.contributorCount === 1
@@ -147,7 +161,18 @@ export async function ProjectFinanceCard({
           </p>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-            <CostFigure cost={cost.cost} />
+            {cost.state === 'suppressed' ? (
+              // contributorCount === 0 — no privacy question, just nobody has
+              // logged hours yet. Only the cost figure has nothing to say;
+              // worth and margin below are unaffected by this.
+              <Figure
+                label="Cost"
+                value="—"
+                hint={`No hours logged in the last ${WINDOW_DAYS} days.`}
+              />
+            ) : (
+              <CostFigure cost={cost.cost} />
+            )}
 
             {worth.state === 'ok' && worth.contractValue !== null ? (
               <Figure label="Contract" value={money(worth.contractValue, worth.currency)} />
@@ -192,7 +217,7 @@ export async function ProjectFinanceCard({
           </div>
         )}
 
-        {!hasWorth && cost.state !== 'suppressed' ? (
+        {!hasWorth && !(cost.state === 'suppressed' && cost.contributorCount >= 1) ? (
           <p className="text-2xs text-muted-foreground">
             No contract value or subscription is recorded for this project, so there is nothing to
             take the cost away from.

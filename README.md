@@ -15,6 +15,7 @@ LogPup is an internal engineering ops HQ for a small studio: track every app you
 - **Roles** — admin (full control) and member (reads all, updates own tasks); every mutation enforced server-side.
 - **Project managers and leads** — Project managers and tech leads run their own projects: create and edit sprints, edit tasks, add or remove people, edit project details and archive — scoped to the projects they hold (`app_role_history` pm/lead); admins keep every right. Per-project change policy (`auto_save` today; `lead_approval` routing through the approvals queue lands with migration 0072).
 - **Per-user Gemini keys** — each user brings their own free-tier key (up to 5); requests roll across active keys on rate limits; keys are AES-256-GCM encrypted at rest.
+- **Rates admin** (`/admin/rates`) — role rate cards, per-person overrides, and project contract/subscription value, as-of intervals rather than editable numbers; gated on `finance.view` (admin/superadmin only), amounts never written to the activity log or reachable from ⌘K search.
 
 ## Stack
 

@@ -15,7 +15,6 @@ import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { tasks } from '@/db/schema'
 import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
-import { can } from '@/features/auth/capabilities'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
@@ -445,7 +444,14 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     if (
       existing.dueKind === 'committed' &&
       incomingDueDate !== existing.dueDate &&
-      !can(actor, 'deadline.move.committed', { appId: existing.appId, ownerId: existing.assigneeId })
+      // A second requireCapability, not `can(actor, …)`: the employment cap is
+      // per-action (isCappable), and `actor` above was resolved for task.edit
+      // — which is NOT cappable, so it carries employmentType: undefined and
+      // `can` would skip deadline.move.committed's own cap entirely.
+      !(await requireCapability('deadline.move.committed', {
+        appId: existing.appId,
+        ownerId: existing.assigneeId,
+      }))
     ) {
       return err('Not allowed')
     }
@@ -561,9 +567,11 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
  *
  * Which field the column change lands on depends on what the board is
  * grouped by, which is why this takes an optional status/assignee/priority
- * rather than a status alone. The permission is the same in every case —
- * `canMoveTask`, the one predicate both this action and the card's
- * `draggable` flag read, so a card that looks locked really is.
+ * rather than a status alone. The permission is asked here via
+ * `requireCapability('task.move', …)` with the real resolved scope; the
+ * client's `canMoveTask` (permissions.ts) only ever sees an empty scope set,
+ * so it is the conservative presentation half — a card that looks locked
+ * really is, but one that looks draggable can still be refused server-side.
  *
  * `rebalance` is the rare path (see task-rank.ts): when the destination gap
  * can't hold another rank, the client sends fresh ranks for the whole

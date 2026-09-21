@@ -57,7 +57,7 @@ import {
   listAppTagTargets,
   getUserJoinDay,
 } from '@/features/worklog/queries'
-import { computeCoverage, formatCoverage } from '@/features/worklog/coverage'
+import { computeCoverage, computeStreak, formatCoverage } from '@/features/worklog/coverage'
 import { buildHolidayCalendar, closesTheStudio } from '@/features/worklog/holiday-listing'
 import { listOrgHolidays, type OrgHolidayRow } from '@/features/worklog/org-holiday-queries'
 import { absenceDays } from '@/features/worklog/absence-days'
@@ -373,7 +373,8 @@ async function SummaryZone({
        Non-owed days — weekends, holidays, approved leave — are stepped over
        rather than breaking the run, and today breaks nothing while it is
        still in progress. Capped by the lookback window, which at 120 days is
-       a boast, not a limit. */
+       a boast, not a limit. The walk itself is computeStreak (coverage.ts) —
+       pinned by its own tests rather than re-derived here. */
     const streakCoverage = computeCoverage({
       from: streakFrom,
       to: streakTo,
@@ -384,16 +385,7 @@ async function SummaryZone({
       joinedOn,
       today,
     })
-    let streak = 0
-    for (let i = streakCoverage.days.length - 1; i >= 0; i -= 1) {
-      const day = streakCoverage.days[i]
-      if (day.status === 'logged') {
-        streak += 1
-        continue
-      }
-      if (day.status === 'missing') break
-      // off / exempt / not-yet-due / not-required: skip without breaking.
-    }
+    const streak = computeStreak(streakCoverage.days)
 
     const loggedCount = rows.filter((row) => row.day >= monthStart && row.day <= monthEnd).length
 

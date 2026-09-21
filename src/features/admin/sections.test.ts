@@ -40,6 +40,12 @@ describe('visibleSections', () => {
     expect(seen).not.toContain('/admin/danger')
   })
 
+  it('shows /admin/rates only to seats holding finance.view', () => {
+    expect(hrefs('admin')).toContain('/admin/rates')
+    expect(hrefs('manager')).not.toContain('/admin/rates')
+    expect(hrefs('auditor')).not.toContain('/admin/rates')
+  })
+
   it('gives a manager the approvals queue — request.review is scoped, and can() with no resource fails closed', () => {
     // Regression: visibleSections used to ask can(actor, 'request.review')
     // with no resource, which a SCOPED grant always fails — hiding the row

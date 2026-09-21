@@ -3,7 +3,9 @@ import {
   DASHBOARD_ZONES,
   ZONE_IDS,
   ZONE_ORDER,
+  canWiden,
   composeDashboard,
+  parseDashboardView,
   zoneScope,
   type ZoneId,
 } from '@/features/dashboard/zones'
@@ -45,9 +47,9 @@ describe('composeDashboard — the seven seats', () => {
   // Superadmin and admin hold the same rows in every action these zones read,
   // so they compose identically. Written out twice rather than looped, because
   // the day they diverge this test should name which one moved.
-  it('superadmin opens on what is waiting on a signature', () => {
+  it('superadmin opens on their own day, then what is waiting on a signature', () => {
     expect(zoneIds(actorFor('superadmin'))).toEqual([
-      'approvals', 'team', 'coverage', 'portfolio', 'trail', 'my-day', 'ai-usage',
+      'my-day', 'approvals', 'team', 'coverage', 'portfolio', 'trail', 'ai-usage',
       // task.edit is 'all' for this seat, so my-work is ADMITTED even though
       // the ordering hint never mentions it — and an unlisted zone goes last.
       'my-work',
@@ -56,13 +58,13 @@ describe('composeDashboard — the seven seats', () => {
 
   it('admin composes the same as superadmin', () => {
     expect(zoneIds(actorFor('admin'))).toEqual([
-      'approvals', 'team', 'coverage', 'portfolio', 'trail', 'my-day', 'ai-usage', 'my-work',
+      'my-day', 'approvals', 'team', 'coverage', 'portfolio', 'trail', 'ai-usage', 'my-work',
     ])
   })
 
-  it('manager opens on the projects they run', () => {
+  it('manager opens on their own day and work, then the projects they run', () => {
     expect(zoneIds(actorFor('manager', { scopeAppIds: ['app-1'] }))).toEqual([
-      'team', 'coverage', 'portfolio', 'my-day', 'my-work', 'ai-usage',
+      'my-day', 'my-work', 'team', 'coverage', 'portfolio', 'ai-usage',
       // activity.view is 'all' for a manager; the hint does not list it.
       'trail',
     ])
@@ -82,7 +84,7 @@ describe('composeDashboard — the seven seats', () => {
 
   it('stakeholder gets project outcomes and nothing about the studio', () => {
     const stakeholder = actorFor('stakeholder', { scopeAppIds: ['app-1'] })
-    expect(zoneIds(stakeholder)).toEqual(['portfolio', 'my-day', 'ai-usage'])
+    expect(zoneIds(stakeholder)).toEqual(['my-day', 'portfolio', 'ai-usage'])
     // Spelled out as absences, because each one is a deliberate refusal: no
     // directory, no worklog rollup, no board, and no watching the studio work.
     for (const withheld of ['team', 'coverage', 'my-work', 'trail', 'approvals'] as ZoneId[]) {
@@ -90,9 +92,9 @@ describe('composeDashboard — the seven seats', () => {
     }
   })
 
-  it('auditor opens on what happened, and never gets a board', () => {
+  it('auditor opens on their own day, then what happened, and never gets a board', () => {
     expect(zoneIds(actorFor('auditor'))).toEqual([
-      'trail', 'coverage', 'portfolio', 'my-day', 'ai-usage',
+      'my-day', 'trail', 'coverage', 'portfolio', 'ai-usage',
       // user.view.directory is 'all' for an auditor; the hint does not list it.
       'team',
     ])
@@ -106,6 +108,67 @@ describe('composeDashboard — the seven seats', () => {
       expect(zoneIds(actorFor(role)), role).toContain('my-day')
       expect(zoneIds(actorFor(role)), role).toContain('ai-usage')
     }
+  })
+
+  it('every seat opens on its own day — the dashboard is the person’s page first', () => {
+    for (const role of USER_ROLES) {
+      expect(zoneIds(actorFor(role, { scopeAppIds: ['app-1'] }))[0], role).toBe('my-day')
+    }
+  })
+})
+
+describe('zoneScope — a wide grant opens on my projects', () => {
+  const admin = actorFor('admin')
+  const mine = { view: 'mine' as const, myAppIds: new Set(['app-9']) }
+
+  it('narrows an all grant to the viewer’s own assignments by default', () => {
+    expect(zoneScope('all', admin, mine)).toEqual({ kind: 'apps', appIds: new Set(['app-9']) })
+  })
+
+  it('widens back to everything on ?view=all', () => {
+    expect(zoneScope('all', admin, { ...mine, view: 'all' })).toEqual({ kind: 'all' })
+  })
+
+  it('keeps the whole studio when the viewer is on no project — never an empty page', () => {
+    expect(zoneScope('all', admin, { view: 'mine', myAppIds: new Set() })).toEqual({ kind: 'all' })
+  })
+
+  it('never widens a scoped or own grant — the matrix decides reach, the switch only narrows', () => {
+    const wide = { view: 'all' as const, myAppIds: new Set(['app-9']) }
+    const editor = actorFor('editor', { scopeAppIds: ['app-1'] })
+    expect(zoneScope('scoped', editor, wide)).toEqual({ kind: 'apps', appIds: new Set(['app-1']) })
+    expect(zoneScope('own', actorFor('member', { id: 'u-7' }), wide)).toEqual({
+      kind: 'own',
+      userId: 'u-7',
+    })
+  })
+
+  it('answers exactly as before when no personal view is given', () => {
+    expect(zoneScope('all', admin)).toEqual({ kind: 'all' })
+  })
+})
+
+describe('parseDashboardView', () => {
+  it('is mine unless the URL says all, exactly', () => {
+    expect(parseDashboardView(undefined)).toBe('mine')
+    expect(parseDashboardView('all')).toBe('all')
+    expect(parseDashboardView('ALL')).toBe('mine')
+    expect(parseDashboardView(['all'])).toBe('mine')
+    expect(parseDashboardView('mine')).toBe('mine')
+  })
+})
+
+describe('canWiden', () => {
+  const zone = (id: ZoneId) => DASHBOARD_ZONES.find((z) => z.id === id)!
+
+  it('only a narrowable zone held at all has a wider view to offer', () => {
+    expect(canWiden({ ...zone('team'), grant: 'all' })).toBe(true)
+    expect(canWiden({ ...zone('coverage'), grant: 'all' })).toBe(true)
+    expect(canWiden({ ...zone('portfolio'), grant: 'all' })).toBe(true)
+    expect(canWiden({ ...zone('team'), grant: 'scoped' })).toBe(false)
+    expect(canWiden({ ...zone('approvals'), grant: 'all' })).toBe(false)
+    expect(canWiden({ ...zone('trail'), grant: 'all' })).toBe(false)
+    expect(canWiden({ ...zone('my-day'), grant: 'own' })).toBe(false)
   })
 })
 
@@ -137,7 +200,7 @@ describe('composeDashboard — a capability removed', () => {
     // And nothing else moved: the rest of the admin dashboard is intact and in
     // the same order, just without the queue they cannot sign.
     expect(zoneIds(trainee)).toEqual([
-      'team', 'coverage', 'portfolio', 'trail', 'my-day', 'ai-usage', 'my-work',
+      'my-day', 'team', 'coverage', 'portfolio', 'trail', 'ai-usage', 'my-work',
     ])
   })
 

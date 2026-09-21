@@ -4,13 +4,17 @@ import { z } from 'zod'
 import { and, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
+import { liveApps } from '@/db/live'
 import { activityLog, changeRequests } from '@/db/schema'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
+import { createNotifications } from '@/features/notifications/notify'
 import { mayReview } from '@/features/admin/change-request-routing'
 import {
+  APP_REQUESTABLE_FIELDS,
   buildApplyStatement,
+  currentRowFor,
   detectConflict,
   isSupportedEntityType,
   type SupportedEntityType,
@@ -57,6 +61,17 @@ export async function createChangeRequest(
     return err(`Changes to ${input.entityType} cannot be requested yet`)
   }
 
+  // An app request may only ask for the fields APP_REQUESTABLE_FIELDS
+  // covers — pmId/leadId (need the appRoleHistory pair a single applied
+  // statement cannot write) and changePolicy (column not live yet) are
+  // refused HERE, at filing, rather than discovered by a reviewer at approve.
+  if (input.entityType === 'app') {
+    const badKey = Object.keys(input.payload.after).find(
+      (key) => !(APP_REQUESTABLE_FIELDS as readonly string[]).includes(key),
+    )
+    if (badKey) return err(`Cannot request a change to ${badKey}`)
+  }
+
   try {
     const [row] = await db
       .insert(changeRequests)
@@ -73,9 +88,50 @@ export async function createChangeRequest(
       .returning({ id: changeRequests.id })
 
     revalidatePath('/admin', 'layout')
+
+    // Best-effort, after the row exists: the request is filed either way, so
+    // a notification failure must never be reported as the filing failing.
+    if (input.entityType === 'app') {
+      await notifyFiled(row.id, input.entityId, actor.id)
+    }
+
     return ok({ id: row.id })
   } catch (error) {
     return unexpected('createChangeRequest', error)
+  }
+}
+
+/**
+ * The app's current lead, for `mayReview`'s app branch. `changeRequests` has
+ * no `leadId` column of its own — it lives on `apps` — so approve/reject
+ * (unlike `getApprovalsInbox`, which already joins `apps` for its listing)
+ * take one extra select, and only for an app-entity request.
+ */
+async function leadIdFor(appId: string | null): Promise<string | null> {
+  if (!appId) return null
+  const [app] = await db.select({ leadId: liveApps.leadId }).from(liveApps).where(eq(liveApps.id, appId))
+  return app?.leadId ?? null
+}
+
+/** Tells the app's lead a request is waiting on them. Silent when there is none. */
+async function notifyFiled(requestId: string, appId: string, requesterId: string): Promise<void> {
+  try {
+    const [app] = await db.select({ leadId: liveApps.leadId }).from(liveApps).where(eq(liveApps.id, appId))
+    if (!app?.leadId) return
+    await createNotifications([
+      {
+        userId: app.leadId,
+        actorId: requesterId,
+        type: 'system',
+        kind: 'change_request.filed',
+        title: 'A change is waiting on your sign-off',
+        link: '/admin/approvals',
+        entity: { type: 'change_request', id: requestId },
+        params: { requestId, requesterId },
+      },
+    ])
+  } catch (error) {
+    console.warn(`[change-requests] notify failed for ${requestId}`, error)
   }
 }
 
@@ -108,7 +164,8 @@ export async function approveChangeRequest(
       .where(eq(changeRequests.id, parsed.data.id))
     if (!request) return err('That request no longer exists')
 
-    if (!mayReview(actor, request)) return err('Not allowed')
+    const leadId = request.entityType === 'app' ? await leadIdFor(request.appId) : null
+    if (!mayReview(actor, { ...request, leadId })) return err('Not allowed')
     if (!isSupportedEntityType(request.entityType)) return err('This request cannot be applied')
 
     const entityType = request.entityType as SupportedEntityType
@@ -155,6 +212,11 @@ export async function approveChangeRequest(
       }),
     ])
 
+    // After the batch, never inside it — best-effort, must never fail the
+    // decision that already landed. The batch's own activityLog insert is
+    // the record of the approval; a lost notification is not a lost approval.
+    await notifyDecision(request.id, request.requesterId, actor.id, 'approved', parsed.data.note)
+
     revalidatePath('/admin', 'layout')
     return ok(undefined)
   } catch (error) {
@@ -178,7 +240,8 @@ export async function rejectChangeRequest(
       .from(changeRequests)
       .where(eq(changeRequests.id, parsed.data.id))
     if (!request) return err('That request no longer exists')
-    if (!mayReview(actor, request)) return err('Not allowed')
+    const leadId = request.entityType === 'app' ? await leadIdFor(request.appId) : null
+    if (!mayReview(actor, { ...request, leadId })) return err('Not allowed')
 
     await db.batch([
       db
@@ -202,10 +265,46 @@ export async function rejectChangeRequest(
       }),
     ])
 
+    await notifyDecision(request.id, request.requesterId, actor.id, 'rejected', parsed.data.note)
+
     revalidatePath('/admin', 'layout')
     return ok(undefined)
   } catch (error) {
     return unexpected('rejectChangeRequest', error)
+  }
+}
+
+/**
+ * Tells the requester how their request was decided. Called after the write
+ * batch in both approveChangeRequest and rejectChangeRequest, never inside
+ * it — createNotifications already swallows its own errors (see notify.ts's
+ * docblock), but the try/catch here is the contract this function promises
+ * its callers: a notify failure is logged, never thrown, never the reason an
+ * approval or rejection reports itself as failed.
+ */
+async function notifyDecision(
+  requestId: string,
+  requesterId: string,
+  reviewerId: string,
+  decision: 'approved' | 'rejected',
+  note: string | undefined,
+): Promise<void> {
+  try {
+    await createNotifications([
+      {
+        userId: requesterId,
+        actorId: reviewerId,
+        type: 'system',
+        kind: `change_request.${decision}`,
+        title: decision === 'approved' ? 'Your request was approved' : 'Your request was rejected',
+        body: note ?? null,
+        link: '/admin/approvals',
+        entity: { type: 'change_request', id: requestId },
+        params: { requestId, reviewerId, note: note ?? null },
+      },
+    ])
+  } catch (error) {
+    console.warn(`[change-requests] notify failed for ${requestId}`, error)
   }
 }
 
@@ -235,12 +334,3 @@ export async function withdrawChangeRequest(raw: { id: string }): Promise<Action
   }
 }
 
-async function currentRowFor(
-  entityType: SupportedEntityType,
-  id: string,
-): Promise<Record<string, unknown> | null> {
-  const { dailyWorklogs, meetings, sprints, tasks } = await import('@/db/schema')
-  const table = { task: tasks, sprint: sprints, meeting: meetings, worklog: dailyWorklogs }[entityType]
-  const [row] = await db.select().from(table).where(eq(table.id, id))
-  return row ?? null
-}

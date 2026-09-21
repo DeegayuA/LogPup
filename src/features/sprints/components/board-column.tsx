@@ -9,7 +9,6 @@ import { TaskComposer } from '@/features/sprints/components/task-composer'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
 import type { BoardGroup, GroupPatch } from '@/features/sprints/board-view'
 import type { UserRole } from '@/features/auth/capabilities'
-import { isAdminRole } from '@/features/auth/capabilities'
 
 /**
  * Column droppable ids are namespaced.
@@ -38,6 +37,7 @@ export function BoardColumn({
   sprintId,
   currentUser,
   canManageTasks = false,
+  canDeleteTasks = false,
   todayIso,
   selectedIds,
   selectionMode,
@@ -64,6 +64,11 @@ export function BoardColumn({
    *  the client (empty scope, owns-only). Without it a PM/lead could not drag
    *  a teammate's card even though the server (`moveTaskOnBoard`) allows it. */
   canManageTasks?: boolean
+  /** `task.delete` resolved server-side WITH this app's id (board.tsx →
+   *  page.tsx) — manager: scoped, editor: NONE, so `canManageTasks`
+   *  (task.edit, which editor also holds) is the wrong proxy for the card's
+   *  destructive quick-menu item. */
+  canDeleteTasks?: boolean
   todayIso: string
   selectedIds: ReadonlySet<string>
   selectionMode: boolean
@@ -132,10 +137,12 @@ export function BoardColumn({
                     canMoveTask(currentUser.role, currentUser.id, task.assignee?.id ?? null)
                   }
                   // The card's quick menu edits the same task the drag moves,
-                  // so it is gated on the same `canMoveTask` answer — with the
-                  // destructive item held back for admins, and the roster the
-                  // reassign items need passed straight through.
-                  isAdmin={isAdminRole(currentUser.role)}
+                  // so its non-destructive items are gated on the same
+                  // `canMoveTask`/`canManageTasks` answer as `draggable`. The
+                  // destructive item is separate: task.delete is its own,
+                  // narrower matrix row (manager: scoped, editor: NONE), so it
+                  // rides `canDeleteTasks` rather than either of those.
+                  canDelete={canDeleteTasks}
                   team={team}
                   selected={selectedIds.has(task.id)}
                   selectionMode={selectionMode}

@@ -299,6 +299,34 @@ const IRREVERSIBLE_ACTIONS = [
 const has = (list: readonly string[], action: Action) => list.includes(action)
 
 /**
+ * The pure twin of migration 0072's `app_change_policy` pg enum. `schema.ts`
+ * will reference THIS const for the `apps.changePolicy` column once that
+ * migration is applied — not the other way round — so the enum values live
+ * in exactly one place. Declaring the column now, ahead of the migration,
+ * is the live-outage trap this file stays clear of: everything below reads
+ * the policy only as a caller-supplied PARAMETER, never a `db` read.
+ */
+export const APP_CHANGE_POLICIES = ['auto_save', 'lead_approval'] as const
+export type AppChangePolicy = (typeof APP_CHANGE_POLICIES)[number]
+
+/**
+ * Project SHAPE, never project WORK. Routing, not permission.
+ *
+ * Deliberately just `app.edit` and `app.archive`. Sprints, tasks, meetings,
+ * bugs and assignments never queue: board work sitting behind a sign-off is
+ * a queue the lead stops opening, and once that happens app edits stop
+ * getting signed too. Add/remove people (`app.assign`, `app.role.assign`)
+ * is phase 2, deferred on purpose — it needs a `change_request_op: 'create'`
+ * that does not exist yet.
+ */
+const SIGNOFF_ACTIONS = ['app.edit', 'app.archive'] as const
+
+/** Whether an action is even a candidate for sign-off, before loading a gate. */
+export function isSignoffAction(action: Action): boolean {
+  return has(SIGNOFF_ACTIONS, action)
+}
+
+/**
  * What an employment stage permits, independent of the seat.
  *
  * A CAP, never a grant: the effective answer is the NARROWER of this and the
@@ -409,6 +437,34 @@ export function scopeSourceFor(role: UserRole): ScopeSource {
     case 'auditor':
       return 'none'
   }
+}
+
+/**
+ * Whether an already-authorised write must route to the app's lead instead
+ * of landing directly. Sign-off is ROUTING, applied AFTER authorisation —
+ * never a narrower permission — so this is called once `can`/`requireCapability`
+ * already said yes, and a `false` here means "proceed", not "denied".
+ *
+ * `gate` is a caller-supplied PARAMETER (the app row's `changePolicy` and
+ * `leadId`), never read from `db` here — `apps.changePolicy` is not a real
+ * column yet (migration 0072 unapplied), so this function stays inert until
+ * a later wiring step passes it a real value.
+ *
+ * `effectiveGrant(...) === 'scoped'` is what makes admins bypass with no role
+ * comparison: their grant is `'all'`, never `'scoped'`, so this returns false
+ * for them by construction — the "never write role ladders" rule holds
+ * without a single `role === 'admin'` check anywhere in here.
+ */
+export function needsSignoff(
+  actor: Actor,
+  action: Action,
+  gate: { changePolicy: AppChangePolicy; leadId: string | null },
+): boolean {
+  if (!isSignoffAction(action)) return false
+  if (gate.changePolicy !== 'lead_approval') return false
+  if (gate.leadId === null) return false // no tech lead named: nobody to sign, degrade to auto-save
+  if (gate.leadId === actor.id) return false // the signer never queues their own change
+  return effectiveGrant(actor.role, actor.employmentType, action) === 'scoped'
 }
 
 export function can(actor: Actor, action: Action, resource?: Resource): boolean {

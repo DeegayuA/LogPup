@@ -1,7 +1,13 @@
 import { Fragment, Suspense } from 'react'
 import { getSession } from '@/lib/session'
 import { loadActor } from '@/features/auth/actor'
-import { composeDashboard } from '@/features/dashboard/zones'
+import {
+  canWiden,
+  composeDashboard,
+  parseDashboardView,
+} from '@/features/dashboard/zones'
+import { getMyAppIds } from '@/features/dashboard/my-apps'
+import { DashboardViewSwitch } from '@/features/dashboard/components/dashboard-view-switch'
 import { PageHeader } from '@/components/ui/page-header'
 import { PasskeyNudge } from '@/features/auth/components/passkey-nudge'
 import { FirstLogNudge } from '@/features/worklog/components/first-log-nudge'
@@ -36,7 +42,9 @@ function greetingFor(hour: number): string {
  * zone here with no edit to this file: the registry admits it, the ordering
  * hint places it, and ZONE_VIEWS knows what to draw.
  */
-export default async function DashboardPage() {
+export default async function DashboardPage(props: {
+  searchParams: Promise<{ view?: string | string[] }>
+}) {
   // Both request-cached, and the layout has already paid for the session — so
   // this is one extra read (the employment type and the actor's app scope),
   // not two round trips.
@@ -48,6 +56,28 @@ export default async function DashboardPage() {
   // redirects both before this renders, so reaching here with null is a
   // defence, and the honest answer to "what may they see" is nothing.
   const zones = actor ? composeDashboard(actor) : []
+
+  // Personal first: the URL decides `mine` or `all` once, here; the viewer's
+  // own projects are read once, here; every zone is handed both. The switch
+  // renders only when a zone on THIS page can widen — for a scoped or own seat
+  // it would change nothing, and a control that changes nothing is a lie.
+  const widenable = zones.some(canWiden)
+  // Only a page with something to widen reads the viewer's projects, and it
+  // reads them ALONGSIDE the URL rather than after it: both are independent
+  // and both sit before the first Suspense boundary, so they overlap on the
+  // way to first paint instead of stacking.
+  const [params, myAppIds] = await Promise.all([
+    props.searchParams,
+    widenable && actor
+      ? getMyAppIds(actor.id)
+      : Promise.resolve<ReadonlySet<string>>(new Set()),
+  ])
+  const view = parseDashboardView(params.view)
+  // A wide seat on no project sees the studio (zoneScope keeps `all`), and is
+  // told why rather than left to wonder what "my projects" narrowed to. The
+  // note is part of the header's description and the switch points at it.
+  const onNoProject = widenable && view === 'mine' && myAppIds.size === 0
+  const noteId = onNoProject ? 'dashboard-scope-note' : undefined
 
   const now = new Date()
   const firstName = user?.name?.trim().split(/\s+/)[0]
@@ -78,13 +108,26 @@ export default async function DashboardPage() {
 
       <PageHeader
         title="LogPup 🐾 Dashboard"
-        description={`${greeting} · ${formatBusinessWeekdayLong(now)}`}
+        description={
+          <>
+            {greeting} · {formatBusinessWeekdayLong(now)}
+            {onNoProject ? (
+              <span id={noteId} className="block">
+                You are not on a project yet — showing the whole studio where your role
+                allows.
+              </span>
+            ) : null}
+          </>
+        }
         actions={
-          user ? (
-            <Suspense fallback={null}>
-              <UnreadMentionsPill userId={user.id} />
-            </Suspense>
-          ) : undefined
+          <>
+            {widenable ? <DashboardViewSwitch view={view} describedBy={noteId} /> : null}
+            {user ? (
+              <Suspense fallback={null}>
+                <UnreadMentionsPill userId={user.id} />
+              </Suspense>
+            ) : null}
+          </>
         }
       />
 
@@ -119,7 +162,13 @@ export default async function DashboardPage() {
                       and zones that resolve together still cascade, because
                       the index is their order on the page. */}
                   <Reveal index={i}>
-                    <Zone actor={actor} grant={zone.grant} userName={user?.name ?? 'You'} />
+                    <Zone
+                      actor={actor}
+                      grant={zone.grant}
+                      userName={user?.name ?? 'You'}
+                      view={view}
+                      myAppIds={myAppIds}
+                    />
                   </Reveal>
                 </Suspense>
               </Fragment>

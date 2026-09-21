@@ -1,5 +1,6 @@
 import { desc, eq } from 'drizzle-orm'
 import { db } from '@/db'
+import { liveApps } from '@/db/live'
 import { changeRequests, users } from '@/db/schema'
 import { mayReview } from '@/features/admin/change-request-routing'
 import { can, type Actor } from '@/features/auth/capabilities'
@@ -41,12 +42,20 @@ const select = {
  * Filtered through `mayReview`, the same pure rule the approve action uses, so
  * the inbox can never show a row whose approve button would be refused — and a
  * worklog correction only ever appears for the row's owner.
+ *
+ * `leadId` comes along for free via the `leftJoin` below (no extra query) so
+ * an app-entity request's lead branch in `mayReview` has something to check —
+ * `changeRequests` itself has no `leadId` column, that fact lives on `apps`.
+ * Joined through `liveApps`, not the raw table — an inbox row must not surface
+ * the lead of an app that was itself trashed (db/live.test.ts's static scan
+ * enforces this for every soft-deleted table, `apps` included).
  */
 export async function getApprovalsInbox(actor: Actor): Promise<InboxRequest[]> {
   const rows = await db
-    .select(select)
+    .select({ ...select, leadId: liveApps.leadId })
     .from(changeRequests)
     .innerJoin(users, eq(users.id, changeRequests.requesterId))
+    .leftJoin(liveApps, eq(liveApps.id, changeRequests.appId))
     .where(eq(changeRequests.status, 'pending'))
     .orderBy(changeRequests.createdAt)
 
@@ -58,6 +67,7 @@ export async function getApprovalsInbox(actor: Actor): Promise<InboxRequest[]> {
         entityType: r.entityType,
         status: r.status,
         ownerId: (r.payload as { before?: { userId?: string } })?.before?.userId,
+        leadId: r.leadId,
       }),
     )
     .map(toInbox(actor))

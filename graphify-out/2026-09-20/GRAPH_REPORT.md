@@ -1,16 +1,16 @@
-# Graph Report - LogPup  (2026-09-06)
+# Graph Report - LogPup  (2026-09-20)
 
 ## Corpus Check
-- 1236 files · ~1,460,166 words
+- 1256 files · ~1,491,224 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 7555 nodes · 21872 edges · 313 communities (271 shown, 42 thin omitted)
+- 7688 nodes · 22142 edges · 317 communities (275 shown, 42 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 166 edges (avg confidence: 0.66)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `3ac9d682`
+- Built from commit: `75284bab`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -321,30 +321,34 @@
 - zod
 - task-assignees.test.ts
 - UNASSIGNED
+- segment-store.ts
+- activity-skeleton.tsx
+- task-status.ts
+- googleapis
 
 ## God Nodes (most connected - your core abstractions)
-1. `cn()` - 471 edges
+1. `cn()` - 473 edges
 2. `err()` - 279 edges
 3. `ok()` - 265 edges
 4. `Button()` - 166 edges
-5. `logActivity()` - 142 edges
-6. `requireCapability()` - 118 edges
-7. `Db` - 117 edges
+5. `logActivity()` - 144 edges
+6. `Db` - 123 edges
+7. `requireCapability()` - 118 edges
 8. `can()` - 99 edges
 9. `toIsoDateInTimeZone()` - 76 edges
-10. `users` - 71 edges
+10. `users` - 74 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `DayNoteEditor()` --references--> `react`  [EXTRACTED]
+  src/features/worklog/components/day-panel.tsx → package.json
+- `CountingNumber()` --references--> `react`  [EXTRACTED]
+  src/components/animate-ui/primitives/texts/counting-number.tsx → package.json
 - `useStaticNumber()` --references--> `react`  [EXTRACTED]
   src/components/animate-ui/stat-number.tsx → package.json
 - `MentionTextarea()` --references--> `react`  [EXTRACTED]
   src/components/mention-textarea.tsx → package.json
 - `MobileNav()` --references--> `react`  [EXTRACTED]
   src/components/shell/mobile-nav.tsx → package.json
-- `CalendarDayButton()` --references--> `react`  [EXTRACTED]
-  src/components/ui/calendar.tsx → package.json
-- `SearchSelect()` --references--> `react`  [EXTRACTED]
-  src/components/ui/search-select.tsx → package.json
 
 ## Import Cycles
 - None detected.
@@ -354,115 +358,119 @@
 - **Capacity Feature (allocation model, math, heat dashboard)** — docs_superpowers_specs_2026_08_10_logpup_design_capacity_allocation, docs_superpowers_plans_2026_08_10_logpup_allocation_math, docs_superpowers_plans_2026_08_10_logpup_capacity_dashboard [INFERRED 0.85]
 - **External Integration Resilience (save first, warn on API failure)** — docs_superpowers_specs_2026_08_10_logpup_design_non_blocking_integrations, docs_superpowers_plans_2026_08_10_logpup_google_calendar_integration, docs_superpowers_plans_2026_08_10_logpup_notion_export [EXTRACTED 1.00]
 
-## Communities (313 total, 42 thin omitted)
+## Communities (317 total, 42 thin omitted)
 
 ### Community 0 - "Server Actions & Results"
-Cohesion: 0.04
-Nodes (83): MarkdownLite(), renderInline(), escapeRegExp(), MentionText(), MentionTextarea(), MentionUser, Dialog(), DialogClose() (+75 more)
+Cohesion: 0.16
+Nodes (14): AppFormDialog(), AppFormInitialValues, emptyState, FieldErrors, FormState, Status, STATUS_OPTIONS, toFormState() (+6 more)
 
 ### Community 1 - "Database Schema & Queries"
-Cohesion: 0.04
-Nodes (92): personId, metadata, ProfilePage(), metadata, DEFAULT_COPY, ERROR_COPY, metadata, metadata (+84 more)
+Cohesion: 0.06
+Nodes (60): AdminAbsencesPage(), AdminAppsPage(), AdminAuditPage(), AuditControls(), AdminDangerPage(), DANGER_PAGE_ACTIONS, DangerControls(), AdminHolidaysPage() (+52 more)
 
 ### Community 2 - "Cards & Page Composition"
-Cohesion: 0.10
-Nodes (31): formatDate(), getDays(), MiniCalendar(), MiniCalendarContext, MiniCalendarContextType, MiniCalendarDay(), MiniCalendarDayProps, MiniCalendarDays() (+23 more)
+Cohesion: 0.04
+Nodes (71): Fortnight(), getDeterministicLog(), SampleLog, SATURDAY_TASKS_POOL, STUDIO_TASKS_POOL, ViewMode, WEEKDAYS, formatDate() (+63 more)
 
 ### Community 3 - "App Detail & Board Pages"
-Cohesion: 0.06
-Nodes (47): AppDetailPage(), SPRINT_STATUS_LABEL, SPRINT_STATUS_VARIANT, TABS_NEEDING_USERS, liveAppColumns, pickCurrentSprint(), listAppComments(), AppComments() (+39 more)
+Cohesion: 0.07
+Nodes (43): AppDetailPage(), SPRINT_STATUS_LABEL, SPRINT_STATUS_VARIANT, TABS_NEEDING_USERS, firstLine(), getAppActivity(), listAppComments(), AppComments() (+35 more)
 
 ### Community 4 - "Runtime Dependencies"
-Cohesion: 0.08
-Nodes (46): Command(), CommandDialog(), CommandEmpty(), CommandGroup(), CommandInput(), CommandItem(), CommandList(), CommandSeparator() (+38 more)
+Cohesion: 0.06
+Nodes (62): Calendar(), CalendarDayButton(), Command(), CommandDialog(), CommandEmpty(), CommandGroup(), CommandInput(), CommandItem() (+54 more)
 
 ### Community 5 - "Design Docs & Plans"
 Cohesion: 0.07
 Nodes (27): drizzle-kit, eslint, eslint-config-next, devDependencies, drizzle-kit, eslint, eslint-config-next, @playwright/test (+19 more)
 
 ### Community 6 - "Tables & Selects"
-Cohesion: 0.04
-Nodes (166): logActivity(), approveUser(), rejectUser(), setUserEmploymentType(), setUserOrgTags(), setUserPersonalEmail(), setUserPhone(), setUserTitle() (+158 more)
+Cohesion: 0.03
+Nodes (193): logActivity(), approveUser(), clearTestData(), rejectUser(), setUserEmploymentType(), setUserOrgTags(), setUserPersonalEmail(), setUserPhone() (+185 more)
 
 ### Community 7 - "Dev Tooling Config"
-Cohesion: 0.03
-Nodes (54): liveAppsAs(), liveMeetingSeries, liveNoteSegments, liveRecordings, liveRecordingSegments, liveScreenshots, liveTasksAs(), qb (+46 more)
+Cohesion: 0.04
+Nodes (47): externalBaseUrl(), ExternalTask, ExternalTaskRow, serializeTask(), input, isFrozen(), PATCH(), readTask() (+39 more)
 
 ### Community 8 - "Form Dialogs"
-Cohesion: 0.03
-Nodes (135): APP_SLUG, decidedKeys, meetingIds, RUN_ID, paramsSchema, RFC-5545, Db, WRITE_METHODS (+127 more)
+Cohesion: 0.02
+Nodes (140): APP_SLUG, decidedKeys, meetingIds, RUN_ID, APP_SLUG, RUN_ID, lead, q (+132 more)
 
 ### Community 9 - "TypeScript Config"
 Cohesion: 0.06
 Nodes (30): dom, dom.iterable, esnext, **/*.mts, .next/dev/types/**/*.ts, .next-e2e/dev/types/**/*.ts, .next-e2e/types/**/*.ts, next-env.d.ts (+22 more)
 
 ### Community 10 - "Command Center Search"
-Cohesion: 0.06
-Nodes (52): ContactButtons(), Avatar(), AvatarBadge(), AvatarFallback(), AvatarGroup(), AvatarGroupCount(), AvatarImage(), StatTile() (+44 more)
+Cohesion: 0.03
+Nodes (102): CardSkeleton(), TableOfContents(), TocSection, ContactButtons(), InlineRename(), LazyDisclosure(), AmbientBackdrop(), AmbientVariant (+94 more)
 
 ### Community 11 - "Shell & Navigation"
-Cohesion: 0.10
-Nodes (27): Activity, ContributionGraph(), ContributionGraphBlock(), ContributionGraphBlockProps, ContributionGraphCalendar(), ContributionGraphCalendarProps, ContributionGraphContext, ContributionGraphContextType (+19 more)
+Cohesion: 0.07
+Nodes (45): Activity, ContributionGraph(), ContributionGraphBlock(), ContributionGraphBlockProps, ContributionGraphCalendar(), ContributionGraphCalendarProps, ContributionGraphContext, ContributionGraphContextType (+37 more)
 
 ### Community 12 - "Feature Dialogs & Panels"
 Cohesion: 0.07
 Nodes (28): ActionResult Pattern, Allocation Math (summarizeAllocations), Auth.js v5 Google Sign-In, Capacity Heat Dashboard, Command Palette (Cmd+K) + Empty States, Drizzle Schema (7 tables, Neon Postgres), Google Calendar Integration, LogPup Implementation Plan (+20 more)
 
 ### Community 13 - "Auth & Security Lib"
-Cohesion: 0.10
-Nodes (24): CommandLoading(), BubbleView, OpenBubbleRequest, openIntelBubble(), TaskIntentPreview, CommandCenterContext, CommandCenterProvider(), EMPTY_RESULTS (+16 more)
+Cohesion: 0.09
+Nodes (25): CommandLoading(), BubbleView, OpenBubbleRequest, openIntelBubble(), commands, TaskIntentPreview, CommandCenterContext, CommandCenterProvider() (+17 more)
 
 ### Community 14 - "shadcn Component Config"
 Cohesion: 0.04
-Nodes (93): GET(), isAdminRole(), acceptSuggestionInput, ActionItemOut, addFollowupInput, addTypedNoteInput, analyzeMeetingAudio(), asActionItems() (+85 more)
+Nodes (93): GET(), meetingNoteSegments, isAdminRole(), callGeminiWithImages(), acceptSuggestionInput, ActionItemOut, addFollowupInput, addTypedNoteInput (+85 more)
 
 ### Community 15 - "Meeting Actions"
 Cohesion: 0.09
 Nodes (22): aliases, components, hooks, lib, ui, utils, iconLibrary, menuAccent (+14 more)
 
 ### Community 16 - "Meeting Forms & Calendar"
-Cohesion: 0.04
-Nodes (71): PublicHomePage(), CardQuickMenu(), AccountMenu(), AccountUser, Header(), MobileNav(), NavLink(), dayFmt (+63 more)
+Cohesion: 0.10
+Nodes (29): DropdownMenu(), DropdownMenuContent(), DropdownMenuGroup(), DropdownMenuItem(), DropdownMenuRadioItem(), DropdownMenuSeparator(), DropdownMenuShortcut(), DropdownMenuSub() (+21 more)
 
 ### Community 17 - "People & Allocation Actions"
-Cohesion: 0.14
-Nodes (36): updateCalendarEventTime(), appIdsForMeeting(), appNameById(), appNamesByIds(), attendeeEmails(), AttendeeRef, canManageMeeting(), createMeeting() (+28 more)
+Cohesion: 0.08
+Nodes (52): buildConferenceDataRequest(), CALENDAR_ERROR_SENTENCES, CalendarErrorKey, classifyCalendarError(), client(), createCalendarEvent(), deleteCalendarEvent(), describeCalendarError() (+44 more)
 
 ### Community 18 - "Input Primitives"
-Cohesion: 0.06
-Nodes (59): mentions, Actor, orderNoteSegments(), ENTITY_KINDS, EntityKind, entityKindForSource(), isMentionSource(), MENTION_SOURCES (+51 more)
+Cohesion: 0.08
+Nodes (44): mentions, scopeSourceFor(), orderNoteSegments(), applyCap(), collapsingArbiter(), countToday(), dropDeadEntities(), dropIneligibleRecipients() (+36 more)
 
 ### Community 19 - "Tabs"
-Cohesion: 0.32
-Nodes (14): assignInput, assignmentStillExists(), assignmentUpdateInput, assignUser(), closeOpenInterval(), historyStatements(), isUniqueViolation(), nameForUser() (+6 more)
+Cohesion: 0.30
+Nodes (15): assignInput, assignmentStillExists(), assignmentUpdateInput, assignUser(), closeOpenInterval(), historyStatements(), isUniqueViolation(), nameForUser() (+7 more)
 
 ### Community 20 - "Root Layout & Theming"
-Cohesion: 0.09
-Nodes (22): cabinet, geistMono, metadata, notoSinhala, satoshi, viewport, css, NON_DEFAULT (+14 more)
+Cohesion: 0.08
+Nodes (27): cabinet, geistMono, metadata, notoSinhala, satoshi, viewport, css, NON_DEFAULT (+19 more)
 
 ### Community 21 - "NextAuth Type Extensions"
-Cohesion: 0.12
-Nodes (36): taskAssignees, sprintOrBacklogCondition(), boardMoveInput, bulkUpdateInput, bulkUpdateTasks(), createTask(), deleteTask(), isForeignKeyViolation() (+28 more)
+Cohesion: 0.15
+Nodes (32): sprintOrBacklogCondition(), boardMoveInput, bulkUpdateInput, bulkUpdateTasks(), createTask(), deleteTask(), isForeignKeyViolation(), moveTaskOnBoard() (+24 more)
 
 ### Community 22 - "App Detail Skeleton"
-Cohesion: 0.11
-Nodes (24): describeBugImport(), bugCsvImportInput, BugImportPreview, BugImportPreviewRow, BugImportResult, importBugCsvRows(), previewBugCsvImport(), resolveImport() (+16 more)
+Cohesion: 0.05
+Nodes (54): userDeletions, webauthnLoginTokens, setPasswordInput, PasskeyLoginButton(), beginPasskeyLogin(), beginPasskeyRegistration(), completePasskeyLogin(), completePasskeyRegistration() (+46 more)
 
 ### Community 23 - "Person Detail Skeleton"
-Cohesion: 0.09
-Nodes (25): react, react, CountingNumber(), CountingNumberProps, ShortcutsOverlay(), SpotlightCard(), useMediaQuery(), isMethod() (+17 more)
+Cohesion: 0.39
+Nodes (5): DayGlance, firstMeaningfulLine(), glanceAtDay(), glance(), truncateAtWordBoundary()
 
 ### Community 24 - "Vercel Cron Config"
-Cohesion: 0.14
-Nodes (18): CohortData(), DirectoryData(), PeoplePage(), oneOf(), parseCohortParams(), buildOverlapReport(), buildProjectCohorts(), buildSharedPeople() (+10 more)
+Cohesion: 0.04
+Nodes (46): 1. Replay: `src/db/schema.ts` — a new `sso_redemptions` table, 1. `src/lib/bridge-auth.ts` (new), 2. `src/features/sprints/task-status-write.ts` (new) — the important one, 2. `src/lib/auth.ts` — a new `attendance-sso` Credentials provider, 3. `src/app/api/external/tasks/route.ts` (new), 3. `src/app/sso/attendance/page.tsx` — the receiver, 4. `src/app/api/external/tasks/[id]/status/route.ts` (new), 5. The write freeze — verify, don't assume (+38 more)
+
+### Community 25 - "ESLint Config"
+Cohesion: 0.10
+Nodes (24): buildMyDayStats(), MyDayInput, plural(), QUIET, QUIET_TASKS, capacityBand, RING_TONE, VALUE_TONE (+16 more)
 
 ### Community 27 - "PostCSS Config"
 Cohesion: 0.33
 Nodes (4): AppleIcon(), size, GET(), pawSvg()
 
 ### Community 28 - "Apps List Skeleton"
-Cohesion: 0.15
-Nodes (18): DashboardPage(), greetingFor(), DeactivatedPage(), PasskeyNudge(), UnreadMentionsPill(), ZONE_VIEWS, ZoneLabel(), fetchNotificationSnapshot() (+10 more)
+Cohesion: 0.09
+Nodes (36): checkWorklogEntries(), draftWorklogEntries(), SILENT, WorklogEntriesCheck, WorklogEntriesDraft, writer(), buildEntryDraftPrompt(), DraftActivityRow (+28 more)
 
 ### Community 29 - "Meetings Skeleton"
 Cohesion: 0.23
@@ -470,167 +478,167 @@ Nodes (10): buildBlocks(), notion(), NotionParentError, resolveParentPageId(), S
 
 ### Community 30 - "Drizzle Config"
 Cohesion: 0.08
-Nodes (57): buildDragAnnouncements(), DragSurface(), useDragSensors(), HEALTH_FILL, remainingLabel(), RoadmapSpine(), SpineSprint, ActiveDrag (+49 more)
+Nodes (54): buildDragAnnouncements(), DragSurface(), useDragSensors(), HEALTH_FILL, remainingLabel(), RoadmapSpine(), SpineSprint, ActiveDrag (+46 more)
 
 ### Community 31 - "File Icon Asset"
 Cohesion: 0.08
-Nodes (51): formatElapsed(), localSpend(), MeterInput, MeterPhase, MeterUsage, meterView, AT, AiMeterDock() (+43 more)
+Nodes (42): formatElapsed(), localSpend(), MeterInput, MeterPhase, MeterUsage, meterView, AT, announcement() (+34 more)
 
 ### Community 32 - "Globe Icon Asset"
-Cohesion: 0.09
-Nodes (30): ProgressPage(), userRole, EMPTY_SCOPE, Action, APPROVAL_ACTIONS, capFor(), effectiveGrant(), EMPLOYMENT_TYPES (+22 more)
+Cohesion: 0.05
+Nodes (47): DashboardPage(), greetingFor(), Action, APPROVAL_ACTIONS, capFor(), EMPLOYMENT_TYPES, GrantLevel, has() (+39 more)
 
 ### Community 33 - "Next.js Logo Asset"
 Cohesion: 0.29
 Nodes (6): sin1, buildCommand, crons, framework, regions, $schema
 
 ### Community 35 - "Window Icon Asset"
-Cohesion: 0.05
-Nodes (48): BentoFeatures(), CAPABILITIES, CapabilitiesGrid(), ACTIVITY_ROWS, BRIEFING_COMPILE, BRIEFING_STATS, BriefingDetailRow, BriefingStat (+40 more)
+Cohesion: 0.10
+Nodes (23): ACTIVITY_ROWS, BRIEFING_COMPILE, BRIEFING_STATS, BriefingDetailRow, BriefingStat, ColumnId, DetailTone, EngineerCapacity (+15 more)
 
 ### Community 37 - "Vitest Config"
-Cohesion: 0.05
-Nodes (77): GET(), isAuthorized(), buildSnapshot(), encryptionKey(), encryptSnapshot(), DangerAppOption, DangerAppResetCard(), DangerBackupCard() (+69 more)
+Cohesion: 0.07
+Nodes (73): GET(), isAuthorized(), buildSnapshot(), encryptionKey(), encryptSnapshot(), DangerAppOption, DangerAppResetCard(), DangerBackupCard() (+65 more)
 
 ### Community 38 - "dependencies"
 Cohesion: 0.07
-Nodes (29): @base-ui/react, class-variance-authority, @dnd-kit/sortable, googleapis, lodash.throttle, motion, @neondatabase/serverless, @notionhq/client (+21 more)
+Nodes (29): @base-ui/react, class-variance-authority, clsx, @dnd-kit/sortable, lodash.throttle, motion, @neondatabase/serverless, @notionhq/client (+21 more)
 
 ### Community 39 - "user-table.tsx"
-Cohesion: 0.05
-Nodes (57): JobRoleSelect(), PopoverDescription(), PopoverHeader(), PopoverTitle(), SelectContent(), SelectGroup(), SelectItem(), SelectLabel() (+49 more)
+Cohesion: 0.06
+Nodes (41): JobRoleSelect(), PopoverDescription(), PopoverHeader(), PopoverTitle(), SelectContent(), SelectGroup(), SelectItem(), SelectLabel() (+33 more)
 
 ### Community 41 - "meetings-time-grid.tsx"
-Cohesion: 0.07
-Nodes (53): clipToDay(), DaySegment, dayStartCache, dayWindow, dayWindowCache, eventGeometry, hourLabel(), isAllDayMeeting() (+45 more)
+Cohesion: 0.06
+Nodes (61): spentToday(), clampPxPerHour(), clipToDay(), DaySegment, dayStartCache, dayWindow, dayWindowCache, eventGeometry (+53 more)
 
 ### Community 42 - "@dnd-kit/sortable"
-Cohesion: 0.08
-Nodes (50): AdminAuditPage(), ACTIVITY_VERBS, AUDIT_SORT_DIRECTIONS, AUDIT_SORT_KEYS, AUDIT_SORT_LABELS, AuditDayGroup, auditDepthNotice(), auditEmptyKind() (+42 more)
+Cohesion: 0.12
+Nodes (35): AUDIT_SORT_DIRECTIONS, AUDIT_SORT_KEYS, AUDIT_SORT_LABELS, AuditDayGroup, auditDepthNotice(), auditEmptyKind(), auditHref(), auditPageCount() (+27 more)
 
 ### Community 43 - "actions.ts"
-Cohesion: 0.06
-Nodes (39): authFile, repoRoot, seedDevUser(), SeedResult, APP_SLUG, RUN_ID, ALL_MEETING_TITLES, APP_SLUG (+31 more)
+Cohesion: 0.12
+Nodes (14): authFile, repoRoot, seedDevUser(), SeedResult, ALL_MEETING_TITLES, APP_SLUG, createMeeting(), deleteMeetingViaList() (+6 more)
 
 ### Community 45 - "googleapis"
-Cohesion: 0.09
-Nodes (40): AdminAbsencesPage(), AdminApprovalsPage(), AdminAppsPage(), AdminDangerPage(), DANGER_PAGE_ACTIONS, DangerControls(), AdminHolidaysPage(), HandoverPage() (+32 more)
+Cohesion: 0.13
+Nodes (22): AdminApprovalsPage(), getApprovalsInbox(), getMyRequests(), InboxRequest, select, toInbox(), mayReview(), ReviewableRequest (+14 more)
 
 ### Community 46 - "lodash.throttle"
-Cohesion: 0.08
-Nodes (42): formatBuildStamp(), SettingsPage(), AiAdoptionCard(), AiFeatureDef, AiFeatureEstimate, AiFeatureId, AiFeatureShape, BY_SLUG (+34 more)
+Cohesion: 0.05
+Nodes (78): AiAdoptionCard(), AiAdoptionCardProps, VERDICT_BADGE, AiEngineRow, aiEngineTotals, buildAiEngineRows(), chainFor(), defaultLeadFor() (+70 more)
 
 ### Community 47 - "queries.ts"
-Cohesion: 0.10
-Nodes (32): HistoryData(), HistoryRow, annotateTeamChanges(), AppLoadRow, appLoadRows(), CapacityDelta, CapacitySnapshotEntry, churnCounts (+24 more)
+Cohesion: 0.06
+Nodes (58): HistoryData(), ACTIVITY_THRESHOLDS, ActivityDay, activityLevel, activityPeak(), activityTotal(), buildActivitySeries(), AllocationRow (+50 more)
 
 ### Community 48 - "motion"
-Cohesion: 0.08
-Nodes (41): DayHoursCard(), editableDuration(), EditDraft, EMPTY_HIDDEN, observationKey(), rowFields(), CATEGORY_LABEL, EntryGrammarHelp() (+33 more)
+Cohesion: 0.07
+Nodes (59): upsertDailyWorklog(), ScoreSource, looksLikeSeveralDays(), DayHoursCard(), editableDuration(), EditDraft, EMPTY_HIDDEN, observationKey() (+51 more)
 
 ### Community 49 - "meeting-intel.tsx"
-Cohesion: 0.04
-Nodes (51): CarriedForwardItem, deferFollowupReason(), FollowupPersonOption, FollowupTargetOption, LinkedTaskView, MeetingIntel, noteFollowup(), UnattributedFollowupView (+43 more)
+Cohesion: 0.03
+Nodes (110): MarkdownLite(), renderInline(), roundUpToStep(), Switch(), CarriedForwardItem, deferFollowupReason(), FollowupPersonOption, FollowupTargetOption (+102 more)
 
 ### Community 53 - "meeting-panels.tsx"
 Cohesion: 0.07
-Nodes (54): MeetingAiNotes(), resolveSummaryBlocks(), broadcastPanelPrefs(), DensityToggle(), EMPTY_OPEN_MAP, EmptyFilterState(), FilterChip(), getDensityServerSnapshot() (+46 more)
+Nodes (53): broadcastPanelPrefs(), DensityToggle(), EMPTY_OPEN_MAP, EmptyFilterState(), FilterBar(), FilterChip(), getDensityServerSnapshot(), getDensitySnapshot() (+45 more)
 
 ### Community 54 - "meeting-list.tsx"
-Cohesion: 0.06
-Nodes (71): AlertDialog(), AlertDialogAction(), AlertDialogCancel(), AlertDialogContent(), AlertDialogDescription(), AlertDialogFooter(), AlertDialogHeader(), AlertDialogTitle() (+63 more)
+Cohesion: 0.11
+Nodes (39): AlertDialog(), AlertDialogAction(), AlertDialogCancel(), AlertDialogContent(), AlertDialogDescription(), AlertDialogFooter(), AlertDialogHeader(), AlertDialogMedia() (+31 more)
 
 ### Community 55 - "notes.ts"
-Cohesion: 0.08
-Nodes (35): segmentWho(), insertAutoNotesAndSuggestions(), linkFollowupToTask(), AppOption, AttendeeAppPrep, AutoAssignCandidate, AutoAssignDecision, AutoAssignedTaskFields (+27 more)
+Cohesion: 0.07
+Nodes (33): segmentWho(), AppOption, AttendeeAppPrep, AttendeeCheckinPrep, AttendeePrep, AutoAssignCandidate, AutoAssignDecision, AutoAssignedTaskFields (+25 more)
 
 ### Community 57 - "Meeting Attendee Recommender — Design Spec (sub-project A)"
 Cohesion: 0.05
 Nodes (37): 1. SCHEDULING (stateless, in the new-meeting form), 2. PRE-MEETING (persisted review on an upcoming meeting), 3. RETROSPECTIVE (organizer-private, past meetings), 4. SERIES (drift over inferred recurring series), A1 — Gemini agenda-topic relevance (the AI scoring component)  — 10 max — 10% of the ledger, and it can never make anyone required by points, AI component (A1), AI override bounds, Degradation (+29 more)
 
 ### Community 59 - "note-timeline.tsx"
-Cohesion: 0.09
-Nodes (34): Audit(), metadata, TeamZone(), getObservedChangesForAdmin(), computeCollisions(), MeetingLoadTrend(), PerAppLoad(), SeriesLoadTable() (+26 more)
+Cohesion: 0.16
+Nodes (8): metadata, PerAppLoad(), SeriesLoadTable(), WeeklyLoadTable(), PerAppLoadRow, SeriesTableRow, WeeklyLoadRow, LoadBoard()
 
 ### Community 61 - "app-health.ts"
-Cohesion: 0.14
-Nodes (26): appHealth, AppHealthInput, AppSprintSnapshot, AppTaskCounts, completionPct(), dayDiff(), daysSince(), inclusiveDayCount() (+18 more)
+Cohesion: 0.13
+Nodes (31): appHealth, AppHealthInput, AppSprintSnapshot, AppTaskCounts, completionPct(), dayDiff(), daysSince(), HEALTH_LABEL (+23 more)
 
 ### Community 62 - "@vercel/blob"
 Cohesion: 0.11
 Nodes (37): cannotSay(), Figure, FigureBasis, FigureUnit, inferred(), isSuppressed(), measured(), median() (+29 more)
 
 ### Community 63 - "history-views.tsx"
-Cohesion: 0.09
-Nodes (27): commands, commands, commands, commands, EMPTY_SCOPE, commands, commands, commands (+19 more)
+Cohesion: 0.10
+Nodes (25): commands, commands, commands, commands, EMPTY_SCOPE, commands, commands, commands (+17 more)
 
 ### Community 67 - "meeting-prep.tsx"
 Cohesion: 0.05
 Nodes (41): Admin RBAC, Change Requests and Coverage Implementation Plan, Decisions this plan is built on, Execution, File structure, Global Constraints, Self-review, Task 10: The admin shell, Task 11: The eight sections (+33 more)
 
 ### Community 68 - "calendar-view.ts"
-Cohesion: 0.13
-Nodes (38): clampPxPerHour(), addCalendarMonths(), CALENDAR_VIEWS, calendarUrlPatch(), CalendarView, endOfMonthIso(), isCalendarView(), isIsoDate() (+30 more)
+Cohesion: 0.05
+Nodes (61): hoursLabel(), MeetingsPage(), metadata, WeekSummaryLine(), YourSeries(), managedAppIdsFor(), addCalendarMonths(), CALENDAR_VIEWS (+53 more)
 
 ### Community 78 - "browse.ts"
 Cohesion: 0.11
-Nodes (39): AppsPage(), metadata, Board(), summarizePortfolio(), activityMs(), APP_RISK_FILTERS, APP_SORTS, APP_STATUS_FILTERS (+31 more)
+Nodes (33): activityMs(), APP_RISK_FILTERS, APP_SORTS, APP_STATUS_FILTERS, AppRiskFilter, AppSort, AppStatusFilter, BrowsableApp (+25 more)
 
 ### Community 79 - "board.tsx"
 Cohesion: 0.11
-Nodes (34): assembleMeetingPrep(), activeFilterCount(), BoardFilters, boardSummary, BoardTask, BoardView, boardViewPatch(), dropIndexIn() (+26 more)
+Nodes (35): DropdownMenuCheckboxItem(), DropdownMenuLabel(), SprintOption, activeFilterCount(), BoardFilters, boardSummary, BoardTask, BoardView (+27 more)
 
 ### Community 80 - "Google OAuth verification — LogPup"
 Cohesion: 0.07
 Nodes (27): This is NOT the Next.js you know, 0. The one shortcut worth checking first, 1. Prerequisites, 1. "The website of your home page URL is not registered to you", 2. Public URLs the reviewer will open, 2. "Your home page does not explain the purpose of your app" — FIXED IN CODE, 3. App logo, 3. "The app name 'log-pup' does not match the app name on your home page" (+19 more)
 
 ### Community 81 - "add-to-calendar.tsx"
-Cohesion: 0.16
-Nodes (19): RFC-6868, GET(), sequenceFor(), buildIcs(), CalendarLinkInput, escapeIcsText(), foldIcsLine(), formatIcsUtc() (+11 more)
+Cohesion: 0.14
+Nodes (23): RFC-6868, GET(), sequenceFor(), AddToCalendarMenu(), buildIcs(), CalendarLinkInput, escapeIcsText(), foldIcsLine() (+15 more)
 
 ### Community 82 - "followups.ts"
-Cohesion: 0.13
-Nodes (22): AttendeeRef, buildFollowupRows(), CarriedForwardEntry, CarriedForwardGroup, decideFollowupResolutionOnTaskStatusChange(), DerivedFollowupRow, filterValidIds(), findMatchingFollowup() (+14 more)
+Cohesion: 0.11
+Nodes (24): deriveAndInsertFollowups(), fetchUnattributedFollowups(), reconcileActionItems(), AttendeeRef, buildFollowupRows(), CarriedForwardEntry, CarriedForwardGroup, decideFollowupResolutionOnTaskStatusChange() (+16 more)
 
 ### Community 83 - "dashboard-zones.tsx"
-Cohesion: 0.14
-Nodes (25): BulkNouns, BulkOutcome, BulkReport, bulkResultTone(), BulkSkip, csvCell(), describeBulkResult(), groupSkipReasons() (+17 more)
+Cohesion: 0.09
+Nodes (35): BulkNouns, BulkOutcome, BulkReport, bulkResultTone(), BulkSkip, csvCell(), csvFilename(), CsvValue (+27 more)
 
 ### Community 84 - "page.tsx"
-Cohesion: 0.07
-Nodes (67): CalendarZone(), closedStudioDays(), firstParam(), isRealDay(), LogZone(), maxIso(), metadata, minIso() (+59 more)
+Cohesion: 0.06
+Nodes (55): CalendarZone(), closedStudioDays(), firstParam(), isRealDay(), LogZone(), maxIso(), metadata, minIso() (+47 more)
 
 ### Community 85 - "page.tsx"
-Cohesion: 0.08
-Nodes (27): dateFmt, durationLabel(), fileDateFmt, generateMetadata(), MeetingPrintPage(), msToClock(), PillTone, readParam() (+19 more)
+Cohesion: 0.10
+Nodes (21): dateFmt, durationLabel(), fileDateFmt, generateMetadata(), MeetingPrintPage(), msToClock(), PillTone, readParam() (+13 more)
 
 ### Community 86 - "meetings-month-calendar.tsx"
-Cohesion: 0.18
-Nodes (17): MeetingDetailDialog(), ChipFace(), chipLabel(), chipTone(), Entry, MeetingChip(), MeetingsMonthCalendar(), ReschedulePatch (+9 more)
+Cohesion: 0.12
+Nodes (30): escapeRegExp(), MentionText(), MentionUser, isoToDisplayDate(), MeetingDetailBody(), durationLabel(), MeetingsOverview, MeetingState (+22 more)
 
 ### Community 87 - "task-intent.ts"
 Cohesion: 0.13
 Nodes (21): take(), addDays(), AT_ANYWHERE, BANG_PRIORITY, extractApp(), extractDue(), extractPriority(), findPeople() (+13 more)
 
 ### Community 88 - "history-params.ts"
-Cohesion: 0.07
-Nodes (46): metadata, TeamCapacityHistoryPage(), StatNumber(), statTransition, subscribeToReducedMotion(), useStaticNumber(), InputGroup(), InputGroupAddon() (+38 more)
+Cohesion: 0.14
+Nodes (23): metadata, TeamCapacityHistoryPage(), isoDay(), isoDaysAgo(), resolveAsOf(), ResolvedAsOf, AFTER_LOCAL_MIDNIGHT, NOW (+15 more)
 
 ### Community 89 - "allocation-history.ts"
-Cohesion: 0.08
-Nodes (31): attendanceAsOf, AttendanceChange, AttendanceEntry, AttendanceEntryInput, AttendanceHistoryRow, AttendanceResponse, FEB, JAN (+23 more)
+Cohesion: 0.19
+Nodes (11): attendanceAsOf, AttendanceChange, AttendanceEntry, AttendanceEntryInput, AttendanceHistoryRow, AttendanceResponse, FEB, JAN (+3 more)
 
 ### Community 90 - "attendee-score.ts"
 Cohesion: 0.09
-Nodes (41): AiRelevanceEvidence, AttendanceEvidence, Caveat, CaveatTemplate, caveatTemplateByCode, daysBetween(), DiscussionEvidence, e1Recency() (+33 more)
+Nodes (26): AiRelevanceEvidence, AttendanceEvidence, Caveat, CaveatTemplate, caveatTemplateByCode, DiscussionEvidence, e1Recency(), escapeRegExp() (+18 more)
 
 ### Community 91 - "action-item-board.tsx"
-Cohesion: 0.09
-Nodes (33): NoteWithAppTags(), meterOrigin(), MeterOriginSource, useAiMeter(), MeetingAssistant(), DictationHandle, useDictation(), ScoreSource (+25 more)
+Cohesion: 0.04
+Nodes (76): react, react, NoteWithAppTags(), ShortcutsOverlay(), SearchSelect(), SpotlightCard(), useMediaQuery(), AuditAsk() (+68 more)
 
 ### Community 92 - "iso-day.ts"
-Cohesion: 0.08
-Nodes (42): ActivityFilterBar(), buildGrounding(), entryLines(), fit(), GroundingEntry, GroundingSection, GroundingSource, loadWorkspaceSnapshot() (+34 more)
+Cohesion: 0.14
+Nodes (27): ActivityFilterBar(), buildGrounding(), entryLines(), fit(), GroundingEntry, GroundingSection, GroundingSource, loadWorkspaceSnapshot() (+19 more)
 
 ### Community 93 - "Global Constraints"
 Cohesion: 0.07
@@ -641,8 +649,8 @@ Cohesion: 0.08
 Nodes (23): 0. What I could and could not verify, 10. Open items, 1.1 How audio is metered, 1.2 Rate limits — Google stopped publishing the free-tier table, 1.3 Published pricing (paid tier, per 1M tokens, audio input), 1.4 Live API session mechanics, 1.5 Transcription-only configuration (the important one), 1.6 Ephemeral tokens (+15 more)
 
 ### Community 95 - "page.tsx"
-Cohesion: 0.08
-Nodes (37): AppsSection(), MatrixSection(), metadata, absences, counts(), { authMock, logActivityMock, whereSpy, setSpy }, selectQueue, updateReturning (+29 more)
+Cohesion: 0.22
+Nodes (15): addDaysIso(), eachDayInclusive(), first(), firstOfMonth(), isValidIsoDay(), mondayOf(), parseProgressParams(), PROGRESS_RANGE_LABEL (+7 more)
 
 ### Community 96 - "attendee-score.test.ts"
 Cohesion: 0.10
@@ -650,7 +658,7 @@ Nodes (21): CandidateFacts, CAVEAT_TEMPLATES, CaveatCode, REASON_TEMPLATES, Reas
 
 ### Community 97 - "page.tsx"
 Cohesion: 0.04
-Nodes (38): CAPABILITIES, metadata, AltaVisionLogo(), ThemeToggle(), badgeVariants, Button(), buttonVariants, Calendar() (+30 more)
+Nodes (61): PublicHomePage(), MentionTextarea(), Button(), buttonVariants, Dialog(), DialogClose(), DialogContent(), DialogDescription() (+53 more)
 
 ### Community 98 - "live.test.ts"
 Cohesion: 0.11
@@ -658,7 +666,7 @@ Nodes (23): liveMeetingsAs(), MEETING_CHILD_TABLES, SOFT_TABLES, ALIAS_RE, ALLOW
 
 ### Community 99 - "client.ts"
 Cohesion: 0.09
-Nodes (37): shouldUseInlineAudio(), buildAudioPart(), buildImagePart(), callGeminiCore(), callGeminiSpeech(), callGeminiWithImages(), callModelWithRetry(), extractInlineAudio() (+29 more)
+Nodes (38): AiCallSlug, shouldUseInlineAudio(), getAiBudget, buildAudioPart(), buildImagePart(), callGeminiCore(), callGeminiSpeech(), callModelWithRetry() (+30 more)
 
 ### Community 100 - "meeting-intent.ts"
 Cohesion: 0.19
@@ -669,76 +677,76 @@ Cohesion: 0.10
 Nodes (20): Agenda-field and app-field usage (drill-down columns only), Assumptions (delegated decisions — veto here), Goal, In-app RSVP adoption (DEMOTED — was 'pending-RSVP cost'), Invited hours per week (headline — renamed from attendee-hours), Meeting Load Reduction — Design Spec (sub-project B), Metrics, Observed change since decision (REPLACES 'hours saved to date') (+12 more)
 
 ### Community 102 - "page.tsx"
-Cohesion: 0.09
-Nodes (43): ActivityControls(), ActivityDescription(), ActivityPage(), ActivityPageParams, ActivityTrailSection(), colomboDayEnd(), colomboDayStart(), metadata (+35 more)
+Cohesion: 0.10
+Nodes (39): ActivityControls(), ActivityDescription(), ActivityPage(), ActivityPageParams, ActivityTrailSection(), colomboDayEnd(), colomboDayStart(), metadata (+31 more)
 
 ### Community 103 - "webauthn-actions.ts"
-Cohesion: 0.32
-Nodes (11): webauthnLoginTokens, beginPasskeyLogin(), beginPasskeyRegistration(), completePasskeyLogin(), completePasskeyRegistration(), PasskeySummary, relyingParty(), setChallengeCookie() (+3 more)
+Cohesion: 0.12
+Nodes (17): attendanceBaseUrl(), POST(), AttendanceSsoPage(), metadata, ssoRedemptions, AttendanceIdentity, Claims, decodeJson() (+9 more)
 
 ### Community 104 - "Direct-manipulation browser verification"
 Cohesion: 0.11
 Nodes (18): Attempted unblock — refused, correctly, Blocked — NOT TESTED, Confession: one real meeting was moved and restored, Defect: rows could never be moved DOWN (keyboard or mouse), Defect: Space-to-lift never worked on task cards, Dev database is two migrations behind — this blocked everything initially, Direct-manipulation browser verification, Environment findings (before any UI test) (+10 more)
 
 ### Community 105 - "sprint-checkins.tsx"
-Cohesion: 0.23
-Nodes (12): getSprintCheckins(), checkinGap, ComputedProgress, computeTaskProgress(), TaskForProgress, GapHint(), parsePercent(), ReportedCheckin (+4 more)
+Cohesion: 0.21
+Nodes (19): generateMetadata(), PersonDetailPage(), personId, MyDayZone(), TASK_TILES, PersonSummaryCard(), getPersonAppRoleHistory(), getPersonFollowups (+11 more)
 
 ### Community 106 - "person-stats.ts"
-Cohesion: 0.05
-Nodes (61): generateMetadata(), PersonDetailPage(), listRecentActivity, InboxRequest, PendingApprovalsCard(), AiZoneSkeleton(), AppHealthCard(), ApprovalsZoneSkeleton() (+53 more)
+Cohesion: 0.07
+Nodes (43): AppsPage(), metadata, Board(), listRecentActivity, summarizePortfolio(), browseHref(), PortfolioSummaryStrip(), Tile (+35 more)
 
 ### Community 107 - "actions.ts"
 Cohesion: 0.06
-Nodes (65): callGemini(), callGeminiWithAudio(), GeminiError, hasGeminiKeys(), isFeatureRouted(), resolveChain(), aiFeatureDisabledMessage(), getAiPrefs() (+57 more)
+Nodes (62): geminiKeys, meetingAiNotes, userAiPrefs, closeOpenAppRoleInterval(), generateAppFromReadme(), generateAppFromRepo(), GeneratedApp, generateFromFacts() (+54 more)
 
 ### Community 108 - "meetings-day-rail.tsx"
-Cohesion: 0.08
-Nodes (35): FilterableProject, filterSortProjects(), matchesQuery(), matchesRole(), PROJECT_SORT_LABEL, PROJECT_SORTS, ProjectFilters, projectLoad() (+27 more)
+Cohesion: 0.06
+Nodes (63): CohortData(), DirectoryData(), PeoplePage(), AppPortfolioEntry, FilterableProject, filterSortProjects(), hasActiveProjectFilters(), matchesQuery() (+55 more)
 
 ### Community 109 - "mention-match.ts"
-Cohesion: 0.16
-Nodes (17): ActiveMention, classify(), compare(), findMentionQuery(), matchMentions(), MENTION_QUERY_RE, MentionCandidate, MentionMatchKind (+9 more)
+Cohesion: 0.14
+Nodes (20): fuzzyMatches(), levenshtein(), similarity(), ActiveMention, classify(), compare(), findMentionQuery(), matchMentions() (+12 more)
 
 ### Community 110 - "use-screen-keyframes.ts"
-Cohesion: 0.21
-Nodes (13): ALLOWED_KEYFRAME_TYPES, MeetingScreenshotView, uploadMeetingKeyframe(), ScreenFilmstrip(), encodeFrame(), hashOfFrame(), ScreenKeyframesHandle, useScreenKeyframes() (+5 more)
+Cohesion: 0.24
+Nodes (11): MeetingScreenshotView, ScreenFilmstrip(), encodeFrame(), hashOfFrame(), ScreenKeyframesHandle, useScreenKeyframes(), computeDHash(), computeDownscaledDimensions() (+3 more)
 
 ### Community 111 - "calendar-grid.ts"
-Cohesion: 0.10
-Nodes (29): AdminBugsPage(), queueFilterHref(), TriageQueue(), liveBugReports, BugListSkeleton(), TriageQueuePager(), assignee, bugColumns (+21 more)
+Cohesion: 0.19
+Nodes (13): liveBugReports, assignee, bugColumns, BugRow, listTriageQueue(), OpenBugCount, reporter, TriagePage (+5 more)
 
 ### Community 112 - "meeting-notes-model.ts"
-Cohesion: 0.11
-Nodes (23): FollowupRow(), ActionLine(), ActionItemPromoter, ActionItemReconciliation, ActionItemSuggestionRef, ActionOutcome, buildActionList(), createActionItemPromoter() (+15 more)
+Cohesion: 0.10
+Nodes (18): liveNoteSegments, meetingTaskSuggestions, { authMock, writeSpy, deleteSpy, logActivityMock }, meetingQueue, screenshotQueue, segmentQueue, suggestionQueue, taskQueue (+10 more)
 
 ### Community 113 - "text-replace.ts"
-Cohesion: 0.18
-Nodes (18): defaultSelection(), keyOf(), ReplaceReviewDialog(), diffSingleWord(), editDistance(), findOccurrences(), FindOptions, fuzzyBudget() (+10 more)
+Cohesion: 0.22
+Nodes (15): applyReplacements(), diffSingleWord(), editDistance(), findOccurrences(), FindOptions, fuzzyBudget(), isWordChar(), isWordStart() (+7 more)
 
 ### Community 114 - "task-card.tsx"
-Cohesion: 0.13
-Nodes (18): QuickMenuItem, InlineRename(), BoardGroup, GroupPatch, isDueToday(), BoardBulkBar(), shortDate(), BoardColumn() (+10 more)
+Cohesion: 0.31
+Nodes (10): CardQuickMenu(), QuickMenuItem, isDueToday(), CardFace(), cardLabel(), formatDueDate(), PRIORITY_BAR, priorityMenuLabel() (+2 more)
 
 ### Community 115 - "scripts"
 Cohesion: 0.13
 Nodes (15): scripts, build, db:drift, db:generate, db:migrate, db:status, dev, e2e (+7 more)
 
 ### Community 116 - "sidebar.tsx"
-Cohesion: 0.11
-Nodes (28): AdminOverviewPage(), AppLayout(), activityNavItem, ADMIN_SECTION_ICONS, adminNavItems, getVisibleNavItems(), NavItem, navItems (+20 more)
+Cohesion: 0.16
+Nodes (19): AltaVisionLogo(), AttendanceAppButton(), activityNavItem, ADMIN_SECTION_ICONS, adminNavItems, getVisibleNavItems(), NavItem, navItems (+11 more)
 
 ### Community 117 - "types.ts"
-Cohesion: 0.14
-Nodes (19): ActivityFeed(), ActivityTrail(), AppChip(), DayMarker(), FlatRow(), graphemes, initialOf(), RailNode() (+11 more)
+Cohesion: 0.15
+Nodes (18): ActivityFeed(), ActivityTrail(), AppChip(), DayMarker(), FlatRow(), graphemes, initialOf(), Sentence() (+10 more)
 
 ### Community 118 - "app-activity.tsx"
-Cohesion: 0.21
-Nodes (13): ActivityDayGroup, AppActivityItem, AppActivityKind, assignmentActivityTitle(), groupActivityByDay(), mergeActivity(), firstLine(), getAppActivity() (+5 more)
+Cohesion: 0.25
+Nodes (11): ActivityDayGroup, AppActivityItem, AppActivityKind, assignmentActivityTitle(), groupActivityByDay(), mergeActivity(), relativeDayLabel(), AppActivity() (+3 more)
 
 ### Community 119 - "LiveTranscriptionSession"
-Cohesion: 0.12
-Nodes (21): LiveTranscriptionHandle, useLiveTranscription(), LiveCallbacks, LiveSessionOptions, LiveStatus, LiveTranscriptionSession, AuthTokenRequestOptions, buildAudioMessage() (+13 more)
+Cohesion: 0.16
+Nodes (20): LiveTranscriptionHandle, useLiveTranscription(), LiveCallbacks, LiveSessionOptions, LiveStatus, AuthTokenRequestOptions, buildAudioMessage(), buildAuthTokenRequest() (+12 more)
 
 ### Community 120 - "Changes"
 Cohesion: 0.12
@@ -749,8 +757,8 @@ Cohesion: 0.12
 Nodes (15): Architecture, Data model, Decisions, Migration 0033, Out of scope, Refusal rules, Risks, Speaker identification from the meeting record (+7 more)
 
 ### Community 122 - "attendee-series.ts"
-Cohesion: 0.11
-Nodes (18): sameSeries(), SeriesCandidate, CADENCE_RE, CADENCE_WORDS, MONTHS, NON_WORD_RUN_RE, PURPOSE_RE, PURPOSE_SPELLINGS (+10 more)
+Cohesion: 0.09
+Nodes (23): groupIntoSeries(), SeriesGroup, SeriesOccurrenceInput, daysBefore(), NOW, occurrence(), sameSeries(), SeriesCandidate (+15 more)
 
 ### Community 123 - "language-switch.ts"
 Cohesion: 0.21
@@ -773,8 +781,8 @@ Cohesion: 0.13
 Nodes (14): Allocation trend (shipped) + churn (real reassignment count), Assumptions (delegated decisions — veto here), Hard product rules, KPIs, Meeting load — scheduled hours/week ('scheduled, not declined'), Observed-load surface, Open follow-up debt (adopted as-is: the shipped Owes tile, made truthful at the source; NO new followup chart), People Work History, Observed Load & KPIs — Design Spec (sub-project C) (+6 more)
 
 ### Community 128 - "scoreCandidate"
-Cohesion: 0.09
-Nodes (33): AskTaskRow, checkinAskContext(), checkinAskText(), isPastDue(), overdueAskText(), OverdueRow, overdueRowsByUserApp(), plural() (+25 more)
+Cohesion: 0.07
+Nodes (47): AskTaskRow, checkinAskContext(), checkinAskText(), isPastDue(), overdueAskText(), OverdueRow, overdueRowsByUserApp(), plural() (+39 more)
 
 ### Community 129 - "Meeting Intel Panel Redesign — Design Spec"
 Cohesion: 0.14
@@ -785,24 +793,24 @@ Cohesion: 0.14
 Nodes (13): App-wide Soft Deletes — Design Spec (sub-project D), Assumptions (delegated decisions — veto here), Cascade rule, External cleanup (Blob / Google Calendar / notifications), Mechanism, One flagged exception requiring your attention, Query safety, Rejected (+5 more)
 
 ### Community 131 - "queries.ts"
-Cohesion: 0.13
-Nodes (23): MeetingApp, cursorInput, dayInput, fetchOlderPast(), rangeInput, NextMeetingDescription, nextMeetingDueDate(), parseColomboWallClock() (+15 more)
+Cohesion: 0.17
+Nodes (20): MeetingApp, cursorInput, dayInput, fetchOlderPast(), rangeInput, parseColomboWallClock(), attachApps(), attachAttendees() (+12 more)
 
 ### Community 132 - "live-transcription-status.tsx"
 Cohesion: 0.30
 Nodes (10): LiveTranscriptionCostNotice(), LiveTranscriptionStatus(), STATUS_COPY, AutoStopInput, autoStopReason, estimateAudioTokens(), estimateCostUsd(), formatCostEstimate() (+2 more)
 
 ### Community 133 - "live-token.ts"
-Cohesion: 0.09
-Nodes (33): findAbsence(), findMarkers(), groupMarkers(), Marker, MarkerGroup, MONTHS, readCatchUpTextOffline(), resolveDate() (+25 more)
+Cohesion: 0.07
+Nodes (48): AliasedApp, AppMatch, AppMatchHow, appPromptLine(), appVocabulary(), containsWord(), deriveAcronyms(), escape() (+40 more)
 
 ### Community 134 - "task-workload.ts"
-Cohesion: 0.10
-Nodes (33): csvFilename(), bugCsvTemplateFilename(), DEADLINE_CSV_COLUMNS, DEADLINE_CSV_EXAMPLE_ROW, DEADLINE_CSV_HEADERS, DeadlineCsvColumn, DeadlineCsvColumnSpec, DeadlineCsvParse (+25 more)
+Cohesion: 0.14
+Nodes (22): splitCsvRows(), DEADLINE_CSV_COLUMNS, DEADLINE_CSV_EXAMPLE_ROW, DEADLINE_CSV_HEADERS, DeadlineCsvColumn, DeadlineCsvColumnSpec, DeadlineCsvParse, deadlineCsvTemplate() (+14 more)
 
 ### Community 135 - "use-live-transcription.ts"
-Cohesion: 0.13
-Nodes (29): compactCoverage(), formatMinutes(), initials(), LEGEND_STATES, mixTitle(), noon(), num(), ProgressMatrix() (+21 more)
+Cohesion: 0.08
+Nodes (35): CoverageFigure(), AppMember, compactCoverage(), formatMinutes(), initials(), LEGEND_STATES, mixTitle(), noon() (+27 more)
 
 ### Community 136 - "Global Constraints"
 Cohesion: 0.17
@@ -813,40 +821,40 @@ Cohesion: 0.05
 Nodes (35): Global Constraints, Roadmap Surface Redesign Implementation Plan, Self-Review, Task 1: Schedule mode, parsed from the URL, Task 2: The shared short day-count label, Task 3: The sprint header (band 2), Task 4: Recompose the page into four bands, Task 5: Toolbar — stat row out, scope line and segmented control in (+27 more)
 
 ### Community 138 - "buttonVariants"
-Cohesion: 0.12
-Nodes (28): bugSeverity, bugStatus, BugBadgeVariant, BugSeverity, bugSeverityBadgeVariant(), bugSeverityLabel(), BugStatus, bugStatusBadgeVariant() (+20 more)
+Cohesion: 0.08
+Nodes (47): AdminBugsPage(), queueFilterHref(), TriageQueue(), bugSeverity, bugStatus, triageBug(), BUG_STATUSES, BugBadgeVariant (+39 more)
 
 ### Community 139 - "actions.ts"
-Cohesion: 0.10
-Nodes (21): geminiKeys, userAiPrefs, addGeminiKey(), addKeyInput, getRecordingReadiness(), idInput, { authMock, upsertSpy }, { dbMock, fetchMock } (+13 more)
+Cohesion: 0.15
+Nodes (17): AppsSection(), MatrixSection(), metadata, ProgressPage(), effectiveGrant(), appReach(), initials(), noon() (+9 more)
 
 ### Community 140 - "plan-read.ts"
-Cohesion: 0.20
-Nodes (12): SprintProgress, PlanReadStrip(), Roadmap(), daysLeftPhrase(), HEALTH_WORD, planGaps, readSprint(), SprintHealth (+4 more)
+Cohesion: 0.22
+Nodes (11): SprintProgress, PlanReadStrip(), Roadmap(), daysLeftPhrase(), planGaps, readSprint(), SprintHealth, SprintRead (+3 more)
 
 ### Community 141 - "active-sprints.tsx"
-Cohesion: 0.10
-Nodes (25): ActiveSprintSummary, getNextUpcomingSprint(), UpcomingSprintSummary, OrgHolidaysCard(), HOLIDAY_CATEGORY_LABEL, HolidayCalendarRow, HolidaySource, splitByDay() (+17 more)
+Cohesion: 0.11
+Nodes (40): PeopleZone(), SummaryZone(), dailyWorklogs, orgHolidays, workSchedules, absenceDays(), exemptingAbsences(), approvedAbsenceDays() (+32 more)
 
 ### Community 142 - "task-rank.ts"
 Cohesion: 0.35
 Nodes (9): compareRanked(), InsertPlan, needsRebalance(), neighboursAt(), planInsert(), rankBetween(), Ranked, rankForAppend() (+1 more)
 
 ### Community 143 - "live-client.ts"
-Cohesion: 0.12
-Nodes (28): HelpDetail(), HelpNote(), CatchUpDayFacts, DayOneLine(), TOKEN_CLASS, dayLabel(), derivedScoreFor(), hasSomethingToSave() (+20 more)
+Cohesion: 0.10
+Nodes (19): 10. Phasing, 1. Goal, 2. Architecture, 3. Data model — migration `0071_knowledge_index`, 4.1 Drafts, 4.2 Reindex, 4.3 Hook and explicit calls, 4.4 Nightly reconcile — `notify-tick` step 4 (+11 more)
 
 ### Community 144 - "page.tsx"
-Cohesion: 0.17
-Nodes (27): deriveBriefing(), entityKey(), joinClauses(), ownClauses(), plural(), priorityFor(), teamClauses(), derive() (+19 more)
+Cohesion: 0.11
+Nodes (37): Briefing, deriveBriefing(), entityKey(), joinClauses(), ownClauses(), plural(), priorityFor(), teamClauses() (+29 more)
 
 ### Community 145 - "queries.ts"
-Cohesion: 0.12
-Nodes (27): isLowParticipation(), median(), OccurrenceParticipation, ParticipationMedians, seriesParticipationMedians(), VoiceSegment, NAMEY, aggregateSuggestions() (+19 more)
+Cohesion: 0.11
+Nodes (30): isLowParticipation(), median(), OccurrenceParticipation, participationFor(), ParticipationMedians, seriesParticipationMedians(), VoiceSegment, NAMEY (+22 more)
 
 ### Community 146 - "capacity-card.tsx"
-Cohesion: 0.07
-Nodes (33): APP_INK, APP_LABEL, APP_RULE, AppKey, BandBadge(), BODY_PLACEMENT, BriefingStatItem, CAPTION_PLACEMENT (+25 more)
+Cohesion: 0.13
+Nodes (16): APP_INK, APP_LABEL, APP_RULE, AppKey, BandBadge(), BODY_PLACEMENT, BriefingStatItem, CAPTION_PLACEMENT (+8 more)
 
 ### Community 147 - "meeting-window.ts"
 Cohesion: 0.22
@@ -881,12 +889,12 @@ Cohesion: 0.20
 Nodes (9): Avoided defaults, Bilingual summary control, Colour + tag system, Filter / control model, Meeting Write-up Panels — Design Spec, Panel model, Relationship to `2026-08-12-meeting-intel-redesign-design.md`, Test plan (pure logic only, per house convention) (+1 more)
 
 ### Community 155 - "readiness.ts"
-Cohesion: 0.17
-Nodes (14): assessRecordingReadiness(), estimateSessionShare(), indicativeHoursPerKey(), isCurrentlyFailing(), KeyHealth, ReadinessLevel, RecordingReadiness, MINUTES_AGO (+6 more)
+Cohesion: 0.06
+Nodes (51): AppLayout(), metadata, ProfilePage(), formatBuildStamp(), metadata, SettingsPage(), metadata, SignalsPage() (+43 more)
 
 ### Community 156 - "MeetingForm"
-Cohesion: 0.12
-Nodes (22): lead, q, qb, liveApps, liveSprints, sprintCheckins, searchProviders, searchProviders (+14 more)
+Cohesion: 0.53
+Nodes (5): checkinInput, deleteSprintCheckin(), nameOf(), unexpected(), upsertSprintCheckin()
 
 ### Community 157 - "text-replace-actions.ts"
 Cohesion: 0.11
@@ -897,28 +905,28 @@ Cohesion: 0.42
 Nodes (8): addDays(), daysFromOffset(), diffDaysInclusive(), parseIsoDate(), resizeEnd(), resizeStart(), shiftRange(), toIsoDate()
 
 ### Community 159 - "use-smart-poll.ts"
-Cohesion: 0.05
-Nodes (82): fetchMaintenanceWindow(), MaintenanceBanner(), KIND_ICONS, MaintenanceControls(), MaintenanceDetailsDialog(), AUTH_PATHS, Bypass, bypassKey() (+74 more)
+Cohesion: 0.13
+Nodes (24): MaintenanceControls(), asMs(), asText(), atLocalTime(), autoMessage(), defaultWindow(), EXTEND_STEPS, ExtendStep (+16 more)
 
 ### Community 160 - "agenda-topics.ts"
-Cohesion: 0.31
-Nodes (8): AgendaTopicMatch, escapeRegExp(), findEarliestKeywordMatch(), matchAgendaTopic(), normalizeRoleToken(), GENERIC_KEYWORD_DENYLIST, TOPIC_BUCKETS, TopicBucket
+Cohesion: 0.27
+Nodes (9): role(), AgendaTopicMatch, escapeRegExp(), findEarliestKeywordMatch(), matchAgendaTopic(), normalizeRoleToken(), GENERIC_KEYWORD_DENYLIST, TOPIC_BUCKETS (+1 more)
 
 ### Community 161 - "Meeting keyframe proxy route — report"
 Cohesion: 0.20
 Nodes (9): Authorization matrix (`keyframe-access.test.ts`), Commit, Concerns / follow-ups (none blocking), How the admin exception was handled, Meeting keyframe proxy route — report, Path/pathname handling, Verification, What was built (+1 more)
 
 ### Community 162 - "search.ts"
-Cohesion: 0.11
-Nodes (26): PresenceList(), absenceKind, approveAbsence(), createAbsence(), createInput, rejectAbsence(), review(), reviewInput (+18 more)
+Cohesion: 0.12
+Nodes (24): PresenceList(), absenceKind, approveAbsence(), createInput, rejectAbsence(), reviewInput, SELF_DECLARABLE, ABSENCE_GROUPS (+16 more)
 
 ### Community 163 - "recording-segments.ts"
 Cohesion: 0.16
 Nodes (17): ConcatenatedSegments, concatenateSegments(), hintTail(), isRetriableSegmentError(), segmentRetryDelayMs(), shouldCutSegment(), TranscribedSegment, afterAttempt() (+9 more)
 
 ### Community 164 - "person-tasks-card.tsx"
-Cohesion: 0.11
-Nodes (24): asIsoDate(), asTaskStatus(), buildApplyStatement(), buildTaskDeadlineSet(), buildTaskStatusSet(), detectConflict(), SUPPORTED_ENTITY_TYPES, SupportedEntityType (+16 more)
+Cohesion: 0.12
+Nodes (26): approveChangeRequest(), createChangeRequest(), createInput, currentRowFor(), rejectChangeRequest(), reviewInput, unexpected(), withdrawChangeRequest() (+18 more)
 
 ### Community 165 - "/activity real search — implementation report"
 Cohesion: 0.22
@@ -929,24 +937,24 @@ Cohesion: 0.22
 Nodes (8): Bug 1 — profile pictures fall back to initials, Bug 2 — "A Google Meet room will be created … needs your Google Calendar connection", Files changed, Google integration — two-bug report, The actual bug, found by a live test against a real refresh token, User action required — nothing else in the code can fix this, Verification, What was already correct (do not re-fix)
 
 ### Community 167 - "LogPup Development"
-Cohesion: 0.25
-Nodes (7): Explore before editing, LogPup Development, Migrations — the trap list, Multi-session coordination, Product decisions already made (don't relitigate), Speech / TTS, Still OPEN — ask the user, don't assume
+Cohesion: 0.22
+Nodes (8): Explore before editing, LogPup Development, Migrations — the trap list, Multi-session coordination, Product decisions already made (don't relitigate), Speech / TTS, Still OPEN — ask the user, don't assume, Verification — when a rung is broken, not failing
 
 ### Community 168 - "Dashboard Redesign + Activity Trail — Design Spec"
 Cohesion: 0.25
 Nodes (7): 1. Dashboard layout (`/`), 2. Activity trail (`activity_log`), 3. Errors & performance, 4. Testing, Dashboard Redesign + Activity Trail — Design Spec, Decisions (from brainstorm), Out of scope
 
 ### Community 169 - "print-masthead-edit.tsx"
-Cohesion: 0.12
-Nodes (29): LeadCell(), PmCell(), useRowRun(), better(), Candidate, compareAsks(), COVER_ASK_KINDS, CoverageGroup (+21 more)
+Cohesion: 0.15
+Nodes (24): better(), Candidate, compareAsks(), COVER_ASK_KINDS, CoverageGroup, coverageHeadline(), CoverageInput, CoveragePlan (+16 more)
 
 ### Community 170 - "page.tsx"
-Cohesion: 0.22
-Nodes (7): metadata, SECTIONS, LEGAL_PROSE, TableOfContents(), TocSection, metadata, TERMS_SECTIONS
+Cohesion: 0.24
+Nodes (5): metadata, SECTIONS, LEGAL_PROSE, metadata, TERMS_SECTIONS
 
 ### Community 171 - "segment-store.ts"
-Cohesion: 0.11
-Nodes (28): addMonthsIso(), CostableAttributedEntry, CostableEntry, CostBreakdown, costForEntries(), costForProject(), coveringRate(), daysInMonth() (+20 more)
+Cohesion: 0.07
+Nodes (52): personRates, projectValue, rateCards, ProjectFinanceCard(), shiftDays(), addMonthsIso(), CostableAttributedEntry, CostableEntry (+44 more)
 
 ### Community 172 - "Merge report: `main` → `feat/soft-deletes`"
 Cohesion: 0.25
@@ -969,20 +977,20 @@ Cohesion: 0.21
 Nodes (12): PUBLIC_DIR, RateHit, REPO_ROOT, GEMINI_MODEL_FALLBACK_ORDER, DEFAULT_CHAIN, defaultChainFor(), ANALYSIS_MODELS, ASSISTANT_MODELS (+4 more)
 
 ### Community 177 - "project-roles.ts"
-Cohesion: 0.21
-Nodes (12): buildEntrySuggestions(), dedupe(), EntrySuggestion, leadsRatherThanBuilds(), SuggestionInput, SuggestionSource, EMPTY, withTag() (+4 more)
+Cohesion: 0.13
+Nodes (18): heldRoles(), buildWorklogDraftPrompt(), DraftActivity, DraftProjectRole, ROLE_PHRASE, activity, buildEntrySuggestions(), dedupe() (+10 more)
 
 ### Community 178 - "generate-changelog.mjs"
 Cohesion: 0.29
 Nodes (5): data, KINDS, out, root, versions
 
 ### Community 179 - "loading.tsx"
-Cohesion: 0.08
-Nodes (9): CardSkeleton(), Skeleton(), ActivityControlsSkeleton(), ActivityTrailSkeleton(), ROW_WIDTHS, BriefingCardSkeleton(), HistoryDataSkeleton(), HistoryShellSkeleton() (+1 more)
+Cohesion: 0.07
+Nodes (13): AdminInsightsPage(), money(), ProjectsZone(), shift(), PageHeader(), Skeleton(), AuditControlsSkeleton(), AuditTrailSkeleton() (+5 more)
 
 ### Community 180 - "setOwnPassword"
 Cohesion: 0.07
-Nodes (36): approveUserInput, clearTestData(), createUser(), createUserInput, dbClearEnabled(), duplicateUserMessage(), employmentInput, isUniqueViolation() (+28 more)
+Nodes (40): approveUserInput, createUser(), createUserInput, dbClearEnabled(), duplicateUserMessage(), employmentInput, isUniqueViolation(), orgTagsInput (+32 more)
 
 ### Community 181 - "google-one-tap.ts"
 Cohesion: 0.50
@@ -1000,21 +1008,25 @@ Nodes (3): 2026-08-12: migration ledger was out of sync with the database, drizz
 Cohesion: 0.67
 Nodes (3): expectedTables(), main(), root
 
+### Community 185 - "set-user-personal-email.test.ts"
+Cohesion: 0.16
+Nodes (15): ENTITY_KINDS, EntityKind, entityKindForSource(), isMentionSource(), MENTION_SOURCES, MentionSource, classifyMention(), mentionAdvisory() (+7 more)
+
 ### Community 187 - "board-skeleton.tsx"
-Cohesion: 0.12
-Nodes (23): Fortnight(), getDeterministicLog(), SampleLog, SATURDAY_TASKS_POOL, STUDIO_TASKS_POOL, ViewMode, WEEKDAYS, SchedulePattern (+15 more)
+Cohesion: 0.20
+Nodes (13): SchedulePattern, allocatedHours(), hoursForFraction(), hoursLoad, round1(), NO_WEEK, PART_TIME, weeklyCapacityHours() (+5 more)
 
 ### Community 188 - "isLiveTranscriptionEnabled"
-Cohesion: 0.12
-Nodes (28): normalizeHeader(), splitCsvRows(), BUG_CSV_COLUMNS, BUG_CSV_EXAMPLE_ROW, BUG_CSV_HEADERS, BugCsvColumn, BugCsvColumnSpec, bugCsvFields (+20 more)
+Cohesion: 0.11
+Nodes (28): normalizeHeader(), BUG_CSV_COLUMNS, BUG_CSV_EXAMPLE_ROW, BUG_CSV_HEADERS, BugCsvColumn, BugCsvColumnSpec, bugCsvFields, BugCsvParse (+20 more)
 
 ### Community 190 - "schema.ts"
-Cohesion: 0.10
-Nodes (23): AskCitation, Briefing, getSignals(), AnswerSegment, DETAIL_LABEL, findLabelNearEnd(), pushText(), readableLabel() (+15 more)
+Cohesion: 0.09
+Nodes (31): hasGeminiKeys(), isFeatureRouted(), AskAnswer, askAvailable(), AskCitation, askInput, briefingSchema, parseBriefing() (+23 more)
 
 ### Community 193 - "@notionhq/client"
 Cohesion: 0.13
-Nodes (24): CHECKED_CHANNELS, corroborateDay(), corroborateRange(), CorroborationSummary, DayCorroboration, DayInput, DayVerdict, findQuietRuns() (+16 more)
+Nodes (31): CHECKED_CHANNELS, corroborateDay(), corroborateRange(), CorroborationSummary, DayCorroboration, DayInput, DayVerdict, findQuietRuns() (+23 more)
 
 ### Community 195 - "@simplewebauthn/server"
 Cohesion: 0.11
@@ -1030,19 +1042,19 @@ Nodes (27): 1. The join table, 2.1 The type everything hangs off, 2.2 Query site
 
 ### Community 200 - "route.ts"
 Cohesion: 0.13
-Nodes (21): GET(), isAuthorized(), nudgeUnloggedDays(), pruneExpiredNotifications(), PruneResult, assertUsable(), DEFAULT_RETENTION_POLICY, planRetention() (+13 more)
+Nodes (22): GET(), isAuthorized(), nudgeUnloggedDays(), pruneExpiredNotifications(), pruneExpiredSsoRedemptions(), PruneResult, assertUsable(), DEFAULT_RETENTION_POLICY (+14 more)
 
 ### Community 201 - "page.tsx"
-Cohesion: 0.12
-Nodes (20): hoursLabel(), MeetingsPage(), metadata, WeekSummaryLine(), managedAppIdsFor(), MeetingLoadLink(), MeetingLoadLinkFallback(), MeetingGlance (+12 more)
+Cohesion: 0.14
+Nodes (11): CAPABILITIES, metadata, ThemeToggle(), CredentialResponse, GoogleIdApi, GoogleOneTap(), Window, RINGS (+3 more)
 
 ### Community 202 - "BUILD ORDER"
 Cohesion: 0.07
 Nodes (27): BUILD ORDER, Self-review, Task 10: Migration — the two indexes that name only columns that exist today, Task 11: Notification kinds and render-at-read-time text, Task 12: The volume budget and the per-recipient daily cap, Task 13: Dedupe as a storage-layer guarantee, with two semantics, Task 14: Recipient filtering, as a pure decision, Task 15: Migration — the `notifications` columns and the `type`-to-`text` conversion (+19 more)
 
 ### Community 203 - "meeting-people-picker-model.ts"
-Cohesion: 0.13
-Nodes (25): MeetingPeopleMultiPicker(), buildPeopleOptions(), BuildPeopleOptionsInput, buildPeoplePool(), ChipLabel, composeHint(), fromPickerValue(), groupPeopleOptions() (+17 more)
+Cohesion: 0.19
+Nodes (15): ACTIVITY_ENTITY_TYPES, ACTIVITY_VERBS, ActivityEntityType, ActivityInput, ActivityVerb, askAuditFilters(), askInput, AuditAskResult (+7 more)
 
 ### Community 204 - "Decisions"
 Cohesion: 0.08
@@ -1053,32 +1065,32 @@ Cohesion: 0.08
 Nodes (25): AI, Architecture, Decisions taken, Finance roll-up, Migrations, Multi-discipline projects — design, Note on decision 12, Parallel-session protocol (+17 more)
 
 ### Community 206 - "gather.ts"
-Cohesion: 0.12
-Nodes (20): deadlinesCount(), ModelSegment, OutputCounts, OutputFacts, partitionByModel(), splitOutputs(), isoWeekOf(), MeetingFact (+12 more)
+Cohesion: 0.11
+Nodes (27): Audit(), inviteChurnBetween(), OccurrenceInvites, seriesChurnCount(), coverageOf(), deadlinesCount(), ModelSegment, OutputCounts (+19 more)
 
 ### Community 207 - "audit-queries.ts"
-Cohesion: 0.14
-Nodes (20): AuditControls(), AuditTrailSection(), AuditSortDir, colomboDayEnd(), colomboDayStart(), RawSearchParams, auditConditions(), auditOrderBy() (+12 more)
+Cohesion: 0.16
+Nodes (18): AuditTrailSection(), AuditSortDir, AuditSortKey, colomboDayEnd(), colomboDayStart(), auditConditions(), AuditEntry, AuditFacets (+10 more)
 
 ### Community 208 - "queries.ts"
-Cohesion: 0.17
-Nodes (19): metadata, SignalsPage(), githubConfigured(), commitEvidenceFor(), FigureCell(), formatFigure(), SignalsHelp(), SignalsView() (+11 more)
+Cohesion: 0.32
+Nodes (7): FigureCell(), formatFigure(), SignalsHelp(), SignalsView(), unitSuffix(), VERDICT_COPY, PersonSignals
 
 ### Community 209 - "ai-engine.ts"
-Cohesion: 0.15
-Nodes (19): AiEngineRow, aiEngineTotals, buildAiEngineRows(), chainFor(), defaultLeadFor(), formatRate(), formatTokenCount(), MODEL_FACTS (+11 more)
+Cohesion: 0.19
+Nodes (14): AttendanceEvent, newEventId(), postEventsToAttendance(), warned, warnOnce(), AssignmentInput, AssignmentNotice, buildAssignmentNotice() (+6 more)
 
 ### Community 210 - "ask-panel.tsx"
-Cohesion: 0.17
-Nodes (18): appendTurn(), capBytes(), ChatCitation, ChatTurn, isTurn(), parseChat(), serializedBytes(), AnswerBody() (+10 more)
+Cohesion: 0.38
+Nodes (7): appendTurn(), capBytes(), ChatCitation, ChatTurn, isTurn(), parseChat(), serializedBytes()
 
 ### Community 211 - "task-composer.tsx"
-Cohesion: 0.16
-Nodes (17): PasteRow, PasteState, shortDue(), TaskComposer(), ComposerPlan, planFor(), PEOPLE, TODAY (+9 more)
+Cohesion: 0.20
+Nodes (13): ComposerPlan, planFor(), PEOPLE, TODAY, isBulkPaste(), nonEmptyLines(), PastedTaskDraft, resolveAssigneeName() (+5 more)
 
 ### Community 212 - "escalation.ts"
-Cohesion: 0.15
-Nodes (17): GradedPromise, gradePromises(), MONTHS, PromiseRow, promisesSummary(), shortDate(), slipLineFor(), STEP_RANK (+9 more)
+Cohesion: 0.13
+Nodes (19): GradedPromise, gradePromises(), MONTHS, PromiseRow, promisesSummary(), shortDate(), slipLineFor(), STEP_RANK (+11 more)
 
 ### Community 213 - "Part A — Foundation"
 Cohesion: 0.09
@@ -1089,36 +1101,32 @@ Cohesion: 0.09
 Nodes (21): Build order, Check 6 — the owner predicate is enforced by a file scan, Data model, Decisions, Error handling, ⌘K stops dead-ending, Migrations, `/my-day` is a read. It owns no status. (+13 more)
 
 ### Community 215 - "sidebar-store.ts"
-Cohesion: 0.17
-Nodes (18): nextSidebarState(), resolveSidebarState(), sidebarCommandLabel(), SidebarState, sidebarToggleLabel(), SidebarToggle(), getServerSnapshot(), getSnapshot() (+10 more)
+Cohesion: 0.26
+Nodes (13): nextSidebarState(), resolveSidebarState(), sidebarCommandLabel(), SidebarState, sidebarToggleLabel(), SidebarToggle(), getServerSnapshot(), getSnapshot() (+5 more)
 
 ### Community 216 - "queries.ts"
-Cohesion: 0.16
-Nodes (21): ProjectFinanceCard(), shiftDays(), assertIsoDayRange(), AttributedTaskEntry, costFigureFor(), effortMix(), EffortMixQueryResult, loadPersonRates() (+13 more)
-
-### Community 217 - "recurrence.ts"
-Cohesion: 0.21
-Nodes (19): dayNumber(), daysInMonth(), expand(), isoFromDayNumber(), isoOf(), monthIndex(), MonthlyMode, nthOfMonth() (+11 more)
+Cohesion: 0.18
+Nodes (11): BentoFeatures(), CAPABILITIES, CapabilitiesGrid(), MouseFollower(), OpsMetricsStrip(), STUDIO_GEMINI_MODELS, metadata, PlateWriteup() (+3 more)
 
 ### Community 218 - "Decisions"
 Cohesion: 0.10
 Nodes (20): A mention that cannot be delivered is recorded and reported, never dropped, Assignment is an offer, recorded as a half-open interval, Build order, Data model, Decisions, Decline requires a reason and returns the task to a named person, Error handling, Four relationships, two built, two cut (+12 more)
 
 ### Community 219 - "budget-notify.ts"
-Cohesion: 0.22
-Nodes (15): aiUsageEvents, AiCallSlug, Budget, BudgetInput, budgetLadderStep(), budgetMonth(), budgetState, isOverBudget() (+7 more)
+Cohesion: 0.33
+Nodes (11): Budget, BudgetInput, budgetLadderStep(), budgetMonth(), budgetState, isOverBudget(), notifyBudgetThreshold(), overBudgetMessage() (+3 more)
 
 ### Community 220 - "actions.ts"
-Cohesion: 0.19
-Nodes (14): maintenanceWindow, assertWritable(), FREEZE_EXEMPT_TABLES, gateBatch(), gated, gateWrite(), isExemptTable(), assertWritable (+6 more)
+Cohesion: 0.17
+Nodes (17): maintenanceWindow, assertWritable(), FREEZE_EXEMPT_TABLES, gateBatch(), gated, gateWrite(), isExemptTable(), assertWritable (+9 more)
 
 ### Community 221 - "model-discovery.ts"
-Cohesion: 0.22
-Nodes (15): buildModelCatalog(), classifyModel(), compareModels(), labelFor(), modelIdFrom(), PAID_TIER_ONLY, RawGeminiModel, stabilityOf() (+7 more)
+Cohesion: 0.29
+Nodes (15): daysBetween(), e4e5Recency(), fmtDayMonth(), interpolate(), maxTier(), renderCaveat(), renderReason(), scoreAttendance() (+7 more)
 
 ### Community 222 - "entry-actions.ts"
-Cohesion: 0.18
-Nodes (17): autoScoreFromHours(), mayAutoScore(), SCORE_SOURCES, scoreSourceLabel(), noteFromEntries(), syncAutoScore(), ENTRY_SOURCES, createInput (+9 more)
+Cohesion: 0.16
+Nodes (21): liveWorklogEntries, autoScoreFromHours(), mayAutoScore(), SCORE_SOURCES, scoreSourceLabel(), noteFromEntries(), syncAutoScore(), createInput (+13 more)
 
 ### Community 223 - "Meeting coverage — R6 COVER-TOGETHER"
 Cohesion: 0.11
@@ -1137,40 +1145,40 @@ Cohesion: 0.11
 Nodes (18): Architect / reviewer — `isReviewerRole()` over `assignments.role`, Architecture, Deliberately not built, Fairness rules, enforced by tests rather than comments, IC / member, Layer 1 — Observations, Layer 2 — Corroboration, Layer 3 — Role scorecards (+10 more)
 
 ### Community 227 - "admin-queries.ts"
-Cohesion: 0.17
-Nodes (15): MeetingLoad(), YourSeries(), getAcceptanceByKind(), getAllDecidedKeys(), getAllSuggestionsForAdmin(), getDismissedDecisions(), getSuggestionsForOrganizer(), TODO: the attendee recommender's half of this — acceptance grouped by surface (+7 more)
+Cohesion: 0.10
+Nodes (28): MeetingLoad(), TeamZone(), getAcceptanceByKind(), getAllDecidedKeys(), getAllSuggestionsForAdmin(), getDismissedDecisions(), getObservedChangesForAdmin(), getSuggestionsForOrganizer() (+20 more)
 
 ### Community 228 - "format-instant.ts"
-Cohesion: 0.25
-Nodes (16): TrailEvent(), AuditRow(), MeetingHeaderActions(), ShareContent(), buildMeetingShareMessage(), mailtoHref(), formatBusinessDate(), formatBusinessDateTime() (+8 more)
+Cohesion: 0.17
+Nodes (21): TrailEvent(), MeetingHeaderActions(), SplitHalf(), ShareContent(), buildMeetingShareMessage(), mailtoHref(), PersonAppRoleHistoryCard(), FollowupRow() (+13 more)
 
 ### Community 229 - "zones.ts"
-Cohesion: 0.16
-Nodes (16): GrantLevel, AdmittingGrant, composeDashboard(), DASHBOARD_ZONES, DashboardZone, GRANT_RANK, grantForZone(), isKnownRole() (+8 more)
+Cohesion: 0.26
+Nodes (12): fetchMaintenanceWindow(), AUTH_PATHS, Bypass, bypassKey(), canManageMaintenance(), MaintenanceGate(), NEVER_CHANGES(), PRINT_PATHS (+4 more)
 
 ### Community 230 - "Global Constraints"
 Cohesion: 0.11
 Nodes (17): AI Foundation (Phase A) Implementation Plan, Global Constraints, Plan self-review notes (applied), Task 10: Usage summaries and adoption math — TDD, Task 11: Keys card UI — tier, sharing consent, used-by, honest copy, Task 12: Settings AI hub, Task 13: Admin AI adoption panel, Task 14: Entry-point gating + final verification (+9 more)
 
 ### Community 231 - "coverage.ts"
-Cohesion: 0.16
-Nodes (13): CoverageFigure(), CoverageDay, CoverageInput, CoverageStatus, CoverageSummary, eachDay(), formatCoverage(), num() (+5 more)
+Cohesion: 0.27
+Nodes (11): deadlineCsvInput, DeadlineImportPreview, DeadlineImportPreviewRow, DeadlineImportResult, importDeadlineCsvRows(), loadTasks(), planImport(), previewDeadlineCsvImport() (+3 more)
 
 ### Community 232 - "glance-core.ts"
-Cohesion: 0.16
-Nodes (14): FollowupKind, selectCarriedForward(), analyzedAt, nextMeetingAt, notesJson, now, asArray(), buildGlanceMap() (+6 more)
+Cohesion: 0.14
+Nodes (16): FollowupKind, OpenFollowupItem, selectCarriedForward(), analyzedAt, nextMeetingAt, notesJson, now, asArray() (+8 more)
 
 ### Community 233 - "registry.test.ts"
-Cohesion: 0.11
-Nodes (14): ALL_FEATURE_COMMANDS, ALL_PROVIDERS, CLIENT_FORBIDDEN, commandsRegistrySource, FEATURES, FEATURES_DIR, GATE_PENDING, NO_COMMANDS (+6 more)
+Cohesion: 0.12
+Nodes (13): ALL_FEATURE_COMMANDS, CLIENT_FORBIDDEN, commandsRegistrySource, FEATURES, FEATURES_DIR, GATE_PENDING, NO_COMMANDS, NO_SEARCH (+5 more)
 
 ### Community 234 - "/activity redesign — implementation report"
 Cohesion: 0.11
 Nodes (17): 1. Design rationale, 2. The six frontend API concerns, 3. Review lens findings and fixes, 4. Verification output, 5. Files, 6. Open items / follow-ups, /activity redesign — implementation report, Honest constraints respected (+9 more)
 
 ### Community 235 - "app-aliases.ts"
-Cohesion: 0.24
-Nodes (15): AliasedApp, AppMatch, AppMatchHow, appPromptLine(), appVocabulary(), containsWord(), deriveAcronyms(), escape() (+7 more)
+Cohesion: 0.23
+Nodes (10): MaintenanceOverlay(), clockFormatter(), dayFormatter(), formatClock(), formatMoment(), assertWritable(), canManageMaintenance(), MaintenanceFreezeError (+2 more)
 
 ### Community 236 - "event-identity.ts"
 Cohesion: 0.21
@@ -1181,8 +1189,8 @@ Cohesion: 0.12
 Nodes (15): Compatibility, Constraints discovered, Data model, Decision: materialised occurrences, Edit semantics, Expansion, Google and ICS, Horizon (+7 more)
 
 ### Community 238 - "google-calendar.ts"
-Cohesion: 0.24
-Nodes (12): buildConferenceDataRequest(), CALENDAR_ERROR_SENTENCES, CalendarErrorKey, classifyCalendarError(), client(), createCalendarEvent(), deleteCalendarEvent(), describeCalendarError() (+4 more)
+Cohesion: 0.29
+Nodes (8): CountingNumber(), CountingNumberProps, StatNumber(), statTransition, subscribeToReducedMotion(), useStaticNumber(), useIsInView(), UseIsInViewOptions
 
 ### Community 239 - "recurrence.ts"
 Cohesion: 0.23
@@ -1201,12 +1209,12 @@ Cohesion: 0.14
 Nodes (13): Accessibility, Adopted where, Avoided defaults, Colourways, Contrast, all six ways × both modes, Guards, Known gap, not fixed here, Motion and Theming — design (+5 more)
 
 ### Community 243 - "role-history.ts"
-Cohesion: 0.21
-Nodes (12): appRoleAsOf(), AppRoleEntry, AppRoleEntryInput, AppRoleInterval, AppRoleKind, buildRoleTimeline(), isBackfilled(), FEB (+4 more)
+Cohesion: 0.24
+Nodes (10): appRoleAsOf(), AppRoleEntry, AppRoleEntryInput, AppRoleInterval, buildRoleTimeline(), isBackfilled(), FEB, JAN (+2 more)
 
 ### Community 244 - "app-client.ts"
-Cohesion: 0.27
-Nodes (10): appJwt(), b64url(), commitsByAuthor(), gh(), installationToken(), CommitEvidence, commitPromptLines(), GithubCommitRow (+2 more)
+Cohesion: 0.23
+Nodes (13): appJwt(), b64url(), commitsByAuthor(), gh(), installationToken(), CommitEvidence, commitPromptLines(), GithubCommitRow (+5 more)
 
 ### Community 245 - "actions.ts"
 Cohesion: 0.26
@@ -1233,8 +1241,8 @@ Cohesion: 0.17
 Nodes (12): Derived figures, Out of scope, Ownership, `person_rates` — the optional override, Project cost, worth, and effort reporting, `rate_cards` — the base, per job role, Rates, Reconcile before reporting (+4 more)
 
 ### Community 251 - "trash-card-logic.ts"
-Cohesion: 0.27
-Nodes (9): matchesPurgeConfirm(), orderGroupsForDisplay(), restoreDisabledReason(), TRASH_GROUP_ORDER, TRASH_GROUP_TITLES, trashCountFootnote(), rowKey(), TrashGroupSection() (+1 more)
+Cohesion: 0.17
+Nodes (20): headerSelectionState(), pruneSelection(), toggleAllSelected(), AppsTable(), ITEMS, matchesPurgeConfirm(), orderGroupsForDisplay(), restoreDisabledReason() (+12 more)
 
 ### Community 252 - "UI Intelligence Redesign — design"
 Cohesion: 0.18
@@ -1249,16 +1257,16 @@ Cohesion: 0.18
 Nodes (10): Data contracts (pin these — implementers build to them), Deferred (recorded, not forgotten), File plan, Intel handoff (the Dossier sheet), Page zones (8 pre-list zones become 4), Palette / type / signature, Row anatomy (one fixed anatomy, ~56px desktop / two-line 64px mobile), States (+2 more)
 
 ### Community 255 - "sections.ts"
-Cohesion: 0.27
-Nodes (7): AdminLayout(), AdminNav(), NavItem(), ADMIN_SECTIONS, AdminSection, actor(), hrefs()
+Cohesion: 0.30
+Nodes (8): AdminLayout(), AdminNav(), NavItem(), ADMIN_SECTIONS, AdminSection, actor(), hrefs(), visibleSections()
 
 ### Community 256 - "recording-progress.ts"
 Cohesion: 0.31
 Nodes (8): capPercent(), formatRemaining(), meetingProcessing, observedMsPerSegment(), SegmentSnapshot, SegmentState, TakeProgress, TakeSnapshot
 
 ### Community 257 - "team-csv.test.ts"
-Cohesion: 0.31
-Nodes (9): employmentLabel(), projectPosition(), TEAM_CSV_HEADERS, TeamCsvMember, teamCsvRows(), TeamPositions, AMA, NOBODY (+1 more)
+Cohesion: 0.27
+Nodes (11): TeamPanel(), employmentLabel(), projectPosition(), TEAM_CSV_HEADERS, TeamCsvMember, teamCsvPrefix(), teamCsvRows(), TeamPositions (+3 more)
 
 ### Community 258 - "entry-actions.test.ts"
 Cohesion: 0.18
@@ -1287,8 +1295,8 @@ Cohesion: 0.20
 Nodes (10): Build order, Data model, Error handling, Migrations, Out of scope (YAGNI), Pages & flows, Purpose, Testing (+2 more)
 
 ### Community 261 - "calendar-overlap.ts"
-Cohesion: 0.33
-Nodes (6): effectiveEnd(), layoutOverlaps(), OverlapEvent, overlapMap(), OverlapPlacement, placementsOf()
+Cohesion: 0.27
+Nodes (9): addEveryone(), applyQuickAddAttendees(), applyTeamPrefill(), AttendeeSelection, roster, MeetingForm(), quickAddProblems(), stateFromMeeting() (+1 more)
 
 ### Community 262 - "live-client.test.ts"
 Cohesion: 0.22
@@ -1307,12 +1315,12 @@ Cohesion: 0.22
 Nodes (9): Decisions, Dedupe is a storage-layer guarantee, with two semantics, `dismissed_at`, deliberately not `deletedAt`, ⌘K scoping hangs off the seam the command registry already built, Notification text is a key and a parameter bag, never a frozen string, Recipient filtering moves inside `createNotifications`, Scheduling: exactly one cron job, The digest is one email per person per day, and it has preconditions (+1 more)
 
 ### Community 266 - "tech-tags-input.tsx"
-Cohesion: 0.42
-Nodes (6): TechTagsInput(), canonicalizeTag(), CURATED_TECH_TAGS, CURATED_TECH_TAGS_RAW, filterTagSuggestions(), mergeTagSources()
+Cohesion: 0.40
+Nodes (7): chunkForSpeech(), cutAt(), effectiveSpeechLength(), rawLimitFor(), sinhalaFraction(), toSpokenText(), truncateForSpeech()
 
 ### Community 267 - "list-filter.ts"
-Cohesion: 0.28
-Nodes (4): FilterableMeeting, LIST_FILTERS, ListFilter, matchesListFilter()
+Cohesion: 0.27
+Nodes (8): AppStatus, AppBeforeState, AppChangeNames, AppChangeSummary, appUpdateInput, AppUpdateResult, buildAppUpdate(), summarizeAppChanges()
 
 ### Community 268 - "Global Constraints"
 Cohesion: 0.25
@@ -1327,12 +1335,12 @@ Cohesion: 0.25
 Nodes (8): 1.1 The rule that shapes everything, 1.2 Three measures answer "4 hours and nothing", 1.4 Fairness rules — non-negotiable, applied before any measure, 1.5 Failure modes and gaming — how each measure breaks, M1 · Time with no visible outcome, M2 · Stalled tasks *(the honest per-work version of the same question)*, M3 · Throughput, per project per week, Part 1 — The measurement model
 
 ### Community 271 - "activity-levels.ts"
-Cohesion: 0.50
-Nodes (6): ACTIVITY_THRESHOLDS, activityLevel, activityPeak(), activityTotal(), buildActivitySeries(), getPersonActivity()
+Cohesion: 0.42
+Nodes (7): ActiveSprints(), daysRemainingLabel(), formatSprintDate(), formatUpcomingDate(), startsInLabel(), daysRemaining(), sprintProgress()
 
 ### Community 272 - "review-rules.ts"
-Cohesion: 0.32
-Nodes (5): canReviewWorklogDay(), ReviewableApp, ReviewSubject, APPS, worklogDayAppIds()
+Cohesion: 0.40
+Nodes (9): readMaintenanceRow, announceScheduled(), announceToEveryone(), claim(), runMaintenanceLifecycle(), backOnlineMessage(), formatWindowRange(), maintenancePhase (+1 more)
 
 ### Community 273 - "Self-teaching audit — meeting notes & intel"
 Cohesion: 0.29
@@ -1347,12 +1355,12 @@ Cohesion: 0.29
 Nodes (7): Columns, Files, Part 4 — Deadline upload for PMs and tech leads, Permission, Template, What, Write rules — these already exist and must be honoured, not reimplemented
 
 ### Community 276 - "page.tsx"
-Cohesion: 0.43
-Nodes (5): AdminInsightsPage(), money(), PeopleZone(), ProjectsZone(), shift()
+Cohesion: 0.24
+Nodes (9): DUE_DOT, DUE_TONE, dueSuffix(), formatDueDate(), PersonTasksCard(), PRIORITY_DOT, PRIORITY_LABEL, STATUS_LABEL (+1 more)
 
 ### Community 277 - "mine.ts"
-Cohesion: 0.48
-Nodes (4): isMine(), MembershipRow, MINE_LABEL, mineKind
+Cohesion: 0.33
+Nodes (7): SmartPollOptions, useSmartPoll(), nextPollDelay(), PollConditions, PollSchedule, shouldPoll(), SCHEDULE
 
 ### Community 278 - "enforcement.test.ts"
 Cohesion: 0.33
@@ -1367,24 +1375,24 @@ Cohesion: 0.38
 Nodes (4): filterMeetingsBySearch(), fold(), SearchableMeeting, Row
 
 ### Community 281 - "backlog.ts"
-Cohesion: 0.38
-Nodes (5): backlogCondition, backlogJoinCondition, backlogTasksQuery(), isBacklogRow(), qb
+Cohesion: 0.14
+Nodes (14): backlogCondition, backlogJoinCondition, backlogTasksQuery(), isBacklogRow(), qb, BoardGroup, GroupPatch, BoardColumn() (+6 more)
 
 ### Community 282 - "2. Commit history (GitHub App)"
 Cohesion: 0.33
 Nodes (5): 1. Sign-in (OAuth App), 2. Commit history (GitHub App), GitHub setup — sign-in and commit history, What was deliberately not built, Who gets commit evidence
 
 ### Community 284 - "churn.ts"
-Cohesion: 0.53
-Nodes (3): inviteChurnBetween(), OccurrenceInvites, seriesChurnCount()
+Cohesion: 0.31
+Nodes (8): dayFmt, dayLabel(), groupByDay(), isoDayFmt, KIND_LABEL, kindClass(), timeFmt, VersionBadge()
 
 ### Community 285 - "collisions.ts"
-Cohesion: 0.47
-Nodes (4): CollisionResult, at(), meeting(), WeekMeetingInterval
+Cohesion: 0.36
+Nodes (6): CollisionResult, computeCollisions(), at(), meeting(), WeekMeetingInterval, getMyOverlapHours()
 
 ### Community 286 - "meeting-url.ts"
-Cohesion: 0.47
-Nodes (3): HTTP_URL, isValidMeetingUrl(), meetingUrlSchema
+Cohesion: 0.36
+Nodes (5): EditableAgenda(), EditableAttendees(), EditableTitle(), MeetingEditBase, useMeetingWrite()
 
 ### Community 287 - "visibility.test.ts"
 Cohesion: 0.33
@@ -1403,8 +1411,8 @@ Cohesion: 0.40
 Nodes (5): Files, Part 2 — Ignore the template lines in an uploaded bug report, Secondary — pasted issue templates, The bug, The rule
 
 ### Community 291 - "auto-title.ts"
-Cohesion: 0.60
-Nodes (3): autoMeetingTitle(), isAutoMeetingTitle(), AUG_12_10AM_LK
+Cohesion: 0.39
+Nodes (6): isMethod(), METHODS, readLastMethod(), rememberSignInMethod(), SignInMethod, SignInMethods()
 
 ### Community 293 - "live-token.test.ts"
 Cohesion: 0.50
@@ -1423,28 +1431,40 @@ Cohesion: 0.50
 Nodes (3): dir, repo, sha
 
 ### Community 299 - "fuzzyMatches"
-Cohesion: 0.83
-Nodes (3): fuzzyMatches(), levenshtein(), similarity()
+Cohesion: 0.32
+Nodes (7): MaintenanceBanner(), MaintenanceDetailsDialog(), MaintenanceAuthNotice(), formatCountdown(), isUrgent(), KIND_HEADINGS, MaintenanceWindow
+
+### Community 313 - "segment-store.ts"
+Cohesion: 0.46
+Nodes (7): keyFor(), loadParkedSegments(), openDb(), ParkedSegment, parkSegment(), releaseSegment(), runTransaction()
+
+### Community 314 - "activity-skeleton.tsx"
+Cohesion: 0.38
+Nodes (3): ActivityControlsSkeleton(), ActivityTrailSkeleton(), ROW_WIDTHS
+
+### Community 315 - "task-status.ts"
+Cohesion: 0.33
+Nodes (4): TaskStatus, TERMINAL_STATUSES, TaskStatusPatch, NOW
 
 ## Knowledge Gaps
-- **2279 isolated node(s):** `qb`, `lead`, `q`, `$schema`, `style` (+2274 more)
+- **2343 isolated node(s):** `qb`, `lead`, `q`, `$schema`, `style` (+2338 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **42 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `cn()` connect `Meeting Forms & Calendar` to `Server Actions & Results`, `Database Schema & Queries`, `Cards & Page Composition`, `App Detail & Board Pages`, `Runtime Dependencies`, `scoreCandidate`, `use-live-transcription.ts`, `Command Center Search`, `Shell & Navigation`, `buttonVariants`, `Auth & Security Lib`, `plan-read.ts`, `live-client.ts`, `capacity-card.tsx`, `page.tsx`, `Person Detail Skeleton`, `Drizzle Config`, `File Icon Asset`, `use-smart-poll.ts`, `search.ts`, `Window Icon Asset`, `Vitest Config`, `user-table.tsx`, `meetings-time-grid.tsx`, `page.tsx`, `motion`, `meeting-intel.tsx`, `loading.tsx`, `meeting-panels.tsx`, `meeting-list.tsx`, `board-skeleton.tsx`, `app-health.ts`, `schema.ts`, `calendar-view.ts`, `meeting-people-picker-model.ts`, `browse.ts`, `queries.ts`, `ask-panel.tsx`, `task-composer.tsx`, `page.tsx`, `meetings-month-calendar.tsx`, `history-params.ts`, `action-item-board.tsx`, `page.tsx`, `page.tsx`, `format-instant.ts`, `coverage.ts`, `person-stats.ts`, `meetings-day-rail.tsx`, `use-screen-keyframes.ts`, `meeting-notes-model.ts`, `text-replace.ts`, `task-card.tsx`, `sidebar.tsx`, `sections.ts`?**
-  _High betweenness centrality (0.137) - this node is a cross-community bridge._
-- **Why does `Button()` connect `page.tsx` to `Server Actions & Results`, `Database Schema & Queries`, `Cards & Page Composition`, `App Detail & Board Pages`, `Runtime Dependencies`, `Tables & Selects`, `use-live-transcription.ts`, `Form Dialogs`, `Command Center Search`, `buttonVariants`, `live-client.ts`, `Meeting Forms & Calendar`, `capacity-card.tsx`, `Vercel Cron Config`, `Apps List Skeleton`, `Drizzle Config`, `use-smart-poll.ts`, `search.ts`, `Vitest Config`, `user-table.tsx`, `@dnd-kit/sortable`, `googleapis`, `motion`, `meeting-intel.tsx`, `setOwnPassword`, `meeting-panels.tsx`, `meeting-list.tsx`, `meeting-pip.tsx`, `note-timeline.tsx`, `schema.ts`, `calendar-view.ts`, `page.tsx`, `browse.ts`, `board.tsx`, `ask-panel.tsx`, `dashboard-zones.tsx`, `page.tsx`, `task-composer.tsx`, `meetings-month-calendar.tsx`, `history-params.ts`, `action-item-board.tsx`, `page.tsx`, `page.tsx`, `sprint-checkins.tsx`, `meetings-day-rail.tsx`, `use-screen-keyframes.ts`, `calendar-grid.ts`, `actions.ts`?**
-  _High betweenness centrality (0.030) - this node is a cross-community bridge._
-- **Why does `Db` connect `Form Dialogs` to `Database Schema & Queries`, `App Detail & Board Pages`, `queries.ts`, `Tables & Selects`, `task-workload.ts`, `Dev Tooling Config`, `actions.ts`, `active-sprints.tsx`, `shadcn Component Config`, `People & Allocation Actions`, `Input Primitives`, `Tabs`, `NextAuth Type Extensions`, `App Detail Skeleton`, `MeetingForm`, `use-smart-poll.ts`, `Globe Icon Asset`, `search.ts`, `person-tasks-card.tsx`, `Vitest Config`, `actions.ts`, `googleapis`, `lodash.throttle`, `queries.ts`, `setOwnPassword`, `note-timeline.tsx`, `route.ts`, `gather.ts`, `audit-queries.ts`, `queries.ts`, `page.tsx`, `queries.ts`, `budget-notify.ts`, `iso-day.ts`, `model-discovery.ts`, `actions.ts`, `entry-actions.ts`, `page.tsx`, `client.ts`, `admin-queries.ts`, `webauthn-actions.ts`, `actions.ts`, `calendar-grid.ts`, `sidebar.tsx`, `actions.ts`?**
-  _High betweenness centrality (0.021) - this node is a cross-community bridge._
+- **Why does `cn()` connect `Command Center Search` to `scoreCandidate`, `Database Schema & Queries`, `Cards & Page Composition`, `App Detail & Board Pages`, `Runtime Dependencies`, `use-live-transcription.ts`, `buttonVariants`, `Shell & Navigation`, `plan-read.ts`, `active-sprints.tsx`, `Auth & Security Lib`, `activity-levels.ts`, `Meeting Forms & Calendar`, `page.tsx`, `capacity-card.tsx`, `actions.ts`, `page.tsx`, `ESLint Config`, `backlog.ts`, `readiness.ts`, `churn.ts`, `Drizzle Config`, `File Icon Asset`, `use-smart-poll.ts`, `search.ts`, `Window Icon Asset`, `auto-title.ts`, `Vitest Config`, `user-table.tsx`, `meetings-time-grid.tsx`, `fuzzyMatches`, `lodash.throttle`, `motion`, `meeting-intel.tsx`, `loading.tsx`, `meeting-panels.tsx`, `meeting-list.tsx`, `app-health.ts`, `browse.ts`, `board.tsx`, `queries.ts`, `dashboard-zones.tsx`, `page.tsx`, `meetings-month-calendar.tsx`, `queries.ts`, `history-params.ts`, `action-item-board.tsx`, `page.tsx`, `format-instant.ts`, `sprint-checkins.tsx`, `person-stats.ts`, `meetings-day-rail.tsx`, `use-screen-keyframes.ts`, `task-card.tsx`, `sidebar.tsx`, `sections.ts`?**
+  _High betweenness centrality (0.110) - this node is a cross-community bridge._
+- **Why does `Button()` connect `page.tsx` to `Server Actions & Results`, `Database Schema & Queries`, `Cards & Page Composition`, `App Detail & Board Pages`, `Runtime Dependencies`, `scoreCandidate`, `Tables & Selects`, `Form Dialogs`, `Command Center Search`, `actions.ts`, `buttonVariants`, `active-sprints.tsx`, `activity-levels.ts`, `Meeting Forms & Calendar`, `page.tsx`, `page.tsx`, `App Detail Skeleton`, `readiness.ts`, `Drizzle Config`, `search.ts`, `Vitest Config`, `user-table.tsx`, `@dnd-kit/sortable`, `motion`, `meeting-intel.tsx`, `meeting-panels.tsx`, `meeting-list.tsx`, `meeting-pip.tsx`, `note-timeline.tsx`, `calendar-view.ts`, `page.tsx`, `browse.ts`, `board.tsx`, `dashboard-zones.tsx`, `page.tsx`, `meetings-month-calendar.tsx`, `history-params.ts`, `action-item-board.tsx`, `page.tsx`, `sprint-checkins.tsx`, `meetings-day-rail.tsx`, `use-screen-keyframes.ts`, `sidebar.tsx`, `actions.ts`, `trash-card-logic.ts`?**
+  _High betweenness centrality (0.038) - this node is a cross-community bridge._
+- **Why does `Db` connect `Form Dialogs` to `Database Schema & Queries`, `queries.ts`, `Tables & Selects`, `Dev Tooling Config`, `use-live-transcription.ts`, `buttonVariants`, `active-sprints.tsx`, `shadcn Component Config`, `review-rules.ts`, `People & Allocation Actions`, `Input Primitives`, `Tabs`, `NextAuth Type Extensions`, `App Detail Skeleton`, `backlog.ts`, `readiness.ts`, `MeetingForm`, `Apps List Skeleton`, `search.ts`, `person-tasks-card.tsx`, `Vitest Config`, `actions.ts`, `segment-store.ts`, `googleapis`, `lodash.throttle`, `queries.ts`, `setOwnPassword`, `@notionhq/client`, `route.ts`, `gather.ts`, `audit-queries.ts`, `ai-engine.ts`, `page.tsx`, `budget-notify.ts`, `iso-day.ts`, `actions.ts`, `entry-actions.ts`, `client.ts`, `admin-queries.ts`, `page.tsx`, `webauthn-actions.ts`, `coverage.ts`, `actions.ts`, `calendar-grid.ts`, `meeting-notes-model.ts`, `app-client.ts`, `actions.ts`?**
+  _High betweenness centrality (0.025) - this node is a cross-community bridge._
 - **What connects `qb`, `lead`, `q` to the rest of the system?**
-  _2279 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Server Actions & Results` be split into smaller, more focused modules?**
-  _Cohesion score 0.04457390597480016 - nodes in this community are weakly interconnected._
+  _2343 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Database Schema & Queries` be split into smaller, more focused modules?**
-  _Cohesion score 0.043295019157088124 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06199460916442048 - nodes in this community are weakly interconnected._
 - **Should `Cards & Page Composition` be split into smaller, more focused modules?**
-  _Cohesion score 0.10338680926916222 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.04481792717086835 - nodes in this community are weakly interconnected._
+- **Should `App Detail & Board Pages` be split into smaller, more focused modules?**
+  _Cohesion score 0.07058823529411765 - nodes in this community are weakly interconnected._

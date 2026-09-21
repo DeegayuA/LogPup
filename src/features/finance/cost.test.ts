@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   costForEntries,
+  costForProject,
   effortMix,
   margin,
   rateForPersonOnDay,
@@ -177,6 +178,53 @@ describe('costForEntries', () => {
     const cost = costForEntries(entries, () => rate(10))
     // 3 x (1/60 x 10) = 0.5 exactly; per-entry rounding would give 0.51.
     expect(cost.amount).toBe(0.5)
+  })
+})
+
+describe('costForProject', () => {
+  const rate = () => ({ hourly: 20, currency: 'LKR', source: 'role' as const })
+  const entry = (userId: string, minutes: number) => ({ userId, minutes })
+
+  // why: this is the reconstruction attack `MIN_COST_CONTRIBUTORS` exists to
+  // block — a reader who does NOT hold finance.view could otherwise divide
+  // the total by the hours and get that one person's hourly rate.
+  it('suppresses a single contributor for a viewer who does not hold finance.view', () => {
+    const result = costForProject([entry('u1', 60)], rate, false)
+    expect(result).toEqual({ state: 'suppressed', contributorCount: 1, hours: 1 })
+  })
+
+  // why: a viewer who holds finance.view can already read this exact rate
+  // straight off the rate card — refusing them the derived total protects
+  // nobody and only makes the card look broken for the one seat meant to see it.
+  it('does NOT suppress a single contributor for a viewer who holds finance.view', () => {
+    const result = costForProject([entry('u1', 60)], rate, true)
+    expect(result.state).toBe('ok')
+    if (result.state !== 'ok') throw new Error('unreachable')
+    expect(result.contributorCount).toBe(1)
+    expect(result.cost.amount).toBe(20)
+    expect(result.hours).toBe(1)
+  })
+
+  // why: with nobody logged, there is no rate to reconstruct either way — this
+  // branch is bookkeeping ("no honest cost to show"), never a privacy rule, so
+  // it applies no matter who is looking.
+  it('still suppresses zero contributors even for a finance.view viewer', () => {
+    expect(costForProject([], rate, true)).toEqual({ state: 'suppressed', contributorCount: 0, hours: 0 })
+    expect(costForProject([], rate, false)).toEqual({ state: 'suppressed', contributorCount: 0, hours: 0 })
+  })
+
+  // why: hours alone never divides into anyone's rate — only cost ÷ hours
+  // does — so the suppressed shape still carries it even while cost stays
+  // withheld from a viewer without finance.view.
+  it('carries hours on the suppressed shape even when cost is withheld', () => {
+    const result = costForProject([entry('u1', 90)], rate, false)
+    expect(result).toEqual({ state: 'suppressed', contributorCount: 1, hours: 1.5 })
+  })
+
+  it('clears the guard at MIN_COST_CONTRIBUTORS regardless of viewerSeesRates', () => {
+    const entries = [entry('u1', 60), entry('u2', 60)]
+    expect(costForProject(entries, rate, false).state).toBe('ok')
+    expect(costForProject(entries, rate, true).state).toBe('ok')
   })
 })
 

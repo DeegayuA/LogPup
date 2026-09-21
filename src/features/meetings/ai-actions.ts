@@ -17,6 +17,7 @@ import {
   liveAppsAs,
   liveMeetings,
   liveNoteSegments,
+  liveRecordingSegments,
   liveScreenshots,
   liveSprints,
   liveTasks,
@@ -1618,10 +1619,14 @@ async function finalizeMeetingRecordingInner(
   const disabled = await aiFeatureDisabledMessage(session.user.id, 'meeting-intel')
   if (disabled) return err(disabled)
 
+  // Through the LIVE view: a take somebody removed must not be quoted back
+  // into the minutes on "Analyze again" — the exact re-run the stale-summary
+  // banner sends them to. fetchNextSegmentIndex still reads the raw table on
+  // purpose (a deleted take keeps its index slot).
   const segmentRows = await db
-    .select({ index: meetingRecordingSegments.index, transcript: meetingRecordingSegments.transcript })
-    .from(meetingRecordingSegments)
-    .where(eq(meetingRecordingSegments.meetingId, id))
+    .select({ index: liveRecordingSegments.index, transcript: liveRecordingSegments.transcript })
+    .from(liveRecordingSegments)
+    .where(eq(liveRecordingSegments.meetingId, id))
 
   const hintParsed = liveTranscriptInput.safeParse(
     typeof liveTranscriptHint === 'string' && liveTranscriptHint.trim().length > 0 ? liveTranscriptHint : '',
@@ -1660,7 +1665,10 @@ async function finalizeMeetingRecordingInner(
     return ok({ mode: 'live-transcript' as const })
   }
 
-  const { text: combinedTranscript, missingIndices } = concatenateSegments(segmentRows)
+  const { text: combinedTranscript, missingIndices } = concatenateSegments(
+    segmentRows,
+    await fetchRemovedSegmentIndices(id),
+  )
   if (missingIndices.length > 0) {
     console.warn(
       `[meeting-recording] finalize for meeting ${id} is missing segment(s) ${missingIndices.join(', ')} — proceeding with the gap reported to the model`,
@@ -2194,6 +2202,24 @@ async function fetchNextSegmentIndex(meetingId: string): Promise<number> {
     .from(meetingRecordingSegments)
     .where(eq(meetingRecordingSegments.meetingId, meetingId))
   return row?.maxIndex === null || row?.maxIndex === undefined ? 0 : Number(row.maxIndex) + 1
+}
+
+/**
+ * The segment indices a removed take left behind. Read from the RAW table on
+ * purpose — these rows are the soft-deleted ones — so concatenateSegments can
+ * skip them instead of reporting a deliberate removal as lost audio.
+ */
+async function fetchRemovedSegmentIndices(meetingId: string): Promise<ReadonlySet<number>> {
+  const rows = await db
+    .select({ index: meetingRecordingSegments.index })
+    .from(meetingRecordingSegments)
+    .where(
+      and(
+        eq(meetingRecordingSegments.meetingId, meetingId),
+        isNotNull(meetingRecordingSegments.deletedAt),
+      ),
+    )
+  return new Set(rows.map((row) => row.index))
 }
 
 /**

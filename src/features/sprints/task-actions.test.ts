@@ -247,7 +247,12 @@ describe('updateTask — moving a committed deadline', () => {
 
   it('refuses a scoped editor moving the date (deadline.move.committed is none for editor)', async () => {
     asEditor('editor-1')
-    selectRows.set(liveTasks, [committedTask()])
+    // assigneeId set to the editor themselves: task.edit must pass (own AND
+    // scope both grant it) so the refusal below can only come from the
+    // deadline.move.committed gate, not from task.edit itself — an
+    // unassigned task would already be refused earlier for a different
+    // reason and never reach the gate this test exists to cover.
+    selectRows.set(liveTasks, [committedTask({ assigneeId: 'editor-1' })])
     // task.edit is editor: scoped — grants the edit itself via assignments.
     selectRows.set(assignments, [{ appId: 'app-1' }])
 

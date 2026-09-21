@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.549",
+  "current": "v0.0.550",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4392,6 +4392,14 @@
       "hash": "75284ba",
       "kind": "other",
       "change": "attendance connection issue fixed"
+    },
+    {
+      "version": "v0.0.550",
+      "date": "2026-09-20",
+      "at": "2026-09-20T21:34:28+05:30",
+      "hash": "d52fdf9",
+      "kind": "other",
+      "change": "No description recorded for this build."
     }
   ]
 }

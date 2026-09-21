@@ -45,14 +45,6 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   admin: 'every action needs a target row, and the purges need a typed confirmation',
   calendar: 'an internal Google Calendar wrapper, no user-facing action',
   dashboard: 'no actions; its page is a nav row',
-  // Pure cost arithmetic today — cost.ts and its test, no route, no server
-  // action, no component. There is nothing to navigate to and nothing to
-  // invoke, and the one action that would exist (setting a rate) is blocked on
-  // a capability nobody owns yet. RETIRE THIS the moment a /finance route or a
-  // cost action exists: project cost is superadmin/admin-only, so its rows will
-  // need visible() through the capability layer rather than a bare role
-  // comparison.
-  finance: 'pure cost arithmetic; no route, no invocable action, and the rate-setting one is blocked on an unowned capability',
   // The route it would point at is already in the palette, contributed by the
   // meetings feature as `meetings.load` — the two live on one page and a second
   // row for the same href would be the palette offering the same jump twice.

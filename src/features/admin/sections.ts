@@ -55,6 +55,16 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     capability: 'finance.view',
   },
   {
+    href: '/admin/rates',
+    label: 'Rates',
+    description: 'What an hour costs, and what a project is worth',
+    // finance.view is 'all|none' for every seat — never scoped — so the
+    // plain `can()` branch in visibleSections is correct and navGrantOnly
+    // must NOT be set (that flag exists for a capability with a real
+    // per-seat scoped arm, which this one does not have).
+    capability: 'finance.view',
+  },
+  {
     href: '/admin/approvals',
     label: 'Approvals',
     description: 'Signups, change requests and leave, in one queue',

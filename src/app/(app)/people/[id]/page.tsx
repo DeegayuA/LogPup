@@ -10,6 +10,8 @@ import { PersonActivityCard } from '@/features/people/components/person-activity
 import { PersonFollowupsCard } from '@/features/people/components/person-followups-card'
 import { loadActor } from '@/features/auth/actor'
 import { can, effectiveGrant } from '@/features/auth/capabilities'
+import { maintenanceActiveNow } from '@/features/maintenance/freeze'
+import { canViewPerson } from '@/features/people/visibility'
 import { PersonHeader } from '@/features/people/components/person-header'
 import { PersonMeetingsCard } from '@/features/people/components/person-meetings-card'
 import { PersonStatRow } from '@/features/people/components/person-stat-row'
@@ -125,8 +127,28 @@ export default async function PersonDetailPage(props: { params: Promise<{ id: st
 
   if (!overview) notFound()
 
+  // THE MATRIX'S GATE, finally enforced here (security review F7 — this page
+  // had none). `user.view.directory` deliberately lists everyone for members
+  // by design; the DETAIL page is what the matrix actually scopes (editor and
+  // member: 'scoped', stakeholder: 'none'), so a client-seat stakeholder or a
+  // member outside this person's projects must get the same `notFound()`
+  // every other refused route in this app returns — never a 200 with a
+  // page they should not have reached.
+  //
+  // Reuses `overview.assignments`, already fetched above for the Assignments
+  // card — no second query for the appIds this person is scoped by.
+  if (!actor || !canViewPerson(actor, { id: userId, appIds: overview.assignments.map((a) => a.appId) })) {
+    notFound()
+  }
+
+  // `requireCapability` applies the maintenance-freeze refusal itself; this
+  // door bypasses it (loadActor + effectiveGrant, not requireCapability) so
+  // the freeze has to be re-checked here, or the controls draw and every save
+  // 404s for the whole duration of an active window.
   const canAssign =
-    actor !== null && effectiveGrant(actor.role, actor.employmentType, 'app.assign') !== 'none'
+    actor !== null &&
+    effectiveGrant(actor.role, actor.employmentType, 'app.assign') !== 'none' &&
+    !(await maintenanceActiveNow())
 
   // The PER-APP door, for the controls themselves. Admin/superadmin's grant is
   // 'all', so `can()` answers true for every app with no scope lookup; a

@@ -1,4 +1,5 @@
 import { rawLimitFor } from './chunk-speech'
+import { graphemeSafeCut } from '@/lib/prompt-truncate'
 
 /**
  * Markdown → something worth listening to.
@@ -58,8 +59,9 @@ const SENTENCE_STOP = /[.!?।…](?=\s)/g
  * joiner — a cut may never leave one of these as the last character, and may
  * never strand text whose next character is one of them: both split a grapheme
  * cluster (e.g. ශ්‍රී), handing TTS a half-syllable to pronounce.
+ * cluster — the walk that enforces it is graphemeSafeCut in lib/prompt-truncate.ts,
+ * shared with the TTS chunker and the segment hint tail.
  */
-const SINHALA_CONTINUATION = /[ංඃ්-ෟ‍]/
 
 /** Share of non-whitespace characters that are Sinhala script — used by the
  * browser-voice fallback to decide whether an English default voice would
@@ -106,11 +108,6 @@ export function truncateForSpeech(text: string, limit: number = MAX_TTS_CHARS): 
   let cut = head.length
   const lastSpace = head.lastIndexOf(' ')
   if (lastSpace > rawLimit * 0.75) cut = lastSpace
-  while (
-    cut > 0 &&
-    (SINHALA_CONTINUATION.test(text[cut]) || text[cut - 1] === '‍')
-  ) {
-    cut -= 1
-  }
+  cut = graphemeSafeCut(text, cut)
   return text.slice(0, cut)
 }

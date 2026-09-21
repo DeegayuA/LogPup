@@ -1,10 +1,27 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  APP_REQUESTABLE_FIELDS,
   SUPPORTED_ENTITY_TYPES,
   buildTaskDeadlineSet,
+  currentRowFor,
   detectConflict,
   isSupportedEntityType,
 } from '@/features/admin/change-request-appliers'
+
+const APP_ID = '33333333-3333-4333-8333-333333333333'
+
+const { selectFields, selectRows } = vi.hoisted(() => ({
+  selectFields: [] as unknown[],
+  selectRows: [] as unknown[][],
+}))
+vi.mock('@/db', () => ({
+  db: {
+    select: (fields: unknown) => {
+      selectFields.push(fields)
+      return { from: () => ({ where: async () => selectRows.shift() ?? [] }) }
+    },
+  },
+}))
 
 describe('detectConflict', () => {
   it('passes when the row still matches the pre-image', () => {
@@ -37,9 +54,47 @@ describe('SUPPORTED_ENTITY_TYPES', () => {
   it('is closed — an unsupported type is refused at filing time', () => {
     // A generic applier is impossible on neon-http: db.batch needs statically
     // built statements. Refusing late, at approval, would strand the request.
-    expect(SUPPORTED_ENTITY_TYPES).toEqual(['task', 'sprint', 'meeting', 'worklog'])
-    expect(isSupportedEntityType('app')).toBe(false)
+    expect(SUPPORTED_ENTITY_TYPES).toEqual(['task', 'sprint', 'meeting', 'worklog', 'app'])
+    // 'app' joined the registry for the sign-off feature — a plain spread
+    // like sprint/meeting/worklog, gated at filing by APP_REQUESTABLE_FIELDS.
+    expect(isSupportedEntityType('app')).toBe(true)
     expect(isSupportedEntityType('task')).toBe(true)
+    expect(isSupportedEntityType('bogus')).toBe(false)
+  })
+})
+
+describe('currentRowFor', () => {
+  beforeEach(() => {
+    selectFields.length = 0
+    selectRows.length = 0
+  })
+
+  it('reads an app through liveApps, selecting only the requestable columns', async () => {
+    // NOT change_policy (migration 0072 unapplied — see change-request-actions.ts's
+    // comment), NOT pmId/leadId (a pm/lead move needs the appRoleHistory
+    // close+open pair this single SELECT/applier cannot express).
+    selectRows.push([
+      { name: 'LogPup', description: 'desc', repoUrl: null, techTags: [], aliases: [], status: 'active', internal: false },
+    ])
+    const row = await currentRowFor('app', APP_ID)
+    expect(row).toEqual({
+      name: 'LogPup', description: 'desc', repoUrl: null, techTags: [], aliases: [], status: 'active', internal: false,
+    })
+    expect(Object.keys(selectFields[0] as object).sort()).toEqual([...APP_REQUESTABLE_FIELDS].sort())
+    expect(APP_REQUESTABLE_FIELDS).not.toContain('changePolicy')
+    expect(APP_REQUESTABLE_FIELDS).not.toContain('pmId')
+    expect(APP_REQUESTABLE_FIELDS).not.toContain('leadId')
+  })
+
+  it('reads a task from the raw table, unfiltered by requestable columns', async () => {
+    selectRows.push([{ id: 't1', title: 'Ship it' }])
+    const row = await currentRowFor('task', 't1')
+    expect(row).toEqual({ id: 't1', title: 'Ship it' })
+  })
+
+  it('returns null when the row is gone', async () => {
+    selectRows.push([])
+    expect(await currentRowFor('app', APP_ID)).toBeNull()
   })
 })
 

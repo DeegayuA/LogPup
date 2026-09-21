@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
-import { dailyWorklogs, meetings, sprints, tasks } from '@/db/schema'
+import { liveApps } from '@/db/live'
+import { apps, dailyWorklogs, meetings, sprints, tasks } from '@/db/schema'
 import type { TaskStatus } from '@/features/sprints/board-view'
 import { applyDueDate, type DueKind, type DueState } from '@/features/sprints/due-date'
 import { transitionTaskStatus } from '@/features/sprints/task-status'
@@ -16,8 +17,14 @@ import { transitionTaskStatus } from '@/features/sprints/task-status'
  *    built array of statements — a diff of arbitrary shape cannot produce one.
  *  - An unsupported entity type must fail loudly when the request is FILED,
  *    not silently when someone approves it a week later.
+ *
+ * `app` is a plain spread like `sprint`/`meeting`/`worklog` below — it carries
+ * no cross-column invariant the way `task`'s deadline/status pair does. The
+ * REQUESTABLE field allowlist that keeps a filed app request off `pmId`,
+ * `leadId` and `changePolicy` lives in change-request-actions.ts
+ * (APP_REQUESTABLE_FIELDS), enforced at filing time, not here.
  */
-export const SUPPORTED_ENTITY_TYPES = ['task', 'sprint', 'meeting', 'worklog'] as const
+export const SUPPORTED_ENTITY_TYPES = ['task', 'sprint', 'meeting', 'worklog', 'app'] as const
 export type SupportedEntityType = (typeof SUPPORTED_ENTITY_TYPES)[number]
 
 export function isSupportedEntityType(value: string): value is SupportedEntityType {
@@ -56,7 +63,59 @@ const TABLES = {
   sprint: sprints,
   meeting: meetings,
   worklog: dailyWorklogs,
+  app: apps,
 } as const
+
+/**
+ * The requestable slice of `apps` an approved edit may touch.
+ *
+ * Explicitly NOT `pmId`/`leadId` — a pm/lead move must also write the
+ * `appRoleHistory` close+open pair in the same batch, which this file's
+ * single `db.update` statement (`buildApplyStatement` below) cannot express;
+ * those stay direct `app.role.assign` writes. And NOT `changePolicy` —
+ * migration 0072 (the `app_change_policy` column) is written but UNAPPLIED;
+ * a column declared ahead of its migration is a live 42703 on every read of
+ * `apps` for every session (the same trap `auth/capabilities.ts`'s
+ * `needsSignoff` stays clear of). `changePolicy` joins this allowlist once
+ * the migration lands and `updateApp` is wired to call `routeForSignoff`.
+ */
+const APP_REQUESTABLE_COLUMNS = {
+  name: liveApps.name,
+  description: liveApps.description,
+  repoUrl: liveApps.repoUrl,
+  techTags: liveApps.techTags,
+  aliases: liveApps.aliases,
+  status: liveApps.status,
+  internal: liveApps.internal,
+} as const
+
+// Derived, not duplicated: the filing-time allowlist in change-request-
+// actions.ts and the columns actually read below must never drift apart.
+export const APP_REQUESTABLE_FIELDS = Object.keys(
+  APP_REQUESTABLE_COLUMNS,
+) as readonly (keyof typeof APP_REQUESTABLE_COLUMNS)[]
+
+/**
+ * The row a change request's pre-image is checked against, and the row an
+ * approval is about to overwrite.
+ *
+ * `app` reads through `liveApps` and only the requestable columns above —
+ * everything else reads its raw table in full. `detectConflict` only ever
+ * compares the fields present in the stored `before`, so a wider read here
+ * costs nothing and needs no per-type projection.
+ */
+export async function currentRowFor(
+  entityType: SupportedEntityType,
+  id: string,
+): Promise<Record<string, unknown> | null> {
+  if (entityType === 'app') {
+    const [row] = await db.select(APP_REQUESTABLE_COLUMNS).from(liveApps).where(eq(liveApps.id, id))
+    return row ?? null
+  }
+  const table = { task: tasks, sprint: sprints, meeting: meetings, worklog: dailyWorklogs }[entityType]
+  const [row] = await db.select().from(table).where(eq(table.id, id))
+  return row ?? null
+}
 
 /**
  * A task's deadline fields, rebuilt through the one helper that owns them.

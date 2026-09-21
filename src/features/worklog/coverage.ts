@@ -185,6 +185,37 @@ export function computeCoverage(input: CoverageInput): CoverageSummary {
   }
 }
 
+/**
+ * The current streak: consecutive OWED days answered, walking backwards from
+ * the end of `days` (the most recent day computeCoverage was given).
+ *
+ * "Owed" is computeCoverage's status, not a second calendar: 'off' (weekend,
+ * gazetted or org holiday — closesTheStudio already folded all three to the
+ * same fraction-0 fact), 'exempt' (approved absence) and 'not-required'
+ * (supervisory seat) are stepped over — they neither extend nor end the
+ * run — while 'missing' ends it and 'logged' extends it. A day nobody
+ * expected work on must not cost someone their streak just because a
+ * holiday fell on it.
+ *
+ * 'not-yet-due' (today, always — see computeCoverage's rule 2, which beats
+ * "already logged") is stepped over the same way: today never breaks the
+ * streak while it is still in progress, but it also does not add to the
+ * count until tomorrow reclassifies it as 'logged'.
+ */
+export function computeStreak(days: readonly CoverageDay[]): number {
+  let streak = 0
+  for (let i = days.length - 1; i >= 0; i -= 1) {
+    const status = days[i].status
+    if (status === 'logged') {
+      streak += 1
+      continue
+    }
+    if (status === 'missing') break
+    // off / exempt / not-yet-due / not-required: skip without breaking.
+  }
+  return streak
+}
+
 /** At most one decimal, no trailing `.0`. `3.5` stays, `4.0` becomes `4`. */
 const num = (n: number) => String(Math.round(n * 10) / 10)
 

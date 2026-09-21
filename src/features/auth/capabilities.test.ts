@@ -9,6 +9,7 @@ import {
   effectiveGrant,
   isAdminRole,
   roleLabel,
+  needsSignoff,
   type Action,
   type Actor,
   type UserRole,
@@ -301,6 +302,43 @@ describe('meeting.admin preserves today reach', () => {
 
   it('still lets a pm manage the same meeting through meeting.manage', () => {
     expect(can(pm, 'meeting.manage', { ownerId: 'u1', appId: 'app-1' })).toBe(true)
+  })
+})
+
+describe('needsSignoff', () => {
+  // Sign-off is ROUTING after authorisation, never a narrower permission —
+  // every case below asks the routing question in isolation, independent of
+  // whether `can` would have refused the actor already (the last two rows
+  // are the ones where it would have).
+  const pm = { id: 'pm-1', role: 'manager' as const, scopeAppIds: new Set(['app-1']) }
+  const lead = { id: 'lead-1', role: 'manager' as const, scopeAppIds: new Set(['app-1']) }
+  const admin = { id: 'admin-1', role: 'admin' as const, scopeAppIds: new Set<string>() }
+  const superadmin = { id: 'sa-1', role: 'superadmin' as const, scopeAppIds: new Set<string>() }
+  const member = { id: 'member-1', role: 'member' as const, scopeAppIds: new Set(['app-1']) }
+  const trainee = {
+    id: 'pm-2', role: 'manager' as const, scopeAppIds: new Set(['app-1']), employmentType: 'trainee' as const,
+  }
+
+  const lockedGate = { changePolicy: 'lead_approval' as const, leadId: 'lead-1' }
+
+  it.each([
+    ['PM (manager, scoped) is gated', pm, 'app.edit' as const, lockedGate, true],
+    ['the lead exempts themselves — the signer never queues their own', lead, 'app.edit' as const, lockedGate, false],
+    ["admin ('all') bypasses with no role comparison", admin, 'app.edit' as const, lockedGate, false],
+    ['superadmin bypasses the same way', superadmin, 'app.edit' as const, lockedGate, false],
+    ['no tech lead named degrades to auto-save', pm, 'app.edit' as const, { changePolicy: 'lead_approval' as const, leadId: null }, false],
+    ['auto_save policy exempts everyone', pm, 'app.edit' as const, { changePolicy: 'auto_save' as const, leadId: 'lead-1' }, false],
+    ['an ungated action (sprint.manage) never queues, even under lead_approval', pm, 'sprint.manage' as const, lockedGate, false],
+    // capFor withholds nothing on app.edit for a trainee (it is not in
+    // APPROVAL_ACTIONS), so the seat's grant survives uncapped at 'scoped'.
+    ['a trainee manager is still scoped on app.edit, so still gated', trainee, 'app.edit' as const, lockedGate, true],
+    // A member holds 'none' on app.edit — `can` refuses them long before
+    // `routeForSignoff` would ever call this, but the predicate itself must
+    // still answer false rather than true for a grant it was never asked to
+    // widen.
+    ['a member (app.edit: none) never reaches routing', member, 'app.edit' as const, lockedGate, false],
+  ] as const)('%s', (_label, actor, action, gate, expected) => {
+    expect(needsSignoff(actor, action, gate)).toBe(expected)
   })
 })
 

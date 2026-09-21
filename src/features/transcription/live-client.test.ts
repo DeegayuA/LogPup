@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { IDLE_TIMEOUT_MS, MAX_SESSION_MS } from './session-budget'
 
 /**
  * The socket state machine had no tests, and the contract that matters most
@@ -7,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * has disowned. live-protocol.test.ts asserts the two builders agree with each
  * other; only this file can assert the session feeds them the right handle.
  *
- * Audio is never started here — these cases deliberately never send
- * `setupComplete`, which is what would reach for an AudioContext.
+ * The resumption cases never send `setupComplete`; the status and watchdog
+ * cases below do, against the FakeAudioContext stubbed onto `window`.
  */
 
 class FakeSocket {
@@ -41,9 +42,56 @@ class FakeSocket {
   deliver(frame: unknown) {
     this.onmessage?.({ data: JSON.stringify(frame) })
   }
+
+  /** Fire the browser's reason-less 'error' event. */
+  deliverError() {
+    this.onerror?.()
+  }
 }
 
 vi.stubGlobal('WebSocket', FakeSocket)
+
+class FakeNode {
+  onaudioprocess: unknown = null
+  gain = { value: 1 }
+  connect() {}
+  disconnect() {}
+}
+
+/** Just enough Web Audio for startAudio/teardownAudio to run. */
+class FakeAudioContext {
+  static instances: FakeAudioContext[] = []
+  sampleRate = 48_000
+  destination = new FakeNode()
+  closed = false
+
+  constructor() {
+    FakeAudioContext.instances.push(this)
+  }
+
+  resume() {
+    return Promise.resolve()
+  }
+
+  close() {
+    this.closed = true
+    return Promise.resolve()
+  }
+
+  createMediaStreamSource() {
+    return new FakeNode()
+  }
+
+  createScriptProcessor() {
+    return new FakeNode()
+  }
+
+  createGain() {
+    return new FakeNode()
+  }
+}
+
+vi.stubGlobal('window', { AudioContext: FakeAudioContext })
 
 const { LiveTranscriptionSession } = await import('./live-client')
 
@@ -80,6 +128,7 @@ function newSession() {
 beforeEach(() => {
   vi.useFakeTimers()
   FakeSocket.instances = []
+  FakeAudioContext.instances = []
   requestToken = vi.fn<TokenFn>(async () => ({ token: 'tok', model: 'gemini-live-test' }))
 })
 
@@ -198,5 +247,112 @@ describe('a token failure does not spend the meeting retrying', () => {
     expect(onFailure).toHaveBeenCalledWith('Your Gemini key was rejected')
     expect(requestToken).toHaveBeenCalledTimes(1)
     expect(session.status).toBe('failed')
+  })
+})
+
+describe('start() is not re-entrant', () => {
+  it('ignores a second start while the first connection is up', async () => {
+    const session = newSession()
+    await session.start()
+    await settle()
+    await session.start()
+    await settle()
+
+    expect(requestToken).toHaveBeenCalledTimes(1)
+    expect(FakeSocket.instances).toHaveLength(1)
+    session.stop()
+  })
+})
+
+describe('status across a routine reconnect', () => {
+  it('stays live when the session already holds transcript', async () => {
+    const statuses: string[] = []
+    const session = new LiveTranscriptionSession({
+      stream: {} as MediaStream,
+      requestToken,
+      maxReconnectAttempts: 10,
+      callbacks: { onStatusChange: (status) => statuses.push(status) },
+    })
+    await session.start()
+    await settle()
+    const first = FakeSocket.instances[0]
+    first.deliver({ setupComplete: {} })
+    expect(session.status).toBe('listening')
+    first.deliver({
+      serverContent: { inputTranscription: { text: 'අපි deploy කරමු' }, turnComplete: true },
+    })
+    expect(session.status).toBe('live')
+
+    await reconnect()
+    FakeSocket.instances[1].deliver({ setupComplete: {} })
+
+    expect(session.status).toBe('live')
+    // "Connected — nothing transcribed yet" must not show above ten minutes
+    // of committed text.
+    expect(statuses.slice(statuses.lastIndexOf('reconnecting'))).not.toContain('listening')
+    session.stop()
+  })
+})
+
+describe('watchdog', () => {
+  function sessionWith(onAutoStop: (reason: 'max-duration' | 'idle') => void) {
+    return new LiveTranscriptionSession({
+      stream: {} as MediaStream,
+      requestToken,
+      maxReconnectAttempts: 10,
+      callbacks: { onAutoStop },
+    })
+  }
+
+  it('stops after five silent minutes, closes the audio graph, and says why', async () => {
+    const onAutoStop = vi.fn()
+    const session = sessionWith(onAutoStop)
+    await session.start()
+    await settle()
+    FakeSocket.instances[0].deliver({ setupComplete: {} })
+    expect(FakeAudioContext.instances).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + 1_000)
+
+    expect(onAutoStop).toHaveBeenCalledWith('idle')
+    expect(session.status).toBe('stopped')
+    expect(FakeAudioContext.instances[0].closed).toBe(true)
+  })
+
+  it('stops at the one-hour cap even while speech keeps coming', async () => {
+    const onAutoStop = vi.fn()
+    const session = sessionWith(onAutoStop)
+    await session.start()
+    await settle()
+    FakeSocket.instances[0].deliver({ setupComplete: {} })
+
+    const step = IDLE_TIMEOUT_MS - 60_000
+    for (let elapsed = 0; elapsed < MAX_SESSION_MS; elapsed += step) {
+      await vi.advanceTimersByTimeAsync(step)
+      FakeSocket.instances.at(-1)?.deliver({ serverContent: { inputTranscription: { text: 'තව' } } })
+    }
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(onAutoStop).toHaveBeenCalledWith('max-duration')
+    expect(session.status).toBe('stopped')
+  })
+})
+
+describe('a socket error leaves a trace', () => {
+  it('logs which attempt failed in which state, never the token', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const session = newSession()
+    await session.start()
+    await settle()
+
+    FakeSocket.instances[0].deliverError()
+
+    expect(error).toHaveBeenCalledWith('[live-client] socket error', {
+      attempt: 0,
+      status: 'connecting',
+    })
+    expect(JSON.stringify(error.mock.calls)).not.toContain('tok')
+    error.mockRestore()
+    session.stop()
   })
 })

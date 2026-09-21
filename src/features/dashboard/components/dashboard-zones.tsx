@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import { can, type Actor } from '@/features/auth/capabilities'
 import {
   zoneScope,
+  type DashboardView,
   type AdmittingGrant,
   type ZoneId,
 } from '@/features/dashboard/zones'
@@ -186,6 +187,10 @@ export type ZoneProps = {
   grant: AdmittingGrant
   /** How to address the reader, for the cards that use a name in prose. */
   userName: string
+  /** `mine` (the default) or `all` — from the URL, decided once by the page. */
+  view: DashboardView
+  /** The viewer's own assignments; what `mine` narrows a wide grant to. */
+  myAppIds: ReadonlySet<string>
 }
 
 type ZoneComponent = (props: ZoneProps) => ReactNode | Promise<ReactNode>
@@ -551,13 +556,19 @@ export function MyWorkZoneSkeleton() {
 
 /* ──────────────────────────── Team ──────────────────────────── */
 
-export async function TeamZone({ actor, grant }: ZoneProps) {
-  const scope = zoneScope(grant, actor)
+export async function TeamZone({ actor, grant, view, myAppIds }: ZoneProps) {
+  const scope = zoneScope(grant, actor, { view, myAppIds })
   // NARROW BY THE GRANT, NEVER BY WHETHER THE SCOPE SET IS EMPTY. `scopeAppIds`
   // is empty for superadmin, admin and auditor because their grant is 'all'
   // and never consults it — filtering on the set unconditionally would show an
   // admin an empty team, which is the exact inversion of what the seat is for.
-  const orgWide = scope.kind === 'all'
+  //
+  // The meeting-load aggregate follows the GRANT, not the personal view: it is
+  // a count of everybody's week with no per-project form, so "my projects"
+  // cannot narrow it — it can only make it vanish without a word, which is the
+  // one thing the honest-fallback rule forbids. The roster below still follows
+  // `scope`.
+  const orgWide = grant === 'all'
   // One "now" for the zone, so the trend's last point and the this-week figure
   // cannot straddle midnight and disagree about which week it is.
   const now = new Date()
@@ -707,8 +718,8 @@ async function rosterForApps(appIds: ReadonlySet<string>) {
  * A morning reading is not a verdict — a day is owed by the end of it — which
  * is why the third figure is "not logged yet" and says so.
  */
-export async function CoverageZone({ actor, grant }: ZoneProps) {
-  const scope = zoneScope(grant, actor)
+export async function CoverageZone({ actor, grant, view, myAppIds }: ZoneProps) {
+  const scope = zoneScope(grant, actor, { view, myAppIds })
   const today = isoDayOf(new Date())
 
   if (scope.kind === 'own') {
@@ -879,8 +890,8 @@ const RISK_RANK: Record<HealthLevel, number> = {
   dormant: 3,
 }
 
-export async function PortfolioZone({ actor, grant }: ZoneProps) {
-  const scope = zoneScope(grant, actor)
+export async function PortfolioZone({ actor, grant, view, myAppIds }: ZoneProps) {
+  const scope = zoneScope(grant, actor, { view, myAppIds })
   const all = await listApps()
   // Scoped seats — editor, member, stakeholder — see the projects they are on.
   // An 'all' seat ignores `scopeAppIds` entirely; it is empty for them, and

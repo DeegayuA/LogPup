@@ -95,6 +95,22 @@ describe('buildActionList', () => {
     })
   })
 
+  it('merges one Sinhala commitment spelled in NFC and NFD', () => {
+    // Two keyboards, or a model round trip, can emit කො composed or as
+    // ක + ෙ + ා; the merge key must not read those as two commitments.
+    const composed = 'කොටස් යවන්න'.normalize('NFC')
+    const decomposed = composed.normalize('NFD')
+    expect(decomposed).not.toBe(composed)
+    const rows = buildActionList(
+      {
+        deadlines: [{ item: decomposed, owner: '', due: '2026-08-20' }],
+        perPerson: [{ name: 'Nadeesha', points: [], actionItems: [composed] }],
+      },
+      now,
+    )
+    expect(rows).toHaveLength(1)
+  })
+
   it('keeps items that exist in only one of the two sources', () => {
     const rows = buildActionList(
       {

@@ -826,6 +826,10 @@ export function MeetingIntelPanel({
   /** Highest index this session has ever assigned, +1. Only ever increases —
    *  unlike `segments`, which finalize empties of everything it consumed. */
   const segmentHighWaterRef = useRef(0)
+  // In-flight IndexedDB parks per segment index. releaseSegment waits on this
+  // so a fast ACK can never delete a blob whose put is still landing — that
+  // orphan would come back as a "recovered" segment and be transcribed twice.
+  const parkedRef = useRef(new Map<number, Promise<void>>())
   // Base mimeType (codec suffix stripped, e.g. "audio/webm") used to build
   // every segment's Blob — captured once at recording start.
   const mimeBaseRef = useRef('')
@@ -1950,6 +1954,17 @@ export function MeetingIntelPanel({
           // The transcript is in the database now — that's the durable copy
           // from here on, so the parked audio has done its job. This is the
           // only place parked audio is ever dropped.
+          // Wait for the park still landing — a fast ACK can beat the
+          // IndexedDB put, and a delete that runs first leaves the blob parked
+          // forever, "recovered" on the next load. BOUNDED: the transcript is
+          // durable already, and a stalled IndexedDB transaction (Safari in a
+          // background tab) must not hold the one upload worker behind this
+          // segment.
+          await Promise.race([
+            parkedRef.current.get(index),
+            new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+          ])
+          parkedRef.current.delete(index)
           await releaseSegment(meetingId, index)
           return
         }
@@ -1970,6 +1985,10 @@ export function MeetingIntelPanel({
       const lastAttempt = attempt === SEGMENT_UPLOAD_ATTEMPTS
       if (lastAttempt || !isRetriableSegmentError(error)) {
         upsertSegment({ index, status: 'failed', blob, error, attempt, recovered })
+        // Every attempt with its backoff is long past the park landing; the
+        // entry has nothing left to wait for, and a later manual retry's
+        // success path awaits nothing rather than a stale promise.
+        parkedRef.current.delete(index)
         return
       }
       // 'retrying' — not 'uploading' — through the whole backoff wait, so the
@@ -2032,9 +2051,21 @@ export function MeetingIntelPanel({
     // Park BEFORE uploading, and don't wait for it: the audio is on disk
     // before the first byte goes out, so a crash mid-upload is recoverable,
     // and a slow/unavailable IndexedDB can never delay the recorder.
-    void parkSegment(meetingId, index, blob)
+    park(index, blob)
     upsertSegment({ index, status: 'queued', blob, attempt: 0 })
     pumpUploads()
+  }
+
+  /** Parks one index, serialised per index so a tail snapshot and the real cut
+   *  (same key) land in order, and remembered so release can wait for it.
+   *  parkSegment never rejects; the catch keeps a future change from turning a
+   *  park failure into a retried upload of an already-saved transcript. */
+  function park(index: number, blob: Blob) {
+    const previous = parkedRef.current.get(index) ?? Promise.resolve()
+    parkedRef.current.set(
+      index,
+      previous.then(() => parkSegment(meetingId, index, blob)).catch(() => undefined),
+    )
   }
 
   /**
@@ -2052,7 +2083,7 @@ export function MeetingIntelPanel({
       index === 0 || !headerChunkRef.current
         ? chunksRef.current
         : [headerChunkRef.current, ...chunksRef.current]
-    void parkSegment(meetingId, index, new Blob(parts, { type: mimeBaseRef.current }))
+    park(index, new Blob(parts, { type: mimeBaseRef.current }))
   }
 
   /**

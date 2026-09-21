@@ -21,12 +21,23 @@ import { cn } from '@/lib/utils'
  * surface in the app was a card on a single project's page, which answers
  * "what did Falcon cost" and never "which project is eating the studio".
  *
- * WHAT IS DELIBERATELY NOT HERE: cost per PERSON. A cost figure over fewer
- * than MIN_COST_CONTRIBUTORS people lets a reader solve for somebody's rate,
- * which is why cost.ts refuses to emit one — and a per-person column is that
- * leak by construction, not by accident. Admins can already read and set
- * rates on the rate card; this page is about where the studio's time and
- * money went, and it does not need to restate anybody's pay to say it.
+ * WHAT IS DELIBERATELY NOT HERE: cost per PERSON. A bar chart of hourly rate
+ * by individual is a salary chart with extra steps — there is no per-person
+ * cost column, and every row below is a project or an hours-and-coverage
+ * summary. A one-contributor project's row DOES let a reader divide that
+ * row's cost by its hours into somebody's rate; see the guard note below for
+ * why that is deliberate here, not an oversight.
+ *
+ * THE SINGLE-CONTRIBUTOR GUARD IS NARROWER THAN THE TABLE LOOKS. A cost
+ * figure over fewer than MIN_COST_CONTRIBUTORS people lets a reader solve for
+ * somebody's rate (cost.ts) — but only for a reader who does not already hold
+ * `finance.view`. Every viewer of THIS page does (the `notFound()` below), so
+ * `portfolioCost` passes `viewerSeesRates: true` and a one-contributor
+ * project's real cost renders in the table: refusing it protected nobody,
+ * since that admin can already read the same rate straight off the rate
+ * card. A project with ZERO contributors still reads "no hours yet" for
+ * everyone — there is no rate to reconstruct either way, so that case was
+ * never a privacy rule (see MIN_COST_CONTRIBUTORS in cost.ts).
  *
  * People are measured here in HOURS AND COVERAGE, which is the honest pair:
  * hours are a measurement somebody made, coverage is what the studio expected
@@ -81,12 +92,12 @@ async function ProjectsZone({ from, to }: { from: string; to: string }) {
   // expensive one, not the alphabetical one. Projects with no hours at all sit
   // at the bottom rather than being dropped — "nobody logged against this"
   // is itself an answer on a page about where time went.
-  const rows = [...result.rows].sort((a, b) => {
-    const ah = a.state === 'ok' ? a.hours : 0
-    const bh = b.state === 'ok' ? b.hours : 0
-    return bh - ah
-  })
-  const totalHours = rows.reduce((sum, row) => sum + (row.state === 'ok' ? row.hours : 0), 0)
+  //
+  // `row.hours` reads directly on EITHER state now — hours is never withheld
+  // (see the module header), so there is no longer a suppressed case to
+  // special-case here the way `row.cost` still must be below.
+  const rows = [...result.rows].sort((a, b) => b.hours - a.hours)
+  const totalHours = rows.reduce((sum, row) => sum + row.hours, 0)
 
   return (
     <section className="flex flex-col gap-3">
@@ -129,14 +140,18 @@ async function ProjectsZone({ from, to }: { from: string; to: string }) {
                     {row.contributorCount}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums">
-                    {row.state === 'ok' ? row.hours.toFixed(1) : '—'}
+                    {/* Hours, unlike cost, is never withheld — Σhours alone
+                        does not divide into anyone's rate (only cost ÷ hours
+                        does), so `SuppressedCostFigure` carries it too. */}
+                    {row.hours.toFixed(1)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums">
                     {row.state === 'suppressed' ? (
-                      /* The two suppressed cases read differently on purpose:
-                         one is a privacy rule, the other is an empty project,
-                         and cost.ts keeps contributorCount on the suppressed
-                         shape precisely so a caller can tell them apart. */
+                      /* On this page `contributorCount === 0` (no hours yet)
+                         is the only reachable case — `viewerSeesRates` above
+                         already releases the 1-contributor cost to every
+                         actual viewer here. The other branch stays for a
+                         future caller that has not made that check. */
                       <span className="text-2xs text-muted-foreground">
                         {row.contributorCount === 0 ? 'no hours yet' : 'withheld · one person'}
                       </span>
@@ -163,8 +178,12 @@ async function ProjectsZone({ from, to }: { from: string; to: string }) {
         </div>
       )}
       <p className="text-2xs text-muted-foreground">
-        A project worked on by one person shows no cost: with a single contributor the figure and
-        the hours together give away that person&rsquo;s rate.
+        A project with no hours logged yet shows no cost — there is nothing to price. Every other
+        project shows its real cost, unless nobody on it has a rate on the rate card, which the
+        row says instead (&ldquo;no rate set&rdquo;) — and a row flagged &ldquo;unpriced&rdquo; is
+        showing only the hours that had one. This page is restricted to the seats that can
+        already read every rate on the rate card, so there is nothing left to protect by hiding a
+        real figure here.
       </p>
     </section>
   )

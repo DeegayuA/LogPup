@@ -169,7 +169,7 @@ export function TaskCardFace({
 export function TaskCard({
   task,
   draggable,
-  isAdmin,
+  canDelete,
   team,
   selected,
   selectionMode,
@@ -185,8 +185,10 @@ export function TaskCard({
   draggable: boolean
   /** Deleting is the one card action that is not covered by `draggable`: an
    *  assignee may move and re-prioritise their own card but never destroy
-   *  it, which is exactly what `deleteTask` enforces server-side. */
-  isAdmin: boolean
+   *  it. This is `task.delete` resolved server-side (manager: scoped,
+   *  editor: NONE) — narrower than `draggable`, so an editor who can drag a
+   *  card still does not get this item. */
+  canDelete: boolean
   /** The roster the quick menu's reassign items are built from, so a card can
    *  change hands without opening the dialog. */
   team: { userId: string; name: string }[]
@@ -326,7 +328,7 @@ export function TaskCard({
       })
     }
   }
-  if (isAdmin) {
+  if (canDelete) {
     if (items.length > 0) items.push({ type: 'separator', key: 'sep-delete' })
     items.push({
       type: 'item',

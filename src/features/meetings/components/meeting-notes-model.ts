@@ -97,9 +97,11 @@ export type ActionRow = {
   status: DueStatus
 }
 
-/** Lowercased, whitespace-collapsed, trailing punctuation dropped. */
+/** NFC first — two keyboards (or a model round trip) spell one Sinhala word
+ * as different code points, the same trap list-search.ts's fold() closes —
+ * then lowercased, whitespace-collapsed, trailing punctuation dropped. */
 function normalize(text: string): string {
-  return text.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!;:]+$/, '')
+  return text.normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.!;:]+$/, '')
 }
 
 /**

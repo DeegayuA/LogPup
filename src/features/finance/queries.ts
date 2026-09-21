@@ -29,14 +29,25 @@
  * gated on `app.view` instead — whatever already gates reading a project —
  * and needs neither a rate card nor the contributor-count guard below.
  *
- * SUPPRESSION IS A SECOND, SEPARATE GATE, layered under the capability. Even
- * an admin who holds `finance.view` cannot be handed a cost total whose
- * distinct-contributor count is below `MIN_COST_CONTRIBUTORS` (cost.ts) — a
- * project with one person on it, or a date range only one person logged in,
- * makes `total ÷ hours` that person's hourly rate. `costForProject` in
- * cost.ts is the only place that decision is made, and every function below
- * that touches cost routes through it rather than calling `costForEntries`
- * directly.
+ * SUPPRESSION WAS A SECOND, SEPARATE GATE, layered under the capability — but
+ * only for a viewer `requireCapability` had NOT already confirmed holds
+ * `finance.view`. A cost total whose distinct-contributor count is below
+ * `MIN_COST_CONTRIBUTORS` (cost.ts) lets `total ÷ hours` solve for that one
+ * person's hourly rate — a real reconstruction of `rate_cards`/`person_rates`
+ * for whoever DOESN'T already hold the capability gating those tables. An
+ * admin who DOES hold `finance.view` is not such a reader: the same rate is
+ * already theirs to read directly, so withholding the derived total from
+ * them protected nothing and only made the figure look broken for the one
+ * seat meant to see it. Every function below therefore resolves
+ * `viewerSeesRates = can(actor, 'finance.view')` right after its own
+ * `requireCapability` call — always `true` today, since nothing here is
+ * reachable without it, but stated explicitly rather than assumed, so a
+ * future caller that reaches `costForProject` through a weaker check inherits
+ * the real answer instead of a silent `true`. `costForProject` in cost.ts is
+ * the only place the suppression decision is made, and every function below
+ * that touches cost routes through it (via `costFigureFor`) rather than
+ * calling `costForEntries` directly. The contributor-count-zero case is
+ * unaffected by any of this — see cost.ts, it was never a privacy rule.
  *
  * A KNOWN, DELIBERATE LIMITATION: `worklog_entries` (migration 0047) carries
  * no `app_id` — only `task_id`, present exclusively on `category = 'task'`
@@ -57,6 +68,7 @@ import { db } from '@/db'
 import { personRates, projectValue, rateCards, users } from '@/db/schema'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
 import { requireCapability } from '@/features/auth/actor'
+import { can } from '@/features/auth/capabilities'
 import { isIsoDay, isoDayAdd } from '@/features/people/iso-day'
 import {
   costForProject,
@@ -169,15 +181,21 @@ async function loadTaskEntriesForApp(
  * (the role or person rate IN FORCE ON THE DAY the entry was logged, never
  * today's) cannot drift between `projectCost`, `projectMargin` and
  * `portfolioCost`.
+ *
+ * `viewerSeesRates` passes straight through to `costForProject` — see its
+ * doc and the module header for why a `finance.view` holder skips the
+ * single-contributor suppression instead of inheriting a default.
  */
 function costFigureFor(
   entries: readonly AttributedTaskEntry[],
   roleRates: readonly RoleRate[],
   personRateRows: readonly PersonRate[],
+  viewerSeesRates: boolean,
 ): ProjectCostResult {
   return costForProject(
     entries,
     (entry) => rateForPersonOnDay(roleRates, personRateRows, entry.title, entry.userId, entry.day),
+    viewerSeesRates,
   )
 }
 
@@ -202,6 +220,11 @@ export async function projectCost(
 ): Promise<ProjectCostQueryResult> {
   const actor = await requireCapability('finance.view')
   if (!actor) return { state: 'denied' }
+  // Always true here — `requireCapability` above already refused anyone who
+  // doesn't hold it — but stated explicitly rather than assumed, so the
+  // single-contributor guard below reads its own answer instead of a
+  // hardcoded `true`. See the module header.
+  const viewerSeesRates = can(actor, 'finance.view')
 
   assertIsoDayRange(from, to)
 
@@ -211,7 +234,7 @@ export async function projectCost(
     loadPersonRates(),
   ])
 
-  return costFigureFor(entries, roleRates, personRateRows)
+  return costFigureFor(entries, roleRates, personRateRows, viewerSeesRates)
 }
 
 // ---------------------------------------------------------------------------
@@ -305,12 +328,15 @@ export type ProjectMarginResult =
  * against subscription earned in that SAME window — two honest numbers,
  * never summed into one, per `margin()`'s own contract in cost.ts.
  *
- * SUPPRESSED, not merely denied a number, when the underlying cost's
- * contributor count is below `MIN_COST_CONTRIBUTORS`: margin is `value −
- * cost`, and a reader who already knows `value` can solve for `cost` from
- * the margin alone — the exact reconstruction the cost gate exists to stop,
- * one subtraction away. Suppressing the cost figure and handing back the
- * margin anyway would not have suppressed anything.
+ * SUPPRESSED only at zero contributors here — nobody has logged hours yet,
+ * so there is no margin to state. `viewerSeesRates` above is always `true`
+ * for the `finance.view` holder that already passed `requireCapability`, so
+ * the `contributorCount < MIN_COST_CONTRIBUTORS` reconstruction guard in
+ * `costForProject` never fires for this caller: margin releases even over a
+ * single contributor, because that reader already holds the rate directly
+ * (see the module header). The guard, and the reconstruction argument for
+ * it, stays live only for a future caller that passes `viewerSeesRates:
+ * false`.
  */
 export async function projectMargin(
   appId: string,
@@ -319,6 +345,8 @@ export async function projectMargin(
 ): Promise<ProjectMarginResult> {
   const actor = await requireCapability('finance.view')
   if (!actor) return { state: 'denied' }
+  // Same reasoning as projectCost — see the module header.
+  const viewerSeesRates = can(actor, 'finance.view')
 
   assertIsoDayRange(from, to)
 
@@ -338,7 +366,7 @@ export async function projectMargin(
       .where(eq(projectValue.appId, appId)),
   ])
 
-  const costResult = costFigureFor(entries, roleRates, personRateRows)
+  const costResult = costFigureFor(entries, roleRates, personRateRows, viewerSeesRates)
   if (costResult.state === 'suppressed') {
     return { state: 'suppressed', contributorCount: costResult.contributorCount }
   }
@@ -411,7 +439,7 @@ export type EffortMixQueryResult = Awaited<ReturnType<typeof effortMix>>
 // ---------------------------------------------------------------------------
 
 export type PortfolioCostRow =
-  | { appId: string; appName: string; state: 'suppressed'; contributorCount: number }
+  | { appId: string; appName: string; state: 'suppressed'; contributorCount: number; hours: number }
   | {
       appId: string
       appName: string
@@ -431,15 +459,22 @@ export type PortfolioCostResult = { state: 'denied' } | { state: 'ok'; rows: Por
  * workspace-sized, not per-project-sized, so fetching once and bucketing by
  * `appId` costs the same as the single-project query and avoids N round trips.
  *
- * EACH ROW IS SUPPRESSED INDEPENDENTLY. A portfolio table is exactly the
- * shape a reader could use to hunt for the one project with a single
- * contributor and read their rate off it — suppression has to apply per row,
- * not once for the whole table, or that project's row would be the leak the
- * rest of the table was protected from.
+ * EACH ROW IS SUPPRESSED INDEPENDENTLY, for a viewer that does not hold
+ * `finance.view`. A portfolio table is exactly the shape such a reader could
+ * use to hunt for the one project with a single contributor and read their
+ * rate off it — suppression has to apply per row, not once for the whole
+ * table, or that project's row would be the leak the rest of the table was
+ * protected from. It buys nothing against the actual reader of this page,
+ * though: `AdminInsightsPage` already 404s anyone without `finance.view`
+ * (src/app/(app)/admin/insights/page.tsx), so `viewerSeesRates` below is
+ * always `true` here too, and a one-contributor project's real cost renders
+ * — the same rate that admin could already read straight off the rate card.
  */
 export async function portfolioCost(from: string, to: string): Promise<PortfolioCostResult> {
   const actor = await requireCapability('finance.view')
   if (!actor) return { state: 'denied' }
+  // Same reasoning as projectCost/projectMargin — see the module header.
+  const viewerSeesRates = can(actor, 'finance.view')
 
   assertIsoDayRange(from, to)
 
@@ -475,9 +510,15 @@ export async function portfolioCost(from: string, to: string): Promise<Portfolio
   }
 
   const rows: PortfolioCostRow[] = appRows.map((app) => {
-    const figure = costFigureFor(entriesByApp.get(app.id) ?? [], roleRates, personRateRows)
+    const figure = costFigureFor(entriesByApp.get(app.id) ?? [], roleRates, personRateRows, viewerSeesRates)
     return figure.state === 'suppressed'
-      ? { appId: app.id, appName: app.name, state: 'suppressed', contributorCount: figure.contributorCount }
+      ? {
+          appId: app.id,
+          appName: app.name,
+          state: 'suppressed',
+          contributorCount: figure.contributorCount,
+          hours: figure.hours,
+        }
       : {
           appId: app.id,
           appName: app.name,

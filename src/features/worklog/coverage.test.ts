@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { computeCoverage, formatCoverage, type CoverageInput } from '@/features/worklog/coverage'
+import {
+  computeCoverage,
+  computeStreak,
+  formatCoverage,
+  type CoverageDay,
+  type CoverageInput,
+  type CoverageStatus,
+} from '@/features/worklog/coverage'
 
 // A 3.5-day week: Mon/Wed/Fri whole, Saturday half, Tue/Thu/Sun none.
 const PART_TIME = { mon: 1, tue: 0, wed: 1, thu: 0, fri: 1, sat: 0.5, sun: 0 }
@@ -139,6 +146,66 @@ describe('a supervisory seat', () => {
   it('leaves a normal person completely unchanged', () => {
     // logsWork defaults true, so every existing caller behaves as before.
     expect(computeCoverage(input()).expected).toBe(4)
+  })
+})
+
+describe('computeStreak', () => {
+  // Bypasses computeCoverage entirely: which real-world fact produces which
+  // status is coverage.ts's job and is pinned above. This only pins the
+  // walk-back rule — a day that was never owed is stepped over, never
+  // breaks — against every status computeCoverage can hand it.
+  let n = 0
+  const day = (status: CoverageStatus, fraction = 1): CoverageDay => {
+    n += 1
+    return { day: `d${n}`, status, fraction }
+  }
+
+  it('keeps the streak across a weekend (Fri logged, Sat+Sun off, Mon logged)', () => {
+    // The count is of OWED days answered, not calendar days spanned: the two
+    // off days are transparent, so Fri + Mon reads as an unbroken streak of 2.
+    expect(computeStreak([day('logged'), day('off'), day('off'), day('logged')])).toBe(2)
+  })
+
+  it('keeps the streak through a mid-week Poya/LK holiday', () => {
+    expect(computeStreak([day('logged'), day('logged'), day('off'), day('logged')])).toBe(3)
+  })
+
+  it('keeps the streak through a company (org_holidays) closure', () => {
+    // A revoked org holiday never reaches computeCoverage as 'off' — see
+    // closesTheStudio — so by the time computeStreak sees it, an org holiday
+    // and a gazetted one are the same status and the same code path.
+    expect(computeStreak([day('logged'), day('off'), day('logged')])).toBe(2)
+  })
+
+  it('keeps the streak through an approved absence', () => {
+    expect(computeStreak([day('logged'), day('exempt'), day('logged')])).toBe(2)
+  })
+
+  it('keeps the streak through a not-required day (supervisory seat)', () => {
+    expect(computeStreak([day('logged'), day('not-required'), day('logged')])).toBe(2)
+  })
+
+  it('breaks on a plain missed owed weekday', () => {
+    expect(computeStreak([day('logged'), day('missing'), day('logged')])).toBe(1)
+  })
+
+  it('breaks on a missed Saturday even though it only owed a half day', () => {
+    // fraction is carried but irrelevant to the walk — status alone decides.
+    // Half-day-still-owed is coverage.ts's rule (see the Saturday case in
+    // 'computeCoverage'); this only confirms the walk does not special-case it.
+    expect(computeStreak([day('logged'), day('missing', 0.5), day('logged')])).toBe(1)
+  })
+
+  it('does not break, and does not yet count, an unlogged today', () => {
+    // computeCoverage always marks today 'not-yet-due' (logged or not — the
+    // day is still in progress), so the walk treats it exactly like any
+    // other skipped day: today does not end the streak, but it also is not
+    // added to the count until tomorrow reclassifies it as 'logged'.
+    expect(computeStreak([day('logged'), day('logged'), day('not-yet-due')])).toBe(2)
+  })
+
+  it('is zero for an empty window', () => {
+    expect(computeStreak([])).toBe(0)
   })
 })
 

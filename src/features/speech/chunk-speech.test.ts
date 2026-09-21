@@ -83,4 +83,20 @@ describe('chunkForSpeech', () => {
       expect(effectiveSpeechLength(chunk)).toBeLessThanOrEqual(limit)
     })
   })
+
+  it('never splits a Sinhala grapheme cluster at a chunk seam', () => {
+    // One unbroken run of ව්‍යාපෘතිය (virama + ZWJ conjunct, vowel signs) with
+    // no spaces forces cutAt's raw-limit fallback; a code-unit cut there lands
+    // between a consonant and its signs, and TTS reads the seam as two wrong
+    // syllables. Escaped so the joiner is visible in the source.
+    const word = '\u0DC0\u0DCA\u200D\u0DBA\u0DCF\u0DB4\u0DD8\u0DAD\u0DD2\u0DBA'
+    const text = word.repeat(120)
+    const chunks = chunkForSpeech(text)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const chunk of chunks) {
+      expect(/^[\u0D82\u0D83\u0DCA-\u0DDF\u200D]/.test(chunk)).toBe(false)
+      expect(/[\u0DCA\u200D]$/.test(chunk)).toBe(false)
+    }
+    expect(chunks.join('')).toBe(text)
+  })
 })

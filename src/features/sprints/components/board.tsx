@@ -128,9 +128,10 @@ export function Board({
    *  manager: scoped, editor: scoped, member: own — see capabilities.ts). */
   canManageTasks?: boolean
   /** `task.delete` resolved server-side WITH this app's id — its OWN row
-   *  (manager: scoped, editor: NONE), passed straight through to TaskDialog's
-   *  Delete control. `canManageTasks` (task.edit) is the wrong proxy: it
-   *  grants editor, which task.delete never does. */
+   *  (manager: scoped, editor: NONE), passed straight through to both
+   *  TaskDialog's Delete control and BoardColumn's card quick menu.
+   *  `canManageTasks` (task.edit) is the wrong proxy: it grants editor, which
+   *  task.delete never does. */
   canDeleteTasks?: boolean
 }) {
   const pathname = usePathname()
@@ -518,6 +519,7 @@ export function Board({
               sprintId={sprintId}
               currentUser={currentUser}
               canManageTasks={canManageTasks}
+              canDeleteTasks={canDeleteTasks}
               todayIso={todayIso}
               selectedIds={selectedIds}
               selectionMode={selection.length > 0}

@@ -6,6 +6,8 @@
 // capture) and ai-actions.ts (server synthesis) both import these to decide
 // what to do, not how to talk to a recorder or a database.
 
+import { SINHALA_CONTINUATION, ZWJ } from '@/lib/prompt-truncate'
+
 /**
  * Target duration of one recording segment before it's cut, uploaded, and
  * transcribed in the background. At 32 kbps mono Opus (~4 KB/s — see the
@@ -107,9 +109,21 @@ export function hintTail(hint: string, maxChars: number = SEGMENT_HINT_MAX_CHARS
   if (trimmed.length <= maxChars) return trimmed
   const tail = trimmed.slice(-maxChars)
   const firstSpace = tail.indexOf(' ')
+  if (firstSpace !== -1) return tail.slice(firstSpace + 1)
   // No space in the whole window means one giant unbroken token — keep it
-  // rather than return nothing.
-  return firstSpace === -1 ? tail : tail.slice(firstSpace + 1)
+  // rather than return nothing, but never open on a bare Sinhala sign or a
+  // joiner the raw slice orphaned from its consonant (they are combining
+  // marks): step forward to the next whole cluster.
+  let cut = trimmed.length - maxChars
+  while (
+    cut < trimmed.length &&
+    (SINHALA_CONTINUATION.test(trimmed[cut]) || trimmed[cut - 1] === ZWJ)
+  ) {
+    cut += 1
+  }
+  // A window that is nothing but marks has no whole cluster to open on: keep
+  // the raw tail, as promised above, rather than hand back nothing.
+  return cut < trimmed.length ? trimmed.slice(cut) : tail
 }
 
 export type TranscribedSegment = { index: number; transcript: string }
@@ -136,9 +150,14 @@ export type ConcatenatedSegments = {
  * block for the final synthesis pass. Any index gap between 0 and the
  * highest index present is called out both in the returned text (so the
  * model doesn't silently paper over it) and in `missingIndices` (so the UI
- * can surface it).
+ * can surface it) — EXCEPT an index in `removedIndices`: a take somebody
+ * deleted keeps its index slots, and calling those "audio lost" would report
+ * a deliberate removal as a failure, to the model and in the log.
  */
-export function concatenateSegments(segments: TranscribedSegment[]): ConcatenatedSegments {
+export function concatenateSegments(
+  segments: TranscribedSegment[],
+  removedIndices: ReadonlySet<number> = new Set(),
+): ConcatenatedSegments {
   if (segments.length === 0) return { text: '', missingIndices: [] }
 
   const byIndex = new Map(segments.map((segment) => [segment.index, segment.transcript]))
@@ -150,6 +169,8 @@ export function concatenateSegments(segments: TranscribedSegment[]): Concatenate
     const transcript = byIndex.get(index)
     if (transcript !== undefined) {
       parts.push(`--- segment ${index + 1} ---\n${transcript}`)
+    } else if (removedIndices.has(index)) {
+      continue
     } else {
       missingIndices.push(index)
       parts.push(`--- segment ${index + 1} (missing — not transcribed, audio lost) ---`)

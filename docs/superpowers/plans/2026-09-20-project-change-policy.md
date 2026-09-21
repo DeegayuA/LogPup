@@ -117,7 +117,9 @@ File: `drizzle/0072_app_change_policy.sql`. Add the matching `idx-72` entry to `
 
 ---
 
-### Phase 3 — declare and wire the pure half (all dead code, zero behaviour change)
+### Phase 3 — declare and wire the pure half (all dead code, zero behaviour change) [partial] landed as inert code (not wired)
+
+Status this session: `src/features/auth/capabilities.ts` — `SIGNOFF_ACTIONS`/`isSignoffAction`, `APP_CHANGE_POLICIES`/`AppChangePolicy`, and `needsSignoff(actor, action, gate)` are landed, pure, and take `gate` as a caller-supplied parameter (no `db` read) — nothing calls it yet. **Still open, deliberately not touched this session** (HARD RULE — migration 0072 unapplied): `src/db/schema.ts` (`appChangePolicyEnum` + `changePolicy` column) and `src/features/apps/update-input.ts` (`changePolicy` field). See "Wiring step" below.
 
 - `src/db/schema.ts`: `appChangePolicyEnum` pgEnum + `changePolicy` column beside `status` — **only after the migration above is confirmed applied**.
 - `src/features/auth/capabilities.ts`: `SIGNOFF_ACTIONS` + `needsSignoff(actor, action, gate)` beside `APPROVAL_ACTIONS`, per the spec's Data contracts section.
@@ -131,7 +133,9 @@ File: `drizzle/0072_app_change_policy.sql`. Add the matching `idx-72` entry to `
 
 ---
 
-### Phase 4 — the routing layer (still unreachable from the UI)
+### Phase 4 — the routing layer (still unreachable from the UI) [ ] not yet landed
+
+Status this session: not started by this task — `SUPPORTED_ENTITY_TYPES` in `change-request-appliers.ts` is still `['task','sprint','meeting','worklog']` (no `'app'` arm, no `APP_REQUESTABLE_FIELDS`), and `change-request-routing.ts`'s `mayReview` has no `leadId`/`'app'` branch yet. `src/features/apps/signoff.ts` (Phase 5, below) calls the existing public `createChangeRequest` action with `entityType: 'app'` regardless — that action accepts any string `entityType` and refuses unsupported ones only at filing time, so `signoff.ts` needed no import from this phase and isn't blocked by it landing later, but a real filing attempt against `entityType: 'app'` will be refused by `isSupportedEntityType` until this phase lands.
 
 - `change-request-appliers.ts`: `SUPPORTED_ENTITY_TYPES += 'app'`; `TABLES += { app: apps }`; `currentRowFor` gains an `'app'` arm selecting `APP_REQUESTABLE_FIELDS` from live `apps`.
 - `change-request-actions.ts` (`createChangeRequest`): `APP_REQUESTABLE_FIELDS` const + zod refine — a payload containing `pmId` or `leadId` is refused at filing.
@@ -145,17 +149,30 @@ File: `drizzle/0072_app_change_policy.sql`. Add the matching `idx-72` entry to `
 
 ---
 
-### Phase 5 — wire the two call sites (first real behaviour change)
+### Phase 5 — wire the two call sites (first real behaviour change) [partial] landed as inert code (not wired)
 
-- `src/features/apps/signoff.ts` (new): `routeForSignoff(actor, req)` per the spec's Data contracts signature.
-- Call it from `updateApp` and `archiveApp` — after `requireCapability`, after the widened row read, before the `db.batch`. On a filed request: `return ok({ queued: id })` and skip the direct write.
-- `createNotifications` on file → the app's lead; on approve/reject → the requester. Called after the write batch, never inside it.
-- Comment on `routeForSignoff` naming the maintenance-freeze hazard: `createChangeRequest` uses `loadActor`+`can`, not `requireCapability`, so it must only ever be called from inside an action that already passed `requireCapability`.
-- This only changes behaviour on a project someone has explicitly switched to `lead_approval` — which is none yet, since the default is `auto_save`.
+Status this session: `src/features/apps/signoff.ts` (new) — `routeForSignoff(actor, req)` per the spec's Data contracts signature, landed with `src/features/apps/signoff.test.ts` (6 cases: `auto_save` no-op, PM+`lead_approval` files and returns `{id}`, actor-is-lead exempt, admin exempt, null `leadId` degrades to auto-save, plus a filing-failure-throws regression). It calls the existing public `createChangeRequest` action (no duplicate filing logic) and comments the maintenance-freeze hazard (`createChangeRequest` uses `loadActor`+`can`, not `requireCapability` — only ever call this from inside an action that already passed `requireCapability`).
+
+**Still open — the actual wiring, deliberately not done this session** (needs Phase 4 landed, and per the HARD RULE, needs migration 0072 applied and `schema.ts` declared first): calling `routeForSignoff` from `updateApp`/`archiveApp`, and the `createNotifications` calls on file/approve/reject. See "Wiring step" below.
 
 **Files:** `src/features/apps/signoff.ts`, `src/features/apps/actions.ts`, `src/features/admin/change-request-actions.ts`
 
 **Verify:** `npx tsc --noEmit -p tsconfig.json` · `npx eslint ...` · full `npx vitest run` · an integration test asserting a PM's `updateApp` on a `lead_approval` app writes a `change_requests` row and does **not** write `apps`
+
+---
+
+### Wiring step (after migration 0072 is applied) [ ] not yet landed
+
+One 10-line pass, only once "Apply the migration" above is confirmed done. Exactly:
+
+- [ ] `src/db/schema.ts` — `appChangePolicy` pgEnum referencing `APP_CHANGE_POLICIES` (from `capabilities.ts`, not a re-declared literal) + the `changePolicy` column on `apps`, beside `status`.
+- [ ] `src/features/apps/update-input.ts` — add the `changePolicy` field (not `create-input.ts`; a project is born `auto_save`).
+- [ ] `src/features/admin/change-request-actions.ts` — `APP_REQUESTABLE_FIELDS` += `'changePolicy'`.
+- [ ] `src/features/admin/change-request-appliers.ts` — the `currentRowFor` arm for `app` gains `changePolicy` in its selected fields.
+- [ ] `src/features/apps/actions.ts` — `updateApp`/`archiveApp` call `routeForSignoff(actor, req)` with `gate` built from the live row (`{ changePolicy: row.changePolicy, leadId: row.leadId }`); on `{ id }` return `ok({ queued: id })` and skip the direct write.
+- [ ] Phase 6 (UI) — see below.
+
+**Files this touches:** `src/db/schema.ts`, `src/features/apps/update-input.ts`, `src/features/admin/change-request-actions.ts`, `src/features/admin/change-request-appliers.ts`, `src/features/apps/actions.ts`.
 
 ---
 

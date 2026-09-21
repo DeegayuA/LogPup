@@ -21,6 +21,13 @@ import {
  * influences it in exactly one way that is not a capability: the order the
  * zones come in — what this person came here to look at first.
  *
+ * PERSONAL FIRST (2026-09-21). Every seat opens on its own day, and the zones
+ * that narrow by app open on the viewer's own projects even when the grant is
+ * `all` — a page-level switch widens to the whole studio, in the URL, stored
+ * nowhere. The capability matrix still decides reach: the switch can only
+ * NARROW a wide grant, never widen a scoped or own one. Spec:
+ * docs/superpowers/specs/2026-09-21-personal-first-dashboard-design.md.
+ *
  * PURE by construction — no `@/db`, no React, no `new Date()`. Every input is
  * the `Actor` the caller already loaded, so composition can be unit-tested by
  * value and the page has nothing left to decide.
@@ -63,6 +70,12 @@ export type ZoneDefinition = {
    * carry the visible titles and a second heading above them would be noise.
    */
   labelHidden?: boolean
+  /**
+   * Reads by app, so an `all` grant can open on the viewer's own projects and
+   * widen on request. Unset for zones with no per-app slice (a queue, a feed,
+   * this person's own rows) — the switch must not claim to change them.
+   */
+  narrowable?: true
 }
 
 /**
@@ -95,18 +108,21 @@ export const DASHBOARD_ZONES: readonly ZoneDefinition[] = [
     action: 'user.view.directory',
     minGrant: 'own',
     label: 'Team Capacity & Sprints',
+    narrowable: true,
   },
   {
     id: 'coverage',
     action: 'coverage.view',
     minGrant: 'own',
     label: 'Coverage & Absence',
+    narrowable: true,
   },
   {
     id: 'portfolio',
     action: 'app.view',
     minGrant: 'scoped',
     label: 'App Portfolio',
+    narrowable: true,
   },
   {
     id: 'approvals',
@@ -147,21 +163,22 @@ const ZONE_BY_ID: Record<ZoneId, ZoneDefinition> = Object.fromEntries(
  * and none to the page.
  */
 export const ZONE_ORDER: Record<UserRole, readonly ZoneId[]> = {
-  // The whole org's exceptions first: what is waiting on a signature, then who
-  // is over capacity, then whether anybody is missing.
-  superadmin: ['approvals', 'team', 'coverage', 'portfolio', 'trail', 'my-day', 'ai-usage'],
-  admin: ['approvals', 'team', 'coverage', 'portfolio', 'trail', 'my-day', 'ai-usage'],
-  // The projects they run.
-  manager: ['team', 'coverage', 'portfolio', 'my-day', 'my-work', 'ai-usage'],
+  // Own day first for EVERY seat — the dashboard is this person's page before
+  // it is the studio's. Then the whole org's exceptions: what is waiting on a
+  // signature, who is over capacity, whether anybody is missing.
+  superadmin: ['my-day', 'approvals', 'team', 'coverage', 'portfolio', 'trail', 'ai-usage'],
+  admin: ['my-day', 'approvals', 'team', 'coverage', 'portfolio', 'trail', 'ai-usage'],
+  // Their own work, then the projects they run.
+  manager: ['my-day', 'my-work', 'team', 'coverage', 'portfolio', 'ai-usage'],
   // The work itself.
   editor: ['my-day', 'my-work', 'portfolio', 'ai-usage'],
   // Their own day.
   member: ['my-day', 'my-work', 'ai-usage'],
-  // Project outcomes. No team, no coverage, no trail — a client seat does not
-  // watch the studio work.
-  stakeholder: ['portfolio', 'my-day', 'ai-usage'],
-  // What happened.
-  auditor: ['trail', 'coverage', 'portfolio', 'my-day', 'ai-usage'],
+  // Own day, then project outcomes. No team, no coverage, no trail — a client
+  // seat does not watch the studio work.
+  stakeholder: ['my-day', 'portfolio', 'ai-usage'],
+  // Own day, then what happened.
+  auditor: ['my-day', 'trail', 'coverage', 'portfolio', 'ai-usage'],
 }
 
 /** A zone the actor may see, with the grant level that admitted it. */
@@ -257,9 +274,48 @@ export type ZoneScope =
   /** Narrow to this person's own rows. */
   | { kind: 'own'; userId: string }
 
-export function zoneScope(grant: AdmittingGrant, actor: Actor): ZoneScope {
+/** Which slice of the studio the page is showing: the viewer's own projects
+ *  (the default) or everything a wide grant reaches. Lives in the URL. */
+export type DashboardView = 'mine' | 'all'
+
+/**
+ * `'all'` for the literal query value and nothing else — an array (a repeated
+ * parameter), a different case or an absent value all mean the default. The
+ * default is the personal view because that is what the page is for.
+ */
+export function parseDashboardView(raw: string | string[] | undefined): DashboardView {
+  return raw === 'all' ? 'all' : 'mine'
+}
+
+/**
+ * Whether the switch changes anything for this zone: only a narrowable zone
+ * held at `all` has a wider view to offer. The page shows the switch only when
+ * some rendered zone answers yes, so a control never claims what it cannot do.
+ */
+export function canWiden(zone: DashboardZone): boolean {
+  return zone.narrowable === true && zone.grant === 'all'
+}
+
+/** The viewer's own projects and which view the URL asked for. */
+export type PersonalView = { view: DashboardView; myAppIds: ReadonlySet<string> }
+
+/**
+ * `personal` narrows an `all` grant to the viewer's own projects on the
+ * default view. It can only NARROW: a scoped or own grant ignores it, because
+ * the matrix decides reach and this is presentation. An `all` grant with no
+ * assignments stays `all` — a wide seat on no project must see the studio,
+ * not an empty page, and the page says why.
+ */
+export function zoneScope(
+  grant: AdmittingGrant,
+  actor: Actor,
+  personal?: PersonalView,
+): ZoneScope {
   switch (grant) {
     case 'all':
+      if (personal && personal.view === 'mine' && personal.myAppIds.size > 0) {
+        return { kind: 'apps', appIds: personal.myAppIds }
+      }
       return { kind: 'all' }
     case 'scoped':
       return { kind: 'apps', appIds: actor.scopeAppIds }

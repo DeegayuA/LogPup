@@ -36,6 +36,26 @@ describe('hintTail', () => {
     expect(hintTail('x'.repeat(50), 10)).toBe('x'.repeat(10))
   })
 
+  it('never opens on an orphaned Sinhala sign when the window has no space', () => {
+    // ව්‍යාපෘතිය is 10 code units; ceilings of 24 and 27 put the raw slice on
+    // a vowel sign and on the consonant after the joiner respectively. The
+    // hint must start on a whole cluster either way.
+    const word = '\u0DC0\u0DCA\u200D\u0DBA\u0DCF\u0DB4\u0DD8\u0DAD\u0DD2\u0DBA'
+    const text = word.repeat(30)
+    for (const maxChars of [24, 27]) {
+      const result = hintTail(text, maxChars)
+      expect(text.endsWith(result)).toBe(true)
+      expect(result.length).toBeGreaterThan(0)
+      expect(/^[\u0D82\u0D83\u0DCA-\u0DDF\u200D]/.test(result)).toBe(false)
+      expect(text[text.length - result.length - 1]).not.toBe('\u200D')
+    }
+  })
+
+  it('keeps the raw tail when the window is nothing but marks — never nothing', () => {
+    const marks = '\u0DCF'.repeat(5)
+    expect(hintTail('x' + marks, 3)).toBe(marks.slice(-3))
+  })
+
   it('has a default ceiling sized for one segment, not one meeting', () => {
     // ~5 minutes of speech is ~4.5k chars; two hours is ~110k. The default
     // must sit near the former — if someone "generously" raises it toward
@@ -181,5 +201,28 @@ describe('concatenateSegments', () => {
     expect(text).toContain('fresh')
     expect(text).not.toContain('stale')
     expect(text.match(/segment 1/g)?.length).toBe(1)
+  })
+})
+
+describe('concatenateSegments — a removed take', () => {
+  it('skips its indices instead of calling them lost audio', () => {
+    // Take 1 held 0-2 and was deleted; 4 went with a later removal. Nothing
+    // here failed, so nothing is missing.
+    const result = concatenateSegments(
+      [
+        { index: 3, transcript: 'c' },
+        { index: 5, transcript: 'e' },
+      ],
+      new Set([0, 1, 2, 4]),
+    )
+    expect(result.missingIndices).toEqual([])
+    expect(result.text).not.toContain('audio lost')
+    expect(result.text).toContain('--- segment 4 ---')
+    expect(result.text).toContain('--- segment 6 ---')
+  })
+
+  it('still reports a genuine gap next to a removed one', () => {
+    const result = concatenateSegments([{ index: 2, transcript: 'c' }], new Set([0]))
+    expect(result.missingIndices).toEqual([1])
   })
 })

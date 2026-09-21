@@ -23,12 +23,12 @@
  * silently pricing an hour at nothing is exactly the failure this module is
  * built to prevent.
  *
- * NOTHING HERE READS person_rates, AND NOTHING ELSE IN THE REPO DOES EITHER.
- * That table is salary data and needs its own capability; the capability
- * matrix belongs to another session and nobody holds it right now. The maths
- * can land without that decision because it never touches the database — it is
- * handed rows by a caller. Whoever writes that caller writes the gate in the
- * same change.
+ * NOTHING HERE READS person_rates — this module stays pure and DB-free, the
+ * same split coverage.ts/coverage-queries.ts already established. `queries.ts`
+ * is what reads it (`loadPersonRates`), gated on the `finance.view`
+ * capability (capabilities.ts) that every exported money query in that file
+ * requires before a row reaches here — see its module header for where the
+ * gate lives and why it lives there rather than in this file.
  */
 import { isIsoDay } from '@/features/people/iso-day'
 
@@ -252,8 +252,9 @@ export function costForEntries<E extends CostableEntry>(
 
 /**
  * The floor a cost aggregate's distinct-contributor count must clear before
- * the figure is released, however it got there — one project, a narrow date
- * range, a filter, anything that can narrow a query.
+ * the figure is released to a viewer who has not otherwise been confirmed to
+ * hold `finance.view` — one project, a narrow date range, a filter, anything
+ * that can narrow a query.
  *
  * THE RECONSTRUCTION ATTACK THIS BLOCKS: a cost total is Σ(hours × rate).
  * When exactly one person contributed the hours behind it, `total / hours`
@@ -263,10 +264,22 @@ export function costForEntries<E extends CostableEntry>(
  * minimum that breaks the division: with two people and two unknown rates,
  * one total and one hour figure can no longer be solved for either rate.
  *
+ * WHO THIS ACTUALLY PROTECTS: somebody who reaches a cost aggregate WITHOUT
+ * holding `finance.view` — the capability that already gates `rate_cards` and
+ * `person_rates` directly. It does not, and cannot usefully, protect a viewer
+ * who already holds that capability: they can already be handed the same
+ * rate straight from the rate card, so refusing them the derived total keeps
+ * nothing hidden, it just makes the figure look broken to the one seat meant
+ * to see it. `costForProject`'s `viewerSeesRates` parameter makes that
+ * distinction explicit at the call site instead of leaving it implicit in
+ * "whoever happened to call this."
+ *
  * Zero contributors carries no such risk — there is no rate to reconstruct
- * because nobody logged anything — but is folded under the same guard anyway:
- * there is no honest non-suppressed figure to show either way, and a caller
- * checking `state === 'ok'` should not have to tell "no data yet" apart from
+ * because nobody logged anything — but is folded under the same guard anyway,
+ * for every viewer regardless of `viewerSeesRates`: there is no honest
+ * non-suppressed COST to show either way (hours, unlike cost, is still
+ * reported — see `SuppressedCostFigure`), and a caller checking
+ * `state === 'ok'` should not have to tell "no data yet" apart from
  * "withheld to protect someone's pay" before it can safely skip rendering.
  * `contributorCount` still travels with the suppressed result so a caller
  * that DOES want to tell those two apart (an empty-state message versus a
@@ -280,7 +293,8 @@ export type CostableAttributedEntry = CostableEntry & { userId: string }
 /** A cost aggregate safe to render — the contributor floor was cleared. */
 export type ProjectCostFigure = {
   state: 'ok'
-  /** Distinct people behind `cost`. Never fewer than `MIN_COST_CONTRIBUTORS`. */
+  /** Distinct people behind `cost`. Never fewer than `MIN_COST_CONTRIBUTORS`
+   *  unless `viewerSeesRates` released the figure early — see `costForProject`. */
   contributorCount: number
   /** Σ minutes ÷ 60 across every entry, priced or not — a fact independent of money. */
   hours: number
@@ -291,14 +305,20 @@ export type ProjectCostFigure = {
 
 /**
  * The figure withheld. NO money field anywhere on this shape — not `amount`,
- * not `hours` — so a caller cannot forward a suppressed result to a renderer
- * that only checks `.amount` and prints `undefined` where a redaction should
- * have stopped it cold. `state` must be narrowed to `'ok'` before any other
- * field on `ProjectCostResult` even type-checks.
+ * not `cost` — so a caller cannot forward a suppressed result to a renderer
+ * that only checks `.cost.amount` and prints `undefined` where a redaction
+ * should have stopped it cold. `state` must be narrowed to `'ok'` before
+ * `cost` even type-checks.
+ *
+ * `hours` IS carried, unlike money: Σhours alone does not divide into
+ * anyone's rate — only `cost ÷ hours` does — so hiding it protected nothing
+ * and only cost a reader the one honest fact ("how much time went into
+ * this") that was never the secret.
  */
 export type SuppressedCostFigure = {
   state: 'suppressed'
   contributorCount: number
+  hours: number
 }
 
 export type ProjectCostResult = ProjectCostFigure | SuppressedCostFigure
@@ -310,24 +330,35 @@ export type ProjectCostResult = ProjectCostFigure | SuppressedCostFigure
  * This is the ONLY entry point `queries.ts` uses to turn worklog rows into a
  * cost figure — never `costForEntries` directly — so the gate cannot be
  * forgotten at a second call site the way a hand-rolled `if (n < 2)` could be.
+ *
+ * `viewerSeesRates` is REQUIRED, not defaulted, so every call site states out
+ * loud whether the actor it already resolved holds `finance.view` — the same
+ * capability that gates `rate_cards`/`person_rates` — rather than this
+ * function silently assuming the answer. `true` releases the cost for a
+ * contributor count between 1 and `MIN_COST_CONTRIBUTORS`, because that
+ * viewer could already read the same rate directly; it never widens the
+ * ZERO-contributor case, which was never a privacy rule to begin with.
  */
 export function costForProject<E extends CostableAttributedEntry>(
   entries: readonly E[],
   rateResolver: (entry: E) => ResolvedRate | null,
+  viewerSeesRates: boolean,
 ): ProjectCostResult {
   const contributorCount = new Set(entries.map((entry) => entry.userId)).size
-  if (contributorCount < MIN_COST_CONTRIBUTORS) {
-    return { state: 'suppressed', contributorCount }
+  const totalMinutes = entries.reduce((sum, entry) => sum + entry.minutes, 0)
+  const hours = Math.round((totalMinutes / 60) * 100) / 100
+
+  if (contributorCount === 0 || (contributorCount < MIN_COST_CONTRIBUTORS && !viewerSeesRates)) {
+    return { state: 'suppressed', contributorCount, hours }
   }
 
   const cost = costForEntries(entries, rateResolver)
   const unpricedEntryCount = entries.filter((entry) => rateResolver(entry) === null).length
-  const totalMinutes = entries.reduce((sum, entry) => sum + entry.minutes, 0)
 
   return {
     state: 'ok',
     contributorCount,
-    hours: Math.round((totalMinutes / 60) * 100) / 100,
+    hours,
     cost,
     unpricedEntryCount,
   }

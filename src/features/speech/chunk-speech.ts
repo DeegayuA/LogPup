@@ -24,6 +24,8 @@
  * a browser.
  */
 
+import { graphemeSafeCut } from '@/lib/prompt-truncate'
+
 /**
  * The first chunk is deliberately small: it is the only one the listener
  * waits on, and ~450 characters is about 30 seconds of speech — plenty of
@@ -102,7 +104,13 @@ function cutAt(text: string, limit: number): number {
   // No sentence break worth honouring — one in the first 40% would waste
   // most of the chunk. Fall back to the last space.
   const lastSpace = window.lastIndexOf(' ')
-  return lastSpace > limit * 0.4 ? lastSpace : limit
+  if (lastSpace > limit * 0.4) return lastSpace
+  // One unbroken run outruns the whole window: cut it, but never between a
+  // Sinhala consonant and its signs — a seam like ක්‍|රී is read aloud as two
+  // wrong syllables. A window that is nothing but marks keeps the raw cut so
+  // the loop in chunkForSpeech always makes progress.
+  const safe = graphemeSafeCut(text, limit)
+  return safe > 0 ? safe : limit
 }
 
 /**

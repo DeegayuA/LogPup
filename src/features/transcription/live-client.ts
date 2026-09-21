@@ -98,6 +98,8 @@ export class LiveTranscriptionSession {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   /** Set once stop() is called, so late async callbacks can't resurrect the session. */
   private stopped = false
+  /** Set once start() ran, so a second start cannot open a second socket. */
+  private started = false
 
   constructor(opts: LiveSessionOptions) {
     this.opts = opts
@@ -118,7 +120,13 @@ export class LiveTranscriptionSession {
   }
 
   async start(): Promise<void> {
-    if (this.stopped) return
+    // A second start on a running session would mint another token and open
+    // another socket over the first, streaming the same microphone twice
+    // against one free-tier quota with nothing left holding the first socket
+    // to close it. The hook stops before it starts; the class must not
+    // depend on every caller remembering that.
+    if (this.stopped || this.started) return
+    this.started = true
     this.startedAt = this.now()
     this.lastTranscriptAt = this.now()
     this.startWatchdog()
@@ -195,7 +203,15 @@ export class LiveTranscriptionSession {
 
     socket.onerror = () => {
       // A WebSocket 'error' is always followed by 'close'; reconnect logic lives
-      // there so a single failure isn't counted twice.
+      // there so a single failure isn't counted twice. The browser puts no
+      // reason on the event and the socket url carries the ephemeral token, so
+      // what is logged is which attempt failed in which state — enough to tell
+      // "never connected" from "dropped after ten minutes" in a bug report,
+      // where before there was no trace at all.
+      console.error('[live-client] socket error', {
+        attempt: this.reconnectAttempts,
+        status: this.statusValue,
+      })
     }
 
     socket.onclose = () => {
@@ -242,9 +258,12 @@ export class LiveTranscriptionSession {
         // turn we already hold; a fresh session cannot.
         this.replayPossible = this.resumptionHandle !== null
         this.startAudio()
-        // Not 'live' yet — nothing has been transcribed, so saying "live" here
-        // would be a claim we haven't earned.
-        this.setStatus('listening')
+        // Not 'live' on a FIRST connection — nothing has been transcribed, so
+        // saying "live" would be a claim we haven't earned. A reconnect (the
+        // routine ~10-minute socket drop) keeps 'live' when the session already
+        // holds transcript: 'listening' renders "nothing transcribed yet", a
+        // lie the badge would tell above ten minutes of committed text.
+        this.setStatus(this.hasTranscribed ? 'live' : 'listening')
         break
 
       case 'transcript':

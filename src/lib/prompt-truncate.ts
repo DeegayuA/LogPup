@@ -13,7 +13,22 @@
 
 /** Sinhala dependent signs and the zero-width joiner — a cut before one of
  * these (or straight after a joiner) splits a grapheme cluster. */
-const SINHALA_CONTINUATION = /[ංඃ්-ෟ‍]/
+export const SINHALA_CONTINUATION = /[ංඃ්-ෟ‍]/
+
+/** The zero-width joiner, which glues a virama to the next consonant (ව්‍යා). */
+export const ZWJ = '\u200d'
+
+/**
+ * Walks a UTF-16 cut offset left until it no longer splits a Sinhala grapheme
+ * cluster: the character at `cut` must not be a dependent sign, and the one
+ * before it must not be a joiner. Returns 0 when everything before is marks.
+ */
+export function graphemeSafeCut(text: string, cut: number): number {
+  while (cut > 0 && (SINHALA_CONTINUATION.test(text[cut]) || text[cut - 1] === ZWJ)) {
+    cut -= 1
+  }
+  return cut
+}
 
 export function truncateAtWordBoundary(text: string, max: number): string {
   if (text.length <= max) return text
@@ -22,8 +37,6 @@ export function truncateAtWordBoundary(text: string, max: number): string {
   // A boundary further back than ~200 chars would cost real content for no
   // gain — no natural-language "word" is that long.
   let cut = space > max - 200 ? space : max
-  while (cut > 0 && (SINHALA_CONTINUATION.test(text[cut]) || text[cut - 1] === '‍')) {
-    cut -= 1
-  }
+  cut = graphemeSafeCut(text, cut)
   return text.slice(0, cut)
 }
