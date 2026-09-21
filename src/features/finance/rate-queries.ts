@@ -22,10 +22,10 @@
  * no aggregate of any kind. A sortable-by-amount column is the per-person
  * cost chart `schema.ts` forbids, with extra steps.
  */
-import { asc, desc, eq } from 'drizzle-orm'
+import { asc, desc, eq, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
-import { personRates, projectValue, rateCards, users } from '@/db/schema'
+import { assignments, personRates, projectValue, rateCards, users } from '@/db/schema'
 import { liveApps } from '@/db/live'
 import { requireCapability } from '@/features/auth/actor'
 import type { PersonRateRow, ProjectValueRow, RoleRateRow } from '@/features/finance/rate-intervals'
@@ -112,4 +112,33 @@ export async function listProjectValues(): Promise<
     .orderBy(asc(liveApps.name))
 
   return { state: 'ok', rows }
+}
+
+/**
+ * Returns distinct active team members assigned to each live app.
+ * Used by the project value form to suggest headcount for per-user subscription calculations.
+ */
+export async function listAppHeadcounts(): Promise<
+  { state: 'ok'; counts: Record<string, number> } | { state: 'denied' }
+> {
+  const actor = await requireCapability('finance.view')
+  if (!actor) return { state: 'denied' }
+
+  const rows = await db
+    .select({
+      appId: assignments.appId,
+      headcount: sql<number>`count(distinct ${assignments.userId})::int`,
+    })
+    .from(assignments)
+    .innerJoin(liveApps, eq(assignments.appId, liveApps.id))
+    .innerJoin(users, eq(assignments.userId, users.id))
+    .where(eq(users.active, true))
+    .groupBy(assignments.appId)
+
+  const counts: Record<string, number> = {}
+  for (const row of rows) {
+    counts[row.appId] = Number(row.headcount) || 0
+  }
+
+  return { state: 'ok', counts }
 }

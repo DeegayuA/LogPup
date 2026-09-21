@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -375,6 +376,9 @@ function AiFeaturesCardSkeleton() {
         <CardTitle as="h2" className="flex items-center gap-2 font-heading">
           <Sparkles className="size-4" aria-hidden /> AI features
         </CardTitle>
+        <CardAction>
+          <Skeleton className="h-8 w-20" />
+        </CardAction>
         <CardDescription>
           <span className="sr-only" role="status">
             Loading your AI feature usage…

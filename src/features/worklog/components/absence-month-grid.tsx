@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { isWorkingDay, isHalfWorkingDay } from '@/lib/working-days'
 import { getLkHoliday } from '@/lib/lk-holidays'
 import { isoToDisplayDate } from '@/features/meetings/calendar-view'
-import { HolidayIcons, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
+import { HolidayIcons, HolidayLegend, holidayCategoryLabel, holidayToneClass } from '@/components/shared/holiday-icon'
 import { eventColorClasses, eventSolidClasses } from '@/features/meetings/event-color'
 import { shiftAbsenceMonth } from '@/features/worklog/absence-calendar'
 import {
@@ -223,6 +223,67 @@ export function AbsenceMonthGrid({
           </div>
         </div>
       ))}
+      <AbsenceCalendarLegend />
+    </div>
+  )
+}
+
+/**
+ * Calendar legend explaining filing statuses, group icons, and holiday badges.
+ */
+export function AbsenceCalendarLegend({ className }: { className?: string }) {
+  return (
+    <div
+      aria-label="Calendar legend"
+      className={cn(
+        'mt-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-2xs text-muted-foreground',
+        className,
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-semibold text-foreground/80">Status:</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex items-center rounded border border-border bg-muted/70 px-1.5 py-0.5 text-2xs font-medium text-foreground">
+            Solid
+          </span>
+          <span>Approved</span>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex items-center rounded border border-dashed border-border bg-muted/30 px-1.5 py-0.5 text-2xs font-medium text-foreground">
+            Dashed
+          </span>
+          <span>Pending approval</span>
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-semibold text-foreground/80">Kind:</span>
+        <span className="inline-flex items-center gap-1">
+          <Plane className="size-3 text-foreground/70" aria-hidden />
+          <span>Time off</span>
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <Clock className="size-3 text-foreground/70" aria-hidden />
+          <span>Part of day (½)</span>
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <Briefcase className="size-3 text-foreground/70" aria-hidden />
+          <span>Working elsewhere</span>
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <FileText className="size-3 text-foreground/70" aria-hidden />
+          <span>Filed for you</span>
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="font-semibold text-foreground/80">Holidays:</span>
+        <HolidayLegend />
+        <span className="inline-flex items-center gap-0.5">
+          <span className="font-mono text-2xs font-medium text-foreground">½</span>
+          <span>Saturday half-day</span>
+        </span>
+      </div>
     </div>
   )
 }

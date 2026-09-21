@@ -18,6 +18,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SearchSelect } from '@/components/ui/search-select'
+import { CurrencySelect } from '@/components/shared/currency-select'
 import { RatesIntervalTable } from '@/features/finance/components/rates-interval-table'
 import { closePersonRate, setPersonRate } from '@/features/finance/rate-actions'
 import type { PersonRateRow } from '@/features/finance/rate-intervals'
@@ -148,16 +149,14 @@ export function RatesPersonCard({
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor={`${fieldId}-currency`}>Currency</Label>
-                <Input
+                <CurrencySelect
                   id={`${fieldId}-currency`}
                   value={currency}
-                  onChange={(event) => {
-                    setCurrency(event.target.value.toUpperCase())
+                  onChange={(next) => {
+                    setCurrency(next)
                     setError(null)
                   }}
-                  maxLength={3}
-                  required
-                  className="h-9 w-20 font-mono uppercase"
+                  disabled={pending}
                 />
               </div>
             </div>

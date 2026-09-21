@@ -6,7 +6,12 @@ import { loadActor } from '@/features/auth/actor'
 import { can } from '@/features/auth/capabilities'
 import { isoDayOf } from '@/features/people/iso-day'
 import { listActiveUsers, listAssignableApps } from '@/features/people/queries'
-import { listPersonRates, listProjectValues, listRoleRates } from '@/features/finance/rate-queries'
+import {
+  listAppHeadcounts,
+  listPersonRates,
+  listProjectValues,
+  listRoleRates,
+} from '@/features/finance/rate-queries'
 import { RatesRoleForm, RatesRoleTable } from '@/features/finance/components/rates-role-card'
 import { RatesPersonCard } from '@/features/finance/components/rates-person-card'
 import { RatesProjectCard } from '@/features/finance/components/rates-project-card'
@@ -104,9 +109,19 @@ async function PersonRatesZone({ today }: { today: string }) {
 }
 
 async function ProjectValueZone() {
-  const [result, apps] = await Promise.all([listProjectValues(), listAssignableApps()])
-  if (result.state === 'denied') notFound()
-  return <RatesProjectCard apps={apps} rows={result.rows} />
+  const [result, apps, headcountsResult] = await Promise.all([
+    listProjectValues(),
+    listAssignableApps(),
+    listAppHeadcounts(),
+  ])
+  if (result.state === 'denied' || headcountsResult.state === 'denied') notFound()
+  return (
+    <RatesProjectCard
+      apps={apps}
+      rows={result.rows}
+      headcounts={headcountsResult.counts}
+    />
+  )
 }
 
 function TableSkeleton({ rows }: { rows: number }) {

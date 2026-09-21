@@ -157,9 +157,14 @@ export function rateForPersonOnDay(
   const override = coveringRate(personRates.filter((row) => row.userId === userId), iso)
   if (override !== null) return { ...override, source: 'person' }
 
-  if (role === null || role === '') return null
-  const base = coveringRate(roleRates.filter((row) => row.role === role), iso)
-  if (base !== null) return { ...base, source: 'role' }
+  if (role !== null && role !== '') {
+    const base = coveringRate(roleRates.filter((row) => row.role === role), iso)
+    if (base !== null) return { ...base, source: 'role' }
+  }
+
+  // Fallback to workspace "All roles" rate if no specific role rate is configured
+  const allRoles = coveringRate(roleRates.filter((row) => row.role === 'All roles'), iso)
+  if (allRoles !== null) return { ...allRoles, source: 'role' }
 
   return null
 }

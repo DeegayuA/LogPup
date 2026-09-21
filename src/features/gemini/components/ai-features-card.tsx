@@ -1,5 +1,4 @@
-import { Sparkles } from 'lucide-react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { CardContent } from '@/components/ui/card'
 import {
   AI_FEATURES,
   estimatePerUseCostUsd,
@@ -17,6 +16,7 @@ import {
   type FeatureUsageSummary,
 } from '@/features/gemini/usage-summary'
 import { AiFeatureToggle } from '@/features/gemini/components/ai-feature-toggle'
+import { AiFeaturesCardShell } from '@/features/gemini/components/ai-features-card-shell'
 import { getModelCatalog } from '@/features/gemini/model-discovery'
 import {
   AiModelSelect,
@@ -138,21 +138,14 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
   const hasPaidKey = keys.some((k) => k.active && k.tier === 'paid')
   const liveUsage = bySummary.get(ESTIMATED_USAGE_FEATURE_ID)
   const totalsIncludeEstimate = !!liveUsage && liveUsage.calls > 0
+  const enabledCount = AI_FEATURES.filter((f) => prefs[f.id]?.enabled).length
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle as="h2" className="flex items-center gap-2 font-heading">
-          <Sparkles className="size-4" aria-hidden /> AI features
-        </CardTitle>
-        <CardDescription>
-          Everything AI does here runs on your Gemini keys. Each switch covers one feature only —
-          turning off drafting leaves dictation and read-aloud on. Dollar figures are indicative —
-          what the tokens would cost on Google&rsquo;s paid tier. Free keys are charged $0, and only
-          your own paid keys can charge you: work that falls through to a teammate&rsquo;s shared key
-          lands on their bill, not yours.
-        </CardDescription>
-      </CardHeader>
+    <AiFeaturesCardShell
+      totalCalls={totals.calls}
+      enabledCount={enabledCount}
+      totalFeatures={AI_FEATURES.length}
+    >
       <CardContent className="flex flex-col gap-4">
         <dl className="grid grid-cols-2 gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
           <div>
@@ -322,6 +315,6 @@ export async function AiFeaturesCard({ userId }: { userId: string }) {
           })}
         </ul>
       </CardContent>
-    </Card>
+    </AiFeaturesCardShell>
   )
 }

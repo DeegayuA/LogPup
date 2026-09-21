@@ -94,6 +94,17 @@ describe('rateForPersonOnDay', () => {
     expect(rateForPersonOnDay([role()], rows, 'Engineer', 'u1', '2026-04-01')?.source).toBe('role')
   })
 
+  it('falls back to All roles rate when a role has no specific rate card', () => {
+    const allRoles = role({ role: 'All roles', hourly: '50.00' })
+    const engineer = role({ role: 'Engineer', hourly: '80.00' })
+    // Designer has no specific rate, so gets All roles
+    expect(rateForPersonOnDay([engineer, allRoles], [], 'Designer', 'u1', '2026-06-12')?.hourly).toBe(50)
+    // Person with no title gets All roles
+    expect(rateForPersonOnDay([engineer, allRoles], [], null, 'u1', '2026-06-12')?.hourly).toBe(50)
+    // Specific role rate beats All roles
+    expect(rateForPersonOnDay([engineer, allRoles], [], 'Engineer', 'u1', '2026-06-12')?.hourly).toBe(80)
+  })
+
   // why: array order is whatever the query returned. Money must not depend on
   // it, so the latest-starting covering row wins deterministically.
   it('is independent of row order when two rows overlap', () => {

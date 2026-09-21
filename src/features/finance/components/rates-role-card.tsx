@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { CurrencySelect } from '@/components/shared/currency-select'
 import { JobRoleSelect } from '@/components/shared/job-role-select'
 import { RatesIntervalTable } from '@/features/finance/components/rates-interval-table'
 import { closeRoleRate, setRoleRate } from '@/features/finance/rate-actions'
@@ -96,6 +97,7 @@ export function RatesRoleForm({ today }: { today: string }) {
                 }}
                 disabled={pending}
                 ariaLabel="Job role"
+                allowAllRoles
               />
             </div>
             <div className="flex flex-col gap-1.5">
@@ -117,16 +119,14 @@ export function RatesRoleForm({ today }: { today: string }) {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`${fieldId}-currency`}>Currency</Label>
-              <Input
+              <CurrencySelect
                 id={`${fieldId}-currency`}
                 value={currency}
-                onChange={(event) => {
-                  setCurrency(event.target.value.toUpperCase())
+                onChange={(next) => {
+                  setCurrency(next)
                   setError(null)
                 }}
-                maxLength={3}
-                required
-                className="h-9 w-20 font-mono uppercase"
+                disabled={pending}
               />
             </div>
           </div>
@@ -209,7 +209,7 @@ export function RatesRoleTable({ rows, today }: { rows: RoleRateRow[]; today: st
             rows={rows}
             today={today}
             subjectHeader="Role"
-            subjectOf={(row) => row.role}
+            subjectOf={(row) => (row.role === 'All roles' ? 'All roles (default)' : row.role)}
             onClose={handleClose}
             closingId={pending ? closingId : null}
           />
