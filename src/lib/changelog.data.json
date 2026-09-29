@@ -1,5 +1,5 @@
 {
-  "current": "v0.0.552",
+  "current": "v0.0.550",
   "versions": [
     {
       "version": "v0.0.1",
@@ -4398,22 +4398,6 @@
       "date": "2026-09-20",
       "at": "2026-09-20T21:34:28+05:30",
       "hash": "d52fdf9",
-      "kind": "other",
-      "change": "No description recorded for this build."
-    },
-    {
-      "version": "v0.0.551",
-      "date": "2026-09-21",
-      "at": "2026-09-21T07:27:03+05:30",
-      "hash": "3fd113e",
-      "kind": "other",
-      "change": "No description recorded for this build."
-    },
-    {
-      "version": "v0.0.552",
-      "date": "2026-09-21",
-      "at": "2026-09-21T20:22:19+05:30",
-      "hash": "ba77feb",
       "kind": "other",
       "change": "No description recorded for this build."
     }
