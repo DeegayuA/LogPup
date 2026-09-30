@@ -92,7 +92,11 @@ export const config = {
   // session before it will approve the sensitive calendar.events scope. Put
   // them back behind the guard and verification fails with a redirect, which
   // nothing else in the app would surface.
+  // api/external is excluded for the same reason as api/cron: the Attendance Web App calls it
+  // server to server with an x-api-key and no LogPup session, so the redirect above would send
+  // every call to /sign-in before the route could check the key. Both routes under it check
+  // the key with bridgeKeyValid before doing anything else (see src/lib/bridge-auth.ts).
   matcher: [
-    '/((?!api/auth|api/cron|api/meetings|_next/static|_next/image|sign-in|sso|home|privacy|terms|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
+        '/((?!api/auth|api/cron|api/meetings|api/external/|_next/static|_next/image|sign-in|sso|home|privacy|terms|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
   ],
 }
