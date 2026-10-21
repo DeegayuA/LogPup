@@ -207,6 +207,42 @@ An unknown or out-of-domain email returns `200` with
   `new Date()`. The schema comment says why: `new Date('2026-08-12')` is midnight UTC, still the
   11th west of Greenwich, and Attendance renders in Asia/Colombo.
 
+### `GET /api/external/worklog` (added 2026-10-21)
+
+The person's own worklog for a date range, read-only: each day's self-score and note
+(`daily_worklogs`) with the time entries under it (live `worklog_entries`). Same key, same
+`resolveBridgeUser` gate, same `{ matched: false }` for an unknown person.
+
+| Param | Required | Notes |
+|---|---|---|
+| `email` | yes | Lowercased before lookup. |
+| `from`, `to` | yes | Inclusive `YYYY-MM-DD`, real calendar days, at most 62 days apart. Else `400`. |
+
+```jsonc
+{
+  "success": true, "matched": true, "user": { … }, "from": "2026-10-01", "to": "2026-10-31",
+  "count": 15,
+  "data": [
+    {
+      "day": "2026-10-20",          // Asia/Colombo calendar day, a string — never a Date
+      "percent": 100,               // null when the day has entries but was never scored
+      "scoreSource": "self",        // or "from_hours" — label a derived score as derived
+      "note": "attendance app issues",
+      "minutes": 240,
+      "entries": [
+        { "id": "…", "minutes": 240, "category": "other", "billable": false, "note": "…",
+          "task": null, "app": { "name": "Attendance Web App", "slug": "attendance" } }
+      ]
+    }
+  ],
+  "url": "https://<logpup-host>/worklog"
+}
+```
+
+A day appears when either table has it — logging time never requires the header row. Newest
+first. No write counterpart: the worklog is a first-person record and stays editable only in
+LogPup.
+
 ### `PATCH /api/external/tasks/{id}/status`
 
 ```jsonc

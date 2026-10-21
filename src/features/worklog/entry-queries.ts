@@ -82,6 +82,47 @@ export async function listDayEntriesForDisplay(
 }
 
 /**
+ * listDayEntriesForDisplay over a day RANGE, each row carrying its `day` — for the Attendance
+ * bridge (GET /api/external/worklog), which shows a month at a time. Same joins and the same
+ * reasons for them: LEFT so hours survive a deleted task or app, LIVE so a trashed task's title
+ * is never shown as current. Bounded on both sides; `worklog_entries_user_day_live_idx` is the
+ * access path.
+ */
+export async function listEntriesInRangeForDisplay(
+  userId: string,
+  fromIso: string,
+  toIso: string,
+): Promise<(WorklogEntryRow & { day: string })[]> {
+  const rows = await db
+    .select({
+      id: liveWorklogEntries.id,
+      day: liveWorklogEntries.day,
+      minutes: liveWorklogEntries.minutes,
+      category: liveWorklogEntries.category,
+      billable: liveWorklogEntries.billable,
+      note: liveWorklogEntries.note,
+      taskId: liveWorklogEntries.taskId,
+      taskTitle: liveTasks.title,
+      appId: liveWorklogEntries.appId,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
+    })
+    .from(liveWorklogEntries)
+    .leftJoin(liveTasks, eq(liveTasks.id, liveWorklogEntries.taskId))
+    .leftJoin(liveApps, eq(liveApps.id, liveWorklogEntries.appId))
+    .where(
+      and(
+        eq(liveWorklogEntries.userId, userId),
+        gte(liveWorklogEntries.day, fromIso),
+        lte(liveWorklogEntries.day, toIso),
+      ),
+    )
+    .orderBy(asc(liveWorklogEntries.day), asc(liveWorklogEntries.createdAt))
+
+  return rows as (WorklogEntryRow & { day: string })[]
+}
+
+/**
  * The tasks this person can book hours to, for the picker on the day card.
  *
  * WHY DONE TASKS ARE IN HERE. The commonest reason to log task hours is
