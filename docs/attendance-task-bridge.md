@@ -243,6 +243,19 @@ A day appears when either table has it — logging time never requires the heade
 first. No write counterpart: the worklog is a first-person record and stays editable only in
 LogPup.
 
+### `POST /api/external/worklog/batch` (added 2026-10-21)
+
+Several people's worklogs for one range, in one call — Attendance's team views. Body:
+`{ "emails": string[], "from": "YYYY-MM-DD", "to": "YYYY-MM-DD" }`; at most 500 emails, same date
+rules as above. Answers `{ success, from, to, results: [{ email, matched, days }] }` with one result
+per requested (normalised, de-duplicated) email; `days` is the single-person endpoint's `data`.
+
+**Who may see whom is decided in Attendance**, before the list is sent: its proxy
+(`/api/logpup/team-worklog`) resolves the viewer's capabilities from their role and restricts the
+list to their own team view's audience — direct reports, or their company for back-office roles.
+This route authenticates the calling application and applies `canHoldWork()` per address
+(`resolveBridgeUsers`, one query), nothing more. Three queries total, whatever the list size.
+
 ### `PATCH /api/external/tasks/{id}/status`
 
 ```jsonc

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { assembleWorklogDays, parseWorklogParams, type WorklogEntryInput, type WorklogHeaderInput } from './worklog'
+import {
+  assembleWorklogDays,
+  groupByUser,
+  parseWorklogBatchBody,
+  parseWorklogParams,
+  type WorklogEntryInput,
+  type WorklogHeaderInput,
+} from './worklog'
 
 const entry = (over: Partial<WorklogEntryInput>): WorklogEntryInput => ({
   id: 'e1',
@@ -81,5 +88,45 @@ describe('parseWorklogParams', () => {
   it('refuses a range longer than 62 days', () => {
     expect(p('email=a@b.c&from=2026-01-01&to=2026-03-15').ok).toBe(false)
     expect(p('email=a@b.c&from=2026-09-01&to=2026-10-31').ok).toBe(true)
+  })
+})
+
+describe('parseWorklogBatchBody', () => {
+  const ok = { emails: ['A@x.com', 'b@x.com'], from: '2026-10-01', to: '2026-10-31' }
+
+  it('normalises and de-duplicates emails, keeping first-seen order', () => {
+    const r = parseWorklogBatchBody({ ...ok, emails: [' A@x.com', 'b@x.com', 'a@X.com'] })
+    expect(r).toEqual({ ok: true, emails: ['a@x.com', 'b@x.com'], from: '2026-10-01', to: '2026-10-31' })
+  })
+
+  it('drops non-strings and blanks rather than failing the batch', () => {
+    const r = parseWorklogBatchBody({ ...ok, emails: ['a@x.com', 7, null, '  '] })
+    expect(r.ok && r.emails).toEqual(['a@x.com'])
+  })
+
+  it('applies the same date rules as the single-person endpoint', () => {
+    expect(parseWorklogBatchBody({ ...ok, from: '2026-02-31' }).ok).toBe(false)
+    expect(parseWorklogBatchBody({ ...ok, from: '2026-10-31', to: '2026-10-01' }).ok).toBe(false)
+    expect(parseWorklogBatchBody({ ...ok, from: '2026-01-01', to: '2026-03-15' }).ok).toBe(false)
+  })
+
+  it('refuses a missing email list, an empty one, and more than 500', () => {
+    expect(parseWorklogBatchBody({ from: ok.from, to: ok.to }).ok).toBe(false)
+    expect(parseWorklogBatchBody({ ...ok, emails: [] }).ok).toBe(false)
+    const many = Array.from({ length: 501 }, (_, i) => `p${i}@x.com`)
+    expect(parseWorklogBatchBody({ ...ok, emails: many }).ok).toBe(false)
+  })
+
+  it('refuses a body that is not an object', () => {
+    expect(parseWorklogBatchBody(null).ok).toBe(false)
+    expect(parseWorklogBatchBody('x').ok).toBe(false)
+  })
+})
+
+describe('groupByUser', () => {
+  it('buckets rows by userId and gives an empty list to a user with none', () => {
+    const m = groupByUser(['u1', 'u2'], [{ userId: 'u1', v: 1 }, { userId: 'u1', v: 2 }])
+    expect(m.get('u1')?.map((r) => r.v)).toEqual([1, 2])
+    expect(m.get('u2')).toEqual([])
   })
 })
