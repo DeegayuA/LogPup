@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { and, eq, exists, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
-import { taskAssignees } from '@/db/schema'
+import { taskAssignees, users } from '@/db/schema'
 import { bridgeKeyValid, resolveBridgeUser } from '@/lib/bridge-auth'
 import { applyTaskStatusChange } from '@/features/sprints/task-status-write'
 import { MaintenanceFreezeError } from '@/features/maintenance/write-freeze'
@@ -162,10 +162,12 @@ async function readTask(taskId: string, userId: string) {
       sprintName: liveSprints.name,
       sprintEndDate: liveSprints.endDate,
       assigneeId: liveTasks.assigneeId,
+      assigneeName: users.name,
     })
     .from(liveTasks)
     .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
     .leftJoin(liveSprints, eq(liveSprints.id, liveTasks.sprintId))
+    .leftJoin(users, eq(users.id, liveTasks.assigneeId))
     .where(eq(liveTasks.id, taskId))
     .limit(1)
   if (!row) return null
@@ -179,6 +181,8 @@ async function readTask(taskId: string, userId: string) {
     {
       ...row,
       isPrimaryAssignee: row.assigneeId === userId,
+      // Only an assignee gets this far — the write above refuses everyone else.
+      isAssignee: row.assigneeId === userId || people.some((p) => p.userId === userId),
       assigneeCount: people.length || 1,
     },
     externalBaseUrl(),

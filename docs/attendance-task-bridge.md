@@ -133,12 +133,14 @@ cron routes carry it — these read a header and must never be cached.
 
 ### `GET /api/external/tasks`
 
-The signed-in Attendance user's own LogPup tasks.
+The signed-in Attendance user's own LogPup tasks — and, with `scope=projects`, every task in the
+projects they belong to.
 
 | Param | Required | Notes |
 |---|---|---|
 | `email` | yes | The person whose tasks to return. Lowercased before lookup. |
 | `status` | no | `open` (default — `todo` plus `in_progress`) or `all`. |
+| `scope` | no | `assigned` (default — tasks the person is on) or `projects` (added 2026-10-21: also every task in an app they belong to — a current `assignments` row, an open `app_role_history` seat, an `app_grants` row, or `apps.lead_id` / `pm_id`). Any other value reads as `assigned`. |
 | `limit` | no | Default 50, hard cap 200. |
 
 Response:
@@ -161,6 +163,8 @@ Response:
       "dueCommitmentNote": "Promised to Finance",
       "originalDueDate": "2026-09-12",
       "isPrimaryAssignee": true,
+      "isAssignee": true,               // false = only here via scope=projects; read-only
+      "assignee": { "name": "Someone" }, // tasks.assignee_id's name, or null
       "assigneeCount": 3,
       "app":    { "id": "<uuid>", "name": "Attendance Web App", "slug": "attendance" },
       "sprint": { "id": "<uuid>", "name": "Sprint 14", "endDate": "2026-09-26" },
@@ -187,8 +191,10 @@ An unknown or out-of-domain email returns `200` with
   (migration 0064 backfilled it). Someone genuinely on a task but not primary would otherwise
   never see it. Return `isPrimaryAssignee` so the Attendance UI can say which they are. The
   reverse direction is already indexed by `task_assignees_user_idx`.
-- **Order by `due_date` ascending, nulls last, then `priority` descending.** This is "what is on
-  my plate, soonest first", and `tasks_assignee_due_idx` is the partial index built for exactly
+- **Order: the person's own tasks first, then open before done, then `due_date` ascending nulls
+  last, then `priority` descending.** The first two keys only matter for `scope=projects` /
+  `status=all`, and they make the limit cut teammates' finished work before anything of the
+  person's own. The rest is "what is on my plate, soonest first", and `tasks_assignee_due_idx` is the partial index built for exactly
   that read (`deleted_at is null and status <> 'done'`), so the default `status=open` call hits
   it.
 - **`due_date` is a `date`, and it leaves as the string it is.** Do not put it through

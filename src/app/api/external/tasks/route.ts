@@ -1,18 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { and, asc, desc, eq, exists, inArray, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, exists, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
-import { taskAssignees } from '@/db/schema'
+import { appGrants, appRoleHistory, assignments, taskAssignees, users } from '@/db/schema'
 import { bridgeKeyValid, resolveBridgeUser } from '@/lib/bridge-auth'
-import { externalBaseUrl, serializeTask } from '@/app/api/external/serialize'
+import { externalBaseUrl, parseTaskListParams, serializeTask } from '@/app/api/external/serialize'
 
 // `timingSafeEqual` is a node builtin, and reading a header already makes this dynamic — the
 // export is here so both external routes read identically.
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-const DEFAULT_LIMIT = 50
-const MAX_LIMIT = 200
 
 /**
  * The Attendance Web App asking "what is this person's LogPup work?".
@@ -26,10 +23,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
-  const params = req.nextUrl.searchParams
-  const email = (params.get('email') ?? '').trim().toLowerCase()
-  const openOnly = params.get('status') !== 'all'
-  const limit = Math.min(Math.max(Number(params.get('limit')) || DEFAULT_LIMIT, 1), MAX_LIMIT)
+  const { email, openOnly, scope, limit } = parseTaskListParams(req.nextUrl.searchParams)
 
   // The try starts BEFORE the first database call, not after it. resolveBridgeUser queries
   // Postgres, so a connection reset or an exhausted pool there would otherwise propagate to
@@ -73,6 +67,31 @@ export async function GET(req: NextRequest) {
       ),
     )
 
+    // scope=projects: ALSO every task in an app this person belongs to. "Belongs to" is the union
+    // of the three places LogPup records it — the same three tables loadActor (actor.ts) reads
+    // for app scope, but taken together and regardless of role, because the question here is
+    // "which projects am I on", not "what may I edit". So an admin sees their own projects, not
+    // the whole workspace.
+    //   assignments       — team membership (editor/member scope)
+    //   app_role_history  — an OPEN pm/lead seat (manager scope); closed seats are history
+    //   app_grants        — stakeholder access
+    //   apps.lead_id / pm_id — the seats as stored on the app itself, in case the history
+    //                       table and the app row ever disagree
+    const inMyProjects = or(
+      eq(liveApps.leadId, user.id),
+      eq(liveApps.pmId, user.id),
+      inArray(liveTasks.appId, db.select({ id: assignments.appId }).from(assignments).where(eq(assignments.userId, user.id))),
+      inArray(
+        liveTasks.appId,
+        db
+          .select({ id: appRoleHistory.appId })
+          .from(appRoleHistory)
+          .where(and(eq(appRoleHistory.userId, user.id), isNull(appRoleHistory.effectiveTo))),
+      ),
+      inArray(liveTasks.appId, db.select({ id: appGrants.appId }).from(appGrants).where(eq(appGrants.userId, user.id))),
+    )
+    const inScope = scope === 'projects' ? or(isMine, inMyProjects) : isMine
+
     const rows = await db
       .select({
         id: liveTasks.id,
@@ -93,6 +112,8 @@ export async function GET(req: NextRequest) {
         sprintName: liveSprints.name,
         sprintEndDate: liveSprints.endDate,
         assigneeId: liveTasks.assigneeId,
+        assigneeName: users.name,
+        isAssignee: sql<boolean>`(${isMine})`,
       })
       // liveTasks / liveApps / liveSprints are the soft-delete-filtered subqueries from
       // src/db/live.ts. Querying the base tables would serve TRASHED tasks into another
@@ -100,10 +121,19 @@ export async function GET(req: NextRequest) {
       .from(liveTasks)
       .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
       .leftJoin(liveSprints, eq(liveSprints.id, liveTasks.sprintId))
-      .where(openOnly ? and(isMine, ne(liveTasks.status, 'done')) : isMine)
-      // "What is on my plate, soonest first." NULLS LAST so undated work sits below dated work
-      // rather than above it, which is what `asc()` alone would do in Postgres.
-      .orderBy(sql`${liveTasks.dueDate} asc nulls last`, desc(liveTasks.priority), asc(liveTasks.createdAt))
+      .leftJoin(users, eq(users.id, liveTasks.assigneeId))
+      .where(openOnly ? and(inScope, ne(liveTasks.status, 'done')) : inScope)
+      // The person's own work first, then open before done, so the limit can only ever cut
+      // teammates' finished tasks — never something on this person's plate. Within that,
+      // "soonest first": NULLS LAST so undated work sits below dated work rather than above it,
+      // which is what `asc()` alone would do in Postgres.
+      .orderBy(
+        sql`(${isMine}) desc`,
+        sql`(${liveTasks.status} = 'done') asc`,
+        sql`${liveTasks.dueDate} asc nulls last`,
+        desc(liveTasks.priority),
+        asc(liveTasks.createdAt),
+      )
       .limit(limit)
 
     // One extra query for "how many people are on each of these", rather than one per task —
@@ -124,6 +154,8 @@ export async function GET(req: NextRequest) {
         {
           ...row,
           isPrimaryAssignee: row.assigneeId === user.id,
+          // The driver can hand back 't'/'f' for a bare boolean expression; normalise it here.
+          isAssignee: row.isAssignee === true || (row.isAssignee as unknown) === 't',
           assigneeCount: counts.get(row.id) ?? 1,
         },
         baseUrl,
