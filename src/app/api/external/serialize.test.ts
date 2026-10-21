@@ -22,6 +22,7 @@ const row = (over: Partial<ExternalTaskRow> = {}): ExternalTaskRow => ({
   isPrimaryAssignee: false,
   isAssignee: false,
   assigneeName: null,
+  completedByMe: false,
   assigneeCount: 1,
   ...over,
 })
@@ -36,6 +37,12 @@ describe('serializeTask', () => {
   it('names the primary assignee, or null when nobody owns it', () => {
     expect(serializeTask(row({ assigneeName: 'Kasun' }), 'https://x').assignee).toEqual({ name: 'Kasun' })
     expect(serializeTask(row({ assigneeName: null }), 'https://x').assignee).toBeNull()
+  })
+
+  it('passes completedByMe through, independent of isAssignee', () => {
+    const out = serializeTask(row({ isAssignee: false, completedByMe: true, status: 'done' }), 'https://x')
+    expect(out.completedByMe).toBe(true)
+    expect(out.isAssignee).toBe(false)
   })
 
   it('keeps calendar dates as strings', () => {

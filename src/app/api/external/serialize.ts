@@ -35,6 +35,9 @@ export type ExternalTaskRow = {
   isAssignee: boolean
   /** Display name of `tasks.assignee_id`, or null when the task has no owner. */
   assigneeName: string | null
+  /** True when the task is done and this person made the latest completion (activity_log).
+   *  Can be true while isAssignee is false: they finished somebody else's task. */
+  completedByMe: boolean
   assigneeCount: number
 }
 
@@ -64,6 +67,7 @@ export function serializeTask(row: ExternalTaskRow, baseUrl: string) {
     originalDueDate: row.originalDueDate,
     isPrimaryAssignee: row.isPrimaryAssignee,
     isAssignee: row.isAssignee,
+    completedByMe: row.completedByMe,
     assignee: row.assigneeName ? { name: row.assigneeName } : null,
     assigneeCount: row.assigneeCount,
     app: row.appId ? { id: row.appId, name: row.appName ?? '', slug: row.appSlug ?? '' } : null,
