@@ -1,63 +1,45 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { bridgeDomains, bridgeEmailAllowed, bridgeKeyValid } from './bridge-auth'
+import { bridgeEmailAllowed, bridgeKeyValid } from './bridge-auth'
 
 describe('bridge-auth', () => {
-  const originalDomains = process.env.LOGPUP_BRIDGE_DOMAINS
   const originalKey = process.env.LOGPUP_EXTERNAL_API_KEY
 
   beforeEach(() => {
-    process.env.LOGPUP_BRIDGE_DOMAINS = 'altavision.lk'
     process.env.LOGPUP_EXTERNAL_API_KEY = 'a-long-shared-secret'
   })
   afterEach(() => {
-    process.env.LOGPUP_BRIDGE_DOMAINS = originalDomains
     process.env.LOGPUP_EXTERNAL_API_KEY = originalKey
   })
 
-  describe('bridgeDomains', () => {
-    it('parses a comma list into trimmed lowercase domains, @ stripped', () => {
-      process.env.LOGPUP_BRIDGE_DOMAINS = ' @Altavision.LK , example.com '
-      expect(bridgeDomains()).toEqual(['altavision.lk', 'example.com'])
-    })
-
-    it('defaults to altavision.lk when unset', () => {
-      delete process.env.LOGPUP_BRIDGE_DOMAINS
-      expect(bridgeDomains()).toEqual(['altavision.lk'])
-    })
-
-    // The whole point of a SEPARATE variable: ALLOWED_EMAIL_DOMAINS decides who may sign in
-    // and carries four domains. Widening sign-in must never widen what a shared API key reads.
-    it('is independent of ALLOWED_EMAIL_DOMAINS', () => {
-      process.env.ALLOWED_EMAIL_DOMAINS = 'altavision.lk,syntaxgenie.com,pearlcluster.lk'
-      process.env.LOGPUP_BRIDGE_DOMAINS = 'altavision.lk'
-      expect(bridgeEmailAllowed('someone@syntaxgenie.com')).toBe(false)
-      expect(bridgeEmailAllowed('someone@altavision.lk')).toBe(true)
-    })
-  })
-
+  // There is no domain gate any more: LogPup's Google sign-in is open to any verified account
+  // behind admin approval, so a domain list refused people who use LogPup every day. Who may be
+  // read is decided by resolveBridgeUser's canHoldWork() — this only rejects non-addresses.
   describe('bridgeEmailAllowed', () => {
-    it('accepts a configured domain, case-insensitively', () => {
+    it('accepts any domain, including personal addresses', () => {
       expect(bridgeEmailAllowed('Someone@Altavision.LK')).toBe(true)
+      expect(bridgeEmailAllowed('someone@gmail.com')).toBe(true)
+      expect(bridgeEmailAllowed('someone@syntaxgenie.com')).toBe(true)
     })
 
-    it('refuses every other domain', () => {
-      expect(bridgeEmailAllowed('someone@carecode.org')).toBe(false)
-      expect(bridgeEmailAllowed('someone@gmail.com')).toBe(false)
+    // A leftover LOGPUP_BRIDGE_DOMAINS on a server must not quietly bring the gate back.
+    it('ignores a leftover LOGPUP_BRIDGE_DOMAINS', () => {
+      const before = process.env.LOGPUP_BRIDGE_DOMAINS
+      process.env.LOGPUP_BRIDGE_DOMAINS = 'altavision.lk'
+      try {
+        expect(bridgeEmailAllowed('someone@gmail.com')).toBe(true)
+      } finally {
+        if (before === undefined) delete process.env.LOGPUP_BRIDGE_DOMAINS
+        else process.env.LOGPUP_BRIDGE_DOMAINS = before
+      }
     })
 
-    it('refuses malformed addresses rather than guessing', () => {
+    it('refuses things that are not an address', () => {
       expect(bridgeEmailAllowed('')).toBe(false)
+      expect(bridgeEmailAllowed('   ')).toBe(false)
       expect(bridgeEmailAllowed('altavision.lk')).toBe(false)
-      expect(bridgeEmailAllowed('@altavision.lk')).toBe(true) // has a domain, empty local part
-      expect(bridgeEmailAllowed('a@b@altavision.lk')).toBe(true) // last @ wins, as elsewhere
-    })
-
-    // A subdomain is a different domain. "evil.altavision.lk.attacker.com" must not pass by
-    // ending with the allowed string.
-    it('matches the whole domain, never a suffix', () => {
-      expect(bridgeEmailAllowed('someone@altavision.lk.attacker.com')).toBe(false)
-      expect(bridgeEmailAllowed('someone@notaltavision.lk')).toBe(false)
-      expect(bridgeEmailAllowed('someone@mail.altavision.lk')).toBe(false)
+      expect(bridgeEmailAllowed('@altavision.lk')).toBe(false)
+      expect(bridgeEmailAllowed('someone@')).toBe(false)
+      expect(bridgeEmailAllowed('some one@gmail.com')).toBe(false)
     })
   })
 

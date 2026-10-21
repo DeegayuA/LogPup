@@ -28,7 +28,7 @@ This bridge gives the Attendance app a **read of that person's own LogPup tasks*
 second surface onto it.
 
 It also adds **sign-in handoff in both directions** (Part two) and **notifications in both
-directions** (Part three). All three parts share the domain gate and the email join, and each
+directions** (Part three). All three parts share the email join, and each
 ships independently of the others.
 
 One dependency runs the other way, and it is easy to miss: **Part three requires Part one's
@@ -75,23 +75,26 @@ That is the correct outcome, not a bug to paper over with fuzzy name matching.
 
 ---
 
-## The domain gate
+## The domain gate — removed (2026-10-21)
 
-"Alta Vision only" is enforced **twice, independently**. Either layer alone would be enough on a
-good day; the point is that neither is the only thing standing there.
+There was one: `LOGPUP_BRIDGE_DOMAINS` (default `altavision.lk`) limited the bridge to company
+addresses. It refused people who use LogPup every day — Google sign-in is open to any verified
+account behind admin approval, so approved accounts with a personal address (a gmail) could sign
+in to LogPup but never sync with Attendance. `bridgeEmailAllowed` now checks shape only, and the
+variable is **no longer read**, so a value left on a server does nothing.
 
-1. **In LogPup (this repo).** A new env var `LOGPUP_BRIDGE_DOMAINS` (default `altavision.lk`)
-   lists the email domains the bridge will resolve. An address outside it returns
-   `{ matched: false }` — the same shape as an unknown user, deliberately, so the endpoint cannot
-   be used to enumerate which domains are configured.
-2. **In Attendance.** A new tenant feature flag `logpupTasks`, on for the `altavision` tenant
-   only. Attendance is one deployment serving several domains off different Firestore databases,
-   so that is where "not carecode.org" is actually said.
+What still decides who the bridge reaches:
 
-This is **not** a reuse of `ALLOWED_EMAIL_DOMAINS`. That var decides who may sign in to LogPup,
-and it currently carries four domains (`altavision.lk`, `syntaxgenie.com`, `pearlcluster.lk`,
-`altavision.co.uk`). Widening sign-in must never silently widen what a shared API key can read.
-Two different questions, two different vars.
+1. **Task API and outbound handoff (LogPup → Attendance):** `resolveBridgeUser` — an existing row
+   passing `canHoldWork()` (active, approved, not removed). Unknown, pending and removed all
+   answer the same refusal, so the endpoint is still not an address oracle. The handoff route
+   needs this check explicitly: `/api` is exempt from `proxy.ts`'s pending and deactivated gates.
+2. **Inbound handoff (Attendance → LogPup):** the `attendance-sso` provider's own row lookup. It
+   never provisions, and refuses rejected and removed accounts; a pending or deactivated one signs
+   in and is pinned to `/pending` or `/deactivated` by `proxy.ts`, exactly as Google sign-in is.
+3. **In Attendance:** the routes accept only the `altavision` tenant (`ALLOWED_TENANT_ID` in
+   `logpupIdentity.ts` and the SSO/events routes; the `logpupTasks` flag additionally gates the
+   UI), and the email comes from the person's own verified Firestore profile.
 
 ---
 
@@ -206,7 +209,7 @@ Refusals, all shaped `{ "success": false, "error": "<sentence>" }`:
 | Situation | HTTP |
 |---|---|
 | Bad or missing `x-api-key` | 401 |
-| `email` out of domain, or no such user | 403 |
+| `email` malformed, or no such user | 403 |
 | `id` not a uuid, or task soft-deleted / absent | 404 |
 | Caller is not an assignee of that task | 403 |
 | `status` not one of `todo` / `in_progress` / `done` | 400 |
@@ -225,11 +228,10 @@ by adding the admin branch.
 
 ### 1. `src/lib/bridge-auth.ts` (new)
 
-Key verification and the domain check, so no route handler carries its own copy.
+Key verification and the address shape check, so no route handler carries its own copy.
 
 ```ts
 export function bridgeKeyValid(header: string | null): boolean   // timing-safe
-export function bridgeDomains(): string[]                        // LOGPUP_BRIDGE_DOMAINS
 export function bridgeEmailAllowed(email: string): boolean
 export async function resolveBridgeUser(email: string): Promise<{ id: string; email: string; name: string } | null>
 ```
@@ -308,9 +310,6 @@ something is enforced.
 # ── Attendance bridge (see docs/attendance-task-bridge.md) ──
 # Shared secret the Attendance Web App sends as x-api-key. No default: unset means refuse.
 LOGPUP_EXTERNAL_API_KEY=
-# Email domains the bridge will resolve. NOT the same list as ALLOWED_EMAIL_DOMAINS above —
-# widening who may sign in must not widen what a shared API key can read.
-LOGPUP_BRIDGE_DOMAINS=altavision.lk
 # HS256 secret for the sign-in handoff, both directions. Distinct from the key above and from
 # Attendance's ATTENDANCE_JWT_SECRET (which is Solar's): three integrations, three secrets.
 # Unset means the attendance-sso provider is not registered at all.
@@ -368,7 +367,7 @@ may enter LogPup applies unchanged to an SSO arrival:
   only for an address that **already matches an allowed user**, and creates nothing. Otherwise
   the Attendance app becomes a way to mint LogPup accounts, and whoever holds the Attendance
   signing secret decides who works here.
-- **The domain gate applies.** `bridgeEmailAllowed(email)` is checked before the lookup, same as
+- **The shape check applies.** `bridgeEmailAllowed(email)` is checked before the lookup, same as
   the task endpoints.
 - **`status === 'rejected'` is refused; deactivated is not.** Copy the passkey provider's
   reasoning verbatim (`src/lib/auth.ts:241`): a deactivated person's session is minted and
@@ -469,6 +468,11 @@ A client page that reads `?token=` and `?next=`, calls
 `signIn('attendance-sso', { token, redirectTo: next })`, and shows a plain "Signing you in…"
 while it does. On failure it lands on the normal sign-in page with the ordinary message, not a
 stack trace.
+
+**Someone already signed in to LogPup goes straight to `next`** and the token is never redeemed
+(added 2026-10-21). Before that, any refusal sent a signed-in person to `/sign-in` — which does
+not bounce a signed-in visitor — so the sidebar button showed the login page to people who were
+logged in.
 
 **`next` must be validated as a same-origin relative path** — it must start with a single `/` and
 not `//`. An unvalidated `next` is an open redirect, and an open redirect on a sign-in route is
@@ -655,9 +659,9 @@ Rules:
   each does one job** — the task API key, the SSO secret, this, and Solar's, which is unrelated.
 - **`recipientEmail`, never an EPF.** LogPup has no EPF number and must never learn one. The
   receiver resolves the person.
-- **Nothing is sent for a recipient outside `LOGPUP_BRIDGE_DOMAINS`.** Filter before the request,
-  not at the far end. A notification for a `syntaxgenie.com` employee has no business leaving the
-  building.
+- **Only malformed recipients are dropped.** (There was a domain filter here; it went with the
+  domain gate.) Attendance matches each `recipientEmail` against its own employees and ignores the
+  rest.
 - **`eventId` is stable per (notification row, recipient).** The receiver keys its Firestore doc
   off it, so a retry writes the same document rather than a second bell entry.
 - **Best effort, and it must stay that way.** Called after the assignment has already been
@@ -730,7 +734,7 @@ LOGPUP_WEBHOOK_SECRET=
 
 | File | What it is |
 |---|---|
-| `src/lib/bridge-auth.ts` + `.test.ts` | Key check, domain gate, user resolution. 13 cases |
+| `src/lib/bridge-auth.ts` + `.test.ts` | Key check, address shape check, user resolution. 13 cases |
 | `src/features/sprints/task-status-write.ts` + `.test.ts` | The shared status writer; `syncLinkedFollowups` relocated here, `statusActivity` de-duplicated out of the two actions |
 | `src/app/api/external/serialize.ts` | One task-to-JSON mapper, shared by both routes |
 | `src/app/api/external/tasks/route.ts` | GET the person's own tasks |
@@ -777,7 +781,7 @@ Three things changed in existing behaviour, all intended and all worth knowing:
 
 `LOGPUP_EXTERNAL_API_KEY` is the only authority on these endpoints and it names no user. Anyone
 holding it — a compromised Attendance deployment, a leaked environment variable, an operator
-there — can read every in-domain person's task list and move any of their tasks, with the write
+there — can read the task list of any approved LogPup account and move any of their tasks, with the write
 recorded in `activity_log` as that person's own action. `metadata.via = 'attendance'` is the only
 forensic trace that it came through the bridge.
 
@@ -897,7 +901,7 @@ visible freshness win.
 
 ## Rollout
 
-1. Ship the LogPup side first, keyed, with `LOGPUP_BRIDGE_DOMAINS` set and the Attendance flag
+1. Ship the LogPup side first, keyed, with the Attendance flag
    still off. Nothing consumes it yet; verify with `curl`.
 2. Ship the Attendance side with `logpupTasks` off for every tenant.
 3. Turn the flag on for `altavision` only, through the tenant registry. No deploy needed.

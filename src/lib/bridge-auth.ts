@@ -17,31 +17,20 @@ import { canHoldWork } from '@/features/people/removal-queries'
  */
 
 /**
- * Email domains the bridge will resolve. Default `altavision.lk`.
+ * Whether this is an address the bridge will look up at all.
  *
- * DELIBERATELY NOT `ALLOWED_EMAIL_DOMAINS`, which decides who may SIGN IN and currently carries
- * four domains. Widening sign-in must never silently widen what a shared API key can read —
- * they are two different questions and they get two different variables.
- */
-export function bridgeDomains(): string[] {
-  const raw = process.env.LOGPUP_BRIDGE_DOMAINS ?? 'altavision.lk'
-  return raw
-    .split(',')
-    .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
-    .filter(Boolean)
-}
-
-/**
- * Whether this address is in scope for the bridge.
+ * NO DOMAIN GATE. There used to be one (`LOGPUP_BRIDGE_DOMAINS`, default `altavision.lk`), and it
+ * refused people who use LogPup every day: Google sign-in is open to any verified account behind
+ * admin approval (see the DECISION note in auth.ts), so plenty of approved accounts hold a
+ * personal address. Who may be read is decided where it always really was — resolveBridgeUser's
+ * canHoldWork(), and the SSO provider's own row lookup — and the variable is deliberately no
+ * longer read, so a value left on a server cannot quietly bring the gate back.
  *
- * Whole-domain equality, never a suffix test: `endsWith('altavision.lk')` would also accept
- * `notaltavision.lk` and `altavision.lk.attacker.com`. A subdomain is a different domain and is
- * not covered unless it is listed. Same shape as lib/allowed-domains.ts, which this mirrors.
+ * What remains is shape only: one `@`, something either side, no whitespace. Callers normalise
+ * (trim + lowercase) before calling.
  */
 export function bridgeEmailAllowed(email: string): boolean {
-  const at = email.lastIndexOf('@')
-  if (at === -1) return false
-  return bridgeDomains().includes(email.slice(at + 1).toLowerCase())
+  return /^[^\s@]+@[^\s@]+$/.test(email)
 }
 
 /**
@@ -79,7 +68,7 @@ export type BridgeUser = { id: string; email: string; name: string }
  * removal-queries.ts documents that six of the nine call sites made exactly this mistake before
  * the predicate was centralised. This is the tenth; it composes rather than repeats.
  *
- * Returns null for every refusal — out of domain, unknown, deactivated, pending, removed — and
+ * Returns null for every refusal — malformed, unknown, deactivated, pending, removed — and
  * the callers must answer all five identically. A distinguishable "no such user" turns the
  * endpoint into an address oracle for anyone holding the key.
  */

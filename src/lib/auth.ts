@@ -301,11 +301,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             const identity = verifyAttendanceToken(String(creds?.token ?? ''))
             if (!identity) return null
 
-            // The bridge's domain gate, checked before the lookup exactly as
-            // the task endpoints check it. DELIBERATELY NOT emailAllowed():
-            // that decides who may sign in and carries four domains, and
-            // widening sign-in must never silently widen what a handoff
-            // secret can reach.
+            // Shape check only, before the lookup, as the task endpoints do —
+            // the bridge has no domain gate (see bridge-auth.ts). Who may come
+            // through is decided by the row lookup and status checks below.
             if (!bridgeEmailAllowed(identity.email)) return null
 
             // REPLAY. Spent here, BEFORE the lookup and before any refusal, so
