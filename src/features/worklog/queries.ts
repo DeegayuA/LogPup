@@ -113,6 +113,36 @@ export async function getMyWorklogsInRange(
 }
 
 /**
+ * getMyWorklogsInRange for several people at once, each row carrying its `userId` — the
+ * Attendance team view (POST /api/external/worklog/batch). Bounded by date on both sides.
+ */
+export async function getWorklogsInRangeForUsers(
+  userIds: string[],
+  fromIso: string,
+  toIso: string,
+): Promise<(WorklogRow & { userId: string })[]> {
+  if (userIds.length === 0) return []
+  return db
+    .select({
+      userId: dailyWorklogs.userId,
+      day: dailyWorklogs.day,
+      percent: dailyWorklogs.percent,
+      scoreSource: dailyWorklogs.scoreSource,
+      note: dailyWorklogs.note,
+      updatedAt: dailyWorklogs.updatedAt,
+    })
+    .from(dailyWorklogs)
+    .where(
+      and(
+        inArray(dailyWorklogs.userId, userIds),
+        gte(dailyWorklogs.day, fromIso),
+        lte(dailyWorklogs.day, toIso),
+      ),
+    )
+    .orderBy(desc(dailyWorklogs.day))
+}
+
+/**
  * Every person's entries across a day range — the team view's single read.
  * Bounded by date on both sides so this cannot become a full-table scan as
  * the log grows; `daily_worklogs_day_idx` is the access path.

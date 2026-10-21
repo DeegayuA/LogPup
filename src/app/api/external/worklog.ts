@@ -94,9 +94,57 @@ export function parseWorklogParams(
   if (!isRealDay(from) || !isRealDay(to)) {
     return { ok: false, error: 'from and to must be real YYYY-MM-DD dates' }
   }
-  if (from > to) return { ok: false, error: 'from must not be after to' }
+  const range = checkRange(from, to)
+  if (range) return { ok: false, error: range }
+  return { ok: true, email, from, to }
+}
+
+/** null when `from`..`to` is a usable range (both already real days), else why not. */
+function checkRange(from: string, to: string): string | null {
+  if (from > to) return 'from must not be after to'
   // Date arithmetic on UTC midnights is exact for whole-day differences; no timezone enters it.
   const span = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000
-  if (span + 1 > MAX_RANGE_DAYS) return { ok: false, error: `range must be at most ${MAX_RANGE_DAYS} days` }
-  return { ok: true, email, from, to }
+  if (span + 1 > MAX_RANGE_DAYS) return `range must be at most ${MAX_RANGE_DAYS} days`
+  return null
+}
+
+const MAX_BATCH_EMAILS = 500
+
+/**
+ * The batch endpoint's JSON body: `{ emails: string[], from, to }`. Emails are normalised and
+ * de-duplicated in first-seen order; a non-string or blank entry is dropped rather than failing
+ * everyone else's answer. Same date rules as the single-person endpoint. At most 500 people —
+ * a whole company's team view — so one call can never become a workspace-wide dump by accident.
+ */
+export function parseWorklogBatchBody(
+  body: unknown,
+): { ok: true; emails: string[]; from: string; to: string } | { ok: false; error: string } {
+  if (!body || typeof body !== 'object') return { ok: false, error: 'body must be a JSON object' }
+  const b = body as { emails?: unknown; from?: unknown; to?: unknown }
+  if (!Array.isArray(b.emails)) return { ok: false, error: 'emails must be an array' }
+  const emails = [
+    ...new Set(
+      b.emails
+        .filter((e): e is string => typeof e === 'string')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ]
+  if (emails.length === 0) return { ok: false, error: 'emails must not be empty' }
+  if (emails.length > MAX_BATCH_EMAILS) return { ok: false, error: `at most ${MAX_BATCH_EMAILS} emails` }
+  const from = typeof b.from === 'string' ? b.from : ''
+  const to = typeof b.to === 'string' ? b.to : ''
+  if (!isRealDay(from) || !isRealDay(to)) {
+    return { ok: false, error: 'from and to must be real YYYY-MM-DD dates' }
+  }
+  const range = checkRange(from, to)
+  if (range) return { ok: false, error: range }
+  return { ok: true, emails, from, to }
+}
+
+/** Rows bucketed by `userId`, every requested user present (an empty list when they have none). */
+export function groupByUser<T extends { userId: string }>(userIds: string[], rows: T[]): Map<string, T[]> {
+  const m = new Map<string, T[]>(userIds.map((id) => [id, []]))
+  for (const r of rows) m.get(r.userId)?.push(r)
+  return m
 }

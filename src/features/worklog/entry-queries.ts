@@ -123,6 +123,46 @@ export async function listEntriesInRangeForDisplay(
 }
 
 /**
+ * listEntriesInRangeForDisplay for several people at once, each row carrying its `userId` —
+ * the Attendance team view. Same LEFT joins onto the LIVE views, for the same reasons.
+ */
+export async function listEntriesInRangeForUsers(
+  userIds: string[],
+  fromIso: string,
+  toIso: string,
+): Promise<(WorklogEntryRow & { day: string; userId: string })[]> {
+  if (userIds.length === 0) return []
+  const rows = await db
+    .select({
+      id: liveWorklogEntries.id,
+      userId: liveWorklogEntries.userId,
+      day: liveWorklogEntries.day,
+      minutes: liveWorklogEntries.minutes,
+      category: liveWorklogEntries.category,
+      billable: liveWorklogEntries.billable,
+      note: liveWorklogEntries.note,
+      taskId: liveWorklogEntries.taskId,
+      taskTitle: liveTasks.title,
+      appId: liveWorklogEntries.appId,
+      appName: liveApps.name,
+      appSlug: liveApps.slug,
+    })
+    .from(liveWorklogEntries)
+    .leftJoin(liveTasks, eq(liveTasks.id, liveWorklogEntries.taskId))
+    .leftJoin(liveApps, eq(liveApps.id, liveWorklogEntries.appId))
+    .where(
+      and(
+        inArray(liveWorklogEntries.userId, userIds),
+        gte(liveWorklogEntries.day, fromIso),
+        lte(liveWorklogEntries.day, toIso),
+      ),
+    )
+    .orderBy(asc(liveWorklogEntries.day), asc(liveWorklogEntries.createdAt))
+
+  return rows as (WorklogEntryRow & { day: string; userId: string })[]
+}
+
+/**
  * The tasks this person can book hours to, for the picker on the day card.
  *
  * WHY DONE TASKS ARE IN HERE. The commonest reason to log task hours is

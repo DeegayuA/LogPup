@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '@/db'
 import { users } from '@/db/schema'
 import { canHoldWork } from '@/features/people/removal-queries'
@@ -84,4 +84,20 @@ export async function resolveBridgeUser(email: string): Promise<BridgeUser | nul
     .limit(1)
 
   return user ?? null
+}
+
+/**
+ * resolveBridgeUser for many addresses in ONE query — for the team worklog batch. Same rule for
+ * every address: shape-checked, then an existing row passing canHoldWork(). Addresses that fail
+ * are simply absent from the result, so the caller answers them exactly like an unknown person.
+ */
+export async function resolveBridgeUsers(emails: string[]): Promise<BridgeUser[]> {
+  const normalized = [...new Set(emails.map((e) => e.trim().toLowerCase()))].filter(
+    (e) => e && bridgeEmailAllowed(e),
+  )
+  if (normalized.length === 0) return []
+  return db
+    .select({ id: users.id, email: users.email, name: users.name })
+    .from(users)
+    .where(and(inArray(users.email, normalized), canHoldWork()))
 }
