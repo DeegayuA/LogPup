@@ -8,6 +8,7 @@ import { bridgeKeyValid, resolveBridgeUser } from '@/lib/bridge-auth'
 import { applyTaskStatusChange } from '@/features/sprints/task-status-write'
 import { MaintenanceFreezeError } from '@/features/maintenance/write-freeze'
 import { externalBaseUrl, serializeTask } from '@/app/api/external/serialize'
+import { completedBy } from '@/app/api/external/task-scope'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -163,6 +164,7 @@ async function readTask(taskId: string, userId: string) {
       sprintEndDate: liveSprints.endDate,
       assigneeId: liveTasks.assigneeId,
       assigneeName: users.name,
+      completedByMe: sql<boolean>`(${completedBy(userId)})`,
     })
     .from(liveTasks)
     .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
@@ -183,6 +185,7 @@ async function readTask(taskId: string, userId: string) {
       isPrimaryAssignee: row.assigneeId === userId,
       // Only an assignee gets this far — the write above refuses everyone else.
       isAssignee: row.assigneeId === userId || people.some((p) => p.userId === userId),
+      completedByMe: row.completedByMe === true || (row.completedByMe as unknown) === 't',
       assigneeCount: people.length || 1,
     },
     externalBaseUrl(),

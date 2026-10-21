@@ -133,8 +133,13 @@ cron routes carry it — these read a header and must never be cached.
 
 ### `GET /api/external/tasks`
 
-The signed-in Attendance user's own LogPup tasks — and, with `scope=projects`, every task in the
+The signed-in Attendance user's own LogPup tasks — every task they are **assigned to** or
+**completed** (any assignee; added 2026-10-21) — and, with `scope=projects`, every task in the
 projects they belong to.
+
+"Completed" comes from `activity_log`: the task is `done` now and the latest `verb = 'completed'`
+row for it names this person as `actor_id` (`src/app/api/external/task-scope.ts`). `tasks` has no
+"completed by" column, and every completion path logs that row.
 
 | Param | Required | Notes |
 |---|---|---|
@@ -165,6 +170,7 @@ Response:
       "isPrimaryAssignee": true,
       "isAssignee": true,               // false = only here via scope=projects; read-only
       "assignee": { "name": "Someone" }, // tasks.assignee_id's name, or null
+      "completedByMe": false,            // done, and this person made the latest completion
       "assigneeCount": 3,
       "app":    { "id": "<uuid>", "name": "Attendance Web App", "slug": "attendance" },
       "sprint": { "id": "<uuid>", "name": "Sprint 14", "endDate": "2026-09-26" },

@@ -1,10 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { and, asc, desc, eq, exists, inArray, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { appGrants, appRoleHistory, assignments, taskAssignees, users } from '@/db/schema'
 import { bridgeKeyValid, resolveBridgeUser } from '@/lib/bridge-auth'
 import { externalBaseUrl, parseTaskListParams, serializeTask } from '@/app/api/external/serialize'
+import { assignedTo, completedBy } from '@/app/api/external/task-scope'
 
 // `timingSafeEqual` is a node builtin, and reading a header already makes this dynamic — the
 // export is here so both external routes read identically.
@@ -57,15 +58,11 @@ export async function GET(req: NextRequest) {
     // more than it; it is reported in docs/attendance-task-bridge.md rather than fixed here,
     // because repairing assignment semantics deserves its own change. This query is correct
     // whether or not that happens.
-    const isMine = or(
-      eq(liveTasks.assigneeId, user.id),
-      exists(
-        db
-          .select({ one: sql`1` })
-          .from(taskAssignees)
-          .where(and(eq(taskAssignees.taskId, liveTasks.id), eq(taskAssignees.userId, user.id))),
-      ),
-    )
+    const isMine = assignedTo(user.id)
+    // AND everything this person finished, whoever it was assigned to — see task-scope.ts. Their
+    // own work is "on it OR completed it"; it is always in scope, whatever `scope` says.
+    const didComplete = completedBy(user.id)
+    const personal = or(isMine, didComplete)
 
     // scope=projects: ALSO every task in an app this person belongs to. "Belongs to" is the union
     // of the three places LogPup records it — the same three tables loadActor (actor.ts) reads
@@ -90,7 +87,7 @@ export async function GET(req: NextRequest) {
       ),
       inArray(liveTasks.appId, db.select({ id: appGrants.appId }).from(appGrants).where(eq(appGrants.userId, user.id))),
     )
-    const inScope = scope === 'projects' ? or(isMine, inMyProjects) : isMine
+    const inScope = scope === 'projects' ? or(personal, inMyProjects) : personal
 
     const rows = await db
       .select({
@@ -114,6 +111,7 @@ export async function GET(req: NextRequest) {
         assigneeId: liveTasks.assigneeId,
         assigneeName: users.name,
         isAssignee: sql<boolean>`(${isMine})`,
+        completedByMe: sql<boolean>`(${didComplete})`,
       })
       // liveTasks / liveApps / liveSprints are the soft-delete-filtered subqueries from
       // src/db/live.ts. Querying the base tables would serve TRASHED tasks into another
@@ -128,7 +126,7 @@ export async function GET(req: NextRequest) {
       // "soonest first": NULLS LAST so undated work sits below dated work rather than above it,
       // which is what `asc()` alone would do in Postgres.
       .orderBy(
-        sql`(${isMine}) desc`,
+        sql`(${personal}) desc`,
         sql`(${liveTasks.status} = 'done') asc`,
         sql`${liveTasks.dueDate} asc nulls last`,
         desc(liveTasks.priority),
@@ -156,6 +154,7 @@ export async function GET(req: NextRequest) {
           isPrimaryAssignee: row.assigneeId === user.id,
           // The driver can hand back 't'/'f' for a bare boolean expression; normalise it here.
           isAssignee: row.isAssignee === true || (row.isAssignee as unknown) === 't',
+          completedByMe: row.completedByMe === true || (row.completedByMe as unknown) === 't',
           assigneeCount: counts.get(row.id) ?? 1,
         },
         baseUrl,
