@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { safeNext } from '@/lib/safe-next'
+import { auth } from '@/lib/auth'
 import { AttendanceSsoReceiver } from '@/features/auth/components/attendance-sso-receiver'
 
 export const metadata = { title: 'Signing you in' }
@@ -30,15 +31,25 @@ export default async function AttendanceSsoPage(props: {
   const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v)
 
   const token = first(raw.token)
-  // No token at all is not an error worth a page — it is somebody who opened a
-  // bare URL, and the sign-in page is what they actually wanted.
-  if (!token) redirect('/sign-in')
 
   // Validated HERE, on the server, before the value can reach a navigation.
   // An unvalidated `next` is an open redirect, and an open redirect on a
   // sign-in route is the classic way to harvest a session — bounce somebody to
   // a lookalike host at the moment they expect to land somewhere new.
   const next = safeNext(first(raw.next))
+
+  // ALREADY SIGNED IN → straight through, token left unspent. The common case
+  // for a PWA: the handoff was never needed. Without this, any refusal of the
+  // token (expired, replayed, out of scope) sent the receiver to /sign-in, and
+  // /sign-in does not bounce a signed-in visitor — so a person with a perfectly
+  // good LogPup session landed on the login page. This lands them as whoever
+  // is signed in here, exactly as opening LogPup directly would; proxy.ts
+  // still applies its pending/deactivated gates on the way to `next`.
+  if ((await auth())?.user) redirect(next)
+
+  // No token at all is not an error worth a page — it is somebody who opened a
+  // bare URL, and the sign-in page is what they actually wanted.
+  if (!token) redirect('/sign-in')
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-6">

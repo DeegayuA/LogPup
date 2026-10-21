@@ -89,8 +89,8 @@ export async function postEventsToAttendance(events: AttendanceEvent[]): Promise
       return
     }
 
-    // Filter BEFORE the request, never at the far end: a notification for somebody outside the
-    // bridge's domains has no business leaving the building.
+    // Drops only malformed addresses — the bridge has no domain gate (see bridge-auth.ts).
+    // Attendance matches each recipient against its own employees and ignores the rest.
     const inScope = events.filter((e) => bridgeEmailAllowed(e.recipientEmail))
     if (inScope.length === 0) return
 

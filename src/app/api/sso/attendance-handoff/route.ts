@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { auth } from '@/lib/auth'
-import { bridgeEmailAllowed } from '@/lib/bridge-auth'
+import { resolveBridgeUser } from '@/lib/bridge-auth'
 import { signAttendanceHandoff } from '@/features/auth/attendance-sso'
 import { safeNext } from '@/lib/safe-next'
 
@@ -42,12 +42,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
-  // The bridge's domain gate, both directions. An in-domain LogPup user is the
-  // only person who could have an Attendance account to land in; minting for
-  // anyone else would be handing out a token that can only ever be refused.
-  // DELIBERATELY NOT emailAllowed(), which decides who may sign in HERE and
-  // carries four domains — see bridge-auth.ts.
-  if (!bridgeEmailAllowed(email)) {
+  // Approved, active, not removed — the same canHoldWork() gate the task API
+  // uses. /api is exempt from the pending and deactivated gates in proxy.ts, so
+  // without this a fresh, unapproved Google signup whose address matches an
+  // Attendance employee would mint a token and skip LogPup's admin approval.
+  // There is no domain gate (see bridge-auth.ts), which is why this check has
+  // to be here rather than implied by one.
+  if (!(await resolveBridgeUser(email))) {
     return NextResponse.json({ success: false, error: 'Not available for this account' }, { status: 403 })
   }
 

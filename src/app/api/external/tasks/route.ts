@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
   // stack — rather than the sanitized 500 this handler promises.
   try {
     const user = await resolveBridgeUser(email)
-    // 200, NOT 404. An unknown address, an out-of-domain one, and a deactivated, pending or
+    // 200, NOT 404. An unknown address, a malformed one, and a deactivated, pending or
     // removed account all answer identically — a distinguishable "no such user" turns this
     // endpoint into an address oracle for anyone holding the key.
     if (!user) {

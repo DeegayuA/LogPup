@@ -53,7 +53,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   // ONE refusal body for every "no" that is not a malformed request.
   //
-  // An unknown address, an out-of-domain one, a deactivated / pending / removed account, a task
+  // An unknown address, a malformed one, a deactivated / pending / removed account, a task
   // that does not exist, and a task that is not yours all answer IDENTICALLY. Two different 403
   // sentences would be an oracle: a key holder could PATCH a random uuid with a guessed address
   // and read which sentence came back to learn whether that person has a live LogPup account —
