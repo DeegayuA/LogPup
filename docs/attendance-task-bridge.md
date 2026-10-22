@@ -256,6 +256,20 @@ list to their own team view's audience — direct reports, or their company for 
 This route authenticates the calling application and applies `canHoldWork()` per address
 (`resolveBridgeUsers`, one query), nothing more. Three queries total, whatever the list size.
 
+### `POST /api/external/tasks/batch` (added 2026-10-21)
+
+Several people's own tasks — each person's **assigned or completed** tasks — whose Attendance day
+falls in a range, for Attendance's team views. Body and limits as the worklog batch:
+`{ emails, from, to }`. Answers `{ success, from, to, results: [{ email, matched, tasks }] }`;
+`tasks` are the list endpoint's task objects, with `isAssignee` / `completedByMe` /
+`isPrimaryAssignee` set for **that** person (`task-batch.ts`, unit-tested).
+
+**The Attendance day** (`taskDayBetween` in `task-scope.ts`): the Asia/Colombo day of
+`completed_at`, else `due_date`, else the Colombo day of `created_at`. `completed_at` is timestamptz;
+`created_at` is a plain timestamp holding UTC wall time and is read as UTC first. Attendance places
+single-person tasks with the same rule (`logpupTaskDate`), so the two agree. Audience: decided in
+Attendance, as for the worklog batch. Four queries regardless of list size; capped at 5000 rows.
+
 ### `PATCH /api/external/tasks/{id}/status`
 
 ```jsonc
