@@ -277,9 +277,9 @@ export default function PublicHomePage() {
 
             <div className="flex flex-col gap-2">
               <span className="font-mono text-xs font-bold uppercase text-primary">Strict Scope Guard</span>
-              <h3 className="font-heading text-lg font-bold text-foreground">Read-Only Calendar</h3>
+              <h3 className="font-heading text-lg font-bold text-foreground">Your Meetings Only</h3>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Google Calendar integration is strictly utilized to read schedule event metadata. LogPup never alters or writes external events.
+                LogPup uses Google Calendar only to create, update and cancel the events for meetings you schedule in LogPup. It never reads or changes any of your other calendar events.
               </p>
             </div>
           </div>
