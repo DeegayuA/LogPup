@@ -21,8 +21,6 @@ export default async function AppsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
-  // The card's hours are this Colombo month; the panel moves between months.
-  const month = today.slice(0, 7)
   const [rawParams, session, apps, workspaceTechTags, activeUsers, loggedTime] =
     await Promise.all([
       props.searchParams,
@@ -30,7 +28,7 @@ export default async function AppsPage(props: {
       listApps(),
       listDistinctTechTags(),
       listActiveUsers(),
-      loadActor().then((actor) => loadLoggedTimeByApp(actor, month)),
+      loadActor().then((actor) => loadLoggedTimeByApp(actor)),
     ])
   const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   const params = parseBrowseParams(rawParams)

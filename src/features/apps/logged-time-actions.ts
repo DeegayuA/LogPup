@@ -95,8 +95,8 @@ export async function getAppMonthHours(raw: {
 
     return ok({
       month,
-      // Same grouping as the card strip, so the panel's current month and
-      // the strip beside it can never disagree.
+      // Per person, one month. The card beside it shows the all-time
+      // project total (totalLoggedMinutes), so the two are not meant to match.
       people:
         groupLoggedTime(rows, (row) =>
           can(actor, 'worklog.view', { ownerId: row.userId, appId }),

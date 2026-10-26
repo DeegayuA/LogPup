@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import {
   bigint,
-  pgTable, pgEnum, text, uuid, integer, doublePrecision, boolean, date, timestamp,
+  pgTable, pgEnum, text, uuid, integer, serial, doublePrecision, boolean, date, timestamp,
   numeric, index, uniqueIndex, primaryKey, jsonb,
 } from 'drizzle-orm/pg-core'
 
@@ -259,6 +259,11 @@ export const apps = pgTable('apps', {
   // client legitimately share a nickname, and app-aliases.ts already refuses to
   // guess when a term answers to more than one project.
   aliases: text('aliases').array().notNull().default([]),
+  // The project number shown as "#12": assigned by the database on insert
+  // (apps_number_seq), never typed, never edited, never reused — a deleted
+  // project keeps its number. Existing projects were numbered oldest first
+  // by migration 0076. Never put it in an insert or an update set.
+  number: serial('number').notNull(),
   status: appStatus('status').notNull().default('active'),
   repoUrl: text('repo_url'),
   techTags: text('tech_tags').array().notNull().default([]),
@@ -290,6 +295,8 @@ export const apps = pgTable('apps', {
   // that matters — a full-table index would carry deleted rows that no such
   // query ever wants.
   index('apps_live_name_idx').on(t.name).where(sql`${t.deletedAt} is null`),
+  // Over ALL rows, trashed included: a number is never handed out twice.
+  uniqueIndex('apps_number_idx').on(t.number),
 ])
 
 // Append-only "as of" index of who has held PM or lead on an app, and when.

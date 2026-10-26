@@ -98,9 +98,8 @@ export default function AppsLoading() {
                 real cards omit it — the far more common seats see it, and
                 a 26px settle for the rare one beats a jump for everyone. */}
             <div className="flex min-h-5 items-center gap-1.5">
-              <Shimmer className="h-3 w-8" />
-              <Shimmer className="h-5 w-20 rounded-full" />
-              <Shimmer className="h-5 w-20 rounded-full" />
+              <Shimmer className="h-3 w-10" />
+              <Shimmer className="h-3 w-28" />
             </div>
             <div className="flex min-h-6 items-center justify-between gap-2 border-t border-border pt-2">
               <div className="flex -space-x-2">

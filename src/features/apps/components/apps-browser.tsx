@@ -21,10 +21,7 @@ import {
   type BrowseParams,
 } from '@/features/apps/browse'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
-import type { PersonLoggedTime } from '@/features/apps/logged-time'
 import type { LoggedTimeView } from '@/features/apps/logged-time-queries'
-
-const NO_LOGGED_TIME: PersonLoggedTime[] = []
 
 const BASE = '/apps'
 const MAX_TAG_FACETS = 8
@@ -309,7 +306,7 @@ export function AppsBrowser({
               loggedTime={
                 loggedTime
                   ? {
-                      people: loggedTime.byApp.get(app.id) ?? NO_LOGGED_TIME,
+                      totalMinutes: loggedTime.totalByApp.get(app.id) ?? 0,
                       onlyOwn: !loggedTime.seesWholeApp(app.id),
                     }
                   : null

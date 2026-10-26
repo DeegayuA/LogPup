@@ -24,7 +24,6 @@ import { eventDotClasses } from '@/features/meetings/event-color'
 import { MINE_LABEL, mineKind } from '@/features/apps/mine'
 import { LoggedHoursStrip } from '@/features/apps/components/logged-hours-strip'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
-import type { PersonLoggedTime } from '@/features/apps/logged-time'
 
 const STATUS_LABEL: Record<AppStatus, string> = {
   active: 'Active',
@@ -97,7 +96,7 @@ export function AppCard({
    * Worklog hours on this app, already cut to what the viewer may read
    * (features/apps/logged-time-queries.ts). Null hides the band.
    */
-  loggedTime?: { people: PersonLoggedTime[]; onlyOwn: boolean } | null
+  loggedTime?: { totalMinutes: number; onlyOwn: boolean } | null
 }) {
   // How this viewer is attached to the project, if at all. Read off the row
   // the page already has — see features/apps/mine.ts for why this is
@@ -184,6 +183,11 @@ export function AppCard({
             className={cn('size-2 shrink-0 rounded-full', identityDot)}
           />
         ) : null}
+        {/* The automatic project number (apps.number). BEFORE the name, not
+            after: the h3 truncates, and a long name would cut the number off. */}
+        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+          <span className="sr-only">Project </span>#{app.number}
+        </span>
         <h3 className="min-w-0 flex-1 truncate font-heading text-base font-semibold tracking-tight">
           <Link
             href={`/apps/${app.slug}`}
@@ -349,20 +353,18 @@ export function AppCard({
         </span>
       </div>
 
-      {/* HOURS — this month's worklog time per person, most first, filtered
-          by worklog.view before it got here (features/apps/logged-time.ts).
-          Every person is on the strip with their avatar, scrolled sideways;
-          the "Hours · Oct 2026" label opens other months and each person's
-          days (logged-hours-strip.tsx). No total, by request — the question
-          is how long each PERSON spent. `today` is the same Colombo date the
-          page fetched the month from, so the label and figures agree. */}
+      {/* HOURS — one figure, all-time worklog hours on this project, by
+          the owner's request; filtered by worklog.view before it got here
+          (features/apps/logged-time.ts). The "Hours" label opens the month
+          panel with each person's hours (logged-hours-strip.tsx). `today`
+          seeds that panel on the current Colombo month. */}
       {loggedTime ? (
         <div className="flex min-h-5 min-w-0">
           <LoggedHoursStrip
             appId={app.id}
             month={today.slice(0, 7)}
             appName={app.name}
-            people={loggedTime.people}
+            totalMinutes={loggedTime.totalMinutes}
             onlyOwn={loggedTime.onlyOwn}
             viewerId={viewerId}
           />

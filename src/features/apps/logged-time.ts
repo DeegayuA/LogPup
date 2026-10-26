@@ -16,9 +16,11 @@
  * the server, before anything is rendered — hiding rows in the card would
  * still have shipped them.
  *
- * No per-app total, by request: the card answers "how long did each person
- * spend", and a sum would also have needed hiding from 'own' viewers, for
- * whom it is just their own figure again under a team-sized label.
+ * The CARD now shows one figure — all-time hours on the project, by request
+ * of the owner (totalLoggedMinutes). The per-person breakdown moved behind
+ * the card's "Hours" label (logged-hours-panel.tsx). For an 'own' viewer the
+ * figure is their own hours, and the card says "by you": a team-sized label
+ * on it would state something false.
  */
 
 export type PersonLoggedTime = {
@@ -68,6 +70,26 @@ export function groupLoggedTime(
     people.sort((a, b) => b.minutes - a.minutes || a.name.localeCompare(b.name))
   }
   return byApp
+}
+
+/**
+ * One figure per app: every visible row's minutes summed. The "0h" floor
+ * applies to the TOTAL, not each row — two 2-minute entries are still 4
+ * minutes of work on the project.
+ */
+export function totalLoggedMinutes(
+  rows: Pick<LoggedTimeRow, 'appId' | 'userId' | 'minutes'>[],
+  seesRow: (row: { appId: string; userId: string }) => boolean = () => true,
+): Map<string, number> {
+  const totals = new Map<string, number>()
+  for (const row of rows) {
+    if (!row.appId || !seesRow({ appId: row.appId, userId: row.userId })) continue
+    totals.set(row.appId, (totals.get(row.appId) ?? 0) + row.minutes)
+  }
+  for (const [appId, minutes] of totals) {
+    if (minutes < MIN_SHOWN_MINUTES) totals.delete(appId)
+  }
+  return totals
 }
 
 /**

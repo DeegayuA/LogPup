@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { MONTH_PATTERN, groupLoggedTime, monthLabel, monthRange, shiftMonth } from './logged-time'
+import {
+  MONTH_PATTERN,
+  groupLoggedTime,
+  monthLabel,
+  monthRange,
+  shiftMonth,
+  totalLoggedMinutes,
+} from './logged-time'
 
 const row = (appId: string, userId: string, minutes: number, name = userId) => ({
   appId,
@@ -50,6 +57,28 @@ describe('groupLoggedTime', () => {
     )
     expect(byApp.get('a')?.map((p) => p.userId)).toEqual(['me'])
     expect(byApp.has('b')).toBe(false)
+  })
+})
+
+describe('totalLoggedMinutes', () => {
+  it('sums every person on an app into one figure', () => {
+    const totals = totalLoggedMinutes([row('a', 'u1', 120), row('a', 'u2', 30), row('b', 'u1', 60)])
+    expect(totals.get('a')).toBe(150)
+    expect(totals.get('b')).toBe(60)
+  })
+
+  it('counts short entries toward the sum, but drops a total that would print as "0h"', () => {
+    const totals = totalLoggedMinutes([row('a', 'u1', 2), row('a', 'u2', 2), row('b', 'u1', 2)])
+    expect(totals.get('a')).toBe(4)
+    expect(totals.has('b')).toBe(false)
+  })
+
+  it('drops null-app rows and rows the viewer may not see', () => {
+    const totals = totalLoggedMinutes(
+      [{ ...row('a', 'me', 90), appId: null }, row('a', 'me', 60), row('a', 'other', 300)],
+      (r) => r.userId === 'me',
+    )
+    expect(totals.get('a')).toBe(60)
   })
 })
 
