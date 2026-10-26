@@ -5,6 +5,8 @@ import { getSession } from '@/lib/session'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { listActiveUsers } from '@/features/people/queries'
 import { listApps, listDistinctTechTags } from '@/features/apps/queries'
+import { loadLoggedTimeByApp } from '@/features/apps/logged-time-queries'
+import { loadActor } from '@/features/auth/actor'
 import { summarizePortfolio } from '@/features/apps/app-health'
 import { browseHref, parseBrowseParams } from '@/features/apps/browse'
 import { AppsBrowser } from '@/features/apps/components/apps-browser'
@@ -18,19 +20,23 @@ export const metadata = { title: 'App Portfolio' }
 export default async function AppsPage(props: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const [rawParams, session, apps, workspaceTechTags, activeUsers] = await Promise.all([
-    props.searchParams,
-    getSession(),
-    listApps(),
-    listDistinctTechTags(),
-    listActiveUsers(),
-  ])
+  const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
+  // The card's hours are this Colombo month; the panel moves between months.
+  const month = today.slice(0, 7)
+  const [rawParams, session, apps, workspaceTechTags, activeUsers, loggedTime] =
+    await Promise.all([
+      props.searchParams,
+      getSession(),
+      listApps(),
+      listDistinctTechTags(),
+      listActiveUsers(),
+      loadActor().then((actor) => loadLoggedTimeByApp(actor, month)),
+    ])
   const isAdmin = session?.user ? isAdminRole(session.user.role) : false
   const params = parseBrowseParams(rawParams)
   const aiPrefs = isAdmin && session?.user ? await getAiPrefs(session.user.id) : null
   const appMetadataEnabled = aiPrefs ? aiPrefs['app-metadata'].enabled : true
 
-  const today = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
   const summary = summarizePortfolio(apps)
 
   return (
@@ -84,6 +90,7 @@ export default async function AppsPage(props: {
             params={params}
             today={today}
             viewerId={session?.user?.id ?? null}
+            loggedTime={loggedTime}
           />
         </>
       )}

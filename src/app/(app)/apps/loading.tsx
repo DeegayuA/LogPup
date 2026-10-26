@@ -8,9 +8,10 @@ function Shimmer({ className }: { className?: string }) {
 
 /**
  * Deliberately shaped like the real page — header, six stat tiles, the search
- * + status row, the sort/tag row, then cards built to the same five bands as
- * app-card.tsx (header 24 · urgency 16 · bar 26 · context 16 · people 33, with
- * gap-2.5 and p-4, so a skeleton card is the same 187px a real one is). An
+ * + status row, the sort/tag row, then cards built to the same six bands as
+ * app-card.tsx (header 24 · urgency 16 · bar 26 · context 16 · hours 20 ·
+ * people 33, with gap-2.5 and p-4, so a skeleton card is the same ~217px a
+ * real one is). An
  * earlier skeleton modelled a much shorter card and no controls at all, so
  * every load ended in a visible jump as the real content pushed everything
  * down; the card is now shorter than that skeleton was, and a stale skeleton
@@ -92,6 +93,14 @@ export default function AppsLoading() {
             <div className="flex min-h-4 items-center justify-between gap-2">
               <Shimmer className="h-3 w-28" />
               <Shimmer className="h-3 w-20" />
+            </div>
+            {/* Hours band. Drawn for every viewer, though a stakeholder's
+                real cards omit it — the far more common seats see it, and
+                a 26px settle for the rare one beats a jump for everyone. */}
+            <div className="flex min-h-5 items-center gap-1.5">
+              <Shimmer className="h-3 w-8" />
+              <Shimmer className="h-5 w-20 rounded-full" />
+              <Shimmer className="h-5 w-20 rounded-full" />
             </div>
             <div className="flex min-h-6 items-center justify-between gap-2 border-t border-border pt-2">
               <div className="flex -space-x-2">
