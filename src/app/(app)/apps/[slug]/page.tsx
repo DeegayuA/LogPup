@@ -420,6 +420,7 @@ export default async function AppDetailPage(props: {
       />
       <AppHeader
         name={app.name}
+        number={app.number}
         slug={app.slug}
         status={app.status}
         description={app.description}

@@ -20,7 +20,8 @@
 import type { AppHealth, AppStatus, AppTaskCounts } from '@/features/apps/app-health'
 import { completionPct } from '@/features/apps/app-health'
 
-export const APP_SORTS = ['risk', 'activity', 'progress', 'name'] as const
+// The default first, so the selected chip sits at the start of the row.
+export const APP_SORTS = ['number', 'risk', 'activity', 'progress', 'name'] as const
 export type AppSort = (typeof APP_SORTS)[number]
 
 export const SORT_LABEL: Record<AppSort, string> = {
@@ -28,6 +29,8 @@ export const SORT_LABEL: Record<AppSort, string> = {
   activity: 'Recent',
   progress: 'Progress',
   name: 'Name',
+  // The automatic project number (apps.number), #1 first — creation order.
+  number: 'Number',
 }
 
 /**
@@ -47,7 +50,10 @@ export const STATUS_FILTER_LABEL: Record<AppStatusFilter, string> = {
   archived: 'Archived',
 }
 
-export const DEFAULT_SORT: AppSort = 'risk'
+// Number (#1, #2, …) by the owner's request: the portfolio reads as the list
+// of projects in the order they were opened. Risk is one click away, and the
+// header strip's "At risk" tile still narrows the grid to the risky ones.
+export const DEFAULT_SORT: AppSort = 'number'
 export const DEFAULT_STATUS: AppStatusFilter = 'live'
 
 /**
@@ -162,6 +168,8 @@ export function browseHref(
 
 /** The shape the grid needs; `AppPortfolioEntry` satisfies it structurally. */
 export type BrowsableApp = {
+  /** apps.number. Optional so a caller without it still sorts — those go last. */
+  number?: number
   name: string
   slug: string
   description: string | null
@@ -284,6 +292,10 @@ export function sortApps<T extends BrowsableApp>(apps: readonly T[], sort: AppSo
         return b.stats.tasks.total - a.stats.tasks.total
       }
       return byName(a, b)
+    }
+    if (sort === 'number') {
+      const delta = (a.number ?? Infinity) - (b.number ?? Infinity)
+      return Number.isNaN(delta) || delta === 0 ? byName(a, b) : delta
     }
     return byName(a, b)
   })

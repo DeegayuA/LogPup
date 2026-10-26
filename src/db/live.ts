@@ -80,6 +80,8 @@ export const liveAppColumns = {
   // make the column unreadable by every live read and unrenderable by the form
   // that edits it.
   aliases: liveApps.aliases,
+  // Same reason: the card and the detail header print it as "#12".
+  number: liveApps.number,
   status: liveApps.status,
   repoUrl: liveApps.repoUrl,
   techTags: liveApps.techTags,

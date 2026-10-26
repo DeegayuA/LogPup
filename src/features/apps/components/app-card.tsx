@@ -22,6 +22,7 @@ import { HealthDot } from '@/features/apps/components/health-dot'
 import { TaskSplitBar } from '@/features/apps/components/task-split-bar'
 import { eventDotClasses } from '@/features/meetings/event-color'
 import { MINE_LABEL, mineKind } from '@/features/apps/mine'
+import { LoggedHoursStrip } from '@/features/apps/components/logged-hours-strip'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
 
 const STATUS_LABEL: Record<AppStatus, string> = {
@@ -50,10 +51,16 @@ const MAX_TAGS = 3
 const MAX_AVATARS = 4
 
 /**
- * FIVE BANDS, 187px: header 24 · urgency 16 · bar 26 · context 16 · people 33,
- * plus 4 × gap-2.5 and p-4. The card this replaced ran ~320px and, worse, its
- * height moved with its content — a wrapping Badge row and a sprint block that
- * collapsed from three lines to one meant the tallest card in a row set the
+ * SIX BANDS, ~217px: header 24 · urgency 16 · bar 26 · context 16 · hours 20
+ * · people 33, plus 5 × gap-2.5 and p-4. The hours band is the one exception
+ * to rule 1 below: per-person logged time was asked for explicitly and no
+ * existing band had the width for it. It obeys rule 2 like the rest, and is
+ * absent on EVERY card at once (a viewer with no worklog.view), never on
+ * some, so the grid stays one height.
+ *
+ * The card this replaced ran ~320px and, worse, its height moved with its
+ * content — a wrapping Badge row and a sprint block that collapsed from three
+ * lines to one meant the tallest card in a row set the
  * height of every card beside it, so the same fact sat at a different y on
  * every card in the grid. Two rules keep that from coming back:
  *
@@ -79,11 +86,17 @@ export function AppCard({
   app,
   today,
   viewerId = null,
+  loggedTime = null,
 }: {
   app: AppPortfolioEntry
   today: string
   /** Signed-in person, or null for a deactivated account with no Actor. */
   viewerId?: string | null
+  /**
+   * Worklog hours on this app, already cut to what the viewer may read
+   * (features/apps/logged-time-queries.ts). Null hides the band.
+   */
+  loggedTime?: { totalMinutes: number; onlyOwn: boolean } | null
 }) {
   // How this viewer is attached to the project, if at all. Read off the row
   // the page already has — see features/apps/mine.ts for why this is
@@ -135,250 +148,292 @@ export function AppCard({
       }`
 
   return (
-    <Link
-      href={`/apps/${app.slug}`}
-      // A whole-card link would otherwise announce every fragment on the card
-      // — each tag, each avatar, "3d left" — as one run-on name. The full
-      // detail stays readable in browse mode; this is the tab-through summary.
-      //
-      // Deliberately held byte-for-byte constant through the density work:
-      // `openTasks` and `donePct` stay computed after they stopped being
-      // printed as figures, because someone arrowing down a grid of twelve
-      // links should not have to enter each card to find out which one has the
-      // overdue work, and "0 overdue" has no visual form on this card by
-      // design. Shrinking the card must never shrink what a link-list user
-      // hears — if a future band goes, this string still does not.
-      aria-label={
-        `${app.name} — ${HEALTH_LABEL[app.health.level]}. ` +
-        (mine ? `${MINE_LABEL[mine]}. ` : '') +
-        `${openTasks} open, ${tasks.overdue} overdue, ${donePct}% done.`
-      }
-      className="group block h-full rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+    // STRETCHED LINK, not a link wrapping the card. The hours band is a
+    // focusable scroll strip, and focusable content inside an <a> is invalid
+    // HTML that also turns every scroll-drag into a navigation. So the <Link>
+    // lives on the name and an absolutely positioned span inside it covers
+    // the whole card; the strip is lifted above that cover with z-10, as is
+    // everything carrying a `title` (the name, the health pill, avatars,
+    // owner line) — under the cover a hover tooltip is unreachable. A new
+    // title-bearing element needs the same. Focus and hover styling moved
+    // from the old wrapper to the article via `has-` and `hover:`.
+    <article
+      className={cn(
+        'relative flex h-full flex-col gap-2.5 rounded-xl border-l-2 bg-card p-4 ring-1 ring-foreground/10',
+        'transition-[transform,box-shadow] duration-150 ease-out',
+        'hover:-translate-y-0.5 hover:ring-ring/40',
+        'motion-reduce:transition-none motion-reduce:hover:translate-y-0',
+        'ring-offset-background has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-offset-2 hover:has-[a:focus-visible]:ring-ring',
+        HEALTH_ACCENT[app.health.level],
+        app.status === 'archived' && 'opacity-70',
+      )}
     >
-      <article
-        className={cn(
-          'flex h-full flex-col gap-2.5 rounded-xl border-l-2 bg-card p-4 ring-1 ring-foreground/10',
-          'transition-[transform,box-shadow] duration-150 ease-out',
-          'group-hover:-translate-y-0.5 group-hover:ring-ring/40',
-          'motion-reduce:transition-none motion-reduce:group-hover:translate-y-0',
-          HEALTH_ACCENT[app.health.level],
-          app.status === 'archived' && 'opacity-70',
-        )}
-      >
-        {/* The name is the only thing on this card set in the heading face at
-            full foreground contrast, and it is now the largest text on it. The
-            first pass down a grid is "which app is this"; the old card
-            answered that in text-base while shouting three unrelated figures
-            at text-xl, so the eye landed on a number it had no question for
-            yet. `title` is the name itself — the row is shared with the pill,
-            so the name truncates sooner than it used to and a clipped name is
-            the one string on the card worth a pointer to recover. */}
-        <header className="flex min-h-6 items-center gap-2">
-          {identityDot ? (
-            <span
-              aria-hidden
-              className={cn('size-2 shrink-0 rounded-full', identityDot)}
-            />
-          ) : null}
-          <h3
-            title={app.name}
-            className="min-w-0 flex-1 truncate font-heading text-base font-semibold tracking-tight"
+      {/* The name is the only thing on this card set in the heading face at
+          full foreground contrast, and it is now the largest text on it. The
+          first pass down a grid is "which app is this"; the old card
+          answered that in text-base while shouting three unrelated figures
+          at text-xl, so the eye landed on a number it had no question for
+          yet. `title` is the name itself — the row is shared with the pill,
+          so the name truncates sooner than it used to and a clipped name is
+          the one string on the card worth a pointer to recover. */}
+      <header className="flex min-h-6 items-center gap-2">
+        {identityDot ? (
+          <span
+            aria-hidden
+            className={cn('size-2 shrink-0 rounded-full', identityDot)}
+          />
+        ) : null}
+        {/* The automatic project number (apps.number). BEFORE the name, not
+            after: the h3 truncates, and a long name would cut the number off. */}
+        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+          <span className="sr-only">Project </span>#{app.number}
+        </span>
+        <h3 className="min-w-0 flex-1 truncate font-heading text-base font-semibold tracking-tight">
+          <Link
+            href={`/apps/${app.slug}`}
+            // A card-sized link would otherwise announce every fragment on
+            // the card — each tag, each avatar, "3d left" — as one run-on
+            // name. The full detail stays readable in browse mode; this is
+            // the tab-through summary.
+            //
+            // Deliberately held byte-for-byte constant through the density
+            // work: `openTasks` and `donePct` stay computed after they
+            // stopped being printed as figures, because someone arrowing
+            // down a grid of twelve links should not have to enter each card
+            // to find out which one has the overdue work, and "0 overdue" has
+            // no visual form on this card by design. Shrinking the card must
+            // never shrink what a link-list user hears — if a future band
+            // goes, this string still does not.
+            aria-label={
+              `${app.name} — ${HEALTH_LABEL[app.health.level]}. ` +
+              (mine ? `${MINE_LABEL[mine]}. ` : '') +
+              `${openTasks} open, ${tasks.overdue} overdue, ${donePct}% done.`
+            }
+            className="outline-none"
           >
-            {app.name}
-          </h3>
-          {/* Your relationship to the project, in WORDS — and in the SAME
-              neutral treatment as the status pill below, deliberately.
-              This card already spends colour twice: the left edge on health
-              (which one needs a person today) and the dot on identity (which
-              project this is). Tinting ownership as well made every card you
-              are on look like a different kind of card, which is a third
-              colour system saying something neither urgent nor ambiguous.
-              Ownership is a fact; facts get words. */}
-          {mine ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 font-mono text-2xs text-muted-foreground">
-              {MINE_LABEL[mine]}
+            {/* `title` on this span, not the h3 or link: the cover below is
+                their descendant and would show the name over the whole card.
+                z-10 so the pointer reaches it through the cover; it is still
+                inside the <a>, so a click on it navigates. */}
+            <span title={app.name} className="relative z-10">
+              {app.name}
             </span>
-          ) : null}
-          {/* Silent for `active`, and silent for archived because the health
-              pill's own word for `dormant` is already "Archived" — printing it
-              twice on one 24px row is the duplicated emphasis this card was
-              rebuilt to remove. Paused is the case that survives: it changes
-              how every figure below should be read and nothing else says it. */}
-          {app.status !== 'active' && app.health.level !== 'dormant' ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 font-mono text-2xs text-muted-foreground">
-              {STATUS_LABEL[app.status]}
-            </span>
-          ) : null}
-          {/* Full pill, unchanged. The old card had it competing with three
-              bordered tag Badges per card; the tags are plain text now, so the
-              pill is the only bordered shape left and reads as loud as it
-              should without stripping its chrome on the on-track cards —
-              which would have made the same component render two different
-              silhouettes on two surfaces for a 0px saving. */}
-          <HealthDot health={app.health} />
-        </header>
+            {/* z-[1], not auto: any later `relative` child (the split bar's
+                wrapper) would otherwise paint over the cover and swallow the
+                click. The z-10 rows sit above it on purpose. */}
+            <span aria-hidden className="absolute inset-0 z-[1] rounded-xl" />
+          </Link>
+        </h3>
+        {/* Your relationship to the project, in WORDS — and in the SAME
+            neutral treatment as the status pill below, deliberately.
+            This card already spends colour twice: the left edge on health
+            (which one needs a person today) and the dot on identity (which
+            project this is). Tinting ownership as well made every card you
+            are on look like a different kind of card, which is a third
+            colour system saying something neither urgent nor ambiguous.
+            Ownership is a fact; facts get words. */}
+        {mine ? (
+          <span className="shrink-0 rounded-sm bg-muted px-1.5 font-mono text-2xs text-muted-foreground">
+            {MINE_LABEL[mine]}
+          </span>
+        ) : null}
+        {/* Silent for `active`, and silent for archived because the health
+            pill's own word for `dormant` is already "Archived" — printing it
+            twice on one 24px row is the duplicated emphasis this card was
+            rebuilt to remove. Paused is the case that survives: it changes
+            how every figure below should be read and nothing else says it. */}
+        {app.status !== 'active' && app.health.level !== 'dormant' ? (
+          <span className="shrink-0 rounded-sm bg-muted px-1.5 font-mono text-2xs text-muted-foreground">
+            {STATUS_LABEL[app.status]}
+          </span>
+        ) : null}
+        {/* Full pill, unchanged. The old card had it competing with three
+            bordered tag Badges per card; the tags are plain text now, so the
+            pill is the only bordered shape left and reads as loud as it
+            should without stripping its chrome on the on-track cards —
+            which would have made the same component render two different
+            silhouettes on two surfaces for a 0px saving. */}
+        <HealthDot health={app.health} className="relative z-10" />
+      </header>
 
-        {/* URGENCY — the deadline you are running against and the work that
-            already blew past one, on a single line because they answer one
-            question and are the only two things on this card allowed to go
-            text-destructive. Red scattered across three separate bands is what
-            made a card in trouble scan the same as a merely busy one. All
-            three sprint states render exactly one line, so "no sprint running"
-            no longer collapses a three-line block and shifts every card beside
-            it by 28px. */}
-        <div className="flex min-h-4 items-center justify-between gap-2 text-2xs">
-          {currentSprint && progress ? (
-            <span className="flex min-w-0 items-baseline gap-1.5">
-              <span className="truncate text-muted-foreground">{currentSprint.name}</span>
-              <span
-                className={cn(
-                  'shrink-0 font-mono tabular-nums',
-                  overrun || progress.remainingDays <= 2
-                    ? 'font-medium text-destructive'
-                    : 'text-muted-foreground',
-                )}
-              >
-                {overrun
-                  ? `${-progress.remainingDays}d over`
-                  : `${progress.remainingDays}d left`}
-              </span>
+      {/* URGENCY — the deadline you are running against and the work that
+          already blew past one, on a single line because they answer one
+          question and are the only two things on this card allowed to go
+          text-destructive. Red scattered across three separate bands is what
+          made a card in trouble scan the same as a merely busy one. All
+          three sprint states render exactly one line, so "no sprint running"
+          no longer collapses a three-line block and shifts every card beside
+          it by 28px. */}
+      <div className="flex min-h-4 items-center justify-between gap-2 text-2xs">
+        {currentSprint && progress ? (
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="truncate text-muted-foreground">{currentSprint.name}</span>
+            <span
+              className={cn(
+                'shrink-0 font-mono tabular-nums',
+                overrun || progress.remainingDays <= 2
+                  ? 'font-medium text-destructive'
+                  : 'text-muted-foreground',
+              )}
+            >
+              {overrun
+                ? `${-progress.remainingDays}d over`
+                : `${progress.remainingDays}d left`}
             </span>
-          ) : nextSprint ? (
-            <span className="min-w-0 truncate text-muted-foreground">
-              Next sprint {nextSprint.name} starts{' '}
-              <span className="font-mono tabular-nums">
-                {format(parseCalendarDate(nextSprint.startDate), 'MMM d')}
-              </span>
+          </span>
+        ) : nextSprint ? (
+          <span className="min-w-0 truncate text-muted-foreground">
+            Next sprint {nextSprint.name} starts{' '}
+            <span className="font-mono tabular-nums">
+              {format(parseCalendarDate(nextSprint.startDate), 'MMM d')}
             </span>
-          ) : (
-            <span className="min-w-0 truncate text-muted-foreground">No sprint running</span>
-          )}
+          </span>
+        ) : (
+          <span className="min-w-0 truncate text-muted-foreground">No sprint running</span>
+        )}
 
-          {/* Nothing at all when the count is zero. The old card printed
-              "Overdue 0" at text-xl on every card, so the one figure on the
-              grid that earns a colour was drowned by eleven copies of itself
-              saying nothing — absence IS the zero here, and the link's
-              aria-label still states it in words for a reader who cannot see
-              an absence. The explicit {' '} is load-bearing: JSX drops a
-              whitespace run that contains a newline, and without it the
-              accessible name can flatten to "3overdue". */}
-          {tasks.overdue > 0 ? (
-            <span className="flex shrink-0 items-center gap-1 font-medium text-destructive">
-              <TriangleAlert aria-hidden className="size-3.5" />
-              <span className="font-mono tabular-nums">{tasks.overdue}</span>{' '}
-              overdue
-            </span>
+        {/* Nothing at all when the count is zero. The old card printed
+            "Overdue 0" at text-xl on every card, so the one figure on the
+            grid that earns a colour was drowned by eleven copies of itself
+            saying nothing — absence IS the zero here, and the link's
+            aria-label still states it in words for a reader who cannot see
+            an absence. The explicit {' '} is load-bearing: JSX drops a
+            whitespace run that contains a newline, and without it the
+            accessible name can flatten to "3overdue". */}
+        {tasks.overdue > 0 ? (
+          <span className="flex shrink-0 items-center gap-1 font-medium text-destructive">
+            <TriangleAlert aria-hidden className="size-3.5" />
+            <span className="font-mono tabular-nums">{tasks.overdue}</span>{' '}
+            overdue
+          </span>
+        ) : null}
+      </div>
+
+      {/* Work done, with the sprint's time-elapsed drawn across it as a tick
+          (see task-split-bar.tsx). The burn gap — the rule that scores an app
+          at 25 points of daylight between time spent and work done — was
+          previously two figures ~90px apart that the reader had to subtract;
+          it is now the distance between the tick and the end of the done
+          segment. That is why the sprint's own progress bar is gone rather
+          than stacked here: a second bar 6px away would have had to be told
+          apart from this one by fill alone, and every fill available for it
+          sits within 0.06 lightness of --primary or --chart-1 in one theme or
+          the other. */}
+      <TaskSplitBar tasks={tasks} elapsedPct={progress ? progress.pct : null} />
+
+      {/* Tech tags as plain text rather than Badges, and no lifetime
+          sprint/meeting/comment counters. Three bordered pills per card put
+          thirty-six pieces of chrome on the grid competing with the one pill
+          that means something, and the Badge row was the card's biggest
+          height variance — at three columns it silently became two rows and
+          pushed +26px onto every card in that row. The counters were
+          cumulative history, not state: nothing you do today changes because
+          an app has held 17 meetings, and "is anything happening here" is
+          answered by the activity stamp beside them, which keeps its visible
+          "Active" label rather than hiding it in a tooltip. */}
+      <div className="mt-auto flex min-h-4 items-baseline justify-between gap-2 text-2xs text-muted-foreground">
+        <span className="min-w-0 truncate font-mono">
+          {visibleTags.length > 0 ? (
+            <>
+              {/* Without this the row announces "react · postgres · redis
+                  Active 3 days ago" and the first three words belong to
+                  nothing. The stamp beside it names itself in visible text;
+                  the tags cannot, because the visible label would cost the
+                  width the tags are already short of. */}
+              <span className="sr-only">Tech tags: </span>
+              {visibleTags.join(' · ')}
+              {extraTags > 0 ? ` +${extraTags}` : null}
+            </>
           ) : null}
+        </span>
+        <span className="shrink-0 tabular-nums">
+          {lastActivityAt
+            ? `Active ${formatDistanceToNowStrict(lastActivityAt, { addSuffix: true })}`
+            : 'No activity yet'}
+        </span>
+      </div>
+
+      {/* HOURS — one figure, all-time worklog hours on this project, by
+          the owner's request; filtered by worklog.view before it got here
+          (features/apps/logged-time.ts). The "Hours" label opens the month
+          panel with each person's hours (logged-hours-strip.tsx). `today`
+          seeds that panel on the current Colombo month. */}
+      {loggedTime ? (
+        <div className="flex min-h-5 min-w-0">
+          <LoggedHoursStrip
+            appId={app.id}
+            month={today.slice(0, 7)}
+            appName={app.name}
+            totalMinutes={loggedTime.totalMinutes}
+            onlyOwn={loggedTime.onlyOwn}
+            viewerId={viewerId}
+          />
         </div>
+      ) : null}
 
-        {/* Work done, with the sprint's time-elapsed drawn across it as a tick
-            (see task-split-bar.tsx). The burn gap — the rule that scores an app
-            at 25 points of daylight between time spent and work done — was
-            previously two figures ~90px apart that the reader had to subtract;
-            it is now the distance between the tick and the end of the done
-            segment. That is why the sprint's own progress bar is gone rather
-            than stacked here: a second bar 6px away would have had to be told
-            apart from this one by fill alone, and every fill available for it
-            sits within 0.06 lightness of --primary or --chart-1 in one theme or
-            the other. */}
-        <TaskSplitBar tasks={tasks} elapsedPct={progress ? progress.pct : null} />
-
-        {/* Tech tags as plain text rather than Badges, and no lifetime
-            sprint/meeting/comment counters. Three bordered pills per card put
-            thirty-six pieces of chrome on the grid competing with the one pill
-            that means something, and the Badge row was the card's biggest
-            height variance — at three columns it silently became two rows and
-            pushed +26px onto every card in that row. The counters were
-            cumulative history, not state: nothing you do today changes because
-            an app has held 17 meetings, and "is anything happening here" is
-            answered by the activity stamp beside them, which keeps its visible
-            "Active" label rather than hiding it in a tooltip. */}
-        <div className="mt-auto flex min-h-4 items-baseline justify-between gap-2 text-2xs text-muted-foreground">
-          <span className="min-w-0 truncate font-mono">
-            {visibleTags.length > 0 ? (
-              <>
-                {/* Without this the row announces "react · postgres · redis
-                    Active 3 days ago" and the first three words belong to
-                    nothing. The stamp beside it names itself in visible text;
-                    the tags cannot, because the visible label would cost the
-                    width the tags are already short of. */}
-                <span className="sr-only">Tech tags: </span>
-                {visibleTags.join(' · ')}
-                {extraTags > 0 ? ` +${extraTags}` : null}
-              </>
+      <div className="flex min-h-6 items-center justify-between gap-2 border-t border-border pt-2">
+        {visibleMembers.length > 0 ? (
+          <AvatarGroup className="relative z-10 *:data-[slot=avatar]:ring-card">
+            {visibleMembers.map((member) => (
+              <Avatar key={member.userId} size="sm" title={`${member.name} · ${member.role}`}>
+                {member.avatarUrl ? (
+                  <AvatarImage src={member.avatarUrl} alt={member.name} />
+                ) : null}
+                <AvatarFallback>{member.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+                {member.userId === app.leadId ? (
+                  <AvatarBadge title="Lead">
+                    <span className="sr-only">Lead</span>
+                  </AvatarBadge>
+                ) : null}
+              </Avatar>
+            ))}
+            {extraMembers > 0 ? (
+              <AvatarGroupCount className="font-mono text-xs ring-card group-has-data-[size=sm]/avatar-group:size-6">
+                +{extraMembers}
+              </AvatarGroupCount>
             ) : null}
+          </AvatarGroup>
+        ) : (
+          // truncate, not a bare span: at two columns this sits beside the
+          // owner line and would otherwise wrap to a second row, making the
+          // unassigned apps — the ones this branch exists to surface — the
+          // tallest cards in their row.
+          <span className="min-w-0 truncate text-2xs text-muted-foreground">
+            Nobody assigned
           </span>
-          <span className="shrink-0 tabular-nums">
-            {lastActivityAt
-              ? `Active ${formatDistanceToNowStrict(lastActivityAt, { addSuffix: true })}`
-              : 'No activity yet'}
-          </span>
-        </div>
-
-        <div className="flex min-h-6 items-center justify-between gap-2 border-t border-border pt-2">
-          {visibleMembers.length > 0 ? (
-            <AvatarGroup className="*:data-[slot=avatar]:ring-card">
-              {visibleMembers.map((member) => (
-                <Avatar key={member.userId} size="sm" title={`${member.name} · ${member.role}`}>
-                  {member.avatarUrl ? (
-                    <AvatarImage src={member.avatarUrl} alt={member.name} />
-                  ) : null}
-                  <AvatarFallback>{member.name.slice(0, 1).toUpperCase()}</AvatarFallback>
-                  {member.userId === app.leadId ? (
-                    <AvatarBadge title="Lead">
-                      <span className="sr-only">Lead</span>
-                    </AvatarBadge>
-                  ) : null}
-                </Avatar>
-              ))}
-              {extraMembers > 0 ? (
-                <AvatarGroupCount className="font-mono text-xs ring-card group-has-data-[size=sm]/avatar-group:size-6">
-                  +{extraMembers}
-                </AvatarGroupCount>
-              ) : null}
-            </AvatarGroup>
+        )}
+        {/* One line, but never by concatenation — see `oneHolder` above for
+            why the equal-ids case gets its own branch. Where the two really
+            are different people the role words stay muted and the names take
+            foreground, so the eye separates them by weight rather than by
+            counting separators. Do not re-flatten this into a single
+            template string. */}
+        <p title={ownerLine} className="relative z-10 min-w-0 truncate text-2xs text-muted-foreground">
+          {oneHolder ? (
+            <>
+              PM &amp; Lead <span className="font-medium text-foreground">{app.pmName}</span>
+            </>
           ) : (
-            // truncate, not a bare span: at two columns this sits beside the
-            // owner line and would otherwise wrap to a second row, making the
-            // unassigned apps — the ones this branch exists to surface — the
-            // tallest cards in their row.
-            <span className="min-w-0 truncate text-2xs text-muted-foreground">
-              Nobody assigned
-            </span>
+            <>
+              {app.pmName ? (
+                <>
+                  PM <span className="font-medium text-foreground">{app.pmName}</span>
+                </>
+              ) : (
+                'No PM'
+              )}
+              {' · '}
+              {app.leadName ? (
+                <>
+                  Lead <span className="font-medium text-foreground">{app.leadName}</span>
+                </>
+              ) : (
+                'No lead'
+              )}
+            </>
           )}
-          {/* One line, but never by concatenation — see `oneHolder` above for
-              why the equal-ids case gets its own branch. Where the two really
-              are different people the role words stay muted and the names take
-              foreground, so the eye separates them by weight rather than by
-              counting separators. Do not re-flatten this into a single
-              template string. */}
-          <p title={ownerLine} className="min-w-0 truncate text-2xs text-muted-foreground">
-            {oneHolder ? (
-              <>
-                PM &amp; Lead <span className="font-medium text-foreground">{app.pmName}</span>
-              </>
-            ) : (
-              <>
-                {app.pmName ? (
-                  <>
-                    PM <span className="font-medium text-foreground">{app.pmName}</span>
-                  </>
-                ) : (
-                  'No PM'
-                )}
-                {' · '}
-                {app.leadName ? (
-                  <>
-                    Lead <span className="font-medium text-foreground">{app.leadName}</span>
-                  </>
-                ) : (
-                  'No lead'
-                )}
-              </>
-            )}
-          </p>
-        </div>
-      </article>
-    </Link>
+        </p>
+      </div>
+    </article>
   )
 }

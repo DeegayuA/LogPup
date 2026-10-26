@@ -7,7 +7,7 @@ LogPup is an internal engineering ops HQ for a small studio: track every app you
 ## Features
 
 - **Dashboard** — team capacity heat, active sprints with progress, upcoming meetings, all in one briefing.
-- **Apps** — one card per product: status, tech tags, team avatars, lead; detail page with team, sprint board, meetings, and settings.
+- **Apps** — one card per product: an automatic project number (#1, #2… assigned on create, never reused; the portfolio opens sorted by it, with Risk/Recent/Progress/Name one click away), status, tech tags, team avatars, lead, and the total hours spent on the project from the work log, all time (filtered by `worklog.view`: members see their own hours, PMs/leads everyone on their projects); the "Hours" label opens a month/year view of each person's hours; detail page with team, sprint board, meetings, and settings.
 - **Sprint boards** — kanban with drag-and-drop, optimistic updates, per-role move permissions, backlog view, one-way Notion export.
 - **People & capacity** — allocation percentages per app; capacity bars go pine → ember → red past 100%; per-person activity contribution graph.
 - **Meetings** — schedule with Google Calendar invites, mini-calendar day filter, and **Meeting Intelligence**: record mic or screen+mic audio in the browser and Gemini transcribes it (English + සිංහල), extracting per-person notes, action items, deadlines, a software-terms glossary, and follow-up questions that surface as prep at the next meeting.

@@ -21,6 +21,7 @@ import {
   type BrowseParams,
 } from '@/features/apps/browse'
 import type { AppPortfolioEntry } from '@/features/apps/queries'
+import type { LoggedTimeView } from '@/features/apps/logged-time-queries'
 
 const BASE = '/apps'
 const MAX_TAG_FACETS = 8
@@ -60,12 +61,15 @@ export function AppsBrowser({
   params,
   today,
   viewerId = null,
+  loggedTime = null,
 }: {
   apps: AppPortfolioEntry[]
   params: BrowseParams
   today: string
   /** Signed-in person, or null for a deactivated account with no Actor. */
   viewerId?: string | null
+  /** Already filtered by worklog.view; null = this viewer sees no worklog. */
+  loggedTime?: LoggedTimeView | null
 }) {
   const counts = statusCounts(apps)
   const facets = tagFacets(apps, MAX_TAG_FACETS)
@@ -294,7 +298,20 @@ export function AppsBrowser({
            the two disagreeing is a horizontal jump on every cold load. */
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visible.map((app) => (
-            <AppCard key={app.id} app={app} today={today} viewerId={viewerId} />
+            <AppCard
+              key={app.id}
+              app={app}
+              today={today}
+              viewerId={viewerId}
+              loggedTime={
+                loggedTime
+                  ? {
+                      totalMinutes: loggedTime.totalByApp.get(app.id) ?? 0,
+                      onlyOwn: !loggedTime.seesWholeApp(app.id),
+                    }
+                  : null
+              }
+            />
           ))}
         </div>
       )}

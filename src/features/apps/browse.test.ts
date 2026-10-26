@@ -44,6 +44,10 @@ describe('parseBrowseParams', () => {
     expect(parseBrowseParams({})).toEqual(DEFAULT_BROWSE_PARAMS)
   })
 
+  it('opens the portfolio in project-number order', () => {
+    expect(parseBrowseParams({}).sort).toBe('number')
+  })
+
   it('degrades garbage to defaults instead of throwing', () => {
     expect(parseBrowseParams({ sort: 'banana', status: 'purple' })).toEqual(
       DEFAULT_BROWSE_PARAMS,
@@ -247,10 +251,21 @@ describe('sortApps', () => {
   const dead = app({ name: 'Aaa Dead', slug: 'dead', status: 'archived', health: health(90) })
 
   it('sinks archived apps to the bottom of every order', () => {
-    for (const sort of ['risk', 'activity', 'progress', 'name'] as const) {
+    for (const sort of ['risk', 'activity', 'progress', 'name', 'number'] as const) {
       const sorted = sortApps([dead, calm, risky], sort)
       expect(sorted.at(-1)?.slug).toBe('dead')
     }
+  })
+
+  it('orders by project number, lowest first', () => {
+    const third = app({ name: 'Aaa', slug: 'third', number: 3 })
+    const first = app({ name: 'Zzz', slug: 'first', number: 1 })
+    const twelfth = app({ name: 'Mmm', slug: 'twelfth', number: 12 })
+    expect(sortApps([twelfth, third, first], 'number').map((a) => a.slug)).toEqual([
+      'first',
+      'third',
+      'twelfth',
+    ])
   })
 
   it('puts the highest risk score first', () => {

@@ -49,6 +49,7 @@ type HeaderStat = {
  */
 export function AppHeader({
   name,
+  number,
   slug,
   status,
   description,
@@ -64,6 +65,8 @@ export function AppHeader({
   actions,
 }: {
   name: string
+  /** The automatic project number (apps.number), printed as "#12". */
+  number: number
   slug: string
   status: AppStatus
   description: string | null
@@ -101,6 +104,9 @@ export function AppHeader({
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-heading text-2xl font-bold tracking-tight">{name}</h1>
+            <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs tabular-nums text-muted-foreground">
+              <span className="sr-only">Project </span>#{number}
+            </span>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
               <span aria-hidden className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
               {STATUS_LABEL[status]}
