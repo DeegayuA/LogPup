@@ -11,6 +11,7 @@ import {
   type PersonTaskRow,
 } from '@/features/people/task-workload'
 import { cn } from '@/lib/utils'
+import { STATUS_LABEL as BOARD_STATUS_LABEL } from '@/features/sprints/board-view'
 
 const linkClass =
   'rounded-sm underline-offset-2 transition-colors duration-150 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
@@ -32,11 +33,8 @@ const DUE_DOT: Record<DueState, string> = {
   none: 'bg-muted-foreground/25',
 }
 
-const STATUS_LABEL: Record<PersonTaskRow['status'], string> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  done: 'Done',
-}
+// The board's labels (board-view.ts), never a local three-entry copy.
+const STATUS_LABEL: Record<PersonTaskRow['status'], string> = BOARD_STATUS_LABEL
 
 // Same ramp as the board's task cards: 0 draws nothing, then sage → ember →
 // danger. No new hues, and priority is named in text for the dot's aria-label.

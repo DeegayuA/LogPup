@@ -44,8 +44,11 @@ import {
   getBoard,
   getSprintTaskCounts,
   getSprintsForApp,
+  getWorkTree,
   type SprintTaskCounts,
 } from '@/features/sprints/queries'
+import { WorkTree } from '@/features/sprints/components/work-tree'
+import { flattenBoard } from '@/features/sprints/board-view'
 import { getSprintCheckins, type SprintCheckinRow } from '@/features/sprints/checkin-queries'
 import { checkinGap, computeTaskProgress } from '@/features/sprints/checkins'
 import { planGaps, readSprint } from '@/features/sprints/plan-read'
@@ -205,6 +208,7 @@ export default async function AppDetailPage(props: {
     aiPrefs,
     bugs,
     openBugCount,
+    workTree,
   ] = await Promise.all([
     getSprintsForApp(app.id),
     getTeamForApp(app.id),
@@ -244,6 +248,8 @@ export default async function AppDetailPage(props: {
     // moment it is not needed. One partial-index count, and only for a viewer
     // who can see the tab at all.
     canViewBugs ? getOpenBugCountForApp(app.id) : Promise.resolve(0),
+    // Backlog tab only: every item in the project, one flat read.
+    tab === 'backlog' ? getWorkTree(app.id) : Promise.resolve(null),
   ])
   const tasks = counts.tasks
   const sprintDraftEnabled = aiPrefs ? aiPrefs['sprint-draft'].enabled : true
@@ -384,7 +390,7 @@ export default async function AppDetailPage(props: {
         }))
       : team.map((member) => ({ id: member.userId, name: member.name, onTeam: true }))
 
-  const boardTasks = board ? [...board.todo, ...board.in_progress, ...board.done] : []
+  const boardTasks = board ? flattenBoard(board) : []
   const selectedRead = selectedSprint
     ? readSprint(
         selectedSprint,
@@ -460,6 +466,8 @@ export default async function AppDetailPage(props: {
                     status: app.status,
                     leadId: app.leadId,
                     pmId: app.pmId,
+                    // Seeded for the aliases reason: edit mode always sends it.
+                    key: app.key,
                   }}
                   workspaceTechTags={workspaceTechTags}
                   activeUsers={activeUsers}
@@ -723,6 +731,7 @@ export default async function AppDetailPage(props: {
               team={team.map((member) => ({ userId: member.userId, name: member.name }))}
               composerPeople={composerPeople}
               appId={app.id}
+              appSlug={app.slug}
               sprintId={boardSprintId}
               currentUser={{ id: session.user.id, role: session.user.role }}
               canManageTasks={canManageTasks}
@@ -781,6 +790,13 @@ export default async function AppDetailPage(props: {
             </LazyDisclosure>
           ) : null}
         </div>
+      ) : null}
+
+      {tab === 'backlog' && workTree ? (
+        <section className="flex flex-col gap-3">
+          <h2 className="sr-only">Backlog</h2>
+          <WorkTree rows={workTree.rows} slug={slug} truncated={workTree.truncated} />
+        </section>
       ) : null}
 
       {tab === 'discussion' ? (
@@ -882,6 +898,7 @@ export default async function AppDetailPage(props: {
                   status: app.status,
                   leadId: app.leadId,
                   pmId: app.pmId,
+                  key: app.key,
                 }}
                 workspaceTechTags={workspaceTechTags}
                 activeUsers={activeUsers}

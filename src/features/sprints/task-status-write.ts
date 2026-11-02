@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveTasks } from '@/db/live'
 import { meetingFollowups, taskAssignees, tasks, users } from '@/db/schema'
-import { isTerminal, type TaskStatus } from '@/features/sprints/board-view'
+import { STATUS_LABEL, isTerminal, type TaskStatus } from '@/features/sprints/board-view'
 import { transitionTaskStatus } from '@/features/sprints/task-status'
 import { decideFollowupResolutionOnTaskStatusChange } from '@/features/meetings/followups'
 import { logActivity } from '@/features/activity/log'
@@ -36,12 +36,9 @@ import { createNotifications } from '@/features/notifications/notify'
  * one.
  */
 
-/** How a status reads inside an activity detail: "moved X to In progress". */
-const STATUS_LABELS: Record<TaskStatus, string> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  done: 'Done',
-}
+/** How a status reads inside an activity detail: "moved X to Code review".
+ *  The board's own labels, so the trail and the column never disagree. */
+const STATUS_LABELS: Record<TaskStatus, string> = STATUS_LABEL
 
 /**
  * The other half of closing the loop between meeting follow-ups and tasks (see

@@ -13,6 +13,8 @@ import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import { logActivity } from '@/features/activity/log'
 import { initialSprintStatus } from '@/features/sprints/sprint-date-range'
+import type { TaskType } from '@/features/sprints/hierarchy'
+import { formatTaskKey } from '@/features/sprints/task-key'
 
 const sprintInput = z
   .object({
@@ -336,6 +338,49 @@ export async function listSprintOptions(appId: string): Promise<ActionResult<Spr
     .orderBy(desc(liveSprints.startDate))
 
   return ok(rows)
+}
+
+export type ParentOption = { id: string; taskKey: string | null; title: string; type: TaskType }
+
+/** Upper bound on the picker. A project past this many possible parents
+ *  needs search, not a longer list. */
+const MAX_PARENT_OPTIONS = 500
+
+/**
+ * Everything in the app that could hold another item (every type but
+ * sub-task), for the task dialog's Parent picker. The dialog narrows by the
+ * edited task's type (ALLOWED_PARENT); updateTask re-checks with the real
+ * tree, so this list is a convenience, never the rule. Fetched only when a
+ * dialog opens.
+ *
+ * Gated on `app.view` WITH the appId, unlike listSprintOptions' bare session
+ * check: this hands back up to 500 task titles, and the ⌘K tasks provider
+ * already decides who may see a project's tasks by that same grant.
+ */
+export async function listParentOptions(appId: string): Promise<ActionResult<ParentOption[]>> {
+  if (!z.uuid().safeParse(appId).success) return err('App not found')
+  const actor = await requireCapability('app.view', { appId })
+  if (!actor) return err('Not allowed')
+
+  const [[app], rows] = await Promise.all([
+    db.select({ key: liveApps.key, number: liveApps.number }).from(liveApps).where(eq(liveApps.id, appId)),
+    db
+      .select({ id: liveTasks.id, number: liveTasks.number, title: liveTasks.title, type: liveTasks.type })
+      .from(liveTasks)
+      .where(and(eq(liveTasks.appId, appId), ne(liveTasks.type, 'subtask')))
+      // Newest first, so the cap cuts the oldest items — never the epic made
+      // a minute ago, which is the one somebody is about to file under.
+      .orderBy(desc(liveTasks.number))
+      .limit(MAX_PARENT_OPTIONS),
+  ])
+  if (!app) return err('App not found')
+
+  return ok(rows.map((r) => ({
+    id: r.id,
+    taskKey: r.number !== null ? formatTaskKey(app, r.number) : null,
+    title: r.title,
+    type: r.type,
+  })))
 }
 
 export async function updateSprintStatus(

@@ -30,6 +30,7 @@ import { logActivity } from '@/features/activity/log'
 import { keyframeDeleteLabel, noteSegmentDeleteLabel } from '@/features/meetings/note-labels'
 import { MAX_KEYFRAMES_PER_MEETING } from '@/features/meetings/screen-keyframes'
 import { PURGE_CONFIRM_PHRASE } from '@/features/admin/components/trash-card-logic'
+import { renumberRestoredTask } from '@/features/sprints/task-number'
 
 // ONE phrase, defined in trash-card-logic.ts and imported here — not two
 // literals that happen to match today. Drift between them breaks purge
@@ -256,6 +257,14 @@ export async function restoreTask(taskId: string): Promise<ActionResult> {
     .returning({ id: tasks.id, title: tasks.title, appId: tasks.appId })
   if (restored.length === 0) return err('Not found, or it was already restored')
   const [row] = restored
+
+  // Its number may have been handed to a newer task on delete; it takes the
+  // next free one instead. Best effort: without it the card shows no ID.
+  try {
+    await renumberRestoredTask(row.id)
+  } catch (error) {
+    console.error(`[trash] renumbering restored task ${row.id} failed:`, error)
+  }
 
   // Same shape as deleteTask's own logActivity call (task-actions.ts): no
   // appName/pagePath — tasks don't carry one there either.

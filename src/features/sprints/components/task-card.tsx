@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  useId,
   useRef,
   useState,
   useTransition,
@@ -19,13 +20,104 @@ import { cn } from '@/lib/utils'
 import {
   PRIORITY_LABEL,
   STATUS_LABEL,
-  TASK_STATUSES,
   isDueToday,
   isOverdue,
+  quickMoveTargets,
 } from '@/features/sprints/board-view'
 import { isoDayAdd } from '@/features/people/iso-day'
 import { deleteTask, updateTask } from '@/features/sprints/task-actions'
 import type { TaskWithAssignee } from '@/features/sprints/queries'
+import { TASK_TYPE_LABEL, TASK_TYPE_PLURAL } from '@/features/sprints/hierarchy'
+import { TaskTypeIcon } from '@/features/sprints/components/task-type-icon'
+import { ChildDoneToggle } from '@/features/sprints/components/child-done-toggle'
+import { withStatusOverrides, type StatusOverrides } from '@/features/sprints/child-toggle'
+
+/** "1 task", "3 sub-tasks", "2 items" when the children are mixed. */
+function childrenNoun(children: TaskWithAssignee['children']): string {
+  const types = new Set(children.map((c) => c.type))
+  const n = children.length
+  if (types.size !== 1) return `${n} ${n === 1 ? 'item' : 'items'}`
+  const type = children[0].type
+  return `${n} ${(n === 1 ? TASK_TYPE_LABEL[type] : TASK_TYPE_PLURAL[type]).toLowerCase()}`
+}
+
+/**
+ * The card's own children, shown ON the card: "▸ 2 tasks · 1 done". The
+ * board never nests one card inside another, so without this a story looked
+ * empty and its tasks looked like strangers. Open state is per card and
+ * local; nothing here writes.
+ */
+function CardChildren({
+  items: rawItems,
+  parentTitle,
+  canEdit,
+}: {
+  items: TaskWithAssignee['children']
+  parentTitle: string
+  canEdit: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const listId = useId()
+  // Ticks not yet painted by the refresh; a fresh `items` from it replaces them.
+  const [overrides, setOverrides] = useState<StatusOverrides>({})
+  const [syncedItems, setSyncedItems] = useState(rawItems)
+  if (rawItems !== syncedItems) {
+    setSyncedItems(rawItems)
+    setOverrides({})
+  }
+  const items = withStatusOverrides(rawItems, overrides)
+  if (items.length === 0) return null
+  const done = items.filter((c) => c.status === 'done').length
+  const pct = Math.round((done / items.length) * 100)
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((o) => !o)}
+        onPointerDown={(event) => event.stopPropagation()}
+        className="flex items-center gap-1.5 rounded-sm text-left text-2xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span aria-hidden className={cn('inline-block transition-transform', open && 'rotate-90')}>▸</span>
+        <span>
+          {childrenNoun(items)} · {done} done
+          {/* Every card's toggle would otherwise read the same. */}
+          <span className="sr-only"> in {parentTitle}</span>
+        </span>
+        <span aria-hidden className="ml-auto h-1 w-12 overflow-hidden rounded-full bg-muted">
+          <span className="block h-full bg-primary" style={{ width: `${pct}%` }} />
+        </span>
+      </button>
+      <ul id={listId} hidden={!open} className="flex flex-col gap-0.5 border-l pl-2" aria-label={`Items under ${parentTitle}`}>
+          {items.map((c) => (
+            <li key={c.id} className="flex items-center gap-1.5 text-2xs">
+              <ChildDoneToggle
+                id={c.id}
+                title={c.title}
+                status={c.status}
+                canEdit={canEdit}
+                onChange={(next) => setOverrides((o) => ({ ...o, [c.id]: next }))}
+              />
+              {c.taskKey ? <span className="font-mono text-muted-foreground tabular-nums">{c.taskKey}</span> : null}
+              <span
+                className={cn('truncate', c.status === 'done' && 'text-muted-foreground line-through')}
+                title={c.title}
+              >
+                {c.title}
+              </span>
+              <span className="sr-only">, {STATUS_LABEL[c.status]}</span>
+            </li>
+          ))}
+      </ul>
+    </div>
+  )
+}
+
+/** "3 pts", "1 pt", "0.5 pts". Null (unestimated) prints nothing at all. */
+function pointsLabel(points: number): string {
+  return `${points} ${points === 1 ? 'pt' : 'pts'}`
+}
 
 // Priority 0 (none) draws nothing; the ramp climbs sage → ember → destructive
 // per the redesign spec — no new hues.
@@ -84,11 +176,31 @@ function CardFace({
 
   return (
     <>
+      {/* ID line: what it is and what to call it, before the title — the
+          order a person reads "LOG-245 · Story" out loud in standup. */}
+      <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
+        <TaskTypeIcon type={task.type} />
+        {task.taskKey ? <span className="font-mono tabular-nums">{task.taskKey}</span> : null}
+        {task.storyPoints !== null ? (
+          <span className="ml-auto rounded-full bg-muted px-1.5 py-px font-mono tabular-nums">
+            {pointsLabel(task.storyPoints)}
+          </span>
+        ) : null}
+      </span>
       {hideTitle ? null : (
-        <p className="line-clamp-2 text-sm leading-snug font-medium text-card-foreground">
+        <p className="line-clamp-2 text-sm leading-snug font-medium text-card-foreground" title={task.title}>
           {task.title}
         </p>
       )}
+      {/* What it belongs to. Without this a sub-task on the board is an
+          orphan sentence: the only way to learn its parent was to open it. */}
+      {task.parent ? (
+        <span className="truncate text-2xs text-muted-foreground" title={task.parent.title}>
+          ↳ under{' '}
+          {task.parent.taskKey ? <span className="font-mono tabular-nums">{task.parent.taskKey}</span> : null}{' '}
+          {task.parent.title}
+        </span>
+      ) : null}
       <div className="flex items-center gap-2">
         {task.dueDate ? (
           <span
@@ -139,7 +251,10 @@ function CardFace({
  */
 function cardLabel(task: TaskWithAssignee, todayIso: string): string {
   return [
+    task.taskKey ? `${task.taskKey}, ${TASK_TYPE_LABEL[task.type]}` : TASK_TYPE_LABEL[task.type],
     task.title,
+    task.parent ? `under ${task.parent.taskKey ?? ''} ${task.parent.title}`.replace('  ', ' ') : null,
+    task.storyPoints !== null ? pointsLabel(task.storyPoints) : null,
     task.assignee ? `assigned to ${task.assignee.name}` : 'unassigned',
     task.priority > 0 ? `${PRIORITY_LABEL[task.priority]} priority` : null,
     task.dueDate
@@ -262,8 +377,7 @@ export function TaskCard({
 
   const items: QuickMenuItem[] = []
   if (draggable) {
-    for (const status of TASK_STATUSES) {
-      if (status === task.status) continue
+    for (const status of quickMoveTargets(task.status)) {
       items.push({
         type: 'item',
         key: `status-${status}`,
@@ -445,6 +559,8 @@ export function TaskCard({
               <CardFace task={task} todayIso={todayIso} hideTitle={draggable} />
             </span>
           </button>
+          {/* Outside the open-button: its own control, like the rename above. */}
+          <CardChildren items={task.children} parentTitle={task.title} canEdit={draggable} />
         </div>
 
         {/*

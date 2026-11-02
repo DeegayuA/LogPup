@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveApps } from '@/db/live'
 import { apps, dailyWorklogs, meetings, sprints, tasks } from '@/db/schema'
-import type { TaskStatus } from '@/features/sprints/board-view'
+import { TASK_STATUSES, type TaskStatus } from '@/features/sprints/board-view'
 import { applyDueDate, type DueKind, type DueState } from '@/features/sprints/due-date'
 import { transitionTaskStatus } from '@/features/sprints/task-status'
 
@@ -210,8 +210,6 @@ export function buildTaskStatusSet(
 
   return { ...after, ...transitionTaskStatus(asTaskStatus(current.status), next, now) }
 }
-
-const TASK_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'done']
 
 /** jsonb carries whatever was filed; the enum column is the only guarantee. */
 function asTaskStatus(value: unknown): TaskStatus | null {

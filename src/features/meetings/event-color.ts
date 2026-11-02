@@ -117,6 +117,32 @@ export function eventDotClasses(appId: string | null | undefined): string | null
 }
 
 /**
+ * A chip (pill with a full border) in the same 12%-fill/full-border recipe as
+ * the block above — for things that STORE a hue rather than hash one, e.g. a
+ * task label's color_slot. Lives here so labels stay on this one palette
+ * instead of carrying a copy of it.
+ */
+const EVENT_CHIP_CLASSES: Record<number, string> = {
+  1: 'border-event-1 bg-event-1/12 text-foreground',
+  2: 'border-event-2 bg-event-2/12 text-foreground',
+  3: 'border-event-3 bg-event-3/12 text-foreground',
+  4: 'border-event-4 bg-event-4/12 text-foreground',
+  5: 'border-event-5 bg-event-5/12 text-foreground',
+  6: 'border-event-6 bg-event-6/12 text-foreground',
+  7: 'border-event-7 bg-event-7/12 text-foreground',
+  8: 'border-event-8 bg-event-8/12 text-foreground',
+}
+
+/** Slot-indexed lookups (1..8) for a stored hue. Null outside the range. */
+export function eventChipClassesForSlot(slot: number): string | null {
+  return EVENT_CHIP_CLASSES[slot] ?? null
+}
+
+export function eventDotClassesForSlot(slot: number): string | null {
+  return EVENT_DOT_CLASSES[slot] ?? null
+}
+
+/**
  * SOLID pill for the month grid — the Notion-calendar look the team asked
  * for: saturated ground, inverted text.
  *

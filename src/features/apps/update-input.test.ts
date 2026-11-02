@@ -56,6 +56,25 @@ describe('buildAppUpdate', () => {
   })
 })
 
+describe('buildAppUpdate — task ID prefix (key)', () => {
+  it('upper-cases and keeps a valid key', () => {
+    expect(buildAppUpdate({ key: ' log ' })).toEqual({ ok: true, set: { key: 'LOG' } })
+  })
+
+  it('maps an empty key to null, which clears it', () => {
+    expect(buildAppUpdate({ key: '' })).toEqual({ ok: true, set: { key: null } })
+  })
+
+  it.each(['L', 'LOGPUPX', '1AB', 'LO-G', 'P12'])('refuses %s', (key) => {
+    const res = buildAppUpdate({ key })
+    expect(res.ok).toBe(false)
+  })
+
+  it('leaves the key alone when it is not sent', () => {
+    expect(buildAppUpdate({ name: 'Renamed' })).toEqual({ ok: true, set: { name: 'Renamed' } })
+  })
+})
+
 describe('summarizeAppChanges', () => {
   const before: AppBeforeState = {
     status: 'active',

@@ -182,6 +182,7 @@ import {
   LiveTranscriptionCostNotice,
   LiveTranscriptionStatus,
 } from '@/features/transcription/components/live-transcription-status'
+import { STATUS_LABEL, TASK_STATUSES, statusBucket } from '@/features/sprints/board-view'
 
 // --- Minimal Web Speech API typings ------------------------------------
 // Not part of TypeScript's DOM lib (non-standard, webkit-prefixed). Declared
@@ -4168,16 +4169,13 @@ function IntelSkeleton() {
   )
 }
 
-const LINKED_TASK_STATUS_LABEL: Record<LinkedTaskView['status'], string> = {
-  todo: 'To do',
-  in_progress: 'In progress',
-  done: 'Done',
-}
-const LINKED_TASK_STATUS_TONE: Record<LinkedTaskView['status'], 'neutral' | 'active' | 'success'> = {
-  todo: 'neutral',
-  in_progress: 'active',
-  done: 'success',
-}
+// The board's own labels, so a linked task reads "Code review" here exactly as
+// it does on its card; the tone follows the three-way bucket.
+const LINKED_TASK_STATUS_LABEL: Record<LinkedTaskView['status'], string> = STATUS_LABEL
+const BUCKET_TONE = { todo: 'neutral', in_progress: 'active', done: 'success' } as const
+const LINKED_TASK_STATUS_TONE = Object.fromEntries(
+  TASK_STATUSES.map((s) => [s, BUCKET_TONE[statusBucket(s)]]),
+) as Record<LinkedTaskView['status'], 'neutral' | 'active' | 'success'>
 
 /**
  * What replaces the bare Resolve button once a follow-up is linked to a

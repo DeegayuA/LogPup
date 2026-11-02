@@ -37,6 +37,7 @@ import {
 import { boardHref } from '@/features/apps/tabs'
 import { isTerminal, UNASSIGNED_GROUP } from '@/features/sprints/board-view'
 import { checkinGap, computeTaskProgress, type CheckinGap } from '@/features/sprints/checkins'
+import type { TaskStatus } from '@/features/sprints/board-view'
 
 export type PlannerRole = 'pm' | 'lead'
 
@@ -142,7 +143,7 @@ export type PlanTaskRow = {
   appId: string
   sprintId: string | null
   assigneeId: string | null
-  status: 'todo' | 'in_progress' | 'done'
+  status: TaskStatus
   dueDate: string | null
 }
 
@@ -414,11 +415,11 @@ export function assembleMeetingPlan(input: AssembleMeetingPlanInput): MeetingPla
           external: false,
         })
       }
-      // The honest stand-in for "blocked": task_status is
-      // ('todo','in_progress','done') — there IS no blocked state in this
-      // schema, and inventing one from a title keyword would put a word on
-      // screen no row can back. Started, past its date, still not finished is
-      // the thing the data can actually say.
+      // Stalled, not "blocked": task_status now has a real 'blocked' state
+      // (migration 0079), but a task nobody has marked blocked can still be
+      // stuck. Started (any in-flight state, blocked included), past its date,
+      // still not finished is the thing the data can say about every task —
+      // never a blocker inferred from a title keyword.
       const stalled = stalledCount(sprintTasks, input.todayIso)
       if (stalled > 0) {
         addAsk(pmId, {

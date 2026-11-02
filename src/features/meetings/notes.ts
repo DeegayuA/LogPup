@@ -348,7 +348,7 @@ export function partitionAutoAssign(
 }
 
 export type AutoAssignedTaskFields = {
-  status: 'todo' | 'in_progress' | 'done'
+  status: TaskStatus
   title: string
   assigneeId: string | null
   dueDate: string | null

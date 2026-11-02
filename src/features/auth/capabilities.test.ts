@@ -14,6 +14,7 @@ import {
   type Actor,
   type UserRole,
 } from '@/features/auth/capabilities'
+import { isFrozenByMaintenance } from '@/features/maintenance/write-actions'
 
 const actor = (role: UserRole, over: string[] = []): Actor => ({
   id: 'actor-1',
@@ -99,6 +100,20 @@ describe('ROLE_GRANTS', () => {
     // arm. A 'scoped' anywhere in this row would silently hand every PM three
     // powers they do not currently hold.
     expect(Object.values(ROLE_GRANTS['meeting.admin'])).not.toContain('scoped')
+  })
+
+  // Regression: task comments were gated on app.view — a READ, which the
+  // maintenance freeze waves through and the auditor holds at 'all'.
+  it('gates task comments on their own write, closed to the auditor', () => {
+    expect(ROLE_GRANTS['task.comment']).toEqual({
+      superadmin: 'all', admin: 'all', manager: 'scoped', editor: 'scoped',
+      member: 'scoped', stakeholder: 'scoped', auditor: 'none',
+    })
+    expect(can(actor('member', ['app-1']), 'task.comment', { appId: 'app-1' })).toBe(true)
+    expect(can(actor('member', ['app-2']), 'task.comment', { appId: 'app-1' })).toBe(false)
+    expect(can(actor('auditor'), 'task.comment', { appId: 'app-1' })).toBe(false)
+    // A write, so a maintenance window stops it.
+    expect(isFrozenByMaintenance('task.comment')).toBe(true)
   })
 })
 

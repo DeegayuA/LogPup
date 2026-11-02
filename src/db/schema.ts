@@ -2,7 +2,8 @@ import { sql } from 'drizzle-orm'
 import {
   bigint,
   pgTable, pgEnum, text, uuid, integer, serial, doublePrecision, boolean, date, timestamp,
-  numeric, index, uniqueIndex, primaryKey, jsonb,
+  numeric, index, uniqueIndex, primaryKey, jsonb, check,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core'
 
 // The seven seats. Additive over the original admin|member: existing rows keep
@@ -108,7 +109,17 @@ export const bugStatus = pgEnum('bug_status', [
 // 'target' that lets somebody avoid naming a counterparty while still looking
 // serious. See docs/superpowers/specs/2026-08-20-deadlines-and-bugs-design.md.
 export const dueKind = pgEnum('due_kind', ['target', 'committed'])
-export const taskStatus = pgEnum('task_status', ['todo', 'in_progress', 'done'])
+export const taskStatus = pgEnum('task_status', [
+  'todo', 'in_progress', 'in_review', 'ready_for_qa', 'qa', 'qa_failed', 'rework',
+  'ready_for_release', 'released', 'blocked', 'deferred', 'done',
+])
+// PRD Module A work-item types (migration 0077). One `tasks` table holds the
+// whole Epic -> Feature -> Story -> Task -> Sub-task tree; which type may sit
+// under which is policy in features/sprints/hierarchy.ts, not a constraint.
+// 'bug' here is a bug-shaped WORK ITEM; triaged reports stay in bug_reports.
+export const taskType = pgEnum('task_type', [
+  'epic', 'feature', 'story', 'task', 'subtask', 'bug', 'improvement', 'tech_debt', 'spike',
+])
 // 'system' is the workspace talking about itself rather than a person talking
 // to a person — today only the maintenance lifecycle writes one. It is a third
 // enum value rather than a reuse of 'meeting' because both notification
@@ -264,6 +275,13 @@ export const apps = pgTable('apps', {
   // project keeps its number. Existing projects were numbered oldest first
   // by migration 0076. Never put it in an insert or an update set.
   number: serial('number').notNull(),
+  // The prefix of every task ID in this project ("LOG" in LOG-245). Nullable:
+  // without one, IDs read "P<number>-<n>" (features/sprints/task-key.ts), which
+  // is why apps_key_format refuses a key shaped like P<digits>.
+  key: text('key'),
+  // The next per-project task number. Written ONLY by the tasks_assign_number
+  // trigger (migration 0077) — never put it in an insert or an update set.
+  nextTaskNumber: integer('next_task_number').notNull().default(1),
   status: appStatus('status').notNull().default('active'),
   repoUrl: text('repo_url'),
   techTags: text('tech_tags').array().notNull().default([]),
@@ -297,6 +315,10 @@ export const apps = pgTable('apps', {
   index('apps_live_name_idx').on(t.name).where(sql`${t.deletedAt} is null`),
   // Over ALL rows, trashed included: a number is never handed out twice.
   uniqueIndex('apps_number_idx').on(t.number),
+  // Over ALL rows, trashed included: a trashed project's key stays reserved so
+  // an old "LOG-245" in a message never starts pointing at a new project.
+  uniqueIndex('apps_key_idx').on(t.key).where(sql`${t.key} is not null`),
+  check('apps_key_format', sql`(key IS NULL) OR ((key ~ '^[A-Z][A-Z0-9]{1,5}$') AND (key !~ '^P[0-9]+$'))`),
 ])
 
 // Append-only "as of" index of who has held PM or lead on an app, and when.
@@ -520,6 +542,25 @@ export const tasks = pgTable('tasks', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   deletedBy: uuid('deleted_by').references(() => users.id),
+  // ---- PRD Module A (migration 0077) ----
+  // Per-project number, the "245" in LOG-245. Assigned by the
+  // tasks_assign_number trigger on insert (and on a move to another project);
+  // leave it out of inserts. Nullable only for the type: every row has one.
+  number: integer('number'),
+  type: taskType('type').notNull().default('task'),
+  // ON DELETE SET NULL: hard-deleting a parent orphans its children rather
+  // than taking them with it. Pairing/cycle/depth rules: sprints/hierarchy.ts.
+  parentId: uuid('parent_id').references((): AnyPgColumn => tasks.id, { onDelete: 'set null' }),
+  // Who raised it — distinct from assigneeId (who does it).
+  reporterId: uuid('reporter_id').references(() => users.id),
+  // Nullable on purpose: unestimated is not zero, and velocity must not count
+  // an unestimated task as a zero-point one.
+  // mode 'number': the default numeric mapping is a string, and a velocity sum
+  // written as a + b would concatenate ("3" + "5" = "35").
+  storyPoints: numeric('story_points', { precision: 5, scale: 1, mode: 'number' }),
+  startDate: date('start_date'),
+  // Free text until the Environments module exists ("staging", "prod").
+  environment: text('environment'),
 }, (t) => [
   // Covers the board's only read: filter (app_id, sprint_id), order by rank.
   // `tasks` had no index at all, so every board render was a full scan + sort.
@@ -530,6 +571,133 @@ export const tasks = pgTable('tasks', {
   index('tasks_assignee_due_idx')
     .on(t.assigneeId, t.dueDate)
     .where(sql`${t.deletedAt} is null and ${t.status} <> 'done'`),
+  uniqueIndex('tasks_app_number_idx').on(t.appId, t.number).where(sql`${t.number} is not null`),
+  index('tasks_parent_idx').on(t.parentId).where(sql`${t.parentId} is not null`),
+  check('tasks_story_points_nonneg', sql`(story_points IS NULL) OR (story_points >= (0)::numeric)`),
+  check('tasks_parent_not_self', sql`(parent_id IS NULL) OR (parent_id <> id)`),
+])
+
+// ---- PRD Module A side tables (migration 0077) ----
+// All seven arrived on the shared dev database before their code did and were
+// adopted by 0077 exactly as found; the shapes below mirror the catalogs.
+
+// The discussion on ONE task (PRD Module A "Comments"), as opposed to
+// app_comments' one thread per project. Adopted by 0078 exactly as found on
+// dev. Soft-deleted, so registered in SOFT_TABLES (db/live.ts) in this change.
+export const taskComments = pgTable('task_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  // Mention tokens @[Name](u:<uuid>) as everywhere else; see the mentions ledger.
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  editedAt: timestamp('edited_at', { withTimezone: true }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  index('task_comments_task_idx').on(t.taskId, t.createdAt),
+])
+
+// A project's components ("Auth", "Billing"). Unique per project, ignoring case.
+export const appComponents = pgTable('app_components', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  leadId: uuid('lead_id').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('app_components_app_name_idx').on(t.appId, sql`lower(${t.name})`),
+])
+
+export const taskComponents = pgTable('task_components', {
+  taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  componentId: uuid('component_id').notNull().references(() => appComponents.id, { onDelete: 'cascade' }),
+}, (t) => [
+  primaryKey({ name: 'task_components_pkey', columns: [t.taskId, t.componentId] }),
+  index('task_components_component_idx').on(t.componentId),
+])
+
+// Per-project labels. colorSlot is an event-color.ts slot (0-7), never a new
+// colour system.
+export const taskLabels = pgTable('task_labels', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  colorSlot: integer('color_slot'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('task_labels_app_name_idx').on(t.appId, sql`lower(${t.name})`),
+])
+
+export const taskLabelLinks = pgTable('task_label_links', {
+  taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  labelId: uuid('label_id').notNull().references(() => taskLabels.id, { onDelete: 'cascade' }),
+}, (t) => [
+  primaryKey({ name: 'task_label_links_pkey', columns: [t.taskId, t.labelId] }),
+  index('task_label_links_label_idx').on(t.labelId),
+])
+
+// "Done means": a checklist on a story/feature that QA marks pass or fail.
+// Hard-deleted with its task (cascade); no deletedAt — a removed criterion
+// loses no history that activity_log does not already hold.
+export const acceptanceCriteria = pgTable('acceptance_criteria', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  taskId: uuid('task_id').notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  sortOrder: doublePrecision('sort_order').notNull().default(0),
+  // null = not yet tested; 'pass' | 'fail' (CHECK acceptance_criteria_verdict).
+  qaVerdict: text('qa_verdict'),
+  verifiedBy: uuid('verified_by').references(() => users.id),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('acceptance_criteria_task_idx').on(t.taskId, t.sortOrder),
+  check('acceptance_criteria_verdict', sql`(qa_verdict IS NULL) OR (qa_verdict = ANY (ARRAY['pass'::text, 'fail'::text]))`),
+])
+
+// A typed edge between two work items of any kind (task, bug, doc, meeting):
+// "blocks", "fixes", "documents"... No FKs on from/to — the ends live in
+// different tables, the same reasoning as activity_log. A reader must
+// resolve each end through its own live subquery.
+export const workLinks = pgTable('work_links', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  fromType: text('from_type').notNull(),
+  fromId: uuid('from_id').notNull(),
+  toType: text('to_type').notNull(),
+  toId: uuid('to_id').notNull(),
+  kind: text('kind').notNull(),
+  createdBy: uuid('created_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('work_links_edge_idx').on(t.fromType, t.fromId, t.toType, t.toId, t.kind),
+  index('work_links_to_idx').on(t.toType, t.toId),
+  index('work_links_app_idx').on(t.appId),
+  check('work_links_types', sql`(from_type = ANY (ARRAY['task'::text, 'bug'::text, 'doc'::text, 'meeting'::text])) AND (to_type = ANY (ARRAY['task'::text, 'bug'::text, 'doc'::text, 'meeting'::text]))`),
+  check('work_links_kind', sql`kind = ANY (ARRAY['blocks'::text, 'relates'::text, 'duplicates'::text, 'fixes'::text, 'implements'::text, 'documents'::text])`),
+  check('work_links_not_self', sql`NOT ((from_type = to_type) AND (from_id = to_id))`),
+])
+
+// Files on a task, bug, doc or message, stored in Vercel Blob (blobPath).
+// Soft-deleted, so registered in SOFT_TABLES (db/live.ts) in this same change.
+export const attachments = pgTable('attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  ownerType: text('owner_type').notNull(),
+  ownerId: uuid('owner_id').notNull(),
+  blobPath: text('blob_path').notNull(),
+  name: text('name').notNull(),
+  mime: text('mime').notNull(),
+  bytes: integer('bytes').notNull(),
+  uploadedBy: uuid('uploaded_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  index('attachments_owner_idx').on(t.ownerType, t.ownerId).where(sql`${t.deletedAt} is null`),
+  index('attachments_app_idx').on(t.appId),
+  check('attachments_owner_type', sql`owner_type = ANY (ARRAY['task'::text, 'bug'::text, 'doc'::text, 'message'::text])`),
+  check('attachments_bytes', sql`bytes >= 0`),
 ])
 
 // One task, several people.

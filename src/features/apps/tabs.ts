@@ -22,6 +22,7 @@
 export const APP_TAB_IDS = [
   'overview',
   'roadmap',
+  'backlog',
   'discussion',
   'meetings',
   'bugs',
@@ -34,6 +35,9 @@ export type AppTabId = (typeof APP_TAB_IDS)[number]
 export const APP_TAB_LABEL: Record<AppTabId, string> = {
   overview: 'Overview',
   roadmap: 'Roadmap',
+  // The same work as Roadmap, shown by WHAT it belongs to (epic -> story ->
+  // task) instead of WHEN it is scheduled. PRD Module A's hierarchy.
+  backlog: 'Backlog',
   discussion: 'Discussion',
   meetings: 'Meetings',
   // Beside Meetings rather than under Settings: filing a bug is something

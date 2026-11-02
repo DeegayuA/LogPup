@@ -116,7 +116,9 @@ export function InlineRename({
           startEditing()
         }
       }}
-      title={disabled ? undefined : 'Double-click or press F2 to rename'}
+      // The full text first: callers clamp it (a card title shows two lines),
+      // and hovering is the only way to read the rest without opening it.
+      title={disabled ? value : `${value}\n\nDouble-click or press F2 to rename`}
       className={cn(
         !disabled && 'rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
         className,

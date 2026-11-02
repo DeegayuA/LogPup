@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   EMPTY_FILTERS,
+  IN_FLIGHT_STATUSES,
+  NOT_STARTED_STATUSES,
   OPEN_STATUSES,
   TASK_STATUSES,
   TERMINAL_STATUSES,
@@ -17,6 +19,10 @@ import {
   matchesFilters,
   parseBoardView,
   patchForGroup,
+  MAIN_FLOW_STATUSES,
+  flattenBoard,
+  quickMoveTargets,
+  statusBucket,
   type BoardTask,
 } from './board-view'
 
@@ -190,7 +196,9 @@ describe('patchForGroup / groupIdForTask', () => {
   it('reads a status column', () =>
     expect(patchForGroup('status', 'in_progress')).toEqual({ status: 'in_progress' }))
   it('rejects a status column id that is not a status', () =>
-    expect(patchForGroup('status', 'blocked')).toBeNull())
+    expect(patchForGroup('status', 'archived')).toBeNull())
+  it('accepts a workflow status added by migration 0079', () =>
+    expect(patchForGroup('status', 'in_review')).toEqual({ status: 'in_review' }))
   it('reads an assignee column', () =>
     expect(patchForGroup('assignee', 'u7')).toEqual({ assigneeId: 'u7' }))
   it('reads the unassigned column as a clear', () =>
@@ -215,10 +223,19 @@ describe('groupTasks', () => {
     { userId: 'u2', name: 'Grace' },
   ]
 
-  it('emits status columns in workflow order, empties included', () => {
+  it('emits the main-line status columns in workflow order, empties included', () => {
     const groups = groupTasks([task({ id: 't1', status: 'done' })], 'status', { team })
-    expect(groups.map((g) => g.id)).toEqual(['todo', 'in_progress', 'done'])
-    expect(groups.map((g) => g.tasks.length)).toEqual([0, 0, 1])
+    expect(groups.map((g) => g.id)).toEqual([...MAIN_FLOW_STATUSES])
+    expect(groups.find((g) => g.id === 'done')?.tasks).toHaveLength(1)
+  })
+
+  it('adds a side-state column (blocked) only while a task is in it, in workflow order', () => {
+    const empty = groupTasks([], 'status', { team }).map((g) => g.id)
+    expect(empty).not.toContain('blocked')
+    const ids = groupTasks([task({ id: 't1', status: 'blocked' })], 'status', { team }).map((g) => g.id)
+    expect(ids).toContain('blocked')
+    expect(ids.indexOf('blocked')).toBeLessThan(ids.indexOf('done'))
+    expect(ids.indexOf('blocked')).toBeGreaterThan(ids.indexOf('released'))
   })
 
   it('emits priority columns high to none', () =>
@@ -353,8 +370,53 @@ describe('terminal status seam', () => {
   it('derives OPEN_STATUSES as exactly the non-terminal statuses', () => {
     // Not a hardcoded ['todo','in_progress']: the point of the seam is that
     // this list follows TERMINAL_STATUSES automatically when the enum widens.
-    expect([...OPEN_STATUSES]).toEqual(['todo', 'in_progress'])
+    expect([...OPEN_STATUSES]).toEqual(TASK_STATUSES.filter((s) => s !== 'done'))
     expect(OPEN_STATUSES.every((s) => !isTerminal(s))).toBe(true)
+  })
+
+  it('sorts every status into the three-way summary dashboards read', () => {
+    expect(statusBucket('todo')).toBe('todo')
+    expect(statusBucket('deferred')).toBe('todo')
+    expect(statusBucket('done')).toBe('done')
+    for (const s of ['in_progress', 'in_review', 'ready_for_qa', 'qa', 'qa_failed', 'rework', 'ready_for_release', 'released', 'blocked'] as const) {
+      expect(statusBucket(s)).toBe('in_progress')
+    }
+  })
+
+  it('expands the in-flight and not-started buckets to every status they hold', () => {
+    expect([...NOT_STARTED_STATUSES]).toEqual(['todo', 'deferred'])
+    expect([...IN_FLIGHT_STATUSES]).toEqual([
+      'in_progress', 'in_review', 'ready_for_qa', 'qa', 'qa_failed', 'rework',
+      'ready_for_release', 'released', 'blocked',
+    ])
+  })
+
+  it('in-flight + not-started + terminal covers every status exactly once', () => {
+    // The SQL counts (todo + in_progress + done = total) rely on this.
+    const all = [...NOT_STARTED_STATUSES, ...IN_FLIGHT_STATUSES, ...TERMINAL_STATUSES]
+    expect(new Set(all).size).toBe(all.length)
+    expect([...all].sort()).toEqual([...TASK_STATUSES].sort())
+  })
+
+  it('quickMoveTargets offers the main-line neighbours plus Blocked and Done, never the current status', () => {
+    expect(quickMoveTargets('todo')).toEqual(['in_progress', 'blocked', 'done'])
+    expect(quickMoveTargets('qa')).toEqual(['ready_for_qa', 'ready_for_release', 'blocked', 'done'])
+    // released's next neighbour IS done — offered once.
+    expect(quickMoveTargets('released')).toEqual(['ready_for_release', 'done', 'blocked'])
+    expect(quickMoveTargets('done')).toEqual(['released', 'blocked'])
+  })
+
+  it('quickMoveTargets sends a side state back to In progress', () => {
+    expect(quickMoveTargets('blocked')).toEqual(['in_progress', 'done'])
+    expect(quickMoveTargets('rework')).toEqual(['in_progress', 'blocked', 'done'])
+    for (const s of TASK_STATUSES) expect(quickMoveTargets(s)).not.toContain(s)
+  })
+
+  it('flattenBoard keeps tasks in every status, not just the original three', () => {
+    const board = Object.fromEntries(TASK_STATUSES.map((s) => [s, [] as string[]])) as Record<(typeof TASK_STATUSES)[number], string[]>
+    board.qa.push('a')
+    board.todo.push('b')
+    expect(flattenBoard(board)).toEqual(['b', 'a'])
   })
 
   it('partitions TASK_STATUSES with no overlap and no gap', () => {

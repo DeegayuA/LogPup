@@ -7,7 +7,7 @@ import { taskAssignees, users } from '@/db/schema'
 import { bridgeKeyValid, resolveBridgeUser } from '@/lib/bridge-auth'
 import { applyTaskStatusChange } from '@/features/sprints/task-status-write'
 import { MaintenanceFreezeError } from '@/features/maintenance/write-freeze'
-import { externalBaseUrl, serializeTask } from '@/app/api/external/serialize'
+import { bridgeStatusIsNoop, externalBaseUrl, serializeTask } from '@/app/api/external/serialize'
 import { completedBy } from '@/app/api/external/task-scope'
 
 export const runtime = 'nodejs'
@@ -72,7 +72,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // array, which the board composer and the task dialog never do. A join-only check would
     // 403 the named assignee off their own card for every task created through the normal UI.
     const [membership] = await db
-      .select({ id: liveTasks.id })
+      .select({ id: liveTasks.id, status: liveTasks.status })
       .from(liveTasks)
       .where(
         and(
@@ -93,14 +93,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .limit(1)
     if (!membership) return refuse()
 
-    const result = await applyTaskStatusChange({
-      taskId: id,
-      actorId: user.id,
-      next: parsed.data.status,
-      note: parsed.data.note,
-    })
-    if (!result.ok && result.reason === 'not-found') {
-      return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 })
+    // Already in the requested bucket (e.g. 'in_progress' sent for a task in QA): answer as
+    // 'unchanged' below rather than writing, so the bridge's three-value vocabulary can never
+    // drag a task backwards through the workflow it cannot see.
+    if (!bridgeStatusIsNoop(membership.status, parsed.data.status)) {
+      const result = await applyTaskStatusChange({
+        taskId: id,
+        actorId: user.id,
+        next: parsed.data.status,
+        note: parsed.data.note,
+      })
+      if (!result.ok && result.reason === 'not-found') {
+        return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 })
+      }
     }
 
     // 'unchanged' is NOT an error — re-sending the status a task already has is what a

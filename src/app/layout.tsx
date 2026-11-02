@@ -93,7 +93,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {themeInitScript}
         </Script>
       </head>
-      <body className="min-h-full flex flex-col">
+      {/* suppressHydrationWarning, like <html> above: browser extensions
+          (seen: a "smart converter" adding data-smart-converter-loaded) write
+          attributes onto <body> before React hydrates, and every page then
+          logs a mismatch that is not ours. It covers this element's own
+          attributes only — children are still checked. */}
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <ThemeProvider>
           {children}
           {/* App-wide, and outside (app) on purpose: the sign-in screen needs

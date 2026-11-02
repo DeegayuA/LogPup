@@ -3,6 +3,7 @@ import { and, asc, count, eq, gte, inArray, lte, sql, sum } from 'drizzle-orm'
 import { db } from '@/db'
 import { liveApps, liveTasks, liveWorklogEntries } from '@/db/live'
 import type { EntryCategory } from '@/features/worklog/entries'
+import { IN_FLIGHT_STATUSES, NOT_STARTED_STATUSES, type TaskStatus } from '@/features/sprints/board-view'
 
 /**
  * One day's logged hours AS THE PAGE RENDERS THEM.
@@ -188,7 +189,7 @@ export type LoggableTask = {
   id: string
   title: string
   appName: string
-  status: 'todo' | 'in_progress' | 'done'
+  status: TaskStatus
 }
 
 /** Enough to cover a real backlog, small enough that one read stays cheap. */
@@ -206,7 +207,11 @@ export async function listLoggableTasks(userId: string): Promise<LoggableTask[]>
     .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
     .where(eq(liveTasks.assigneeId, userId))
     .orderBy(
-      sql`case ${liveTasks.status} when 'in_progress' then 0 when 'todo' then 1 else 2 end`,
+      // In flight first, then not started, then done. Bucket lists, not the
+      // literals 'in_progress' / 'todo': those sent review, QA and blocked
+      // work to the bottom beside finished tasks. inArray binds each status
+      // as a parameter, so nothing is spliced into the SQL text.
+      sql`case when ${inArray(liveTasks.status, IN_FLIGHT_STATUSES)} then 0 when ${inArray(liveTasks.status, NOT_STARTED_STATUSES)} then 1 else 2 end`,
       asc(liveApps.name),
       asc(liveTasks.title),
     )

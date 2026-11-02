@@ -1,4 +1,5 @@
-import { and, asc, eq, ilike, inArray, or } from 'drizzle-orm'
+import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
+import { formatTaskKey, parseTaskKey } from '@/features/sprints/task-key'
 import { db } from '@/db'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
 import { effectiveGrant, type GrantLevel } from '@/features/auth/capabilities'
@@ -76,14 +77,30 @@ export const searchProviders: SearchProvider[] = [
             // is the same column deadline.set resolves ownership against.
             : eq(liveTasks.assigneeId, ctx.user.id)
 
+      // "LOG-245" (or the no-key fallback "P12-3") names exactly one task.
+      // OR-ed with the title match, inside the same `visible` filter, so an ID
+      // never reaches a task the searcher could not find by its title.
+      const parsed = parseTaskKey(query)
+      const keyMatch = parsed
+        ? and(
+            eq(liveTasks.number, parsed.number),
+            /^P[1-9][0-9]*$/.test(parsed.appKey)
+              ? eq(liveApps.number, Number(parsed.appKey.slice(1)))
+              : eq(liveApps.key, parsed.appKey),
+          )
+        : undefined
+
       const rows = await db
         .select({
           id: liveTasks.id,
           title: liveTasks.title,
           status: liveTasks.status,
           sprintId: liveTasks.sprintId,
+          number: liveTasks.number,
           appName: liveApps.name,
           appSlug: liveApps.slug,
+          appKey: liveApps.key,
+          appNumber: liveApps.number,
         })
         .from(liveTasks)
         .innerJoin(liveApps, eq(liveTasks.appId, liveApps.id))
@@ -91,15 +108,20 @@ export const searchProviders: SearchProvider[] = [
         // applied ahead of an authorisation filter returns a page that has
         // already discarded everything the searcher was allowed to see, and
         // that reads as "no results" rather than as a bug.
-        .where(and(visible, ilike(liveTasks.title, likePattern(query))))
-        // asc(status) is todo → in_progress → done, by the pg enum's
-        // declaration order: unfinished work first.
-        .orderBy(asc(liveTasks.status))
+        .where(and(visible, or(ilike(liveTasks.title, likePattern(query)), keyMatch)))
+        // The exact ID first, then asc(status): todo → in_progress → done, by
+        // the pg enum's declaration order — unfinished work first.
+        .orderBy(
+          ...(keyMatch ? [sql`case when ${keyMatch} then 0 else 1 end`] : []),
+          asc(liveTasks.status),
+        )
         .limit(PALETTE_RESULT_LIMIT)
 
       return rows.map((task) => ({
         id: task.id,
-        title: task.title,
+        title: task.number !== null
+          ? `${formatTaskKey({ key: task.appKey, number: task.appNumber }, task.number)} · ${task.title}`
+          : task.title,
         subtitle: task.appName,
         // `backlog` is the board's sentinel for a task on no sprint.
         href: `/apps/${task.appSlug}?tab=roadmap&sprint=${task.sprintId ?? 'backlog'}`,

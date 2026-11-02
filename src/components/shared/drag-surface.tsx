@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import {
   DndContext,
   KeyboardSensor,
@@ -55,8 +55,12 @@ export function DragSurface({
   ...props
 }: Omit<DndContextProps, 'sensors'> & { children?: ReactNode }) {
   const sensors = useDragSensors()
+  // A stable id for dnd-kit's screen-reader hints. Without it dnd-kit numbers
+  // them from a module counter (DndDescribedBy-0 on the server, -12 in the
+  // browser), and every draggable logs a hydration mismatch.
+  const autoId = useId()
   return (
-    <DndContext sensors={sensors} {...props}>
+    <DndContext sensors={sensors} id={autoId} {...props}>
       {children}
     </DndContext>
   )

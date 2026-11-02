@@ -9,11 +9,13 @@
  * Attendance-Web-App/LOGPUP_TASKS_INTEGRATION.md.
  */
 
+import { statusBucket, type StatusBucket, type TaskStatus } from '@/features/sprints/board-view'
+
 export type ExternalTaskRow = {
   id: string
   title: string
   description: string | null
-  status: string
+  status: TaskStatus
   priority: number
   dueDate: string | null
   dueKind: 'target' | 'committed'
@@ -59,7 +61,12 @@ export function serializeTask(row: ExternalTaskRow, baseUrl: string) {
     id: row.id,
     title: row.title,
     description: row.description,
-    status: row.status,
+    // `status` keeps the three values the contract has always promised (todo / in_progress /
+    // done): the Attendance app switches on them, and a twelve-state workflow leaking through
+    // would render there as a state it does not know. The raw workflow state rides alongside
+    // for any caller that wants the detail.
+    status: statusBucket(row.status),
+    workflowStatus: row.status,
     priority: row.priority,
     dueDate: row.dueDate,
     dueKind: row.dueKind,
@@ -80,6 +87,18 @@ export function serializeTask(row: ExternalTaskRow, baseUrl: string) {
     // is worse than a link to the list the task is on. Same decision assignment-notice.ts makes.
     url: row.appSlug ? `${baseUrl}/apps/${row.appSlug}` : null,
   }
+}
+
+/**
+ * Whether a bridge status write would be a no-op — the task already sits in the requested bucket.
+ *
+ * The bridge only speaks todo / in_progress / done. Without this, an Attendance double-tap of
+ * "in progress" on a task that has moved on to QA would drag it back to plain in_progress and
+ * erase the reviewer's step. 'done' is never short-circuited: it is a real state, and the single
+ * writer already answers 'unchanged' for a task that is done.
+ */
+export function bridgeStatusIsNoop(current: TaskStatus, requested: StatusBucket): boolean {
+  return requested !== 'done' && statusBucket(current) === requested
 }
 
 /**

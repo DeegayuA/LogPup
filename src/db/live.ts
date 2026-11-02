@@ -2,7 +2,8 @@ import { QueryBuilder } from 'drizzle-orm/pg-core'
 import { isNull } from 'drizzle-orm'
 import {
   apps, bugReports, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
-  worklogEntries, meetingSeries, meetingRecordingSegments, meetingRecordings,
+  worklogEntries, meetingSeries, meetingRecordingSegments, meetingRecordings, attachments,
+  taskComments,
 } from './schema'
 
 // Connection-free: QueryBuilder builds SQL without a client, so importing
@@ -40,6 +41,10 @@ export const liveRecordingSegmentsAs = (name: string) =>
   qb.select().from(meetingRecordingSegments).where(isNull(meetingRecordingSegments.deletedAt)).as(name)
 export const liveRecordingsAs = (name: string) =>
   qb.select().from(meetingRecordings).where(isNull(meetingRecordings.deletedAt)).as(name)
+export const liveAttachmentsAs = (name: string) =>
+  qb.select().from(attachments).where(isNull(attachments.deletedAt)).as(name)
+export const liveTaskCommentsAs = (name: string) =>
+  qb.select().from(taskComments).where(isNull(taskComments.deletedAt)).as(name)
 
 export const liveApps = liveAppsAs('live_apps')
 export const liveBugReports = liveBugReportsAs('live_bug_reports')
@@ -52,6 +57,8 @@ export const liveWorklogEntries = liveWorklogEntriesAs('live_worklog_entries')
 export const liveMeetingSeries = liveMeetingSeriesAs('live_meeting_series')
 export const liveRecordingSegments = liveRecordingSegmentsAs('live_recording_segments')
 export const liveRecordings = liveRecordingsAs('live_meeting_recordings')
+export const liveAttachments = liveAttachmentsAs('live_attachments')
+export const liveTaskComments = liveTaskCommentsAs('live_task_comments')
 
 /**
  * Every column of `apps`, taken from the LIVE subquery.
@@ -82,6 +89,9 @@ export const liveAppColumns = {
   aliases: liveApps.aliases,
   // Same reason: the card and the detail header print it as "#12".
   number: liveApps.number,
+  // Same reason again, and a sharper one: the edit form ALWAYS sends the key
+  // (that is how one is cleared), so a form seeded without it would erase it.
+  key: liveApps.key,
   status: liveApps.status,
   repoUrl: liveApps.repoUrl,
   techTags: liveApps.techTags,
@@ -128,6 +138,13 @@ export const SOFT_TABLES = [
   // its readers exist means the guard was blind for exactly as long as it
   // mattered. A cancelled series must not keep materialising occurrences.
   { table: meetingSeries, sqlName: 'meeting_series', live: liveMeetingSeries, liveAs: liveMeetingSeriesAs },
+  // Registered in the SAME change that declares the table (0077), before its
+  // first reader exists — the rule every entry above states. A removed file
+  // reappearing on a task is the app showing something somebody took down.
+  { table: attachments, sqlName: 'attachments', live: liveAttachments, liveAs: liveAttachmentsAs },
+  // Same rule, same change (0078): a deleted comment must not reappear in the
+  // thread or in a mention digest.
+  { table: taskComments, sqlName: 'task_comments', live: liveTaskComments, liveAs: liveTaskCommentsAs },
 ] as const
 
 // Registered BEFORE anything reads them. Both tables arrived with later

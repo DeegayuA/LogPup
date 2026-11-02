@@ -14,9 +14,10 @@ import {
 import { PRIORITY_LABEL, STATUS_LABEL, TASK_STATUSES } from '@/features/sprints/board-view'
 import { isoDayAdd } from '@/features/people/iso-day'
 import type { SprintOption } from '@/features/sprints/actions'
+import type { TaskStatus } from '@/features/sprints/board-view'
 
 export type BulkPatch = {
-  status?: 'todo' | 'in_progress' | 'done'
+  status?: TaskStatus
   assigneeId?: string | null
   priority?: number
   sprintId?: string | null

@@ -30,16 +30,16 @@ import * as live from './live'
 // --- live.ts sanity ---------------------------------------------------------
 
 describe('live.ts subqueries', () => {
-  it('SOFT_TABLES covers exactly the eleven soft-deleted tables', () => {
+  it('SOFT_TABLES covers exactly the thirteen soft-deleted tables', () => {
     // Spelled out rather than derived, so ADDING a soft-deleted table is a
     // deliberate edit here as well as in live.ts. The check above already
     // catches a table with deleted_at that nobody registered; this one catches
     // the reverse — a registration nobody meant to make.
     expect(SOFT_TABLES.map((t) => t.sqlName).sort()).toEqual(
       [
-        'apps', 'bug_reports', 'meeting_note_segments', 'meeting_recording_segments',
+        'apps', 'attachments', 'bug_reports', 'meeting_note_segments', 'meeting_recording_segments',
         'meeting_recordings', 'meeting_screenshots', 'meeting_series', 'meetings',
-        'sprints', 'tasks', 'worklog_entries',
+        'sprints', 'task_comments', 'tasks', 'worklog_entries',
       ].sort(),
     )
   })
@@ -357,6 +357,14 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   // rather than in the row. A handover reassigns an allocation; it does not
   // trash it.
   'src/features/people/handover-actions.ts': 'applyHandover',
+  // PRD Module A side tables (migration 0077), none carrying a deletedAt —
+  // verified in schema.ts. A label or component taken off a task, a link
+  // between two items removed, a criterion struck from the checklist: in each
+  // the row's absence IS the fact, the task itself is the soft-deleted thing
+  // (and cascades), and who changed what is activity_log's record.
+  'src/features/sprints/labels-actions.ts': ['setTaskLabels', 'setTaskComponents'],
+  'src/features/sprints/links-actions.ts': 'removeTaskLink',
+  'src/features/sprints/criteria-actions.ts': 'deleteCriterion',
   // Verified by reading the file: every db.delete() in admin/actions.ts
   // today lives inside clearTestData (the ENABLE_DB_CLEAR-gated dev tool).
   'src/features/admin/actions.ts': 'clearTestData',
