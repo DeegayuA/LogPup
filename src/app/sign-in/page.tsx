@@ -180,11 +180,11 @@ export default function SignInPage() {
           </CardHeader>
 
           <CardContent className="flex flex-col gap-5 px-6 pb-6">
-            {/* Development Environment Alert */}
+            {/* Account activation note */}
             <div className="flex items-start gap-2.5 rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs leading-relaxed text-muted-foreground">
               <ShieldCheck className="size-4 shrink-0 text-primary mt-0.5" />
               <span>
-                Personal accounts require admin activation. If you see Google&apos;s unverified app screen during development, click <strong>Advanced &rarr; Proceed</strong>.
+                Personal accounts require admin activation.
               </span>
             </div>
 

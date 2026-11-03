@@ -260,13 +260,13 @@ a fresh submission goes to the back of the queue.
 
 ## 8. After approval
 
-- Remove the workaround copy on the sign-in card: *"App is still in development,
-  so please click unsafe and proceed if you see a warning."*
-  ([src/app/sign-in/page.tsx](../src/app/sign-in/page.tsx)) — it is false and
-  alarming once the app is verified.
+- Done: the "unverified app screen" workaround copy is gone from the sign-in card
+  ([src/app/sign-in/page.tsx](../src/app/sign-in/page.tsx)). Do not merge a change
+  like this until production runs on the approved client, because users on an
+  unapproved client still see the warning.
 - The 100-user cap lifts and refresh tokens stop expiring after 7 days, which is
-  the practical difference users will notice: today an unverified app's Google
-  refresh token dies weekly and calendar sync silently stops until re-consent.
+  the practical difference users will notice: an unverified app's Google refresh
+  token dies weekly and calendar sync silently stops until re-consent.
 
 ---
 
