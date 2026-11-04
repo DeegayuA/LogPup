@@ -377,6 +377,9 @@ export function SprintEditDialog({
               {sprint ? (
                 <Link
                   href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
+                  // The dialog is opened from the roadmap itself, so the board
+                  // loads underneath it: without closing, the click looks dead.
+                  onClick={() => onOpenChange(false)}
                   className={cn(buttonVariants({ variant: 'outline' }))}
                 >
                   Open board

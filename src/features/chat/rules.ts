@@ -1,3 +1,4 @@
+import { LK_TIMEZONE, toIsoDateInTimeZone } from '@/lib/lk-holidays'
 import type { ChannelKind } from './chat'
 
 /**
@@ -192,4 +193,135 @@ export function mentionTargets(input: {
 }): string[] {
   const skip = new Set([input.actorId, ...(input.previouslyMentioned ?? []), ...(input.alreadyNotified ?? [])])
   return [...new Set(input.mentioned)].filter((id) => !skip.has(id))
+}
+
+// --- presentation: previews, times, day separators, message runs -----------
+//
+// Pure and in Asia/Colombo on purpose: the server render and the browser must
+// print the same words (a UTC server and a +5:30 browser would otherwise
+// disagree about "Today" and fail hydration), and every other date in the app
+// is a Sri Lankan date.
+
+/** Longest preview a conversation row shows; the query clips the body well before this runs. */
+export const SNIPPET_MAX = 80
+
+const FILE_ONLY = /^\s*(?:📎\s*)?!?\[([^\]]*)\]\(\/api\/attachments\/[^)\s]+\)\s*$/u
+
+/**
+ * One line of plain text from a message body for the conversation list:
+ * Markdown marks, link targets and code fences go; the words stay. A message
+ * that is only a shared file (fileMessageBody) reads "📎 name". Mentions are
+ * plain "@Name" text in the source (MentionTextarea writes them that way), so
+ * they survive as written; a link-shaped "@[Name](…)" keeps just "@Name".
+ */
+export function messageSnippet(body: string, max = SNIPPET_MAX): string {
+  const file = FILE_ONLY.exec(body)
+  if (file) return clip(`📎 ${file[1].trim() || 'file'}`, max)
+  const text = body
+    .replace(/```[^\n]*\n?([\s\S]*?)(?:```|$)/g, ' $1 ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*([-*_])(?:\s*\1){2,}\s*$/gm, ' ')
+    .replace(/^\s{0,3}(?:#{1,6}\s+|(?:>\s?)+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/gm, '')
+    .replace(/(\*\*|__|~~)(.+?)\1/g, '$2')
+    .replace(/(^|[^\w*])[*_](?=\S)([^*_\n]*?\S)[*_](?=[^\w*]|$)/g, '$1$2')
+    .replace(/<\/?[a-z][^>]*>/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return clip(text, max)
+}
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text
+}
+
+/** "You: hi", "Ann Perera: hi", or "Message deleted" — never a deleted body. */
+export function previewLine(p: { authorName: string; mine: boolean; snippet: string; deleted: boolean }): string {
+  if (p.deleted) return 'Message deleted'
+  return `${p.mine ? 'You' : p.authorName}: ${p.snippet}`
+}
+
+const DAY_MS = 86_400_000
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+function lkParts(date: Date, options: Intl.DateTimeFormatOptions): Partial<Record<Intl.DateTimeFormatPartTypes, string>> {
+  const key = JSON.stringify(options)
+  let f = formatters.get(key)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-GB', { ...options, timeZone: LK_TIMEZONE })
+    formatters.set(key, f)
+  }
+  const out: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {}
+  for (const part of f.formatToParts(date)) out[part.type] = part.value
+  return out
+}
+
+const asDate = (d: Date | string) => (d instanceof Date ? d : new Date(d))
+
+/** The Sri Lankan calendar day a moment falls on, "yyyy-mm-dd". */
+export function lkDayKey(d: Date | string): string {
+  return toIsoDateInTimeZone(asDate(d))
+}
+
+/** "3 Nov", with the year when it is not this year's. */
+function shortDate(date: Date, now: Date): string {
+  const p = lkParts(date, { day: 'numeric', month: 'short', year: 'numeric' })
+  const sameYear = p.year === lkDayKey(now).slice(0, 4)
+  return sameYear ? `${p.day} ${p.month}` : `${p.day} ${p.month} ${p.year}`
+}
+
+/** A conversation row's time: "now", "4m", "1h", "Yesterday", "3 Nov". */
+export function relativeTime(at: Date | string, now: Date): string {
+  const date = asDate(at)
+  const diff = now.getTime() - date.getTime()
+  if (diff < 60_000) return 'now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`
+  const day = lkDayKey(date)
+  if (day === lkDayKey(now)) return `${Math.floor(diff / 3_600_000)}h`
+  if (day === lkDayKey(new Date(now.getTime() - DAY_MS))) return 'Yesterday'
+  return shortDate(date, now)
+}
+
+/** A date separator: "Today", "Yesterday", "Mon, 3 Nov". */
+export function dayLabel(at: Date | string, now: Date): string {
+  const date = asDate(at)
+  const day = lkDayKey(date)
+  if (day === lkDayKey(now)) return 'Today'
+  if (day === lkDayKey(new Date(now.getTime() - DAY_MS))) return 'Yesterday'
+  return `${lkParts(date, { weekday: 'short' }).weekday}, ${shortDate(date, now)}`
+}
+
+/**
+ * "4:05 PM". Built from parts because ICU versions disagree on the space
+ * before AM/PM (a narrow no-break space in newer ones) and on its case, and
+ * the server's Node and the browser must print the same string.
+ */
+export function clockTime(at: Date | string): string {
+  const p = lkParts(asDate(at), { hour: 'numeric', minute: '2-digit', hour12: true })
+  return `${p.hour}:${p.minute} ${(p.dayPeriod ?? '').toUpperCase()}`.trim()
+}
+
+/** Same author within this long reads as one run: one avatar, one name. */
+export const RUN_GAP_MS = 5 * 60_000
+
+/**
+ * Where each message sits in the list: whether a new Sri Lankan day starts at
+ * it (a date separator goes above) and whether it starts a run (it shows the
+ * avatar and name). A run breaks on a new day, a new author, or a gap over
+ * RUN_GAP_MS from the message before.
+ */
+export function messageRuns(
+  list: readonly { authorId: string; createdAt: Date | string }[],
+): { newDay: boolean; startsRun: boolean }[] {
+  return list.map((m, i) => {
+    const prev = i > 0 ? list[i - 1] : null
+    const newDay = prev === null || lkDayKey(prev.createdAt) !== lkDayKey(m.createdAt)
+    const startsRun =
+      prev === null ||
+      newDay ||
+      prev.authorId !== m.authorId ||
+      asDate(m.createdAt).getTime() - asDate(prev.createdAt).getTime() > RUN_GAP_MS
+    return { newDay, startsRun }
+  })
 }

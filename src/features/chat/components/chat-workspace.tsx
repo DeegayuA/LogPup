@@ -15,6 +15,7 @@ import {
   listConversations,
   listMembers,
   listRootMessages,
+  listSharedFiles,
   messageablePeople,
 } from '@/features/chat/queries'
 import { groupTitle } from '@/features/chat/rules'
@@ -33,8 +34,12 @@ import { NewChannelDialog, NewMessageDialog, StatusDialog } from './chat-dialogs
  * project tab a channel from ANOTHER project is refused the same way, so a
  * pasted link cannot render someone else's channel under this project.
  *
+ * Three panes on a wide screen — list, conversation, details (the details
+ * column is the Conversation's own, see conversation.tsx). Shared files for
+ * the details load here, after loadChannelAccess, like every one-channel read.
+ *
  * Mobile shows one pane at a time: the list without ?c, the conversation
- * with it (its header has a Back link).
+ * with it (its header has a Back link), details as a sheet over it.
  */
 
 type Search = Record<string, string | string[] | undefined>
@@ -66,17 +71,19 @@ export async function ChatWorkspace({
     db.select({ name: users.name, avatarUrl: users.avatarUrl }).from(users).where(eq(users.id, actor.id)),
   ])
   const viewer = { id: actor.id, name: viewerRows[0]?.name ?? 'You', avatarUrl: viewerRows[0]?.avatarUrl ?? null }
+  const serverNow = new Date().toISOString()
 
   const ch = c && isUuid(c) ? await loadChannelAccess(actor, c) : null
   const canOpen = ch !== null && ch.perms.read && (!app || ch.app?.id === app.id)
 
   let conversation: React.ReactNode = <NoConversation />
   if (ch && canOpen) {
-    const [page, members, readers, thread] = await Promise.all([
+    const [page, members, readers, thread, sharedFiles] = await Promise.all([
       listRootMessages(ch.id, actor.id),
       listMembers(ch.id),
       channelReaders(ch),
       t && isUuid(t) ? getThread(ch.id, t, actor.id) : Promise.resolve(null),
+      listSharedFiles(ch.id),
     ])
     const memberIds = new Set(members.map((m) => m.id))
     let addable: { id: string; name: string }[] = []
@@ -124,8 +131,9 @@ export async function ChatWorkspace({
         mentionUsers={readers.filter((r) => r.id !== actor.id)}
         members={members}
         addablePeople={addable}
+        sharedFiles={sharedFiles}
         viewer={viewer}
-        serverNow={new Date().toISOString()}
+        serverNow={serverNow}
         baseHref={baseHref}
       />
     )
@@ -140,7 +148,7 @@ export async function ChatWorkspace({
     <div className="flex h-[calc(100svh-9rem)] min-h-[26rem] overflow-hidden rounded-xl border bg-card">
       <aside
         className={cn(
-          'w-full flex-col border-r md:flex md:w-72 md:shrink-0',
+          'min-h-0 w-full flex-col border-r md:flex md:w-72 md:shrink-0 lg:w-80',
           open ? 'hidden' : 'flex',
         )}
       >
@@ -152,6 +160,7 @@ export async function ChatWorkspace({
           activeId={open && ch ? ch.id : null}
           baseHref={baseHref}
           presence={listPresence}
+          serverNow={serverNow}
           openableProjects={app ? [] : projects}
           showPersonal={!app}
           actions={

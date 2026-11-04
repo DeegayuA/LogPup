@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
   channelPermissions,
+  clockTime,
+  dayLabel,
   fileMessageBody,
   groupTitle,
   laterOf,
   mentionTargets,
+  messageRuns,
+  messageSnippet,
   nextRejectCount,
   pollGaveUp,
   pollSince,
+  previewLine,
+  relativeTime,
+  SNIPPET_MAX,
   POLL_OVERLAP_MS,
   POLL_REJECT_LIMIT,
   unreadBadgeLabel,
@@ -152,5 +159,97 @@ describe('mentionTargets', () => {
     expect(
       mentionTargets({ mentioned: ['a', 'b', 'c'], actorId: 'me', previouslyMentioned: ['a'], alreadyNotified: ['b'] }),
     ).toEqual(['c'])
+  })
+})
+
+// Wed 4 Nov 2026, 12:00 in Colombo (UTC+5:30).
+const NOON = new Date('2026-11-04T06:30:00Z')
+
+describe('messageSnippet', () => {
+  it('strips Markdown marks and link targets, keeps the words', () => {
+    expect(messageSnippet('**Ship** it _today_ — see [the plan](https://x.test/p) and `npm run e2e`')).toBe(
+      'Ship it today — see the plan and npm run e2e',
+    )
+    expect(messageSnippet('# Heading\n> quoted\n- item one\n1. item two')).toBe('Heading quoted item one item two')
+    expect(messageSnippet('```ts\nconst a = 1\n```\nafter')).toBe('const a = 1 after')
+  })
+
+  it('keeps @mentions as written and leaves snake_case alone', () => {
+    expect(messageSnippet('@Ann Perera can you check snake_case_name?')).toBe('@Ann Perera can you check snake_case_name?')
+    expect(messageSnippet('ping @[Ann](/people/1)')).toBe('ping @Ann')
+  })
+
+  it('reads a shared file as 📎 and its name', () => {
+    expect(messageSnippet(fileMessageBody('a1b2', 'spec.pdf', false))).toBe('📎 spec.pdf')
+    expect(messageSnippet(fileMessageBody('a1b2', 'shot.png', true))).toBe('📎 shot.png')
+    expect(messageSnippet('📎 [](/api/attachments/a1b2)')).toBe('📎 file')
+  })
+
+  it('clips to the limit with an ellipsis', () => {
+    const out = messageSnippet('word '.repeat(40))
+    expect(out.length).toBeLessThanOrEqual(SNIPPET_MAX)
+    expect(out.endsWith('…')).toBe(true)
+    expect(messageSnippet('short')).toBe('short')
+  })
+})
+
+describe('previewLine', () => {
+  it('names the author, says You for the viewer, never shows a deleted body', () => {
+    expect(previewLine({ authorName: 'Ann', mine: false, snippet: 'hi', deleted: false })).toBe('Ann: hi')
+    expect(previewLine({ authorName: 'Me', mine: true, snippet: 'hi', deleted: false })).toBe('You: hi')
+    expect(previewLine({ authorName: 'Ann', mine: false, snippet: 'secret', deleted: true })).toBe('Message deleted')
+  })
+})
+
+describe('relativeTime (Asia/Colombo)', () => {
+  it('minutes, hours, yesterday, then a short date', () => {
+    expect(relativeTime(new Date(NOON.getTime() - 20_000), NOON)).toBe('now')
+    expect(relativeTime(new Date(NOON.getTime() - 4 * 60_000), NOON)).toBe('4m')
+    expect(relativeTime(new Date(NOON.getTime() - 61 * 60_000), NOON)).toBe('1h')
+    expect(relativeTime('2026-11-03T15:00:00Z', NOON)).toBe('Yesterday') // 20:30 Tue in Colombo
+    expect(relativeTime('2026-11-02T06:30:00Z', NOON)).toBe('2 Nov')
+    expect(relativeTime('2025-12-31T06:30:00Z', NOON)).toBe('31 Dec 2025')
+  })
+
+  it('a moment past midnight in Colombo is today there, though still yesterday in UTC', () => {
+    const justAfterMidnight = new Date('2026-11-03T18:40:00Z') // 00:10 Wed in Colombo
+    const now = new Date('2026-11-04T04:00:00Z')
+    expect(relativeTime(justAfterMidnight, now)).toBe('9h')
+  })
+})
+
+describe('dayLabel and clockTime (Asia/Colombo)', () => {
+  it('Today, Yesterday, then weekday and date', () => {
+    expect(dayLabel('2026-11-04T00:00:00Z', NOON)).toBe('Today')
+    expect(dayLabel('2026-11-03T18:29:00Z', NOON)).toBe('Yesterday') // 23:59 Tue
+    expect(dayLabel('2026-11-02T06:30:00Z', NOON)).toBe('Mon, 2 Nov')
+  })
+
+  it('prints the Colombo wall clock', () => {
+    expect(clockTime('2026-11-04T10:35:00Z')).toBe('4:05 PM')
+    expect(clockTime(new Date('2026-11-03T18:40:00Z'))).toBe('12:10 AM')
+  })
+})
+
+describe('messageRuns', () => {
+  const at = (iso: string) => new Date(iso)
+  it('groups one author within five minutes, breaks on author, gap or day', () => {
+    const runs = messageRuns([
+      { authorId: 'a', createdAt: at('2026-11-04T06:00:00Z') },
+      { authorId: 'a', createdAt: at('2026-11-04T06:04:00Z') }, // same run
+      { authorId: 'b', createdAt: at('2026-11-04T06:05:00Z') }, // new author
+      { authorId: 'b', createdAt: at('2026-11-04T06:11:00Z') }, // gap > 5 min
+      { authorId: 'b', createdAt: at('2026-11-04T18:29:00Z') }, // 23:59 Colombo, same day
+      { authorId: 'b', createdAt: at('2026-11-04T18:31:00Z') }, // 00:01 next day
+    ])
+    expect(runs).toEqual([
+      { newDay: true, startsRun: true },
+      { newDay: false, startsRun: false },
+      { newDay: false, startsRun: true },
+      { newDay: false, startsRun: true },
+      { newDay: false, startsRun: true },
+      { newDay: true, startsRun: true },
+    ])
+    expect(messageRuns([])).toEqual([])
   })
 })

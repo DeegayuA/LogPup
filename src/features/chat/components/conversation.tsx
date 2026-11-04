@@ -12,12 +12,11 @@ import {
   type KeyboardEvent,
 } from 'react'
 import Link from 'next/link'
-import { format, isToday, isYesterday } from 'date-fns'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
-  Hash,
-  Lock,
+  Info,
   MessageSquareReply,
   Paperclip,
   Pencil,
@@ -60,11 +59,21 @@ import {
   postMessage,
   toggleReaction,
 } from '@/features/chat/actions'
-import type { ChatMessage, MessageSummary, Presence } from '@/features/chat/queries'
-import { nextRejectCount, pollGaveUp, withParams } from '@/features/chat/rules'
+import type { ChatMessage, MessageSummary, Presence, SharedFile } from '@/features/chat/queries'
+import {
+  clockTime,
+  dayLabel,
+  messageRuns,
+  nextRejectCount,
+  pollGaveUp,
+  relativeTime,
+  withParams,
+} from '@/features/chat/rules'
 import { remarkMentions, type MentionPerson } from '@/features/chat/mentions'
+import { eventColorSlot } from '@/features/meetings/event-color'
 import { PresenceDot, PresenceLabel } from './presence'
-import { AddMembersDialog } from './chat-dialogs'
+import { ChannelIcon, InfoColumn, InfoSheet, channelKindLabel, initials } from './info-panel'
+import bubbleStyles from './bubble.module.css'
 
 /**
  * One open conversation: the message list, the composer, and the thread side
@@ -86,10 +95,46 @@ import { AddMembersDialog } from './chat-dialogs'
  * @mentions of people this conversation knows render highlighted through a
  * remark plugin (chat/mentions.ts), built once per conversation and handed to
  * every message by context — MarkdownView still renders no raw HTML.
+ *
+ * LAYOUT is a messenger's: others on the left with avatar and coloured name
+ * at the start of a run (rules.ts messageRuns — same author, ≤5 min, same
+ * day), the viewer's own on the right in a primary bubble, a date separator
+ * per Sri Lankan day. Every time printed here is Asia/Colombo (rules.ts), so
+ * the server render and the browser agree. The name colour is the ONE
+ * identity hash (meetings/event-color.ts) keyed by user id, and the name is
+ * always written out, so colour is never the only signal.
+ *
+ * The Details panel (info-panel.tsx) is a column at xl, a sheet below it.
+ * `infoPref` null means "the default for this width" and is left to CSS
+ * (hidden xl:flex), so the first paint is right at every width without
+ * knowing the viewport on the server. The thread panel and the details
+ * column share the right edge: opening one closes the other.
  */
 
 type MarkdownPlugins = NonNullable<Parameters<typeof MarkdownView>[0]['remarkPlugins']>
 const MentionPlugins = createContext<MarkdownPlugins>([])
+/** "Now" for day labels and reply stamps — the server's at first paint, then the browser's each minute. */
+const NowContext = createContext<Date>(new Date(0))
+
+/**
+ * Literal classes per identity slot (Tailwind only generates what it sees
+ * written), on the --event-N tokens that globals.css tunes to clear contrast
+ * on card and background in both themes.
+ */
+const NAME_CLASSES: Record<number, string> = {
+  1: 'text-event-1',
+  2: 'text-event-2',
+  3: 'text-event-3',
+  4: 'text-event-4',
+  5: 'text-event-5',
+  6: 'text-event-6',
+  7: 'text-event-7',
+  8: 'text-event-8',
+}
+
+function nameClass(userId: string): string {
+  return NAME_CLASSES[eventColorSlot(userId) ?? 1] ?? 'text-foreground'
+}
 
 export type ConversationChannel = {
   id: string
@@ -123,6 +168,8 @@ type Props = {
     role: 'owner' | 'member'
   }[]
   addablePeople: { id: string; name: string }[]
+  /** The newest files shared here, for the Details panel. */
+  sharedFiles: SharedFile[]
   viewer: Viewer
   serverNow: string
   /** "/chat" or "/apps/<slug>?tab=chat" — links add c/t to it. */
@@ -252,15 +299,73 @@ function useFeed(
   return { messages, setMessages, poll, lost }
 }
 
-function initials(name: string) {
-  return (name.trim()[0] ?? '?').toUpperCase()
+/** Matches Tailwind's xl breakpoint (80rem). Read after mount; false on the server. */
+function useWide(): boolean {
+  const [wide, setWide] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 80rem)')
+    const sync = () => setWide(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return wide
 }
 
-function stamp(d: Date | string) {
-  const date = new Date(d)
-  if (isToday(date)) return format(date, 'h:mm a')
-  if (isYesterday(date)) return `Yesterday ${format(date, 'h:mm a')}`
-  return format(date, 'MMM d, h:mm a')
+/** Starts at the server's clock (hydration-safe), then follows the browser's each minute. */
+function useNow(serverNow: string): Date {
+  const [now, setNow] = useState(() => new Date(serverNow))
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  return now
+}
+
+/** A date separator; plain text, not interactive. */
+function DaySeparator({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <span aria-hidden className="h-px flex-1 bg-border" />
+      <span className="rounded-full border bg-card px-3 py-0.5 text-2xs font-medium text-muted-foreground">{label}</span>
+      <span aria-hidden className="h-px flex-1 bg-border" />
+    </div>
+  )
+}
+
+/**
+ * Messages split by Sri Lankan day, each day a labelled group, each message
+ * told whether it starts a run (avatar + name).
+ */
+function MessageDays({
+  messages,
+  now,
+  render,
+}: {
+  messages: ChatMessage[]
+  now: Date
+  render: (m: ChatMessage, first: boolean) => React.ReactNode
+}) {
+  const runs = messageRuns(messages)
+  const days: { label: string; key: string; items: { m: ChatMessage; first: boolean }[] }[] = []
+  messages.forEach((m, i) => {
+    if (runs[i].newDay) days.push({ label: dayLabel(m.createdAt, now), key: dayLabel(m.createdAt, now), items: [] })
+    days[days.length - 1].items.push({ m, first: runs[i].startsRun })
+  })
+  return (
+    <>
+      {days.map((day) => (
+        <div key={day.key} role="group" aria-label={day.label}>
+          <DaySeparator label={day.label} />
+          <ol className="flex flex-col">
+            {day.items.map(({ m, first }) => (
+              <li key={m.id}>{render(m, first)}</li>
+            ))}
+          </ol>
+        </div>
+      ))}
+    </>
+  )
 }
 
 export function Conversation(props: Props) {
@@ -268,11 +373,17 @@ export function Conversation(props: Props) {
   const [presence, setPresence] = useState(props.presence)
   const [threadId, setThreadId] = useState<string | null>(props.initialThread?.root.id ?? null)
   const [isMember, setIsMember] = useState(channel.isMember)
+  const router = useRouter()
   const [hasOlder, setHasOlder] = useState(props.initial.hasOlder)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  // null = this width's default (open at xl, closed below) — see the header comment.
+  const [infoPref, setInfoPref] = useState<boolean | null>(null)
+  const wide = useWide()
+  const now = useNow(props.serverNow)
   const scroller = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const keepOffset = useRef<number | null>(null)
+  const infoShown = !threadId && (infoPref ?? wide)
 
   const mergePresence = useCallback((p: Record<string, Presence>) => setPresence((cur) => ({ ...cur, ...p })), [])
   const readSoon = useCallback(() => {
@@ -347,6 +458,9 @@ export function Conversation(props: Props) {
     if (result.ok) {
       setIsMember(true)
       toast.success('Joined')
+      // Member count, the Members list and unread state are server-rendered:
+      // without a refresh the join looks like it did nothing.
+      router.refresh()
     } else toast.error(result.error)
   }
 
@@ -355,54 +469,67 @@ export function Conversation(props: Props) {
     if (result.ok) {
       setIsMember(false)
       toast.success('You left the conversation')
-      window.location.assign(withParams(baseHref, { c: null, t: null }))
+      // A public channel or work-item thread stays readable after leaving, so
+      // stay on it; only a private one is gone, so go back to the list.
+      if (channel.kind === 'private') window.location.assign(withParams(baseHref, { c: null, t: null }))
+      else router.refresh()
     } else toast.error(result.error)
   }
 
-  const headerIcon =
-    channel.kind === 'private' ? (
-      <Lock aria-hidden className="size-4" />
-    ) : channel.kind === 'public' ? (
-      <Hash aria-hidden className="size-4" />
-    ) : channel.kind === 'group' ? (
-      <Users aria-hidden className="size-4" />
-    ) : null
-  const kindLabel =
-    channel.kind === 'public'
-      ? 'Public channel'
-      : channel.kind === 'private'
-        ? 'Private channel'
-        : channel.kind === 'group'
-          ? 'Group chat'
-          : channel.kind === 'dm'
-            ? 'Direct message'
-            : 'Work item thread'
+  function toggleInfo() {
+    if (threadId) {
+      // The thread and the details column share the right edge.
+      openThread(null)
+      setInfoPref(true)
+      return
+    }
+    setInfoPref(!infoShown)
+  }
+
+  const memberCount = props.members.length
+  const membersText = `${memberCount} ${memberCount === 1 ? 'member' : 'members'}`
+  const subtitle =
+    channel.topic ??
+    (channel.kind === 'context'
+      ? `${channelKindLabel(channel.kind)}${channel.projectName ? ` · ${channel.projectName}` : ''}`
+      : `${channelKindLabel(channel.kind)} · ${membersText}`)
+  const infoProps = {
+    channel,
+    members: props.members,
+    presence,
+    files: props.sharedFiles,
+    addablePeople: props.addablePeople,
+    now,
+    onClose: () => setInfoPref(false),
+  }
 
   return (
     <MentionPlugins.Provider value={mentionPlugins}>
+      <NowContext.Provider value={now}>
       <div className="flex min-h-0 flex-1">
         <section
           aria-labelledby="chat-title"
           className={cn('flex min-h-0 min-w-0 flex-1 flex-col', threadId && 'hidden lg:flex')}
         >
-          <header className="flex flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-4">
+          <header className="flex items-center gap-2 border-b px-2 py-2.5 sm:gap-3 sm:px-4">
             <Link
               href={withParams(baseHref, { c: null, t: null })}
-              className="inline-flex items-center rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden"
+              className="inline-flex shrink-0 items-center rounded-md p-1.5 text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
               aria-label="Back to conversations"
             >
               <ArrowLeft aria-hidden className="size-4" />
             </Link>
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <ChannelIcon kind={channel.kind} className="size-4" />
+            </span>
             <div className="min-w-0 flex-1">
-              <h2 id="chat-title" className="flex items-center gap-1.5 truncate text-sm font-semibold">
-                {headerIcon}
+              <h2 id="chat-title" className="flex items-center gap-1.5 text-sm font-semibold">
                 <span className="truncate">{channel.title}</span>
+                {channel.kind === 'private' ? <span className="sr-only">(private)</span> : null}
                 {channel.otherUserId ? <PresenceDot presence={presence[channel.otherUserId]} /> : null}
               </h2>
               <p className="truncate text-xs text-muted-foreground">
-                {kindLabel}
-                {channel.projectName ? ` · ${channel.projectName}` : ''}
-                {channel.topic ? ` · ${channel.topic}` : ''}
+                {subtitle}
                 {channel.otherUserId && presence[channel.otherUserId] ? (
                   <>
                     {' · '}
@@ -411,33 +538,57 @@ export function Conversation(props: Props) {
                 ) : null}
               </p>
             </div>
-            {channel.contextHref ? (
-              <Link href={channel.contextHref} className="text-xs font-medium text-primary hover:underline">
-                Open the work item
-              </Link>
-            ) : null}
-            {channel.kind !== 'dm' ? (
-              <span className="text-xs text-muted-foreground" title={props.members.map((m) => m.name).join(', ')}>
-                {props.members.length} {props.members.length === 1 ? 'member' : 'members'}
-              </span>
-            ) : null}
-            {channel.canAddMembers ? <AddMembersDialog channelId={channel.id} people={props.addablePeople} /> : null}
-            {!isMember && (channel.kind === 'public' || channel.kind === 'context') && channel.canWrite ? (
-              <Button size="sm" variant="outline" onClick={() => void onJoin()}>
-                Join
+            <div className="flex shrink-0 items-center gap-1">
+              {channel.contextHref ? (
+                <Link
+                  href={channel.contextHref}
+                  className="hidden rounded-md px-2 py-1 text-xs font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring sm:inline"
+                >
+                  Open the work item
+                </Link>
+              ) : null}
+              {channel.kind !== 'dm' ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="hidden text-muted-foreground sm:inline-flex"
+                  onClick={() => {
+                    if (!infoShown) toggleInfo()
+                  }}
+                  aria-label={`${membersText} — show details`}
+                  title={props.members.map((m) => m.name).join(', ')}
+                >
+                  <Users aria-hidden />
+                  <span className="tabular-nums">{memberCount}</span>
+                </Button>
+              ) : null}
+              {!isMember && (channel.kind === 'public' || channel.kind === 'context') && channel.canWrite ? (
+                <Button size="sm" variant="outline" onClick={() => void onJoin()}>
+                  Join
+                </Button>
+              ) : null}
+              {isMember && channel.kind !== 'dm' ? (
+                <Button size="sm" variant="ghost" onClick={() => void onLeave()}>
+                  Leave
+                </Button>
+              ) : null}
+              <Button
+                size="icon-sm"
+                variant={infoShown ? 'secondary' : 'ghost'}
+                onClick={toggleInfo}
+                aria-label={infoShown ? 'Hide details' : 'Show details'}
+                aria-expanded={infoShown}
+                title="Details"
+              >
+                <Info aria-hidden />
               </Button>
-            ) : null}
-            {isMember && channel.kind !== 'dm' ? (
-              <Button size="sm" variant="ghost" onClick={() => void onLeave()}>
-                Leave
-              </Button>
-            ) : null}
+            </div>
           </header>
 
           <div
             ref={scroller}
             onScroll={onScroll}
-            className="min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4"
+            className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-muted/30 px-2 pt-1 pb-3 sm:px-4"
             role="log"
             aria-label={`Messages in ${channel.title}`}
             aria-live="polite"
@@ -456,21 +607,22 @@ export function Conversation(props: Props) {
                 {channel.canWrite ? ' Say hello — or type @ to bring someone in.' : ''}
               </p>
             ) : (
-              <ol className="flex flex-col gap-0.5">
-                {feed.messages.map((m) => (
-                  <li key={m.id}>
-                    <MessageItem
-                      message={m}
-                      viewer={viewer}
-                      presence={presence[m.authorId]}
-                      canWrite={channel.canWrite}
-                      canModerate={channel.canModerate}
-                      onReply={() => openThread(m.id)}
-                      setList={feed.setMessages}
-                    />
-                  </li>
-                ))}
-              </ol>
+              <MessageDays
+                messages={feed.messages}
+                now={now}
+                render={(m, first) => (
+                  <MessageItem
+                    message={m}
+                    first={first}
+                    viewer={viewer}
+                    presence={presence[m.authorId]}
+                    canWrite={channel.canWrite}
+                    canModerate={channel.canModerate}
+                    onReply={() => openThread(m.id)}
+                    setList={feed.setMessages}
+                  />
+                )}
+              />
             )}
           </div>
 
@@ -527,7 +679,17 @@ export function Conversation(props: Props) {
             onReplied={() => void feed.poll()}
           />
         ) : null}
+
+        {/* xl+: a column. Left to CSS while the preference is the default,
+            so the first paint is right before the width is known. */}
+        <InfoColumn
+          {...infoProps}
+          className={cn('hidden', !threadId && (infoPref ?? true) && 'xl:flex')}
+        />
       </div>
+      {/* Below xl: the same details as a sheet, only when asked for. */}
+      <InfoSheet {...infoProps} open={infoPref === true && !wide && !threadId} />
+      </NowContext.Provider>
     </MentionPlugins.Provider>
   )
 }
@@ -536,6 +698,7 @@ export function Conversation(props: Props) {
 
 function MessageItem({
   message: m,
+  first = true,
   viewer,
   presence,
   canWrite,
@@ -545,6 +708,8 @@ function MessageItem({
   inThread = false,
 }: {
   message: ChatMessage
+  /** Starts a run: shows the avatar and name (others' messages only). */
+  first?: boolean
   viewer: Viewer
   presence: Presence | undefined
   canWrite: boolean
@@ -557,6 +722,7 @@ function MessageItem({
   const [draft, setDraft] = useState(m.body)
   const [saving, setSaving] = useState(false)
   const mentionPlugins = useContext(MentionPlugins)
+  const now = useContext(NowContext)
   const mine = m.authorId === viewer.id
   const pending = m.id.startsWith('tmp-')
 
@@ -645,33 +811,36 @@ function MessageItem({
 
   return (
     <article
-      aria-label={`${m.authorName}, ${stamp(m.createdAt)}`}
+      aria-label={`${mine ? 'You' : m.authorName}, ${clockTime(m.createdAt)}`}
       className={cn(
-        'group relative flex gap-2.5 rounded-lg px-2 py-1.5 hover:bg-muted/50 focus-within:bg-muted/50',
+        'group relative flex gap-2 rounded-lg px-1 sm:px-2',
+        mine && 'flex-row-reverse',
+        first ? 'mt-3' : 'mt-1',
         pending && 'opacity-60',
       )}
     >
-      <div className="relative shrink-0 pt-0.5">
-        <Avatar size="sm">
-          {m.authorAvatarUrl ? <AvatarImage src={m.authorAvatarUrl} alt="" /> : null}
-          <AvatarFallback>{initials(m.authorName)}</AvatarFallback>
-        </Avatar>
-        <PresenceDot presence={presence} className="absolute -right-1.5 -bottom-1 size-3.5 text-[8px]" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-baseline gap-x-2 text-xs">
-          <span className="font-semibold text-foreground">{m.authorName}</span>
-          <time dateTime={new Date(m.createdAt).toISOString()} className="text-muted-foreground">
-            {stamp(m.createdAt)}
-          </time>
-          {m.editedAt && !m.deleted ? <span className="text-muted-foreground">(edited)</span> : null}
-          {pending ? <span className="text-muted-foreground">Sending…</span> : null}
-        </p>
+      {mine ? null : first ? (
+        <div className="relative mt-5 shrink-0">
+          <Avatar>
+            {m.authorAvatarUrl ? <AvatarImage src={m.authorAvatarUrl} alt="" /> : null}
+            <AvatarFallback className="text-xs font-medium">{initials(m.authorName)}</AvatarFallback>
+          </Avatar>
+          <PresenceDot presence={presence} className="absolute -right-1.5 -bottom-1 size-3.5 text-[8px]" />
+        </div>
+      ) : (
+        <span aria-hidden className="w-8 shrink-0" />
+      )}
+      <div className={cn('flex min-w-0 flex-col', editing ? 'flex-1' : 'max-w-[85%] sm:max-w-[75%]', mine ? 'items-end' : 'items-start')}>
+        {!mine && first ? (
+          <p className={cn('mb-1 px-1 text-xs font-semibold', nameClass(m.authorId))}>{m.authorName}</p>
+        ) : null}
 
         {m.deleted ? (
-          <p className="text-sm italic text-muted-foreground">This message was deleted</p>
+          <p className="rounded-2xl border border-dashed px-3 py-2 text-sm text-muted-foreground italic">
+            This message was deleted
+          </p>
         ) : editing ? (
-          <div className="mt-1 flex flex-col gap-2">
+          <div className="flex w-full flex-col gap-2">
             <Textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -699,17 +868,38 @@ function MessageItem({
             </div>
           </div>
         ) : (
-          <MarkdownView
-            markdown={m.body}
-            remarkPlugins={mentionPlugins}
-            className="text-sm [&_p]:my-0.5 [&_pre]:my-1"
-          />
+          <div
+            className={cn(
+              'max-w-full min-w-0 rounded-2xl px-3 py-2 shadow-xs',
+              mine
+                ? cn('bg-primary text-primary-foreground', first && 'rounded-tr-md')
+                : cn('border bg-card text-card-foreground', first && 'rounded-tl-md'),
+            )}
+          >
+            {/* The wrapper re-points MarkdownView's colour tokens so links,
+                mentions and code stay readable on the primary ground. */}
+            <div className={mine ? bubbleStyles.onPrimary : undefined}>
+              <MarkdownView
+                markdown={m.body}
+                remarkPlugins={mentionPlugins}
+                className="text-sm [&_p]:my-0.5 [&_pre]:my-1"
+              />
+            </div>
+          </div>
         )}
+
+        {!editing ? (
+          <p className={cn('mt-0.5 flex flex-wrap gap-x-1.5 px-1 text-2xs text-muted-foreground', mine && 'justify-end')}>
+            <time dateTime={new Date(m.createdAt).toISOString()}>{clockTime(m.createdAt)}</time>
+            {m.editedAt && !m.deleted ? <span>(edited)</span> : null}
+            {pending ? <span>Sending…</span> : null}
+          </p>
+        ) : null}
 
         {/* Always visible, not hover-only: the user asked for reacting and
             replying to be obvious, and a phone has no hover anyway. */}
         {!m.deleted && !pending && !editing && (m.reactions.length > 0 || canWrite || (!inThread && onReply)) ? (
-          <div className="mt-1 flex flex-wrap items-center gap-1">
+          <div className={cn('mt-1 flex flex-wrap items-center gap-1', mine && 'justify-end')}>
             <ul className="contents" aria-label="Reactions">
               {m.reactions.map((r) => (
                 <li key={r.emoji}>
@@ -748,10 +938,15 @@ function MessageItem({
         ) : null}
 
         {!inThread && m.replyCount > 0 ? (
-          <button type="button" onClick={onReply} className="mt-1 text-xs font-medium text-primary hover:underline">
+          <button
+            type="button"
+            onClick={onReply}
+            className="mt-1 inline-flex items-center gap-1 rounded-full px-1 text-xs font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <MessageSquareReply className="size-3.5" aria-hidden />
             {m.replyCount} {m.replyCount === 1 ? 'reply' : 'replies'}
             {m.lastReplyAt ? (
-              <span className="font-normal text-muted-foreground"> · last {stamp(m.lastReplyAt)}</span>
+              <span className="font-normal text-muted-foreground"> · last {relativeTime(m.lastReplyAt, now)}</span>
             ) : null}
           </button>
         ) : null}
@@ -759,7 +954,12 @@ function MessageItem({
 
       {!m.deleted && !pending && !editing && ((!inThread && onReply) || mine || canModerate) ? (
         <div
-          className="absolute top-0 right-2 flex -translate-y-1/2 items-center gap-0.5 rounded-lg border bg-card p-0.5 opacity-0 shadow-xs transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+          className={cn(
+            'absolute flex -translate-y-1/2 items-center gap-0.5 rounded-lg border bg-card p-0.5 opacity-0 shadow-xs transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
+            // On the empty side of the row, so it never sits on the bubble's text.
+            mine ? 'left-2' : 'right-2',
+            first && !mine ? 'top-5' : 'top-0',
+          )}
           role="toolbar"
           aria-label={`Actions for the message from ${m.authorName}`}
         >
@@ -1160,6 +1360,7 @@ function ThreadPanel({
   const feed = useFeed(channel.id, rootId, initial?.replies ?? [], serverNow, mergePresence, noop, viewer.id)
   const { setMessages } = feed
   const endRef = useRef<HTMLDivElement>(null)
+  const now = useContext(NowContext)
 
   useEffect(() => {
     if (initial) return
@@ -1189,9 +1390,9 @@ function ThreadPanel({
   return (
     <aside
       aria-labelledby="thread-title"
-      className="flex min-h-0 w-full flex-col border-l bg-card/40 lg:w-[380px] lg:shrink-0"
+      className="flex min-h-0 w-full min-w-0 flex-col border-l bg-card lg:w-[380px] lg:shrink-0"
     >
-      <header className="flex items-center gap-2 border-b px-3 py-2">
+      <header className="flex items-center gap-2 border-b px-3 py-2.5">
         <h2 id="thread-title" className="flex-1 text-sm font-semibold">
           Thread
         </h2>
@@ -1200,7 +1401,7 @@ function ThreadPanel({
         </Button>
       </header>
       <div
-        className="min-h-0 flex-1 overflow-y-auto px-2 py-3"
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-muted/30 px-2 pt-1 pb-3"
         role="log"
         aria-label="Thread replies"
         aria-live="polite"
@@ -1220,14 +1421,20 @@ function ThreadPanel({
               setList={(fn) => setRoot((r) => (r ? (fn([r])[0] ?? r) : r))}
               inThread
             />
-            <p className="my-2 border-b pb-1 px-2 text-xs text-muted-foreground">
-              {feed.messages.length} {feed.messages.length === 1 ? 'reply' : 'replies'}
+            <p className="mt-3 flex items-center gap-3 px-1 text-xs text-muted-foreground">
+              <span>
+                {feed.messages.length} {feed.messages.length === 1 ? 'reply' : 'replies'}
+              </span>
+              <span aria-hidden className="h-px flex-1 bg-border" />
             </p>
-            <ol className="flex flex-col gap-0.5">
-              {feed.messages.map((m) => (
-                <li key={m.id}>
+            {feed.messages.length > 0 ? (
+              <MessageDays
+                messages={feed.messages}
+                now={now}
+                render={(m, first) => (
                   <MessageItem
                     message={m}
+                    first={first}
                     viewer={viewer}
                     presence={presence[m.authorId]}
                     canWrite={channel.canWrite}
@@ -1235,9 +1442,9 @@ function ThreadPanel({
                     setList={feed.setMessages}
                     inThread
                   />
-                </li>
-              ))}
-            </ol>
+                )}
+              />
+            ) : null}
             <div ref={endRef} />
           </>
         )}

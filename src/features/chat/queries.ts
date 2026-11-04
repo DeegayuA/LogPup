@@ -3,11 +3,11 @@ import 'server-only'
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, max, ne, or, sql, type SQL } from 'drizzle-orm'
 import { db } from '@/db'
 import { attachments, channelMembers, channels, messageReactions, messages, userPresence, users } from '@/db/schema'
-import { liveApps, liveBugReports, liveDocs, liveMessages, liveTasks } from '@/db/live'
+import { liveApps, liveAttachments, liveBugReports, liveDocs, liveMessages, liveTasks } from '@/db/live'
 import { can, effectiveGrant, type Actor } from '@/features/auth/capabilities'
 import { appViewers } from '@/features/sprints/app-viewers'
 import { effectiveStatus, type PresenceStatus } from './chat'
-import { groupTitle } from './rules'
+import { groupTitle, messageSnippet } from './rules'
 import type { ChannelAccess } from './access'
 
 /**
@@ -377,7 +377,48 @@ export async function messageablePeople(actor: Actor): Promise<{ id: string; nam
     .orderBy(asc(users.name))
 }
 
+// --- shared files ------------------------------------------------------------
+
+export const SHARED_FILES_LIMIT = 12
+
+export type SharedFile = { id: string; name: string; mime: string; createdAt: Date; href: string }
+
+/**
+ * The newest files shared in one conversation — the info panel's "Shared
+ * files". PERMISSION-FREE like every one-channel read here: the caller ran
+ * loadChannelAccess. LIVE attachments on LIVE messages only, so a file whose
+ * message (or the file itself) was deleted drops out — the opposite of
+ * recentUploadCount above, which counts them on purpose. The href is the
+ * download route, which re-checks access per request.
+ */
+export async function listSharedFiles(channelId: string, limit = SHARED_FILES_LIMIT): Promise<SharedFile[]> {
+  const rows = await db
+    .select({
+      id: liveAttachments.id,
+      name: liveAttachments.name,
+      mime: liveAttachments.mime,
+      createdAt: liveAttachments.createdAt,
+    })
+    .from(liveAttachments)
+    .innerJoin(liveMessages, eq(liveMessages.id, liveAttachments.ownerId))
+    .where(and(eq(liveAttachments.ownerType, 'message'), eq(liveMessages.channelId, channelId)))
+    .orderBy(desc(liveAttachments.createdAt), desc(liveAttachments.id))
+    .limit(limit)
+  return rows.map((r) => ({ ...r, href: `/api/attachments/${r.id}` }))
+}
+
 // --- the conversation list ------------------------------------------------
+
+/** A row's one-line preview: built from the newest message, root or reply. */
+export type ConversationPreview = {
+  authorName: string
+  /** The viewer wrote it ("You: …"). */
+  mine: boolean
+  /** Plain text, ≤ SNIPPET_MAX; '' when deleted. */
+  snippet: string
+  deleted: boolean
+  at: Date
+}
 
 export type ConversationItem = {
   id: string
@@ -388,6 +429,7 @@ export type ConversationItem = {
   unread: number
   lastMessageAt: Date | null
   isMember: boolean
+  preview: ConversationPreview | null
 }
 
 export type ConversationList = {
@@ -495,7 +537,7 @@ export async function listConversations(actor: Actor, onlyAppId?: string): Promi
   const allIds = [...projectChannels.map((r) => r.id), ...personalRows.map((r) => r.id), ...threadsLive.map((r) => r.id)]
 
   const personalIds = personalRows.map((r) => r.id)
-  const [unreadRows, lastRows, memberRows] = await Promise.all([
+  const [unreadRows, lastRows, memberRows, previewRows] = await Promise.all([
     allIds.length === 0
       ? Promise.resolve([])
       : db
@@ -525,8 +567,43 @@ export async function listConversations(actor: Actor, onlyAppId?: string): Promi
           .innerJoin(users, eq(users.id, channelMembers.userId))
           .where(inArray(channelMembers.channelId, personalIds))
           .orderBy(asc(users.name)),
+    // The newest message per listed channel, root or reply, in ONE read.
+    // RAW messages so a deletion reads "Message deleted" instead of silently
+    // resurfacing the message before it; the body of a deleted one is blanked
+    // IN SQL, so it never leaves the database. Clipped in SQL too — the row
+    // only needs a line. allIds holds only channels the viewer can read.
+    allIds.length === 0
+      ? Promise.resolve([])
+      : db
+          .selectDistinctOn([messages.channelId], {
+            channelId: messages.channelId,
+            authorId: messages.authorId,
+            authorName: users.name,
+            body: sql<string>`case when ${messages.deletedAt} is null then left(${messages.body}, 400) else '' end`,
+            deletedAt: messages.deletedAt,
+            createdAt: messages.createdAt,
+          })
+          .from(messages)
+          .innerJoin(users, eq(users.id, messages.authorId))
+          .where(inArray(messages.channelId, allIds))
+          .orderBy(messages.channelId, desc(messages.createdAt), desc(messages.id)),
   ])
 
+  const previews = new Map<string, ConversationPreview>(
+    previewRows.map((r) => {
+      const deleted = r.deletedAt !== null
+      return [
+        r.channelId,
+        {
+          authorName: r.authorName,
+          mine: r.authorId === me,
+          snippet: deleted ? '' : messageSnippet(r.body),
+          deleted,
+          at: r.createdAt,
+        },
+      ]
+    }),
+  )
   const unread = new Map(unreadRows.map((r) => [r.channelId, Number(r.n)]))
   const last = new Map(lastRows.map((r) => [r.channelId, r.last ? new Date(r.last) : null]))
   const byRecent = (a: ConversationItem, b: ConversationItem) =>
@@ -543,6 +620,7 @@ export async function listConversations(actor: Actor, onlyAppId?: string): Promi
       unread: unread.get(r.id) ?? 0,
       lastMessageAt: last.get(r.id) ?? null,
       isMember: r.memberId !== null,
+      preview: previews.get(r.id) ?? null,
     })
     projects.set(r.appId, group)
   }
@@ -559,6 +637,7 @@ export async function listConversations(actor: Actor, onlyAppId?: string): Promi
       unread: unread.get(r.id) ?? 0,
       lastMessageAt: last.get(r.id) ?? null,
       isMember: true,
+      preview: previews.get(r.id) ?? null,
     }
     ;(r.kind === 'dm' ? direct : groups).push(item)
   }
@@ -571,6 +650,7 @@ export async function listConversations(actor: Actor, onlyAppId?: string): Promi
     unread: unread.get(t.id) ?? 0,
     lastMessageAt: last.get(t.id) ?? null,
     isMember: true,
+    preview: previews.get(t.id) ?? null,
   }))
 
   direct.sort(byRecent)
