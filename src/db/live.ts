@@ -4,6 +4,8 @@ import {
   apps, bugReports, meetings, tasks, sprints, meetingNoteSegments, meetingScreenshots,
   worklogEntries, meetingSeries, meetingRecordingSegments, meetingRecordings, attachments,
   taskComments,
+  docs,
+  messages,
 } from './schema'
 
 // Connection-free: QueryBuilder builds SQL without a client, so importing
@@ -59,6 +61,12 @@ export const liveRecordingSegments = liveRecordingSegmentsAs('live_recording_seg
 export const liveRecordings = liveRecordingsAs('live_meeting_recordings')
 export const liveAttachments = liveAttachmentsAs('live_attachments')
 export const liveTaskComments = liveTaskCommentsAs('live_task_comments')
+export const liveDocsAs = (name: string) =>
+  qb.select().from(docs).where(isNull(docs.deletedAt)).as(name)
+export const liveDocs = liveDocsAs('live_docs')
+export const liveMessagesAs = (name: string) =>
+  qb.select().from(messages).where(isNull(messages.deletedAt)).as(name)
+export const liveMessages = liveMessagesAs('live_messages')
 
 /**
  * Every column of `apps`, taken from the LIVE subquery.
@@ -145,6 +153,13 @@ export const SOFT_TABLES = [
   // Same rule, same change (0078): a deleted comment must not reappear in the
   // thread or in a mention digest.
   { table: taskComments, sqlName: 'task_comments', live: liveTaskComments, liveAs: liveTaskCommentsAs },
+  // Module C (0082), registered before its first reader: a deleted page must
+  // not reappear in the hub, in search or behind a link.
+  { table: docs, sqlName: 'docs', live: liveDocs, liveAs: liveDocsAs },
+  // Module D (0083), registered before its first reader. Note a chat view
+  // may still read raw messages to show "This message was deleted" in place —
+  // that reader must say so (live.test.ts allowlist), not skip the guard.
+  { table: messages, sqlName: 'messages', live: liveMessages, liveAs: liveMessagesAs },
 ] as const
 
 // Registered BEFORE anything reads them. Both tables arrived with later

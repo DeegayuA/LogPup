@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { attachments } from '@/db/schema'
-import { liveApps, liveAttachments, liveTasks } from '@/db/live'
+import { liveApps, liveAttachments, liveDocs, liveTasks } from '@/db/live'
 
 // Both attachment routes and the two server actions, with the database, the
 // blob store, the session and the capability matrix mocked. The select mock
@@ -338,5 +338,49 @@ describe('attachments actions', () => {
     expect(result.ok).toBe(false)
     expect(h.requireCapability).toHaveBeenCalledWith('task.delete', { appId: APP_ID })
     expect(h.updates).toHaveLength(0)
+  })
+})
+
+describe('Docs pages as attachment owners', () => {
+  const DOC_ID = '44444444-4444-4444-8444-444444444444'
+
+  async function docUpload(file: File) {
+    const form = new FormData()
+    form.append('docId', DOC_ID)
+    form.append('file', file)
+    const encoded = new Response(form)
+    const body = new Uint8Array(await encoded.arrayBuffer())
+    return new Request('http://localhost/api/attachments', {
+      method: 'POST',
+      body,
+      headers: { 'content-type': encoded.headers.get('content-type') ?? '', 'content-length': String(body.byteLength) },
+    })
+  }
+
+  it('uploads onto a live page under task.create, filed under the PAGE\'s app', async () => {
+    h.selectRows.set(liveDocs, [{ id: DOC_ID, appId: APP_ID, title: 'Setup guide' }])
+    const res = await POST(await docUpload(new File([PNG], 'shot.png', { type: 'image/png' })))
+    expect(res.status).toBe(201)
+    expect(h.requireCapability).toHaveBeenCalledWith('task.create', { appId: APP_ID })
+    expect(h.inserted[0]).toMatchObject({ appId: APP_ID, ownerType: 'doc', ownerId: DOC_ID })
+    expect(h.logActivity).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'doc', entityId: DOC_ID }))
+  })
+
+  it('404s for a missing page or a viewer who cannot write pages', async () => {
+    h.selectRows.set(liveDocs, [])
+    expect((await POST(await docUpload(new File([PNG], 'a.png', { type: 'image/png' })))).status).toBe(404)
+    h.selectRows.set(liveDocs, [{ id: DOC_ID, appId: APP_ID, title: 'x' }])
+    h.requireCapability.mockResolvedValueOnce(null)
+    expect((await POST(await docUpload(new File([PNG], 'a.png', { type: 'image/png' })))).status).toBe(404)
+    expect(h.put).not.toHaveBeenCalled()
+  })
+
+  it('stops serving a page\'s file once the page is trashed', async () => {
+    h.selectRows.set(liveAttachments, [{ appId: APP_ID, ownerType: 'doc', ownerId: DOC_ID, blobPath: 'p', name: 'a.png', mime: 'image/png' }])
+    h.get.mockResolvedValue({ statusCode: 200, stream: new Blob(['x']).stream(), headers: new Headers(), blob: { size: 1 } })
+    h.selectRows.set(liveDocs, [{ id: DOC_ID }])
+    expect((await get()).status).toBe(200)
+    h.selectRows.set(liveDocs, [])
+    expect((await get()).status).toBe(404)
   })
 })

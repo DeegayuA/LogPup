@@ -1027,6 +1027,8 @@ function MeetingRow({
               meetingUrl: meeting.meetingUrl,
               attendeeIds: meeting.attendees.map((attendee) => attendee.id),
               visibility: meeting.visibility,
+              ceremony: meeting.ceremony,
+              sprintId: meeting.sprintId,
             }}
             defaultOpen
             onOpenChange={(next) => {

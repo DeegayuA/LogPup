@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { canAccessApp } from '@/lib/access-gate'
 import { db } from '@/db'
-import { liveApps, liveAttachments, liveTasks } from '@/db/live'
+import { liveApps, liveAttachments, liveDocs, liveTasks } from '@/db/live'
 import { requireCapability } from '@/features/auth/actor'
 import { contentDisposition, isUuid } from '@/features/sprints/attachments'
 
@@ -54,8 +54,14 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     .limit(1)
   if (!row) return notFound()
 
-  const actor = await requireCapability('app.view', { appId: row.appId })
-  if (!actor) return notFound()
+  // A chat file in a DM or group has no project (0084), so app.view cannot be
+  // its gate; the message branch below is. Every other owner type names one.
+  if (row.appId) {
+    const actor = await requireCapability('app.view', { appId: row.appId })
+    if (!actor) return notFound()
+  } else if (row.ownerType !== 'message') {
+    return notFound()
+  }
 
   // A trashed task takes its files with it: the task page is gone, so the
   // attachment should be too, until an admin restores the task. Joined to
@@ -68,6 +74,25 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       .where(eq(liveTasks.id, row.ownerId))
       .limit(1)
     if (!task) return notFound()
+  }
+  // A file shared in chat (PRD Module D) is readable exactly when its
+  // message's conversation is — a private channel's file is members-only even
+  // though app.view above already passed — and a deleted message takes its
+  // file with it. Imported lazily so this route's tests never load chat.
+  if (row.ownerType === 'message') {
+    const { canReadMessageFile } = await import('@/features/chat/chat-upload')
+    if (!(await canReadMessageFile(row.ownerId))) return notFound()
+  }
+  // The same rule for a Docs page: a trashed page (or project) takes its
+  // images and files with it until an admin restores it.
+  if (row.ownerType === 'doc') {
+    const [doc] = await db
+      .select({ id: liveDocs.id })
+      .from(liveDocs)
+      .innerJoin(liveApps, eq(liveApps.id, liveDocs.appId))
+      .where(eq(liveDocs.id, row.ownerId))
+      .limit(1)
+    if (!doc) return notFound()
   }
 
   let blob: Awaited<ReturnType<typeof get>>

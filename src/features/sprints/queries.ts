@@ -52,6 +52,9 @@ export type TaskWithAssignee = {
   startDate: string | null
   reporterId: string | null
   environment: string | null
+  /** Refinement (Module B): when someone marked it ready, and its assessed risk. */
+  readyAt: Date | null
+  risk: 'low' | 'medium' | 'high' | null
 }
 
 export type BoardChild = {
@@ -332,6 +335,8 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
       startDate: liveTasks.startDate,
       reporterId: liveTasks.reporterId,
       environment: liveTasks.environment,
+      readyAt: liveTasks.readyAt,
+      risk: liveTasks.risk,
     })
     .from(liveTasks)
     .leftJoin(users, eq(liveTasks.assigneeId, users.id))
@@ -375,6 +380,8 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
     startDate: string | null
     reporterId: string | null
     environment: string | null
+    readyAt: Date | null
+    risk: 'low' | 'medium' | 'high' | null
   }[]
 
   // Parents and children in ONE read each, not one per card. Either end is
@@ -442,6 +449,8 @@ export async function getBoard(appId: string, sprintId: string | null): Promise<
       startDate: row.startDate,
       reporterId: row.reporterId,
       environment: row.environment,
+      readyAt: row.readyAt,
+      risk: row.risk,
     })
   }
   return board

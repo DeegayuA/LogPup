@@ -472,6 +472,12 @@ export const sprints = pgTable('sprints', {
   // day this column is introduced; `resortSprintsByDate` re-runs that same
   // seed on demand.
   sortOrder: integer('sort_order').notNull().default(0),
+  // Module B planning (migration 0080). Capacity is what the team can take
+  // on; committed is the scope snapshot taken when the sprint is locked in,
+  // so mid-sprint additions cannot rewrite what was promised.
+  capacityPoints: numeric('capacity_points', { precision: 7, scale: 1, mode: 'number' }),
+  committedPoints: numeric('committed_points', { precision: 7, scale: 1, mode: 'number' }),
+  committedAt: timestamp('committed_at', { withTimezone: true }),
 })
 
 export const tasks = pgTable('tasks', {
@@ -561,6 +567,14 @@ export const tasks = pgTable('tasks', {
   startDate: date('start_date'),
   // Free text until the Environments module exists ("staging", "prod").
   environment: text('environment'),
+  // Module B refinement (migration 0081). "Ready" is a person's call; product
+  // approval is the one Definition of Ready box nothing else can tick. See
+  // features/sprints/readiness.ts.
+  readyAt: timestamp('ready_at', { withTimezone: true }),
+  readyBy: uuid('ready_by').references(() => users.id),
+  productApprovedAt: timestamp('product_approved_at', { withTimezone: true }),
+  productApprovedBy: uuid('product_approved_by').references(() => users.id),
+  risk: text('risk', { enum: ['low', 'medium', 'high'] }),
 }, (t) => [
   // Covers the board's only read: filter (app_id, sprint_id), order by rank.
   // `tasks` had no index at all, so every board render was a full scan + sort.
@@ -682,7 +696,9 @@ export const workLinks = pgTable('work_links', {
 // Soft-deleted, so registered in SOFT_TABLES (db/live.ts) in this same change.
 export const attachments = pgTable('attachments', {
   id: uuid('id').primaryKey().defaultRandom(),
-  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  // Optional for chat messages only (0084): a DM or group has no project. The
+  // attachments_app_unless_message check keeps every other owner type pinned to one.
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'cascade' }),
   ownerType: text('owner_type').notNull(),
   ownerId: uuid('owner_id').notNull(),
   blobPath: text('blob_path').notNull(),
@@ -698,6 +714,7 @@ export const attachments = pgTable('attachments', {
   index('attachments_app_idx').on(t.appId),
   check('attachments_owner_type', sql`owner_type = ANY (ARRAY['task'::text, 'bug'::text, 'doc'::text, 'message'::text])`),
   check('attachments_bytes', sql`bytes >= 0`),
+  check('attachments_app_unless_message', sql`(owner_type = 'message'::text) OR (app_id IS NOT NULL)`),
 ])
 
 // One task, several people.
@@ -864,6 +881,10 @@ export const meetings = pgTable('meetings', {
   nextMeetingAt: timestamp('next_meeting_at', { withTimezone: true }),
   // Video-call link (Meet/Zoom/etc.) for one-click join. Optional.
   meetingUrl: text('meeting_url'),
+  // Module B (migration 0081): which Scrum ceremony this is, for which sprint.
+  // Both optional — most meetings are not ceremonies.
+  ceremony: text('ceremony', { enum: ['planning', 'standup', 'refinement', 'review', 'retro'] }),
+  sprintId: uuid('sprint_id').references(() => sprints.id, { onDelete: 'set null' }),
   googleEventId: text('google_event_id'),
   /**
    * WHOSE calendar this meeting lives on — deliberately NOT `created_by`.
@@ -1739,6 +1760,184 @@ export const sprintCheckins = pgTable('sprint_checkins', {
   // (getSprintCheckins / getCheckinsForSprints filter on sprint_id, the
   // index's leading column).
   uniqueIndex('sprint_checkins_sprint_user_idx').on(t.sprintId, t.userId),
+])
+
+// PRD Module B (migration 0081). Daily standup, as history: one row per
+// person per sprint per DAY, unlike sprintCheckins above (one overwritten
+// percentage per sprint). Hard-deleted only with the sprint.
+export const standupEntries = pgTable('standup_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sprintId: uuid('sprint_id').notNull().references(() => sprints.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  day: date('day').notNull(),
+  yesterday: text('yesterday'),
+  today: text('today'),
+  blockers: text('blockers'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('standup_entries_one_per_day_idx').on(t.sprintId, t.userId, t.day),
+])
+
+// Sprint review: stakeholder feedback, optionally pinned to the work item it
+// is about. The author may delete their own (a hard delete — feedback is a
+// remark, not a record anything else points at).
+export const sprintFeedback = pgTable('sprint_feedback', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sprintId: uuid('sprint_id').notNull().references(() => sprints.id, { onDelete: 'cascade' }),
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('sprint_feedback_sprint_idx').on(t.sprintId, t.createdAt),
+])
+
+// Retrospective board. An 'action' can become a task (taskId) and be closed.
+export const retroItems = pgTable('retro_items', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sprintId: uuid('sprint_id').notNull().references(() => sprints.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['went_well', 'improve', 'action'] }).notNull(),
+  body: text('body').notNull(),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  ownerId: uuid('owner_id').references(() => users.id),
+  taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  doneAt: timestamp('done_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('retro_items_sprint_idx').on(t.sprintId, t.createdAt),
+])
+
+// PRD Module C (migration 0082): the project knowledge hub. A doc is one
+// living Markdown page; soft-deleted like tasks so a lost page comes back
+// from Trash. `version` counts saves that changed something — each such save
+// also writes doc_revisions row N holding the page AS SAVED.
+export const docs = pgTable('docs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  category: text('category', {
+    enum: [
+      'project', 'requirements', 'architecture', 'api', 'database', 'setup',
+      'deployment', 'qa', 'runbook', 'meeting_notes', 'release_notes', 'other',
+    ],
+  }).notNull().default('project'),
+  body: text('body').notNull().default(''),
+  version: integer('version').notNull().default(1),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  updatedBy: uuid('updated_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  index('docs_app_idx').on(t.appId, t.category, t.updatedAt).where(sql`${t.deletedAt} is null`),
+])
+
+// Revision history: append-only. Restore writes a NEW revision with the old
+// content, so history is never rewritten.
+export const docRevisions = pgTable('doc_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  docId: uuid('doc_id').notNull().references(() => docs.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  title: text('title').notNull(),
+  body: text('body').notNull(),
+  summary: text('summary'),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('doc_revisions_doc_version_idx').on(t.docId, t.version),
+])
+
+export const docComments = pgTable('doc_comments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  docId: uuid('doc_id').notNull().references(() => docs.id, { onDelete: 'cascade' }),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('doc_comments_doc_idx').on(t.docId, t.createdAt),
+])
+
+// PRD Module D (migration 0083): team communication. ONE channels table for
+// every conversation shape, told apart by `kind` — see the migration header
+// for what each kind means and the uniqueness that keeps DMs and work-item
+// threads to one per pair / per item.
+export const channels = pgTable('channels', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind', { enum: ['public', 'private', 'group', 'dm', 'context'] }).notNull(),
+  appId: uuid('app_id').references(() => apps.id, { onDelete: 'cascade' }),
+  name: text('name'),
+  topic: text('topic'),
+  // "<smaller uuid>:<larger uuid>" — one DM channel per pair, ever.
+  dmKey: text('dm_key'),
+  contextType: text('context_type', { enum: ['task', 'doc', 'bug'] }),
+  contextId: uuid('context_id'),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
+}, (t) => [
+  uniqueIndex('channels_dm_key_idx').on(t.dmKey).where(sql`${t.dmKey} is not null`),
+  uniqueIndex('channels_context_idx').on(t.contextType, t.contextId).where(sql`${t.contextType} is not null`),
+  uniqueIndex('channels_app_name_idx').on(t.appId, sql`lower(${t.name})`).where(sql`${t.kind} = ANY (ARRAY['public'::text, 'private'::text])`),
+  index('channels_app_idx').on(t.appId).where(sql`${t.appId} is not null`),
+  check('channels_kind', sql`kind = ANY (ARRAY['public'::text, 'private'::text, 'group'::text, 'dm'::text, 'context'::text])`),
+  check('channels_project_kinds_have_app', sql`(kind <> ALL (ARRAY['public'::text, 'private'::text, 'context'::text])) OR (app_id IS NOT NULL)`),
+  check('channels_dm_has_key', sql`(kind <> 'dm'::text) OR (dm_key IS NOT NULL)`),
+  check('channels_context_shape', sql`(kind <> 'context'::text) OR ((context_type = ANY (ARRAY['task'::text, 'doc'::text, 'bug'::text])) AND (context_id IS NOT NULL))`),
+])
+
+// Membership plus read position: last_read_at drives unread counts.
+export const channelMembers = pgTable('channel_members', {
+  channelId: uuid('channel_id').notNull().references(() => channels.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  role: text('role', { enum: ['owner', 'member'] }).notNull().default('member'),
+  joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
+  lastReadAt: timestamp('last_read_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ name: 'channel_members_pk', columns: [t.channelId, t.userId] }),
+  index('channel_members_user_idx').on(t.userId),
+  check('channel_members_role', sql`role = ANY (ARRAY['owner'::text, 'member'::text])`),
+])
+
+// Soft-deleted, so a deleted message leaves "This message was deleted" and a
+// thread keeps its shape. Registered in SOFT_TABLES (db/live.ts).
+export const messages = pgTable('messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  channelId: uuid('channel_id').notNull().references(() => channels.id, { onDelete: 'cascade' }),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  parentId: uuid('parent_id').references((): AnyPgColumn => messages.id, { onDelete: 'cascade' }),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  editedAt: timestamp('edited_at', { withTimezone: true }),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  deletedBy: uuid('deleted_by').references(() => users.id),
+}, (t) => [
+  index('messages_channel_idx').on(t.channelId, t.createdAt).where(sql`${t.parentId} is null`),
+  index('messages_thread_idx').on(t.parentId, t.createdAt).where(sql`${t.parentId} is not null`),
+])
+
+export const messageReactions = pgTable('message_reactions', {
+  messageId: uuid('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  emoji: text('emoji').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ name: 'message_reactions_pk', columns: [t.messageId, t.userId, t.emoji] }),
+])
+
+// Presence. An expired status reads as "no status" at query time, so nothing
+// has to sweep the table.
+// Named user_presence, not user_status: that name is taken by the users
+// approval enum type above, and Postgres tables share the type namespace.
+export const userPresence = pgTable('user_presence', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  status: text('status', { enum: ['available', 'busy', 'meeting', 'focus', 'lunch', 'away', 'dnd'] }).notNull(),
+  note: text('note'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check('user_presence_kind', sql`status = ANY (ARRAY['available'::text, 'busy'::text, 'meeting'::text, 'focus'::text, 'lunch'::text, 'away'::text, 'dnd'::text])`),
 ])
 
 // One row per person per DAY — what they did, and how much of what they set

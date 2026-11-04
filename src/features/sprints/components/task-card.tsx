@@ -181,6 +181,14 @@ function CardFace({
       <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <TaskTypeIcon type={task.type} />
         {task.taskKey ? <span className="font-mono tabular-nums">{task.taskKey}</span> : null}
+        {/* Refinement (Module B): only on work not yet started — a Ready
+            badge on a card in QA would be noise. */}
+        {task.readyAt && task.status === 'todo' ? (
+          <span className="rounded-full border border-primary/40 px-1.5 py-px text-primary">✓ Ready</span>
+        ) : null}
+        {task.risk === 'high' ? (
+          <span className="rounded-full border border-destructive/40 px-1.5 py-px text-destructive">High risk</span>
+        ) : null}
         {task.storyPoints !== null ? (
           <span className="ml-auto rounded-full bg-muted px-1.5 py-px font-mono tabular-nums">
             {pointsLabel(task.storyPoints)}
@@ -255,6 +263,8 @@ function cardLabel(task: TaskWithAssignee, todayIso: string): string {
     task.title,
     task.parent ? `under ${task.parent.taskKey ?? ''} ${task.parent.title}`.replace('  ', ' ') : null,
     task.storyPoints !== null ? pointsLabel(task.storyPoints) : null,
+    task.readyAt && task.status === 'todo' ? 'ready' : null,
+    task.risk === 'high' ? 'high risk' : null,
     task.assignee ? `assigned to ${task.assignee.name}` : 'unassigned',
     task.priority > 0 ? `${PRIORITY_LABEL[task.priority]} priority` : null,
     task.dueDate

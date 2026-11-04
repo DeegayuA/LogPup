@@ -1,0 +1,131 @@
+/*
+ * Prose for a Docs page, written against the design tokens (globals.css) so
+ * light and dark come for free: every colour below is a var() the .dark
+ * theme redefines. No typography plugin — this is the whole of it, small on
+ * purpose. The highlight.js part maps token classes onto the chart/status
+ * tokens instead of shipping a theme that would ignore dark mode.
+ */
+
+.markdown {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.6em 0 0.6em;
+}
+.markdown h1 { font-size: 1.5rem; }
+.markdown h2 { font-size: 1.25rem; padding-bottom: 0.25em; border-bottom: 1px solid var(--border); }
+.markdown h3 { font-size: 1.075rem; }
+.markdown h4 { font-size: 1rem; }
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre,
+.markdown .tableWrap {
+  margin: 0.8em 0;
+}
+
+.markdown ul { list-style: disc; padding-left: 1.5em; }
+.markdown ol { list-style: decimal; padding-left: 1.5em; }
+.markdown li + li { margin-top: 0.25em; }
+.markdown li > ul,
+.markdown li > ol { margin: 0.25em 0; }
+
+/* GFM task lists: the checkbox replaces the bullet. */
+.markdown :global(.contains-task-list) { list-style: none; padding-left: 0.25em; }
+.markdown :global(.task-list-item) input[type='checkbox'] {
+  margin: 0 0.5em 0 0;
+  vertical-align: middle;
+  accent-color: var(--primary);
+}
+
+.markdown a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown a:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 2px; }
+/* A chat @mention (chat/mentions.ts emits data-mention). An attribute, not a
+   class: this module's class names are hashed and the plugin cannot know them. */
+.markdown a[data-mention] {
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: 4px;
+  padding: 0 0.2em;
+}
+.markdown a[data-mention]:hover { text-decoration: underline; }
+
+.markdown strong { font-weight: 600; }
+
+.markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+}
+
+.markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.5em 0; }
+
+.markdown img { max-width: 100%; height: auto; border-radius: 0.5rem; border: 1px solid var(--border); }
+
+.markdown code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  background: var(--muted);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.markdown pre {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.9em 1em;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.markdown pre code { background: none; padding: 0; font-size: 0.8125rem; }
+
+.tableWrap { overflow-x: auto; }
+.markdown table { border-collapse: collapse; font-size: 0.875rem; min-width: 50%; }
+.markdown th,
+.markdown td { border: 1px solid var(--border); padding: 0.4em 0.7em; text-align: left; vertical-align: top; }
+.markdown th { background: var(--muted); font-weight: 600; }
+
+/* highlight.js tokens, on theme tokens. */
+.markdown :global(.hljs-comment),
+.markdown :global(.hljs-quote) { color: var(--muted-foreground); font-style: italic; }
+.markdown :global(.hljs-keyword),
+.markdown :global(.hljs-selector-tag),
+.markdown :global(.hljs-built_in),
+.markdown :global(.hljs-literal) { color: var(--chart-1); }
+.markdown :global(.hljs-string),
+.markdown :global(.hljs-regexp),
+.markdown :global(.hljs-addition) { color: var(--success); }
+.markdown :global(.hljs-number),
+.markdown :global(.hljs-symbol),
+.markdown :global(.hljs-variable),
+.markdown :global(.hljs-template-variable) { color: var(--chart-4); }
+.markdown :global(.hljs-title),
+.markdown :global(.hljs-section),
+.markdown :global(.hljs-attr),
+.markdown :global(.hljs-attribute),
+.markdown :global(.hljs-type) { color: var(--primary); }
+.markdown :global(.hljs-deletion),
+.markdown :global(.hljs-meta) { color: var(--destructive); }
+.markdown :global(.hljs-emphasis) { font-style: italic; }
+.markdown :global(.hljs-strong) { font-weight: 600; }

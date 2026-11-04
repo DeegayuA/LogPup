@@ -30,15 +30,15 @@ import * as live from './live'
 // --- live.ts sanity ---------------------------------------------------------
 
 describe('live.ts subqueries', () => {
-  it('SOFT_TABLES covers exactly the thirteen soft-deleted tables', () => {
+  it('SOFT_TABLES covers exactly the fifteen soft-deleted tables', () => {
     // Spelled out rather than derived, so ADDING a soft-deleted table is a
     // deliberate edit here as well as in live.ts. The check above already
     // catches a table with deleted_at that nobody registered; this one catches
     // the reverse — a registration nobody meant to make.
     expect(SOFT_TABLES.map((t) => t.sqlName).sort()).toEqual(
       [
-        'apps', 'attachments', 'bug_reports', 'meeting_note_segments', 'meeting_recording_segments',
-        'meeting_recordings', 'meeting_screenshots', 'meeting_series', 'meetings',
+        'apps', 'attachments', 'bug_reports', 'docs', 'meeting_note_segments', 'meeting_recording_segments',
+        'meeting_recordings', 'meeting_screenshots', 'meeting_series', 'meetings', 'messages',
         'sprints', 'task_comments', 'tasks', 'worklog_entries',
       ].sort(),
     )
@@ -153,6 +153,13 @@ const ALLOWLIST: readonly string[] = [
   // (src/features/meetings/keyframe-access.ts, unit tested directly in
   // keyframe-access.test.ts); this raw read only gathers the facts it needs.
   'src/app/api/meeting-keyframes/[...path]/route.ts',
+
+  // why: a deleted chat message stays in place as "This message was deleted"
+  // so a thread keeps its shape and a reply never loses what it answered,
+  // and a poll has to SEE a deletion to show it. The file blanks the body of
+  // every deleted row before it leaves the module; counts (unread, replies)
+  // still read liveMessages. Every other chat file reads through liveMessages.
+  'src/features/chat/queries.ts',
 ]
 const allowlistSet = new Set(ALLOWLIST)
 
@@ -187,7 +194,11 @@ describe('allowlist hygiene', () => {
 // see a table named here as a LITERAL, so a table registered in live.ts but
 // missing from this string is guarded by check 5 alone (which only asks that
 // it be registered, never that anybody reads it through the live subquery).
-const SOFT_TABLE_NAMES = '(apps|bugReports|meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots|worklogEntries)'
+// docs (Module C, 0082) joined in the commit that wrote its first readers,
+// so a raw read of a trashed page is caught here rather than in review.
+// messages (Module D, 0083) the same way; its one reader that must see
+// deleted rows (chat/queries.ts) is in ALLOWLIST with its why.
+const SOFT_TABLE_NAMES = '(apps|bugReports|meetings|tasks|sprints|meetingNoteSegments|meetingScreenshots|worklogEntries|docs|messages)'
 const RAW_FROM_RE = new RegExp(`\\.from\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const RAW_JOIN_RE = new RegExp(`(?:leftJoin|innerJoin|rightJoin)\\(\\s*${SOFT_TABLE_NAMES}\\s*[),]`)
 const ALIAS_RE = new RegExp(`alias\\(\\s*${SOFT_TABLE_NAMES}\\b`)
@@ -365,6 +376,19 @@ const DELETE_ALLOWED_FUNCTIONS: Readonly<Record<string, string | readonly string
   'src/features/sprints/labels-actions.ts': ['setTaskLabels', 'setTaskComponents'],
   'src/features/sprints/links-actions.ts': 'removeTaskLink',
   'src/features/sprints/criteria-actions.ts': 'deleteCriterion',
+  // PRD Module B (migration 0081): sprint_feedback and retro_items carry no
+  // deletedAt (verified in schema.ts). A withdrawn remark or retro note has
+  // nothing to restore; the sprint is the soft-deleted thing and cascades.
+  'src/features/sprints/scrum-actions.ts': ['deleteFeedback', 'deleteRetroItem', 'deleteStandup'],
+  // PRD Module C (migration 0082): doc_comments and work_links carry no
+  // deletedAt (verified in schema.ts). A withdrawn comment or a removed link
+  // is the row's absence; the page itself is the soft-deleted thing.
+  'src/features/docs/actions.ts': ['deleteDocComment', 'unlinkDoc'],
+  // PRD Module D (migration 0083): channel_members and message_reactions
+  // carry no deletedAt (verified in schema.ts). Leaving a conversation and
+  // taking back a reaction are the row's absence; messages themselves are
+  // soft-deleted through an update.
+  'src/features/chat/actions.ts': ['leaveChannel', 'toggleReaction'],
   // Verified by reading the file: every db.delete() in admin/actions.ts
   // today lives inside clearTestData (the ENABLE_DB_CLEAR-gated dev tool).
   'src/features/admin/actions.ts': 'clearTestData',

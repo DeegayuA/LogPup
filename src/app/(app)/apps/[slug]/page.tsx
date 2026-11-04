@@ -48,6 +48,15 @@ import {
   type SprintTaskCounts,
 } from '@/features/sprints/queries'
 import { WorkTree } from '@/features/sprints/components/work-tree'
+import { SprintMetricsPanel } from '@/features/sprints/components/sprint-metrics-panel'
+import { loadSprintMetrics } from '@/features/sprints/sprint-metrics-queries'
+import { ScrumPanel } from '@/features/sprints/components/scrum-panel'
+import { DocsTab } from '@/features/docs/components/docs-tab'
+import { ChatWorkspace } from '@/features/chat/components/chat-workspace'
+import { RefinementQueue } from '@/features/sprints/components/refinement-queue'
+import { loadScrumView } from '@/features/sprints/scrum-queries'
+import { getRefinementQueue, REFINEMENT_LIMIT } from '@/features/sprints/readiness-queries'
+import { defaultStandupDay, isIsoDay, parseScrumView } from '@/features/sprints/scrum'
 import { flattenBoard } from '@/features/sprints/board-view'
 import { getSprintCheckins, type SprintCheckinRow } from '@/features/sprints/checkin-queries'
 import { checkinGap, computeTaskProgress } from '@/features/sprints/checkins'
@@ -94,7 +103,7 @@ const ACTIVITY_FEED_LIMIT = 40
 const OVERVIEW_ACTIVITY_LIMIT = 6
 
 /** Tabs whose panel needs the workspace roster (member pickers, @mentions). */
-const TABS_NEEDING_USERS: readonly AppTabId[] = ['overview', 'discussion', 'meetings', 'settings']
+const TABS_NEEDING_USERS: readonly AppTabId[] = ['overview', 'discussion', 'meetings', 'settings', 'scrum']
 
 export default async function AppDetailPage(props: {
   params: Promise<{ slug: string }>
@@ -149,8 +158,18 @@ export default async function AppDetailPage(props: {
   // Everything else is visible to any signed-in member. normalizeAppTab sends
   // a link to a tab this viewer cannot open back to Overview rather than to a
   // 403.
+  // Scrum and Metrics show the team's own words and numbers (standups, retro,
+  // feedback, velocity), so they ask app.view on THIS app. The older tabs
+  // predate that check; widening it to them is a separate decision.
+  const canViewApp = actor ? can(actor, 'app.view', { appId: app.id }) : false
   const available = APP_TAB_IDS.filter((id) =>
-    id === 'settings' ? canEditApp : id === 'bugs' ? canViewBugs : true,
+    id === 'settings'
+      ? canEditApp
+      : id === 'bugs'
+        ? canViewBugs
+        : id === 'scrum' || id === 'metrics' || id === 'docs' || id === 'chat'
+          ? canViewApp
+          : true,
   )
   const tab = normalizeAppTab(search.tab, available)
   const bugFilters = parseBugFilters({ bugStatus: search.bugStatus, bugSeverity: search.bugSeverity })
@@ -215,7 +234,7 @@ export default async function AppDetailPage(props: {
     getAppCounts(app.id),
     needsUsers ? listActiveUsers() : Promise.resolve([]),
     tab === 'discussion' ? listAppComments(app.id) : Promise.resolve([]),
-    tab === 'meetings' ? getMeetingsForApp(app.id, session?.user?.id ?? '') : Promise.resolve([]),
+    tab === 'meetings' || tab === 'scrum' ? getMeetingsForApp(app.id, session?.user?.id ?? '') : Promise.resolve([]),
     tab === 'meetings' ? listAssignableApps() : Promise.resolve([]),
     needsTechTags ? listDistinctTechTags() : Promise.resolve([]),
     activityLimit > 0 ? getAppActivity(app.id, activityLimit) : Promise.resolve([]),
@@ -298,6 +317,28 @@ export default async function AppDetailPage(props: {
       sprints.find((s) => s.status === 'active') ??
       sprintsByDateDesc[0]
   const showBoard = tab === 'roadmap' && (isBacklog || Boolean(selectedSprint))
+  // Metrics tab only; it needs the chosen sprint, so it cannot join the batch above.
+  const metricsSprint = tab === 'metrics' && !isBacklog ? selectedSprint : undefined
+  const sprintMetrics = metricsSprint
+    ? await loadSprintMetrics(app.id, metricsSprint, today)
+    : null
+  // Scrum tab only, same reason. Refinement is project-wide; the other three
+  // views are per sprint, and standup also per day.
+  const scrumView = parseScrumView(search.view)
+  const scrumSprint = tab === 'scrum' && !isBacklog ? selectedSprint : undefined
+  const scrumDay =
+    typeof search.day === 'string' && isIsoDay(search.day)
+      ? search.day
+      : scrumSprint
+        ? defaultStandupDay(scrumSprint, today)
+        : today
+  const [scrumData, refinementRows] =
+    tab === 'scrum'
+      ? await Promise.all([
+          loadScrumView(app.id, scrumView, scrumSprint?.id ?? null, scrumDay),
+          scrumView === 'refinement' ? getRefinementQueue(app.id) : Promise.resolve([]),
+        ])
+      : [null, []]
   const boardSprintId = isBacklog ? null : (selectedSprint?.id ?? null)
 
   // The plan's three reads, fetched together. `getBoard` answers for the
@@ -797,6 +838,77 @@ export default async function AppDetailPage(props: {
           <h2 className="sr-only">Backlog</h2>
           <WorkTree rows={workTree.rows} slug={slug} truncated={workTree.truncated} />
         </section>
+      ) : null}
+
+      {tab === 'scrum' && session?.user ? (
+        <ScrumPanel
+          slug={slug}
+          appId={app.id}
+          sprints={sprintsByDateDesc.map((s) => ({ id: s.id, name: s.name, status: s.status }))}
+          selected={
+            scrumSprint
+              ? {
+                  id: scrumSprint.id,
+                  name: scrumSprint.name,
+                  status: scrumSprint.status,
+                  startDate: scrumSprint.startDate,
+                  endDate: scrumSprint.endDate,
+                  goal: scrumSprint.goal,
+                }
+              : null
+          }
+          view={scrumView}
+          day={scrumDay}
+          currentUser={{ id: session.user.id }}
+          canManageSprints={canManageSprints}
+          people={activeUsers.map((user) => ({ id: user.id, name: user.name }))}
+          data={scrumData}
+          refinementSlot={
+            <RefinementQueue rows={refinementRows} slug={slug} truncated={refinementRows.length >= REFINEMENT_LIMIT} />
+          }
+          ceremonies={appMeetings.flatMap((m) =>
+            m.ceremony && scrumSprint && m.sprintId === scrumSprint.id
+              ? [{ id: m.id, title: m.title, startsAt: m.startsAt, ceremony: m.ceremony }]
+              : [],
+          )}
+        />
+      ) : null}
+
+      {tab === 'metrics' ? (
+        <SprintMetricsPanel
+          slug={slug}
+          sprints={sprintsByDateDesc.map((s) => ({ id: s.id, name: s.name, status: s.status }))}
+          selected={metricsSprint ? { id: metricsSprint.id, name: metricsSprint.name, status: metricsSprint.status } : null}
+          metrics={sprintMetrics?.metrics ?? null}
+          velocity={sprintMetrics?.velocity ?? []}
+          averageVelocity={sprintMetrics?.average ?? null}
+          plan={
+            metricsSprint
+              ? {
+                  capacity: metricsSprint.capacityPoints,
+                  committed: metricsSprint.committedPoints,
+                  committedAt: metricsSprint.committedAt,
+                }
+              : null
+          }
+          canManageSprints={canManageSprints}
+        />
+      ) : null}
+
+      {/* Docs loads its own data (DocsTab is an async server component), so
+          nothing about it joins the batches above. */}
+      {tab === 'docs' && actor ? (
+        <DocsTab app={{ id: app.id, slug, name: app.name }} actor={actor} search={search} />
+      ) : null}
+
+      {/* Chat loads its own data, like Docs (PRD Module D). */}
+      {tab === 'chat' && actor ? (
+        <ChatWorkspace
+          actor={actor}
+          search={search}
+          app={{ id: app.id, slug, name: app.name }}
+          baseHref={`/apps/${slug}?tab=chat`}
+        />
       ) : null}
 
       {tab === 'discussion' ? (

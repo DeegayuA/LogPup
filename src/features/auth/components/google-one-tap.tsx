@@ -50,11 +50,50 @@ declare global {
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client'
 
+/**
+ * GSI's wording when a FedCM request ends without a credential: our own
+ * cancel() (AbortError), Google refusing (NetworkError — origin not
+ * authorised, third-party sign-in off, cooldown after a dismissal, no Google
+ * session), or the user closing it.
+ */
+const GSI_FEDCM_REJECTION = /^\[GSI_LOGGER\]: FedCM get\(\) rejects with /
+
+/**
+ * While One Tap is mounted, GSI's FedCM rejections are logged as warnings
+ * instead of errors. Each one is a normal "One Tap can't help here" outcome
+ * (see the header: this component fails quiet, the button is the way in),
+ * but GSI reports them through console.error, which the Next dev overlay turns
+ * into a red error box. They are NOT dropped — still in the console, just at
+ * the level they deserve. Every other console.error passes through untouched.
+ * Returns the undo.
+ */
+function downgradeGsiRejections(): () => void {
+  const original = console.error
+  const filtered = (...args: unknown[]) => {
+    if (typeof args[0] === 'string' && GSI_FEDCM_REJECTION.test(args[0])) {
+      console.warn(...args)
+      return
+    }
+    original(...args)
+  }
+  console.error = filtered
+  return () => {
+    // Only undo our own wrapper; if something else wrapped console.error
+    // since, leave theirs in place.
+    if (console.error === filtered) console.error = original
+  }
+}
+
 export function GoogleOneTap({ clientId }: { clientId: string }) {
   const router = useRouter()
 
   useEffect(() => {
     if (!clientId) return
+    const restoreConsole = downgradeGsiRejections()
+    // Whether a FedCM request may still be open: set when the prompt starts,
+    // cleared once Google has handed us a credential (the request is over).
+    // cancel() on an open request is what GSI logs as an AbortError.
+    let pending = false
 
     const start = () => {
       const api = window.google
@@ -63,6 +102,7 @@ export function GoogleOneTap({ clientId }: { clientId: string }) {
         ...ONE_TAP_OPTIONS,
         client_id: clientId,
         callback: async ({ credential }) => {
+          pending = false
           if (!credential) return
           const result = await signIn('google-one-tap', { credential, redirect: false })
           if (result?.error) {
@@ -88,6 +128,7 @@ export function GoogleOneTap({ clientId }: { clientId: string }) {
           router.refresh()
         },
       })
+      pending = true
       api.accounts.id.prompt()
     }
 
@@ -126,7 +167,10 @@ export function GoogleOneTap({ clientId }: { clientId: string }) {
       // navigated away would otherwise prompt on whatever page they are on.
       window.clearTimeout(timer)
       script?.removeEventListener('load', schedule)
-      window.google?.accounts.id.cancel()
+      if (pending) window.google?.accounts.id.cancel()
+      // GSI reports the cancel's abort asynchronously; keep the downgrade a
+      // moment longer so that one lands as a warning too.
+      window.setTimeout(restoreConsole, 2000)
     }
   }, [clientId, router])
 

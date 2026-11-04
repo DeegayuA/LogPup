@@ -45,6 +45,9 @@ export type MeetingSummary = {
   meetingUrl: string | null
   googleEventId: string | null
   createdBy: string
+  /** Scrum ceremony and its sprint (Module B); null on ordinary meetings. */
+  ceremony: 'planning' | 'standup' | 'refinement' | 'review' | 'retro' | null
+  sprintId: string | null
   attendees: MeetingAttendee[]
 }
 
@@ -63,6 +66,8 @@ const meetingColumns = {
   meetingUrl: liveMeetings.meetingUrl,
   googleEventId: liveMeetings.googleEventId,
   createdBy: liveMeetings.createdBy,
+  ceremony: liveMeetings.ceremony,
+  sprintId: liveMeetings.sprintId,
 }
 
 /**

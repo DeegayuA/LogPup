@@ -23,6 +23,10 @@ export const APP_TAB_IDS = [
   'overview',
   'roadmap',
   'backlog',
+  'scrum',
+  'metrics',
+  'docs',
+  'chat',
   'discussion',
   'meetings',
   'bugs',
@@ -38,6 +42,15 @@ export const APP_TAB_LABEL: Record<AppTabId, string> = {
   // The same work as Roadmap, shown by WHAT it belongs to (epic -> story ->
   // task) instead of WHEN it is scheduled. PRD Module A's hierarchy.
   backlog: 'Backlog',
+  // PRD Module B ceremonies: standup, refinement, review, retro.
+  scrum: 'Scrum',
+  // PRD Module B: burndown, burnup, velocity, blocked, QA rejection.
+  metrics: 'Metrics',
+  // PRD Module C: the project's living pages — requirements, runbooks, notes.
+  docs: 'Docs',
+  // PRD Module D: this project's channels and work-item threads (the same
+  // panes as /chat, narrowed to the project).
+  chat: 'Chat',
   discussion: 'Discussion',
   meetings: 'Meetings',
   // Beside Meetings rather than under Settings: filing a bug is something

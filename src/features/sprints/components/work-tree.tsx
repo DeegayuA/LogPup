@@ -28,7 +28,7 @@ function Row({ node, slug }: { node: TreeNode<WorkTreeRow>; slug: string }) {
         <span className="shrink-0 font-mono text-2xs text-muted-foreground tabular-nums">{node.taskKey}</span>
       ) : null}
       <Link
-        href={boardHref(slug, node.sprintId ?? 'backlog')}
+        href={boardHref(slug, node.sprintId ?? 'backlog', { task: node.id })}
         title={node.title}
         className={cn(
           'truncate text-sm hover:underline focus-visible:underline focus-visible:outline-none',

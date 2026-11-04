@@ -1,7 +1,7 @@
 'use server'
 
 import { z } from 'zod'
-import { and, count, desc, eq, isNull, ne } from 'drizzle-orm'
+import { and, count, desc, eq, isNull, ne, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
 import { liveApps, liveSprints, liveTasks } from '@/db/live'
@@ -23,6 +23,7 @@ const sprintInput = z
     goal: z.string().max(300).optional(),
     startDate: z.iso.date(),
     endDate: z.iso.date(),
+    capacityPoints: z.number().min(0).max(99999).nullable().optional(),
   })
   .refine((data) => data.endDate >= data.startDate, {
     message: 'End date must be on or after the start date',
@@ -45,6 +46,7 @@ const sprintUpdateInput = z
     goal: z.string().max(300).nullable(),
     startDate: z.iso.date(),
     endDate: z.iso.date(),
+    capacityPoints: z.number().min(0).max(99999).nullable(),
   })
   .partial()
 
@@ -75,6 +77,69 @@ function unexpected(context: string, error: unknown): ActionResult<never> {
   return err('Something went wrong — try again')
 }
 
+/** The sprint's live estimated scope, as a SQL expression for a snapshot write. */
+function liveScopePoints(sprintId: string) {
+  return sql<number>`(select coalesce(sum(t.story_points), 0) from tasks t where t.sprint_id = ${sprintId} and t.deleted_at is null)`
+}
+
+/**
+ * "Lock in" the sprint's commitment: snapshot its current estimated scope as
+ * Committed. Activation does this once on its own; this is the planning
+ * meeting's explicit button, and it may be pressed again after re-planning.
+ */
+export async function commitSprintScope(sprintId: string): Promise<ActionResult<{ committedPoints: number }>> {
+  if (!z.uuid().safeParse(sprintId).success) return err('Sprint not found')
+  const session = await auth()
+  if (!session?.user) return err('Sign in required')
+
+  let committedPoints: number
+  let existing: { appId: string; name: string; committedPoints: number | null; status: SprintStatus } | undefined
+  let actor: Awaited<ReturnType<typeof requireCapability>>
+  try {
+    ;[existing] = await db
+      .select({
+        appId: liveSprints.appId,
+        name: liveSprints.name,
+        committedPoints: liveSprints.committedPoints,
+        status: liveSprints.status,
+      })
+      .from(liveSprints)
+      .where(eq(liveSprints.id, sprintId))
+    if (!existing) return err('Sprint not found')
+    // A finished sprint's commitment is history: carry-over and the burndown
+    // were measured against it, and rewriting it would quietly change both.
+    if (existing.status === 'done') return err('This sprint is finished — its commitment can no longer change')
+    actor = await requireCapability('sprint.manage', { appId: existing.appId })
+    if (!actor) return err('Not allowed')
+
+    const [row] = await db
+      .update(sprints)
+      .set({ committedPoints: liveScopePoints(sprintId), committedAt: new Date() })
+      .where(eq(sprints.id, sprintId))
+      .returning({ committedPoints: sprints.committedPoints })
+    committedPoints = row?.committedPoints ?? 0
+  } catch (error) {
+    return unexpected('commitSprintScope', error)
+  }
+  // Both are set on every path that reaches here; this narrows them for TS.
+  if (!existing || !actor) return err('Sprint not found')
+
+  const slug = await slugForApp(existing.appId)
+  await logActivity({
+    actorId: actor.id,
+    verb: 'updated',
+    entityType: 'sprint',
+    entityId: sprintId,
+    entityLabel: existing.name,
+    appId: existing.appId,
+    pagePath: slug ? '/apps/' + slug : null,
+    detail: `committed to ${committedPoints} points`,
+    metadata: { committedPoints: { from: existing.committedPoints, to: committedPoints } },
+  })
+  if (slug) revalidatePath('/apps/' + slug)
+  return ok({ committedPoints })
+}
+
 async function slugForApp(appId: string): Promise<string | null> {
   const [app] = await db
     .select({ slug: liveApps.slug })
@@ -87,7 +152,7 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
   const parsed = sprintInput.safeParse(input)
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
-  const { appId, name, goal, startDate, endDate } = parsed.data
+  const { appId, name, goal, startDate, endDate, capacityPoints } = parsed.data
   // Guard moved BELOW the parse: sprint.manage is SCOPED for manager, and
   // `can()` fails closed on 'scoped' with no resource — the appId has to come
   // from validated input before the matrix can answer at all.
@@ -117,12 +182,12 @@ export async function createSprint(input: unknown): Promise<ActionResult<{ sprin
           .where(and(eq(sprints.appId, appId), eq(sprints.status, 'active'), isNull(sprints.deletedAt))),
         db
           .insert(sprints)
-          .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status }),
+          .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status, capacityPoints: capacityPoints ?? null }),
       ])
     } else {
       await db
         .insert(sprints)
-        .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status })
+        .values({ id: sprintId, appId, name, goal: goal || null, startDate, endDate, status, capacityPoints: capacityPoints ?? null })
     }
   } catch (error) {
     return unexpected('createSprint', error)
@@ -191,6 +256,7 @@ export async function updateSprint(sprintId: string, input: unknown): Promise<Ac
   if (parsed.data.goal !== undefined) set.goal = parsed.data.goal || null
   if (parsed.data.startDate !== undefined) set.startDate = parsed.data.startDate
   if (parsed.data.endDate !== undefined) set.endDate = parsed.data.endDate
+  if (parsed.data.capacityPoints !== undefined) set.capacityPoints = parsed.data.capacityPoints
 
   try {
     await db.update(sprints).set(set).where(eq(sprints.id, sprintId))
@@ -410,6 +476,13 @@ export async function updateSprintStatus(
       // (or none) if only one of the two updates were to apply.
       await db.batch([
         db.update(sprints).set({ status: 'active' }).where(eq(sprints.id, sprintId)),
+        // Starting a sprint locks in what it promised, the first time only
+        // and only once it holds estimated work — an empty sprint started on
+        // creation would otherwise commit to zero. commitSprintScope re-locks.
+        db
+          .update(sprints)
+          .set({ committedPoints: liveScopePoints(sprintId), committedAt: new Date() })
+          .where(and(eq(sprints.id, sprintId), isNull(sprints.committedAt), sql`${liveScopePoints(sprintId)} > 0`)),
         db
           .update(sprints)
           .set({ status: 'done' })

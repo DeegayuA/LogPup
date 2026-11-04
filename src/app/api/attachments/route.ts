@@ -5,7 +5,7 @@ import { auth } from '@/lib/auth'
 import { canAccessApp } from '@/lib/access-gate'
 import { db } from '@/db'
 import { attachments } from '@/db/schema'
-import { liveApps, liveAttachments, liveTasks } from '@/db/live'
+import { liveApps, liveAttachments, liveDocs, liveTasks } from '@/db/live'
 import { requireCapability } from '@/features/auth/actor'
 import { logActivity } from '@/features/activity/log'
 import {
@@ -20,7 +20,9 @@ import {
 } from '@/features/sprints/attachments'
 
 /**
- * Upload one file onto a task.
+ * Upload one file onto a task, or onto a Docs page (form field docId instead
+ * of taskId — the editor's Insert image/file button), or into a chat
+ * conversation (form field channelId — see features/chat/chat-upload.ts).
  *
  * A route handler rather than a server action because the client needs a
  * plain HTTP status to branch on (413 vs 415 vs 503) and because server
@@ -76,22 +78,54 @@ export async function POST(request: Request) {
     return fail('Expected a multipart form with taskId and file', 400)
   }
   const taskId = form.get('taskId')
+  // A Docs-tab page (PRD Module C) is the other owner this route accepts:
+  // images and files inserted into a page's Markdown. Exactly one of the two.
+  const docId = form.get('docId')
   const file = form.get('file')
-  if (!isUuid(taskId) || !(file instanceof File)) return fail('Expected a multipart form with taskId and file', 400)
+  // A chat conversation (PRD Module D) is the third owner: the file becomes
+  // its own message. Handled in the chat feature, imported lazily so this
+  // route's tests never load the chat server modules.
+  const channelId = form.get('channelId')
+  if (taskId === null && docId === null && isUuid(channelId) && file instanceof File) {
+    const { uploadChatFile } = await import('@/features/chat/chat-upload')
+    return uploadChatFile({ channelId, file, userId })
+  }
+  const isDocUpload = taskId === null && isUuid(docId)
+  if ((!isUuid(taskId) && !isDocUpload) || !(file instanceof File)) {
+    return fail('Expected a multipart form with taskId and file', 400)
+  }
 
-  // Inner-joined to liveApps: a task in a trashed project is read-only, like
-  // the project itself.
-  const [task] = await db
-    .select({ id: liveTasks.id, appId: liveTasks.appId, assigneeId: liveTasks.assigneeId, title: liveTasks.title })
-    .from(liveTasks)
-    .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
-    .where(eq(liveTasks.id, taskId))
-    .limit(1)
-  // Not found and not allowed answer identically, so the endpoint cannot be
-  // used to probe which task ids exist.
-  if (!task) return fail('Task not found', 404)
-  const actor = await requireCapability('task.edit', { appId: task.appId, ownerId: task.assigneeId })
-  if (!actor) return fail('Task not found', 404)
+  let task: { id: string; appId: string; title: string }
+  if (isDocUpload) {
+    // Same shape as the task branch: the project comes from the live page
+    // row joined to its live project, and writing pages (task.create) is the
+    // bar for adding a file to one.
+    const [doc] = await db
+      .select({ id: liveDocs.id, appId: liveDocs.appId, title: liveDocs.title })
+      .from(liveDocs)
+      .innerJoin(liveApps, eq(liveApps.id, liveDocs.appId))
+      .where(eq(liveDocs.id, docId as string))
+      .limit(1)
+    if (!doc) return fail('Page not found', 404)
+    if (!(await requireCapability('task.create', { appId: doc.appId }))) return fail('Page not found', 404)
+    task = doc
+  } else {
+    // Inner-joined to liveApps: a task in a trashed project is read-only, like
+    // the project itself.
+    const [row] = await db
+      .select({ id: liveTasks.id, appId: liveTasks.appId, assigneeId: liveTasks.assigneeId, title: liveTasks.title })
+      .from(liveTasks)
+      .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
+      .where(eq(liveTasks.id, taskId as string))
+      .limit(1)
+    // Not found and not allowed answer identically, so the endpoint cannot be
+    // used to probe which task ids exist.
+    if (!row) return fail('Task not found', 404)
+    const actor = await requireCapability('task.edit', { appId: row.appId, ownerId: row.assigneeId })
+    if (!actor) return fail('Task not found', 404)
+    task = row
+  }
+  const ownerType = isDocUpload ? 'doc' : 'task'
 
   const meta = checkAttachmentMeta({ name: file.name, type: file.type, size: file.size })
   if (!meta.ok) return fail(meta.error, meta.status)
@@ -108,9 +142,9 @@ export async function POST(request: Request) {
   const [{ n }] = await db
     .select({ n: count() })
     .from(liveAttachments)
-    .where(and(eq(liveAttachments.ownerType, 'task'), eq(liveAttachments.ownerId, task.id)))
+    .where(and(eq(liveAttachments.ownerType, ownerType), eq(liveAttachments.ownerId, task.id)))
   if (n >= MAX_ATTACHMENTS_PER_TASK) {
-    return fail(`A task can hold ${MAX_ATTACHMENTS_PER_TASK} attachments — remove one first`, 409)
+    return fail(`A ${ownerType === 'doc' ? 'page' : 'task'} can hold ${MAX_ATTACHMENTS_PER_TASK} attachments — remove one first`, 409)
   }
 
   const name = sanitizeFileName(file.name)
@@ -131,7 +165,7 @@ export async function POST(request: Request) {
       .insert(attachments)
       .values({
         appId: task.appId,
-        ownerType: 'task',
+        ownerType,
         ownerId: task.id,
         blobPath,
         name,
@@ -153,7 +187,7 @@ export async function POST(request: Request) {
   await logActivity({
     actorId: userId,
     verb: 'updated',
-    entityType: 'task',
+    entityType: ownerType,
     entityId: task.id,
     entityLabel: task.title,
     appId: task.appId,

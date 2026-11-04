@@ -21,6 +21,7 @@ import { BugTriageControls } from '@/features/bugs/components/bug-triage-control
 import { DeleteBugButton } from '@/features/bugs/components/delete-bug-button'
 import { BugContentEditor } from '@/features/bugs/components/bug-content-editor'
 import { BugDescription } from '@/features/bugs/components/bug-description'
+import { DiscussButton } from '@/features/chat/components/discuss-button'
 
 /**
  * The body of the Bugs tab, and of the admin triage queue — one component, so
@@ -190,6 +191,11 @@ export function BugList({
                     </>
                   ) : null}
                 </p>
+
+                {/* The conversation attached to this bug (PRD Module D). */}
+                <div>
+                  <DiscussButton type="bug" id={bug.id} size="xs" />
+                </div>
 
                 {canTriage?.(bug) || canDelete?.(bug) ? (
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2">

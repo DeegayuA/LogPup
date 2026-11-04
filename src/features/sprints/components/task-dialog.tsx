@@ -46,12 +46,14 @@ import {
 import type { BoardChild } from '@/features/sprints/queries'
 import { TaskTypeIcon } from '@/features/sprints/components/task-type-icon'
 import { ChildDoneToggle } from '@/features/sprints/components/child-done-toggle'
+import { TaskReadiness } from '@/features/sprints/components/task-readiness'
 import { withStatusOverrides, type StatusOverrides } from '@/features/sprints/child-toggle'
 import { AcceptanceCriteria } from '@/features/sprints/components/acceptance-criteria'
 import { TaskTagsField } from '@/features/sprints/components/task-tags-field'
 import { TaskLinks } from '@/features/sprints/components/task-links'
 import { TaskAttachments } from '@/features/sprints/components/task-attachments'
 import { TaskComments } from '@/features/sprints/components/task-comments'
+import { DiscussButton } from '@/features/chat/components/discuss-button'
 
 /** Sentinel for "no parent" — same reason as BACKLOG below. */
 const NO_PARENT = '__no_parent__'
@@ -908,6 +910,8 @@ export function TaskDialog({
           ) : null}
               {/* "Done means…" — the checklist QA tests against (PRD Module A). */}
               <AcceptanceCriteria taskId={task.id} canEdit={canEdit} />
+              {/* Definition of Ready, risk and product approval (PRD Module B). */}
+              <TaskReadiness key={task.id} taskId={task.id} />
             </section>
             <section className="flex flex-col gap-4" aria-labelledby="task-sec-related">
               <h3 id="task-sec-related" className="text-sm font-semibold">Related</h3>
@@ -915,7 +919,11 @@ export function TaskDialog({
               <TaskAttachments taskId={task.id} canEdit={canEdit} />
             </section>
             <section className="flex flex-col gap-4" aria-labelledby="task-sec-discussion">
-              <h3 id="task-sec-discussion" className="text-sm font-semibold">Discussion</h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 id="task-sec-discussion" className="text-sm font-semibold">Discussion</h3>
+                {/* Live chat about this task (PRD Module D), beside the comments. */}
+                <DiscussButton type="task" id={task.id} label="Discuss in chat" size="xs" />
+              </div>
               {/* The comment action decides who may post (task.comment); the
                   section hides its composer from anyone it would refuse. */}
               <TaskComments taskId={task.id} canComment />

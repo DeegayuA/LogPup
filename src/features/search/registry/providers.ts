@@ -1,5 +1,6 @@
 import { searchProviders as appsProviders } from '@/features/apps/search-providers'
 import { searchProviders as bugsProviders } from '@/features/bugs/search-providers'
+import { searchProviders as docsProviders } from '@/features/docs/search-providers'
 import { searchProviders as meetingsProviders } from '@/features/meetings/search-providers'
 import { searchProviders as peopleProviders } from '@/features/people/search-providers'
 import { searchProviders as sprintsProviders } from '@/features/sprints/search-providers'
@@ -26,6 +27,7 @@ export const ALL_PROVIDERS: SearchProvider[] = [
   ...sprintsProviders,
   ...meetingsProviders,
   ...bugsProviders,
+  ...docsProviders,
 ].sort((a, b) => a.rank - b.rank)
 
 /**

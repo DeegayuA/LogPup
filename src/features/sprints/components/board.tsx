@@ -174,7 +174,12 @@ export function Board({
 
   const [tasks, applyOptimisticMove] = useOptimistic(initialTasks, applyMove)
   const [isPending, startTransition] = useTransition()
-  const [editingTask, setEditingTask] = useState<TaskWithAssignee | null>(null)
+  /* ?task=<id> (from a Backlog tree row) opens that task's dialog on arrival:
+     clicking an item should show the item, not just the board it sits on. */
+  const [editingTask, setEditingTask] = useState<TaskWithAssignee | null>(() => {
+    const wanted = searchParams.get('task')
+    return wanted ? (initialTasks.find((t) => t.id === wanted) ?? null) : null
+  })
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [draggingId, setDraggingId] = useState<string | null>(null)
   /** A failed move is a state, not a notification: the toast is gone in four
@@ -594,7 +599,15 @@ export function Board({
         sprintOptionsFailed={sprintOptionsFailed}
         onNeedSprintOptions={ensureSprintOptions}
         onOpenChange={(open) => {
-          if (!open) setEditingTask(null)
+          if (open) return
+          setEditingTask(null)
+          // Drop the ?task= the Backlog tree opened us with, so a reload or a
+          // shared link doesn't keep reopening a dialog the user closed.
+          const url = new URL(window.location.href)
+          if (url.searchParams.has('task')) {
+            url.searchParams.delete('task')
+            window.history.replaceState(window.history.state, '', url)
+          }
         }}
       />
     </div>

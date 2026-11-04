@@ -39,6 +39,8 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { MeetingShareDialog } from '@/features/meetings/components/meeting-share-dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { CeremonyFields } from '@/features/meetings/components/ceremony-fields'
+import type { Ceremony } from '@/features/sprints/scrum'
 import { createMeeting, teamForApp, updateMeeting } from '@/features/meetings/actions'
 import {
   addEveryone,
@@ -72,6 +74,10 @@ type FormState = {
   /** Who may see this meeting — the "show to everyone or just attendees?"
    *  answer the form asks for out loud. */
   visibility: 'workspace' | 'attendees'
+  /** Scrum ceremony and its sprint (Module B). Undefined = not known here
+   *  (an edit opened without them), so the save leaves the stored values. */
+  ceremony?: Ceremony | null
+  sprintId?: string | null
   // Which of attendeeIds only the app-team prefill put there (see
   // attendee-prefill.ts for the swap semantics). Lives inside FormState, not
   // its own useState, so a prefill response updates both lists in ONE
@@ -238,6 +244,9 @@ export type EditableMeeting = {
   meetingUrl: string | null
   attendeeIds: string[]
   visibility: 'workspace' | 'attendees'
+  /** Optional so callers that do not load them keep working; absent = left as stored. */
+  ceremony?: Ceremony | null
+  sprintId?: string | null
 }
 
 function stateFromMeeting(meeting: EditableMeeting): FormState {
@@ -249,6 +258,8 @@ function stateFromMeeting(meeting: EditableMeeting): FormState {
     agenda: meeting.agenda ?? '',
     meetingUrl: meeting.meetingUrl ?? '',
     visibility: meeting.visibility,
+    ceremony: meeting.ceremony,
+    sprintId: meeting.sprintId,
     attendeeIds: meeting.attendeeIds,
     // Nothing here came from the app-team prefill — these are attendees a
     // person actually committed to. Marking them prefilled would let a later
@@ -574,6 +585,9 @@ export function MeetingForm({
           meetingUrl: form.meetingUrl,
           attendeeIds: form.attendeeIds,
           visibility: form.visibility,
+          // undefined (an edit that never loaded or touched them) leaves both as stored.
+          ceremony: form.ceremony,
+          sprintId: form.sprintId,
           // Only meaningful with a blank link — the server enforces the same.
           withMeet: withMeet && !form.meetingUrl ? true : undefined,
         }
@@ -775,6 +789,12 @@ export function MeetingForm({
               maxLength={2000}
             />
           </div>
+          <CeremonyFields
+            appIds={form.appIds}
+            ceremony={form.ceremony ?? null}
+            sprintId={form.sprintId ?? null}
+            onChange={(next) => setForm((f) => ({ ...f, ...next }))}
+          />
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="meeting-link">Link</Label>
             <div className="flex items-start gap-2">

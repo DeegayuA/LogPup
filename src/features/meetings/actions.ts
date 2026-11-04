@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 import { db } from '@/db'
-import { liveApps, liveMeetings } from '@/db/live'
+import { liveApps, liveMeetings, liveSprints } from '@/db/live'
 // meetingScreenshots is deliberately NOT imported: deleteMeeting used to read
 // its rows to sweep the Blob objects, and a soft delete keeps both the rows and
 // the objects (they are purged with the meeting from admin Trash, not here).
@@ -35,6 +35,7 @@ import { logActivity } from '@/features/activity/log'
 import { createNotifications, extractMentionedUserIds } from '@/features/notifications/notify'
 import { meetingUrlSchema } from '@/features/meetings/meeting-url'
 import { formatAppNames } from '@/features/meetings/app-labels'
+import { CEREMONIES } from '@/features/sprints/scrum'
 import { buildAttendanceEntry } from '@/features/meetings/attendance-history'
 import { can, type UserRole } from '@/features/auth/capabilities'
 import { loadActor } from '@/features/auth/actor'
@@ -67,6 +68,44 @@ const meetingFields = {
   // the DB read path: an absent field from an older client means what it
   // always meant — visible to the workspace.
   visibility: z.enum(['workspace', 'attendees']).default('workspace'),
+  // PRD Module B: which Scrum ceremony this is, and for which sprint. Both
+  // optional; the sprint must belong to one of the meeting's projects
+  // (checked against the DB in ceremonySprintProblem).
+  ceremony: z.enum(CEREMONIES).nullable().optional(),
+  sprintId: z.uuid().nullable().optional(),
+}
+
+/** A ceremony's sprint must be a live sprint of one of the meeting's projects. */
+async function ceremonySprintProblem(sprintId: string | null | undefined, appIds: readonly string[]): Promise<string | null> {
+  if (!sprintId) return null
+  try {
+    const [sprint] = await db
+      .select({ appId: liveSprints.appId })
+      .from(liveSprints)
+      .where(eq(liveSprints.id, sprintId))
+      .limit(1)
+    if (!sprint || !appIds.includes(sprint.appId)) return 'Pick a sprint from one of this meeting’s projects'
+    return null
+  } catch (error) {
+    // A server action returns err(), it never rejects.
+    console.error('[meetings] ceremonySprintProblem', error)
+    return 'Something went wrong — try again'
+  }
+}
+
+/** The sprint a meeting is stored against; null on any failure (the edit then keeps it). */
+async function storedMeetingSprintId(meetingId: string): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ sprintId: liveMeetings.sprintId })
+      .from(liveMeetings)
+      .where(eq(liveMeetings.id, meetingId))
+      .limit(1)
+    return row?.sprintId ?? null
+  } catch (error) {
+    console.error('[meetings] storedMeetingSprintId', error)
+    return null
+  }
 }
 
 const endsAfterStart = (data: { startsAt: string; endsAt: string }) =>
@@ -408,6 +447,8 @@ export async function createMeeting(
   const attendeeIds = [...new Set(parsed.data.attendeeIds)]
   // Same dedup, same reason: meeting_apps has the same composite primary key.
   const appIds = [...new Set(parsed.data.appIds)]
+  const sprintProblem = await ceremonySprintProblem(parsed.data.sprintId, appIds)
+  if (sprintProblem) return err(sprintProblem)
   // Generated client-side (not via .returning()) so the id is known before
   // the batch runs — db.batch sends both inserts in one atomic round-trip
   // (neon-http has no transactions), so the attendee rows can't reference a
@@ -443,6 +484,8 @@ export async function createMeeting(
         endsAt: new Date(endsAt),
         agenda: agenda || null,
         meetingUrl: meetingUrl ?? null,
+        ceremony: parsed.data.ceremony ?? null,
+        sprintId: parsed.data.sprintId ?? null,
         visibility: parsed.data.visibility,
         createdBy: session.user.id,
         createdAt: at,
@@ -790,6 +833,16 @@ export async function updateMeeting(
   // and a duplicate would violate the meetingAttendees composite primary key.
   const nextAttendeeIds = [...new Set(parsed.data.attendeeIds)]
   const nextAppIds = [...new Set(parsed.data.appIds)]
+  const sprintProblem = await ceremonySprintProblem(parsed.data.sprintId, nextAppIds)
+  if (sprintProblem) return err(sprintProblem)
+  // An edit that does not send sprintId keeps the stored one — unless the
+  // project it belongs to was just removed, which would leave a ceremony
+  // pointing at another project's sprint. Clear it then.
+  let nextSprintId = parsed.data.sprintId
+  if (nextSprintId === undefined) {
+    const stored = await storedMeetingSprintId(parsed.data.meetingId)
+    if (stored && (await ceremonySprintProblem(stored, nextAppIds))) nextSprintId = null
+  }
   const nextStart = new Date(startsAt)
   const nextEnd = new Date(endsAt)
 
@@ -941,6 +994,9 @@ export async function updateMeeting(
           endsAt: nextEnd,
           agenda: agenda || null,
           meetingUrl: meetingUrl ?? null,
+          // Absent = unchanged: callers that predate ceremonies send neither.
+          ...(parsed.data.ceremony !== undefined ? { ceremony: parsed.data.ceremony } : {}),
+          ...(nextSprintId !== undefined ? { sprintId: nextSprintId } : {}),
         })
         .where(eq(meetings.id, meetingId)),
       ...attendeeWrites,

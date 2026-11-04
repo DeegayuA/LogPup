@@ -42,6 +42,9 @@ export const ACTIVITY_ENTITY_TYPES = [
   // is answering "who closed the workspace, and when" rather than "which of
   // several windows was this".
   'maintenance_window',
+  // A Docs-tab page (PRD Module C). entityId is the docs row id; pagePath
+  // opens it on its project's Docs tab.
+  'doc',
 ] as const
 
 export type ActivityEntityType = (typeof ACTIVITY_ENTITY_TYPES)[number]
