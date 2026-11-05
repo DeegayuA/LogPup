@@ -4,7 +4,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import { db } from '@/db'
 import { liveApps, liveMeetings, liveSprints, liveTasks } from '@/db/live'
 import { meetingVisibleTo } from '@/features/meetings/visibility'
-import { OPEN_STATUSES } from '@/features/sprints/board-view'
+import { IN_FLIGHT_STATUSES, OPEN_STATUSES } from '@/features/sprints/board-view'
 import {
   activityLog,
   appRoleHistory,
@@ -1063,7 +1063,7 @@ export const getPeopleNow = cache(async function getPeopleNow(
       .where(
         and(
           inArray(liveTasks.assigneeId, userIds),
-          eq(liveTasks.status, 'in_progress'),
+          inArray(liveTasks.status, IN_FLIGHT_STATUSES),
         ),
       ),
     db.select().from(ranked).where(lte(ranked.rank, RECENT_ACTIONS)).orderBy(desc(ranked.at)),

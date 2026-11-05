@@ -395,6 +395,20 @@ export async function updateApp(appId: string, input: unknown): Promise<ActionRe
     .where(eq(liveApps.id, parsedId.data))
   if (!app) return err('App not found')
 
+  // RAW `apps`, for the slug check's reason above: apps_key_idx covers trashed
+  // rows too (a trashed project's IDs must never start meaning a new one), so
+  // the live set would report a key as free and the update would then die on
+  // a 23505 reported as "could not save".
+  if (typeof result.set.key === 'string') {
+    const [holder] = await db
+      .select({ id: apps.id, name: apps.name })
+      .from(apps)
+      .where(eq(apps.key, result.set.key))
+    if (holder && holder.id !== parsedId.data) {
+      return err(`“${holder.name}” already uses the key ${result.set.key}`)
+    }
+  }
+
   const at = new Date()
   const pmChanging = typeof result.set.pmId === 'string' && result.set.pmId !== app.pmId
   const leadChanging = 'leadId' in result.set && result.set.leadId !== app.leadId

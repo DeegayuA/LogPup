@@ -9,6 +9,7 @@ import { auth } from '@/lib/auth'
 import { requireCapability } from '@/features/auth/actor'
 import { ok, err, type ActionResult } from '@/lib/action-result'
 import { getBoard, type Board, type TaskWithAssignee } from '@/features/sprints/queries'
+import { STATUS_LABEL, TASK_STATUSES } from '@/features/sprints/board-view'
 import { NotionParentError, upsertSprintPage, type SprintExportData } from '@/features/notion/export'
 
 // Was a verbatim copy of the same six-line `requireAdmin()` that lived in six
@@ -39,11 +40,13 @@ function buildExportData(
     goal: sprint.goal,
     startDate: sprint.startDate,
     endDate: sprint.endDate,
-    columns: [
-      { heading: 'To do', items: columnItems(board.todo) },
-      { heading: 'In progress', items: columnItems(board.in_progress) },
-      { heading: 'Done', items: columnItems(board.done) },
-    ],
+    // Every workflow column that holds something (To do and Done always), in
+    // workflow order. A fixed three-heading list would drop every task in
+    // review, QA and the rest.
+    columns: TASK_STATUSES.filter((s) => board[s].length > 0 || s === 'todo' || s === 'done').map((s) => ({
+      heading: STATUS_LABEL[s],
+      items: columnItems(board[s]),
+    })),
   }
 }
 

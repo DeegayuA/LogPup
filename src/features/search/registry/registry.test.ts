@@ -42,6 +42,10 @@ const FEATURES = readdirSync(FEATURES_DIR, { withFileTypes: true })
  * features nobody got round to".
  */
 const NO_COMMANDS: Readonly<Record<string, string>> = {
+  // Every conversation lives on a project's Chat tab (the user's rule: project
+  // talk stays inside the project), so each action needs a project the palette
+  // cannot know — the same shape as docs.
+  chat: "every conversation lives on a project's Chat tab, so each action needs a project",
   admin: 'every action needs a target row, and the purges need a typed confirmation',
   calendar: 'an internal Google Calendar wrapper, no user-facing action',
   dashboard: 'no actions; its page is a nav row',
@@ -61,6 +65,9 @@ const NO_COMMANDS: Readonly<Record<string, string>> = {
   // in a picker. A palette row for "import deadlines" could only ever open the
   // dialog it is already one click from, on a project the palette cannot know.
   deadlines: 'its two actions need a project and an uploaded file, neither of which a bare query can supply',
+  // Pages are reachable from ⌘K through docs/search-providers.ts. "New page"
+  // needs a project the palette cannot know; the Docs tab is where it lives.
+  docs: 'every action needs a project or a page id; pages themselves are searchable through its provider',
   notion: 'its one action needs a sprintId',
   onboarding: 'renders only on /pending, where the palette does not exist',
   pwa: 'its affordances are components wired to browser events, not callables',
@@ -81,6 +88,11 @@ const NO_SEARCH: Readonly<Record<string, string>> = {
   admin: 'it administers users, which the people provider already indexes',
   auth: 'own-account data only',
   calendar: 'no tables of its own',
+  // Message bodies are private by membership (private channels), and a
+  // palette index anybody can type into is the wrong place to decide that per
+  // row. Conversations are listed on each project's Chat tab. Revisit if a
+  // channel-name search is asked for.
+  chat: "conversations are private by membership and are listed on each project's Chat tab",
   dashboard: 'no tables of its own',
   // Two reasons, both true and neither sufficient alone: the shape is wrong
   // (these are figures you read ON a project, not rows you jump TO) and the

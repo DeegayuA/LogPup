@@ -49,7 +49,15 @@ const STATUS_OPTIONS: { value: Status; label: string }[] = [
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-type FormState = { name: string; goal: string; startDate: string; endDate: string; status: Status }
+type FormState = {
+  name: string
+  goal: string
+  startDate: string
+  endDate: string
+  status: Status
+  /** Story points the team can take on; '' = not set. */
+  capacity: string
+}
 
 function toFormState(sprint: Sprint): FormState {
   return {
@@ -58,6 +66,7 @@ function toFormState(sprint: Sprint): FormState {
     startDate: sprint.startDate,
     endDate: sprint.endDate,
     status: sprint.status,
+    capacity: sprint.capacityPoints === null ? '' : String(sprint.capacityPoints),
   }
 }
 
@@ -67,6 +76,7 @@ const EMPTY: FormState = {
   startDate: '',
   endDate: '',
   status: 'planned',
+  capacity: '',
 }
 
 /**
@@ -152,6 +162,7 @@ export function SprintEditDialog({
           goal: form.goal,
           startDate: form.startDate,
           endDate: form.endDate,
+          capacityPoints: form.capacity.trim() === '' ? null : Number(form.capacity),
         })
         if (!res.ok) {
           setRangeError(res.error)
@@ -239,6 +250,24 @@ export function SprintEditDialog({
               maxLength={300}
               className="min-h-20"
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="sprint-edit-capacity">Capacity (story points)</Label>
+            <Input
+              id="sprint-edit-capacity"
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step={0.5}
+              placeholder="e.g. 80"
+              value={form.capacity}
+              onChange={(e) => setForm((f) => ({ ...f, capacity: e.target.value }))}
+              aria-describedby="sprint-edit-capacity-hint"
+              className="h-9 w-32"
+            />
+            <p id="sprint-edit-capacity-hint" className="text-2xs text-muted-foreground">
+              How many points the team can finish this sprint. Leave empty if you don&apos;t plan in points.
+            </p>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5">
@@ -348,6 +377,9 @@ export function SprintEditDialog({
               {sprint ? (
                 <Link
                   href={`/apps/${slug}?tab=roadmap&sprint=${sprint.id}`}
+                  // The dialog is opened from the roadmap itself, so the board
+                  // loads underneath it: without closing, the click looks dead.
+                  onClick={() => onOpenChange(false)}
                   className={cn(buttonVariants({ variant: 'outline' }))}
                 >
                   Open board

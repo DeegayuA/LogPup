@@ -69,12 +69,19 @@ export function MentionTextarea({
   onKeyDown,
   onBlur,
   onSelect,
+  placement = 'below',
+  suggestionLimit,
   ...props
 }: Omit<React.ComponentProps<'textarea'>, 'value' | 'onChange' | 'defaultValue'> & {
   users: MentionUser[]
   value: string
   onValueChange: (value: string) => void
   onMention?: (user: MentionUser) => void
+  /** 'above' for a box pinned to the bottom of its pane (chat), where a list
+      opening downwards is clipped off-screen. */
+  placement?: 'below' | 'above'
+  /** Rows offered (the list scrolls); defaults to MENTION_SUGGESTION_LIMIT. */
+  suggestionLimit?: number
 }) {
   const listId = React.useId()
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -86,8 +93,8 @@ export function MentionTextarea({
   /* Ranked in src/lib/mention-match.ts: prefixes, then two-word and initials
      forms, then a typo fallback — so "@shan ayas" and "@deghayu" both land. */
   const suggestions = React.useMemo(
-    () => (mention ? matchMentions(mention.query, users) : []),
-    [mention, users],
+    () => (mention ? matchMentions(mention.query, users, suggestionLimit) : []),
+    [mention, users, suggestionLimit],
   )
 
   /* The typo fallback only ever runs when nothing else matched, so one fuzzy
@@ -186,7 +193,10 @@ export function MentionTextarea({
           id={listId}
           role="listbox"
           aria-label={closest ? 'Closest matching teammates' : 'Mention a teammate'}
-          className="absolute top-full left-0 z-50 mt-1 max-h-56 w-60 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-border duration-150 ease-out animate-in fade-in-0 slide-in-from-top-1 motion-reduce:animate-none"
+          className={
+            (placement === 'above' ? 'bottom-full mb-1 slide-in-from-bottom-1 ' : 'top-full mt-1 slide-in-from-top-1 ') +
+            'absolute left-0 z-50 max-h-56 w-60 overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-border duration-150 ease-out animate-in fade-in-0 motion-reduce:animate-none'
+          }
         >
           {closest ? (
             <li role="presentation" className="px-2 pt-1 pb-1.5 text-xs text-muted-foreground">

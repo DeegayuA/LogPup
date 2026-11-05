@@ -79,6 +79,8 @@ type FormState = {
    *  sentinel for "none" — the PM is required, so '' is only ever a
    *  transient state that handleSubmit refuses to send. */
   pmId: string
+  /** Task-ID prefix ("LOG"), '' = none (IDs read P<number>-<n>). Edit only. */
+  key: string
 }
 
 type FieldErrors = Partial<Record<keyof FormState, string>>
@@ -92,6 +94,7 @@ const emptyState: FormState = {
   status: 'active',
   leadId: NO_LEAD,
   pmId: '',
+  key: '',
 }
 
 export type AppFormInitialValues = {
@@ -108,6 +111,8 @@ export type AppFormInitialValues = {
    *  such here so a caller that forgets to select it fails loudly (an empty
    *  select) rather than the type system assuming a value that isn't there. */
   pmId: string
+  /** Optional for callers that predate task IDs; absent reads as no key. */
+  key?: string | null
 }
 
 function toFormState(values?: AppFormInitialValues): FormState {
@@ -121,6 +126,7 @@ function toFormState(values?: AppFormInitialValues): FormState {
     status: values.status,
     leadId: values.leadId ?? NO_LEAD,
     pmId: values.pmId,
+    key: values.key ?? '',
   }
 }
 
@@ -151,6 +157,7 @@ function identifyField(message: string): keyof FormState | null {
   if (/<=500 characters/.test(message)) return 'description'
   if (/<=10 items/.test(message)) return 'techTags'
   if (/expected one of/i.test(message)) return 'status'
+  if (/starting with a letter|already uses the key/.test(message)) return 'key'
   return null
 }
 
@@ -391,6 +398,10 @@ export function AppFormDialog({
               // column — buildAppUpdate only touches keys that are present.
               leadId: form.leadId === NO_LEAD ? null : form.leadId,
               pmId: form.pmId,
+              // Only when it changed: '' is how a key is removed, so a caller
+              // that opened this form without seeding the key must not erase it
+              // by saving an unrelated field.
+              key: form.key !== (initialValues?.key ?? '') ? form.key : undefined,
             })
           : await createApp({
               name: form.name,
@@ -666,6 +677,29 @@ export function AppFormDialog({
               already works out acronyms from the name itself; add the ones it cannot guess.
             </p>
           </div>
+          {/* Edit only: a brand-new project has no tasks yet, and its IDs work
+              without a key (P<number>-<n>) until somebody picks one. */}
+          {isEdit ? (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="app-key">Task ID prefix</Label>
+              <Input
+                id="app-key"
+                value={form.key}
+                maxLength={6}
+                placeholder="e.g. LOG"
+                autoCapitalize="characters"
+                onChange={(e) => setField('key', e.target.value.toUpperCase())}
+                aria-invalid={errors.key ? true : undefined}
+                aria-describedby="app-key-hint"
+                className="h-9 w-32 font-mono uppercase"
+              />
+              {errors.key ? <p className="text-2xs text-destructive">{errors.key}</p> : null}
+              <p id="app-key-hint" className="text-2xs text-muted-foreground">
+                Tasks in this project are numbered {form.key || 'P…'}-1, -2, -3… Changing it renames
+                every task ID; the numbers stay the same.
+              </p>
+            </div>
+          ) : null}
           {/* Required — every app must have a PM, from the moment it's
               created. No "No PM" item (unlike Lead below): there is nothing
               equivalent to send, so the field simply stays unfilled and

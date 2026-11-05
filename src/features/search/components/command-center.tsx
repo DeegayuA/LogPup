@@ -27,6 +27,7 @@ import { createDeduper } from '@/lib/dedupe'
 import { openIntelBubble } from '@/features/intel/bubble-bus'
 import { askAvailable } from '@/features/intel/actions'
 import { usePrefetchIntent } from '@/hooks/use-prefetch-intent'
+import { TASK_STATUSES, statusBucket, type TaskStatus } from '@/features/sprints/board-view'
 import {
   universalSearch,
   quickAssignTask,
@@ -151,8 +152,20 @@ const STATUS_DOT: Record<string, { shape: StatusShape; className: string }> = {
   archived: { shape: 'check', className: 'text-muted-foreground/70' },
 }
 
+/** A task status the table above does not name (review, QA, blocked…) takes
+ *  its bucket's mark, so the widened workflow reads as "in flight" rather
+ *  than falling through to the grey unknown dot. */
+function statusMeta(status: string): { shape: StatusShape; className: string } | undefined {
+  const direct = STATUS_DOT[status]
+  if (direct) return direct
+  if ((TASK_STATUSES as readonly string[]).includes(status)) {
+    return STATUS_DOT[statusBucket(status as TaskStatus)]
+  }
+  return undefined
+}
+
 function StatusDot({ status }: { status: string }) {
-  const meta = STATUS_DOT[status] ?? { shape: 'dot' as const, className: 'bg-border' }
+  const meta = statusMeta(status) ?? { shape: 'dot' as const, className: 'bg-border' }
   return (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
       {meta.shape === 'check' ? (

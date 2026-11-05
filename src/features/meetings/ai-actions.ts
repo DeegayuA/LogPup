@@ -118,6 +118,7 @@ import {
 import { haveNoteSegmentsEverExisted } from '@/features/meetings/legacy-notes'
 import { can, isAdminRole, type UserRole } from '@/features/auth/capabilities'
 import { managesAnyApp } from '@/features/apps/project-manager'
+import type { TaskStatus } from '@/features/sprints/board-view'
 // Re-exported below (not just imported) — existing callers, including this
 // file's own test, import keyframeDeleteLabel/noteSegmentDeleteLabel from
 // './ai-actions'. The implementation itself lives in note-labels.ts, a
@@ -200,7 +201,7 @@ export type FollowupStatus = 'open' | 'resolved'
 export type LinkedTaskView = {
   id: string
   title: string
-  status: 'todo' | 'in_progress' | 'done'
+  status: TaskStatus
   appSlug: string | null
 }
 
@@ -3089,7 +3090,7 @@ export type TaskSuggestionView = {
    */
   acceptedBy: string | null
   /** Live snapshot of the created task — null unless createdTaskId is set. */
-  taskStatus: 'todo' | 'in_progress' | 'done' | null
+  taskStatus: TaskStatus | null
   taskTitle: string | null
   /** The task's app slug, for linking straight to its board. */
   appSlug: string | null

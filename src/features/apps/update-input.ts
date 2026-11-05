@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { AppStatus } from '@/features/apps/app-health'
+import { isValidAppKey } from '@/features/sprints/task-key'
 
 // Deliberately no `.default()` on any field: unlike the create schema, a
 // missing key here must stay missing after parsing so a partial update only
@@ -19,6 +20,18 @@ const appUpdateInput = z
     // uuid. Omitting the key entirely (a partial update that doesn't touch
     // the PM) is still allowed, same as every other field here.
     pmId: z.uuid(),
+    // The task-ID prefix ("LOG" in LOG-245). '' clears it, and IDs fall back
+    // to "P<number>-<n>". Upper-cased before the check so "log" is accepted
+    // as LOG; the rule itself is the apps_key_format CHECK, mirrored by
+    // isValidAppKey.
+    key: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .refine(
+        (k) => k === '' || isValidAppKey(k),
+        'Use 2–6 letters or digits starting with a letter (not P followed by digits)',
+      ),
   })
   .partial()
 
@@ -41,6 +54,8 @@ export function buildAppUpdate(input: unknown): AppUpdateResult {
       set.repoUrl = parsed.data.repoUrl || null
     } else if (key === 'description') {
       set.description = parsed.data.description || null
+    } else if (key === 'key') {
+      set.key = parsed.data.key || null
     } else {
       set[key] = parsed.data[key]
     }

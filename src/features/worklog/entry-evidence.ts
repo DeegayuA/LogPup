@@ -13,6 +13,7 @@ import type { CommitEvidence } from '@/features/github/commits'
 import type { CheckEntry, DayEvidence } from '@/features/worklog/entry-check'
 import type { DraftMeeting, DraftActivityRow, DraftTask } from '@/features/worklog/entry-draft-prompt'
 import { resolveWorkDay } from '@/features/worklog/worklog-day'
+import { IN_FLIGHT_STATUSES } from '@/features/sprints/board-view'
 
 /**
  * Everything the two worklog AI features are allowed to know about one
@@ -279,7 +280,7 @@ export async function loadDayEvidence(
       .select({ id: liveTasks.id, title: liveTasks.title, appName: liveApps.name })
       .from(liveTasks)
       .innerJoin(liveApps, eq(liveApps.id, liveTasks.appId))
-      .where(and(eq(liveTasks.assigneeId, userId), eq(liveTasks.status, 'in_progress')))
+      .where(and(eq(liveTasks.assigneeId, userId), inArray(liveTasks.status, IN_FLIGHT_STATUSES)))
       .orderBy(asc(liveTasks.title))
       .limit(MAX_TASKS),
     commitEvidenceFor(userId, start, end),

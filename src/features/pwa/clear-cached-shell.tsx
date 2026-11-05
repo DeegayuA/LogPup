@@ -14,7 +14,7 @@ import { useEffect } from 'react'
  * replaced.
  *
  * Mounted on /sign-in because that is where both sign-out paths land — the
- * header's `signOut({ redirectTo: '/sign-in' })` form action and the command
+ * account menu's SignOutItem (`signOut({ redirectTo: '/sign-in' })` via /api/auth) and the command
  * palette's `signOutFromPalette` — which also covers an expired session and a
  * proxy.ts redirect.
  */

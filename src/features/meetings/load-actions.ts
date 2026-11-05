@@ -16,7 +16,7 @@ import { boardHref } from '@/features/apps/tabs'
 import { overdueAskText, overdueRowsByUserApp, stalledAskText } from '@/features/meetings/ask-derivation'
 import { purposeToken } from '@/features/meetings/series-key'
 import { coverAsks, type CoverAsk, type CoverageGroup } from '@/features/meetings/coverage'
-import { OPEN_STATUSES } from '@/features/sprints/board-view'
+import { IN_FLIGHT_STATUSES, OPEN_STATUSES } from '@/features/sprints/board-view'
 
 /**
  * The read and the two writes behind /meetings/load.
@@ -175,8 +175,9 @@ export async function getMeetingLoadSuggestions(): Promise<ActionResult<MeetingL
           inArray(liveTasks.status, OPEN_STATUSES),
           isNotNull(liveTasks.assigneeId),
         )),
-      // Started, past its date, still not finished — the honest stand-in for
-      // "blocked", since task_status has no such state (see ask-derivation.ts).
+      // Started, past its date, still not finished — every in-flight state,
+      // which since migration 0079 includes the real 'blocked' status as well
+      // as review / QA / rework (see stalledCount in ask-derivation.ts).
       db
         .select({
           id: liveTasks.id, appId: liveTasks.appId, sprintId: liveTasks.sprintId,
@@ -184,7 +185,7 @@ export async function getMeetingLoadSuggestions(): Promise<ActionResult<MeetingL
         })
         .from(liveTasks)
         .where(and(
-          eq(liveTasks.status, 'in_progress'),
+          inArray(liveTasks.status, IN_FLIGHT_STATUSES),
           isNotNull(liveTasks.dueDate),
           lt(liveTasks.dueDate, todayIso),
           isNotNull(liveTasks.assigneeId),

@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { signIn } from 'next-auth/react'
 import { toast } from 'sonner'
+import { ONE_TAP_OPTIONS, type OneTapConfig } from '../one-tap-options'
 
 /**
  * Google One Tap: the prompt that offers an already-signed-in Google account in
@@ -29,14 +30,12 @@ type CredentialResponse = { credential?: string }
 type GoogleIdApi = {
   accounts: {
     id: {
-      initialize: (config: {
-        client_id: string
-        callback: (response: CredentialResponse) => void
-        auto_select?: boolean
-        cancel_on_tap_outside?: boolean
-        context?: 'signin' | 'signup' | 'use'
-        use_fedcm_for_prompt?: boolean
-      }) => void
+      initialize: (
+        config: OneTapConfig & {
+          client_id: string
+          callback: (response: CredentialResponse) => void
+        },
+      ) => void
       prompt: () => void
       cancel: () => void
     }
@@ -51,34 +50,59 @@ declare global {
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client'
 
+/**
+ * GSI's wording when a FedCM request ends without a credential: our own
+ * cancel() (AbortError), Google refusing (NetworkError — origin not
+ * authorised, third-party sign-in off, cooldown after a dismissal, no Google
+ * session), or the user closing it.
+ */
+const GSI_FEDCM_REJECTION = /^\[GSI_LOGGER\]: FedCM get\(\) rejects with /
+
+/**
+ * While One Tap is mounted, GSI's FedCM rejections are logged as warnings
+ * instead of errors. Each one is a normal "One Tap can't help here" outcome
+ * (see the header: this component fails quiet, the button is the way in),
+ * but GSI reports them through console.error, which the Next dev overlay turns
+ * into a red error box. They are NOT dropped — still in the console, just at
+ * the level they deserve. Every other console.error passes through untouched.
+ * Returns the undo.
+ */
+function downgradeGsiRejections(): () => void {
+  const original = console.error
+  const filtered = (...args: unknown[]) => {
+    if (typeof args[0] === 'string' && GSI_FEDCM_REJECTION.test(args[0])) {
+      console.warn(...args)
+      return
+    }
+    original(...args)
+  }
+  console.error = filtered
+  return () => {
+    // Only undo our own wrapper; if something else wrapped console.error
+    // since, leave theirs in place.
+    if (console.error === filtered) console.error = original
+  }
+}
+
 export function GoogleOneTap({ clientId }: { clientId: string }) {
   const router = useRouter()
-  // React Strict Mode mounts effects twice in development. Without this guard
-  // the second mount calls initialize() again mid-prompt, which Google answers
-  // by tearing the prompt down — One Tap would flicker and vanish every time,
-  // but only locally, which is the worst kind of bug to chase.
-  const started = useRef(false)
 
   useEffect(() => {
-    if (started.current || !clientId) return
-    started.current = true
+    if (!clientId) return
+    const restoreConsole = downgradeGsiRejections()
+    // Whether a FedCM request may still be open: set when the prompt starts,
+    // cleared once Google has handed us a credential (the request is over).
+    // cancel() on an open request is what GSI logs as an AbortError.
+    let pending = false
 
     const start = () => {
       const api = window.google
       if (!api) return
       api.accounts.id.initialize({
+        ...ONE_TAP_OPTIONS,
         client_id: clientId,
-        // FedCM is required: Chrome has removed the legacy third-party-cookie
-        // path One Tap relied on, so without this the prompt never appears in
-        // a current Chrome at all.
-        use_fedcm_for_prompt: true,
-        // Never sign someone in without a deliberate click. auto_select would
-        // resume the last account on page load, which on a shared machine means
-        // signing in as whoever used it last.
-        auto_select: false,
-        cancel_on_tap_outside: true,
-        context: 'signin',
         callback: async ({ credential }) => {
+          pending = false
           if (!credential) return
           const result = await signIn('google-one-tap', { credential, redirect: false })
           if (result?.error) {
@@ -104,30 +128,49 @@ export function GoogleOneTap({ clientId }: { clientId: string }) {
           router.refresh()
         },
       })
+      pending = true
       api.accounts.id.prompt()
+    }
+
+    // One tick late on purpose. Strict Mode's mount → cleanup → mount clears
+    // the first timer before any FedCM request exists, so there is exactly one
+    // prompt and nothing for cancel() to abort (an abort is what GSI logs as
+    // "FedCM get() rejects with AbortError").
+    let timer: number | undefined
+    const schedule = () => {
+      timer = window.setTimeout(start, 0)
     }
 
     // Loaded by hand rather than through next/script: this component mounts on
     // exactly one page, and next/script's afterInteractive strategy keeps the
     // tag in the document across client navigations, leaving One Tap
     // initialized on pages that never asked for it.
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GSI_SRC}"]`)
-    if (existing) {
-      start()
-      return
+    let script = document.querySelector<HTMLScriptElement>(`script[src="${GSI_SRC}"]`)
+    if (window.google) {
+      schedule()
+    } else {
+      // A tag from an earlier visit may still be loading, so wait on it rather
+      // than assume it is ready.
+      if (!script) {
+        script = document.createElement('script')
+        script.src = GSI_SRC
+        script.async = true
+        script.defer = true
+        document.head.appendChild(script)
+      }
+      script.addEventListener('load', schedule)
     }
 
-    const script = document.createElement('script')
-    script.src = GSI_SRC
-    script.async = true
-    script.defer = true
-    script.onload = start
-    document.head.appendChild(script)
-
     return () => {
-      // Leave the script cached in the document, but close any open prompt so
-      // it cannot outlive the page that opened it.
-      window.google?.accounts.id.cancel()
+      // Leave the script cached in the document, but make sure no prompt opens
+      // or outlives the page that asked for it: a load landing after the user
+      // navigated away would otherwise prompt on whatever page they are on.
+      window.clearTimeout(timer)
+      script?.removeEventListener('load', schedule)
+      if (pending) window.google?.accounts.id.cancel()
+      // GSI reports the cancel's abort asynchronously; keep the downgrade a
+      // moment longer so that one lands as a warning too.
+      window.setTimeout(restoreConsole, 2000)
     }
   }, [clientId, router])
 

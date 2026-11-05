@@ -74,6 +74,11 @@ export const config = {
   // caller can act on — a 307 to an HTML sign-in page would be downloaded as
   // the "invite". The route gates itself on auth() + canAccessApp and returns
   // 401/404 directly; see src/app/api/meetings/[id]/ics/route.ts.
+  // api/attachments is excluded on the same reasoning, from the other side: the
+  // task dialog fetch()es it and branches on 401/413/415 JSON, and a 307 to the
+  // HTML sign-in page would arrive as an opaque "upload failed". Both routes
+  // gate themselves on auth() + active + canAccessApp before any read; see
+  // src/app/api/attachments/route.ts and [id]/route.ts.
   // Also skip PWA/static assets so install/manifest fetches don't redirect to
   // /sign-in. The extension list is explicit and end-anchored on purpose: a bare
   // `.*\.` exclusion skips the guard for ANY path containing a dot, so a request
@@ -97,6 +102,6 @@ export const config = {
   // every call to /sign-in before the route could check the key. Both routes under it check
   // the key with bridgeKeyValid before doing anything else (see src/lib/bridge-auth.ts).
   matcher: [
-        '/((?!api/auth|api/cron|api/meetings|api/external/|_next/static|_next/image|sign-in|sso|home|privacy|terms|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
+        '/((?!api/auth|api/cron|api/meetings|api/attachments|api/external/|_next/static|_next/image|sign-in|sso|home|privacy|terms|pwa-icon|apple-icon|.*\\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|webmanifest|json|txt|xml|js|css|map|woff|woff2|ttf)$).*)',
   ],
 }

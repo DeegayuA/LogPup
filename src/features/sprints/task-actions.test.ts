@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { appRoleHistory, assignments, tasks } from '@/db/schema'
+import { appRoleHistory, assignments, tasks, users } from '@/db/schema'
 import { liveTasks } from '@/db/live'
 
 // deleteTask is soft-delete (D3): the row is marked deletedAt/deletedBy,
@@ -226,6 +226,57 @@ describe('updateTask authorisation', () => {
 
     expect(res).toEqual({ ok: false, error: 'Not allowed' })
     expect(writeSpy).not.toHaveBeenCalled()
+  })
+})
+
+// Regression: reporterId was a bare uuid, so task.edit could name any account
+// — pending, deactivated, or outside the project — as having raised the work.
+// The mocked select ignores WHERE, so the users rows here stand for "what the
+// approved-and-active query returned"; the status filter itself is SQL.
+describe('updateTask — reporter', () => {
+  const REPORTER = '55555555-5555-4555-8555-555555555555'
+
+  it('refuses a reporter who cannot open the project', async () => {
+    asAdmin()
+    selectRows.set(liveTasks, [baseTask({ reporterId: null })])
+    selectRows.set(users, [{ id: REPORTER, name: 'Bo', role: 'member' }])
+
+    const res = await updateTask(TASK_ID, { reporterId: REPORTER })
+
+    expect(res).toEqual({ ok: false, error: 'Choose someone on this project as reporter' })
+    expect(writeSpy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a reporter the approved-and-active read did not return', async () => {
+    asAdmin()
+    selectRows.set(liveTasks, [baseTask({ reporterId: null })])
+
+    const res = await updateTask(TASK_ID, { reporterId: REPORTER })
+
+    expect(res).toEqual({ ok: false, error: 'Choose someone on this project as reporter' })
+    expect(writeSpy).not.toHaveBeenCalled()
+  })
+
+  it('accepts a reporter assigned to the project', async () => {
+    asAdmin()
+    selectRows.set(liveTasks, [baseTask({ reporterId: null })])
+    selectRows.set(users, [{ id: REPORTER, name: 'Cy', role: 'member' }])
+    selectRows.set(assignments, [{ userId: REPORTER, appId: 'app-1' }])
+
+    const res = await updateTask(TASK_ID, { reporterId: REPORTER })
+
+    expect(res).toEqual({ ok: true, data: undefined })
+    expect(writeSpy).toHaveBeenCalledWith(tasks, expect.objectContaining({ reporterId: REPORTER }))
+  })
+
+  it('does not re-check an unchanged reporter, or a cleared one', async () => {
+    asAdmin()
+    selectRows.set(liveTasks, [baseTask({ reporterId: REPORTER })])
+    expect(await updateTask(TASK_ID, { reporterId: REPORTER, title: 'Same reporter' })).toEqual({
+      ok: true,
+      data: undefined,
+    })
+    expect(await updateTask(TASK_ID, { reporterId: null })).toEqual({ ok: true, data: undefined })
   })
 })
 

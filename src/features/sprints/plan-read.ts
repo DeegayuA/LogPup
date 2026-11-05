@@ -27,6 +27,7 @@ import {
   type SprintProgress,
 } from '@/features/apps/app-health'
 import { isTerminal } from '@/features/sprints/board-view'
+import type { TaskStatus } from '@/features/sprints/board-view'
 
 /** Board counts, in the shape getBoard and ActiveSprintSummary already produce. */
 export type StatusCounts = { todo: number; in_progress: number; done: number }
@@ -203,7 +204,7 @@ export function planGaps(
   tasks: {
     assignee: { id: string } | null
     dueDate: string | null
-    status: 'todo' | 'in_progress' | 'done'
+    status: TaskStatus
   }[],
 ): PlanGaps {
   const open = tasks.filter((task) => !isTerminal(task.status))

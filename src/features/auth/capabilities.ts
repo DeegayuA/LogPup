@@ -146,6 +146,18 @@ export const ROLE_GRANTS = {
   'task.edit':                  { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: N },
   'task.move':                  { superadmin: A, admin: A, manager: S, editor: S, member: O, stakeholder: N, auditor: N },
   'task.delete':                { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
+  // Joining a task's discussion. Its own row rather than riding on app.view,
+  // because app.view is a READ — the maintenance freeze lets every `.view`
+  // through, and auditor holds it at 'all' — so a comment gated on it was a
+  // write that neither a freeze nor the read-only seat could stop.
+  //
+  // Scoped, not 'own': a comment is about the work, not owned by whoever the
+  // task is assigned to, so everyone on the project may speak. Stakeholder is
+  // 'scoped' too — a client seat asking a question on a task in a project it
+  // was granted is the conversation app_grants exists for. Auditor is 'none':
+  // they read everything and change nothing. Editing and deleting are further
+  // narrowed in task-comments-actions.ts (author only; task.delete moderates).
+  'task.comment':               { superadmin: A, admin: A, manager: S, editor: S, member: S, stakeholder: S, auditor: N },
   'sprint.manage':              { superadmin: A, admin: A, manager: S, editor: N, member: N, stakeholder: N, auditor: N },
   // Deadlines, as THREE questions rather than one, because they are three
   // different acts. Setting a working date is doing the work. Turning one into

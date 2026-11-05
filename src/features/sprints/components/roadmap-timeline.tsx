@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -640,6 +641,10 @@ export function RoadmapTimeline({
     [committedRange, write],
   )
 
+  // A stable id for dnd-kit's screen-reader hints. Without it dnd-kit numbers
+  // them from a module counter (DndDescribedBy-0 on the server, -12 in the
+  // browser), and every draggable logs a hydration mismatch.
+  const dndId = useId()
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
   )
@@ -876,6 +881,7 @@ export function RoadmapTimeline({
       </p>
 
       <DndContext
+        id={dndId}
         sensors={sensors}
         onDragStart={handleDragStart}
         onDragMove={handleDragMove}

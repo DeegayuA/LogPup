@@ -75,6 +75,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useOptimistic,
   useRef,
@@ -356,6 +357,10 @@ export function MeetingsTimeGrid({
   /* Same activation distance as the month grid and the sprint board: a plain
      click must still open the meeting, so a drag only begins once the
      pointer has actually travelled. */
+  // A stable id for dnd-kit's screen-reader hints. Without it dnd-kit numbers
+  // them from a module counter (DndDescribedBy-0 on the server, -12 in the
+  // browser), and every draggable logs a hydration mismatch.
+  const dndId = useId()
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
   )
@@ -905,6 +910,7 @@ export function MeetingsTimeGrid({
        dnd-kit measures against the same scroll offset the blocks are
        positioned in. */
     <DndContext
+      id={dndId}
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragMove={handleDragMove}

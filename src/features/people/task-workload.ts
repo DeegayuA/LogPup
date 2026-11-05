@@ -1,5 +1,6 @@
 import { isoDayAdd, isoDayDiff } from '@/features/people/iso-day'
 import { isTerminal } from '@/features/sprints/board-view'
+import type { TaskStatus } from '@/features/sprints/board-view'
 
 /**
  * How a person's open tasks are ordered, grouped and counted.
@@ -26,7 +27,7 @@ import { isTerminal } from '@/features/sprints/board-view'
  * figure; nothing here needs to change when it lands beyond widening the row.
  */
 
-export type PersonTaskStatus = 'todo' | 'in_progress' | 'done'
+export type PersonTaskStatus = TaskStatus
 
 export type PersonTaskRow = {
   id: string

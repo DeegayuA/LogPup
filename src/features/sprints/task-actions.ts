@@ -20,6 +20,10 @@ import { revalidateAdmin } from '@/lib/revalidate-admin'
 import { logActivity } from '@/features/activity/log'
 import { rankForAppend } from '@/features/sprints/task-rank'
 import { backlogJoinCondition, sprintOrBacklogCondition } from '@/features/sprints/backlog'
+import { ALLOWED_PARENT, TASK_TYPES } from '@/features/sprints/hierarchy'
+import { parentProblem } from '@/features/sprints/hierarchy-read'
+import { appViewers } from '@/features/sprints/app-viewers'
+import { compactTaskNumbersAfterDelete } from '@/features/sprints/task-number'
 import {
   MAX_TASK_ASSIGNEES,
   getTaskAssignees,
@@ -28,8 +32,9 @@ import {
   withPrimaryAssignee,
 } from '@/features/sprints/task-assignees'
 
-const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
-type TaskStatus = (typeof TASK_STATUSES)[number]
+// The one status list (board-view.ts), not a private copy: a copy here is how
+// the board could offer "Code review" and the save then refuse it.
+import { TASK_STATUSES, type TaskStatus } from '@/features/sprints/board-view'
 
 /**
  * A rank is a `double precision` column, so the only thing that must never
@@ -39,6 +44,23 @@ type TaskStatus = (typeof TASK_STATUSES)[number]
  * both, hence the explicit finite check.
  */
 const rank = z.number().refine(Number.isFinite, 'Invalid position')
+
+// PRD Module A fields (migration 0077). Shared by create and update so the two
+// can never disagree on what a valid estimate or environment is. Points match
+// the numeric(5,1) column: up to 9999.9, one decimal, never negative.
+const workItemFields = {
+  type: z.enum(TASK_TYPES),
+  parentId: z.uuid().nullable(),
+  storyPoints: z
+    .number()
+    .min(0, 'Points cannot be negative')
+    .max(9999.9, 'That estimate is too large')
+    .refine((n) => Number.isInteger(n * 10), 'Points take at most one decimal place')
+    .nullable(),
+  startDate: z.iso.date().nullable(),
+  reporterId: z.uuid().nullable(),
+  environment: z.string().trim().max(60).nullable(),
+}
 
 const taskInput = z.object({
   appId: z.uuid(),
@@ -56,6 +78,13 @@ const taskInput = z.object({
   // above is untouched and still the column every board reads; when both
   // arrive the array wins. Bounded — one element is one row.
   assigneeIds: z.array(z.uuid()).max(MAX_TASK_ASSIGNEES).optional(),
+  // Optional for the same reason as dueDate: every existing caller keeps
+  // creating a plain parentless 'task' without naming any of these.
+  type: workItemFields.type.default('task'),
+  parentId: workItemFields.parentId.optional(),
+  storyPoints: workItemFields.storyPoints.optional(),
+  startDate: workItemFields.startDate.optional(),
+  environment: workItemFields.environment.optional(),
 })
 
 // Deliberately no `.default()` on any field, mirroring apps/update-input.ts:
@@ -75,6 +104,7 @@ const taskUpdateInput = z
     dueDate: z.iso.date().nullable(),
     // See taskInput: additive, and the array wins over `assigneeId`.
     assigneeIds: z.array(z.uuid()).max(MAX_TASK_ASSIGNEES),
+    ...workItemFields,
   })
   .partial()
 
@@ -309,10 +339,12 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
   if (!parsed.success) return err(parsed.error.issues[0].message)
 
   const { appId, sprintId, title, description, assigneeId, priority, status, dueDate } = parsed.data
-  const { assigneeIds } = parsed.data
+  const { assigneeIds, type, parentId, storyPoints, startDate, environment } = parsed.data
   if (sprintId !== null && !(await sprintIsInApp(sprintId, appId))) {
     return err('That sprint belongs to a different app')
   }
+  const hierarchyError = await parentProblem({ taskId: null, appId, type, parentId: parentId ?? null })
+  if (hierarchyError) return err(hierarchyError)
 
   let created: { id: string } | undefined
   try {
@@ -328,6 +360,14 @@ export async function createTask(input: unknown): Promise<ActionResult<{ taskId:
         // lands here — `assignee_id` is still "the accountable person".
         assigneeId: assigneeIds ? primaryAssigneeId(assigneeIds) : assigneeId,
         priority,
+        type,
+        parentId: parentId ?? null,
+        storyPoints: storyPoints ?? null,
+        startDate: startDate ?? null,
+        environment: environment || null,
+        // Whoever creates it raised it. `number` is deliberately absent: the
+        // tasks_assign_number trigger assigns it (see task-key.ts).
+        reporterId: session.user.id,
         // Through transitionTaskStatus for the same reason the due date goes
         // through applyDueDate: a task created AS 'done' — the ⌘K "log the
         // thing I just finished" path — is an entry into done and must carry
@@ -407,6 +447,8 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   for (const key of Object.keys(parsed.data) as (keyof typeof parsed.data)[]) {
     if (key === 'description') {
       set.description = parsed.data.description || null
+    } else if (key === 'environment') {
+      set.environment = parsed.data.environment || null
     } else if (key !== 'assigneeIds') {
       set[key] = parsed.data[key]
     }
@@ -418,6 +460,22 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
   if (assigneeIds !== undefined) set.assigneeId = primaryAssigneeId(assigneeIds)
   if (Object.keys(set).length === 0) return err('Nothing to update')
 
+  // The reporter is client-settable (the dialog's "Reported by" picker), so
+  // a bare uuid would otherwise let anyone with task.edit name ANY account —
+  // a pending signup, a deactivated leaver, or somebody with no access to this
+  // project — as having raised the work. The same app.view answer that
+  // decides who can open the project (appViewers) decides who may be named.
+  // Checked only when it CHANGES: the dialog resends every field, and a
+  // reporter who has since left the project must not block an unrelated save.
+  // null (clearing it) needs no check.
+  if (
+    typeof set.reporterId === 'string' &&
+    set.reporterId !== existing.reporterId &&
+    (await appViewers(existing.appId, [set.reporterId])).length === 0
+  ) {
+    return err('Choose someone on this project as reporter')
+  }
+
   // Only when the sprint actually CHANGES: the dialog sends every field on
   // every save, and re-reading the sprint a task is already in would be a
   // wasted round trip on the common path.
@@ -427,6 +485,27 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
     !(await sprintIsInApp(set.sprintId, existing.appId))
   ) {
     return err('That sprint belongs to a different app')
+  }
+
+  // Hierarchy, only when this save changes where the task sits or what it is.
+  // A type change must also still fit under the current parent and over the
+  // current children, so both directions are checked.
+  const nextType = parsed.data.type ?? existing.type
+  const nextParentId = parsed.data.parentId !== undefined ? parsed.data.parentId : existing.parentId
+  if (nextType !== existing.type || nextParentId !== existing.parentId) {
+    const problem = await parentProblem({
+      taskId, appId: existing.appId, type: nextType, parentId: nextParentId,
+    })
+    if (problem) return err(problem)
+    if (nextType !== existing.type) {
+      const children = await db
+        .select({ type: liveTasks.type })
+        .from(liveTasks)
+        .where(eq(liveTasks.parentId, taskId))
+      if (children.some((c) => !ALLOWED_PARENT[c.type].includes(nextType))) {
+        return err('Some of its sub-items cannot sit under that type — move them first')
+      }
+    }
   }
 
   // Only when the caller actually named a date. `set` carries every field the
@@ -504,7 +583,7 @@ export async function updateTask(taskId: string, input: unknown): Promise<Action
       addedAssignees = (await setTaskAssignees(taskId, assigneeIds, session.user.id)).add
     }
   } catch (error) {
-    if (isForeignKeyViolation(error)) return err('Invalid sprint or assignee')
+    if (isForeignKeyViolation(error)) return err('Invalid sprint, assignee, reporter or parent')
     return unexpected('updateTask', error)
   }
 
@@ -924,6 +1003,15 @@ export async function deleteTask(taskId: string): Promise<ActionResult> {
     return unexpected('deleteTask', error)
   }
   if (marked.length === 0) return err('Task not found')
+
+  // Later tasks shift down so the project's numbers stay gapless
+  // (task-number.ts). Best effort: the delete already happened, and the batch
+  // is all-or-nothing, so a failure leaves only a gap.
+  try {
+    await compactTaskNumbersAfterDelete({ taskId, appId: existing.appId, number: existing.number })
+  } catch (error) {
+    console.error(`[sprints] compacting task numbers failed for task ${taskId}:`, error)
+  }
 
   // ONE row, deliberately. The merge that brought soft deletes in landed this
   // logActivity twice (main's copy plus the branch's re-worded copy), which

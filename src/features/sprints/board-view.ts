@@ -27,7 +27,23 @@
  * that must not be trapped inside a client component.
  */
 
-export const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
+// The PRD Module A workflow (migration 0079), in the task_status enum's own
+// declaration order — main line first, then the side states, then done — so
+// asc(status) still reads "unfinished first" everywhere it is used.
+export const TASK_STATUSES = [
+  'todo', 'in_progress', 'in_review', 'ready_for_qa', 'qa', 'qa_failed', 'rework',
+  'ready_for_release', 'released', 'blocked', 'deferred', 'done',
+] as const
+
+/**
+ * The main line the board shows as columns, left to right. The side states
+ * (qa_failed, rework, blocked, deferred) get a column only while something is
+ * in them: a board of twelve mostly-empty columns hides the work it exists to
+ * show.
+ */
+export const MAIN_FLOW_STATUSES: readonly TaskStatus[] = [
+  'todo', 'in_progress', 'in_review', 'ready_for_qa', 'qa', 'ready_for_release', 'released', 'done',
+]
 export type TaskStatus = (typeof TASK_STATUSES)[number]
 
 /**
@@ -74,9 +90,78 @@ export function isTerminal(status: TaskStatus): boolean {
   return TERMINAL.has(status)
 }
 
+/**
+ * Every task on a board, in workflow order. The one way to flatten it: code
+ * that spread `board.todo, board.in_progress, board.done` by name silently
+ * dropped every task in the states added later (review, QA, …).
+ */
+export function flattenBoard<T>(board: Record<TaskStatus, T[]>): T[] {
+  return TASK_STATUSES.flatMap((status) => board[status])
+}
+
+export type StatusBucket = 'todo' | 'in_progress' | 'done'
+/**
+ * The three-way summary every count, progress bar and dashboard tile was
+ * built on (to do / in progress / done), so widening the workflow does not
+ * rewrite them all. "Not started" is todo and deferred; "done" is done; every
+ * state in between — review, QA, rework, blocked, released-but-not-closed —
+ * is work in progress.
+ */
+export function statusBucket(status: TaskStatus): StatusBucket {
+  if (status === 'done') return 'done'
+  if (status === 'todo' || status === 'deferred') return 'todo'
+  return 'in_progress'
+}
+
+/**
+ * The statuses each non-done bucket expands to, for SQL `IN (...)` filters.
+ * Queries that used to say `status = 'in_progress'` meant "work in flight";
+ * after the workflow widened, that literal silently dropped review, QA,
+ * rework and blocked tasks. Derived from `statusBucket` so the SQL and the
+ * in-memory summary can never disagree about what a bucket holds.
+ */
+export const IN_FLIGHT_STATUSES: readonly TaskStatus[] = TASK_STATUSES.filter(
+  (s) => statusBucket(s) === 'in_progress',
+)
+export const NOT_STARTED_STATUSES: readonly TaskStatus[] = TASK_STATUSES.filter(
+  (s) => statusBucket(s) === 'todo',
+)
+
+/**
+ * The card quick menu's "Move to …" targets. Twelve entries made the menu a
+ * wall of options most of which were wrong for the card in hand, so it offers
+ * the step back and the step forward along the main line, plus the two exits
+ * that apply from anywhere — Blocked and Done. A side state (QA failed,
+ * rework, blocked, deferred) has no place on the line, so its way back is
+ * plain In progress. The full list stays in the task dialog's Status select.
+ */
+export function quickMoveTargets(current: TaskStatus): TaskStatus[] {
+  const index = MAIN_FLOW_STATUSES.indexOf(current)
+  const steps: TaskStatus[] =
+    index === -1
+      ? ['in_progress']
+      : [MAIN_FLOW_STATUSES[index - 1], MAIN_FLOW_STATUSES[index + 1]].filter(
+          (s): s is TaskStatus => s !== undefined,
+        )
+  const targets: TaskStatus[] = []
+  for (const status of [...steps, 'blocked', 'done'] as const) {
+    if (status !== current && !targets.includes(status)) targets.push(status)
+  }
+  return targets
+}
+
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: 'To do',
   in_progress: 'In progress',
+  in_review: 'Code review',
+  ready_for_qa: 'Ready for QA',
+  qa: 'QA',
+  qa_failed: 'QA failed',
+  rework: 'Rework required',
+  ready_for_release: 'Ready for release',
+  released: 'Released',
+  blocked: 'Blocked',
+  deferred: 'Deferred',
   done: 'Done',
 }
 
@@ -306,7 +391,13 @@ export function groupTasks<T extends BoardTask>(
   const groups: BoardGroup<T>[] = []
 
   if (groupBy === 'status') {
+    // The main line always (empty columns are drop targets); a side state
+    // (blocked, QA failed, rework, deferred) only while a task is in it —
+    // twelve columns, most of them empty, would bury the work. Still in the
+    // fixed TASK_STATUSES order, so columns never reshuffle.
+    const used = new Set(tasks.map((t) => t.status))
     for (const status of TASK_STATUSES) {
+      if (!MAIN_FLOW_STATUSES.includes(status) && !used.has(status)) continue
       groups.push({ id: status, title: STATUS_LABEL[status], tasks: [] })
     }
   } else if (groupBy === 'priority') {
@@ -406,7 +497,7 @@ export function boardSummary(tasks: BoardTask[], todayIso: string): BoardSummary
 
   for (const task of tasks) {
     if (isTerminal(task.status)) done += 1
-    else if (task.status === 'in_progress') inProgress += 1
+    else if (statusBucket(task.status) === 'in_progress') inProgress += 1
     else todo += 1
     if (isOverdue(task, todayIso)) overdue += 1
     if (!task.assignee) unassigned += 1

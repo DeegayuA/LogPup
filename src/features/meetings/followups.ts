@@ -12,6 +12,7 @@ import { resolveSpeakerUserId, type SpeakerMapping } from '@/features/meetings/n
 import { isTerminal } from '@/features/sprints/board-view'
 
 import { differenceInCalendarDays } from 'date-fns'
+import type { TaskStatus } from '@/features/sprints/board-view'
 
 export type FollowupKind = 'question' | 'action'
 
@@ -436,7 +437,7 @@ export function unplacedUnattributed<T extends { id: string }>(
 
 /* --- task completion <-> follow-up resolution --------------------------- */
 
-export type TaskLikeStatus = 'todo' | 'in_progress' | 'done'
+export type TaskLikeStatus = TaskStatus
 export type FollowupResolutionDecision = 'resolve' | 'reopen' | 'none'
 
 /**

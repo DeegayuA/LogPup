@@ -2,6 +2,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { checkinGap, computeTaskProgress } from '@/features/sprints/checkins'
 import { getSprintCheckins } from '@/features/sprints/checkin-queries'
 import { getBoard } from '@/features/sprints/queries'
+import { flattenBoard } from '@/features/sprints/board-view'
 import {
   GapHint,
   SprintCheckinEditor,
@@ -39,7 +40,7 @@ export async function SprintCheckins({
     getSprintCheckins(sprintId),
   ])
 
-  const sprintTasks = [...board.todo, ...board.in_progress, ...board.done]
+  const sprintTasks = flattenBoard(board)
   const taskRows = sprintTasks.map((task) => ({
     assigneeId: task.assignee?.id ?? null,
     status: task.status,

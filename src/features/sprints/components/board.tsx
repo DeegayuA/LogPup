@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useOptimistic, useRef, useState, useTransition } from 'react'
+import { useCallback, useId, useMemo, useOptimistic, useRef, useState, useTransition } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import {
   DndContext,
@@ -40,6 +40,7 @@ import {
   type BoardView,
   type GroupPatch,
   type TaskStatus,
+  flattenBoard,
 } from '@/features/sprints/board-view'
 import { compareRanked, planInsert } from '@/features/sprints/task-rank'
 import type { Board as BoardData, TaskWithAssignee } from '@/features/sprints/queries'
@@ -105,6 +106,7 @@ export function Board({
   team,
   composerPeople,
   appId,
+  appSlug,
   sprintId,
   currentUser,
   canManageTasks = false,
@@ -118,6 +120,8 @@ export function Board({
    *  TaskComposer. */
   composerPeople: { id: string; name: string; onTeam: boolean }[]
   appId: string
+  /** For links out of the task dialog (linked items point at their board). */
+  appSlug?: string
   sprintId: string | null
   currentUser: { id: string; role: UserRole }
   /** `task.edit` resolved server-side WITH this app's id (page.tsx) — passed
@@ -147,16 +151,35 @@ export function Board({
    */
   const todayIso = toIsoDateInTimeZone(new Date(), LK_TIMEZONE)
 
+  // The dialog's assignee select offers the team first, then everyone else —
+  // a bug or sub-task often goes to someone never added to this app's Team.
+  const otherPeople = useMemo(
+    () =>
+      composerPeople
+        .filter((person) => !person.onTeam)
+        .map((person) => ({ userId: person.id, name: person.name })),
+    [composerPeople],
+  )
+  const mentionUsers = useMemo(
+    () => composerPeople.map((person) => ({ id: person.id, name: person.name })),
+    [composerPeople],
+  )
+
   const view = useMemo(() => parseBoardView(searchParams), [searchParams])
 
   const initialTasks = useMemo(
-    () => [...initialBoard.todo, ...initialBoard.in_progress, ...initialBoard.done],
+    () => flattenBoard(initialBoard),
     [initialBoard],
   )
 
   const [tasks, applyOptimisticMove] = useOptimistic(initialTasks, applyMove)
   const [isPending, startTransition] = useTransition()
-  const [editingTask, setEditingTask] = useState<TaskWithAssignee | null>(null)
+  /* ?task=<id> (from a Backlog tree row) opens that task's dialog on arrival:
+     clicking an item should show the item, not just the board it sits on. */
+  const [editingTask, setEditingTask] = useState<TaskWithAssignee | null>(() => {
+    const wanted = searchParams.get('task')
+    return wanted ? (initialTasks.find((t) => t.id === wanted) ?? null) : null
+  })
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [draggingId, setDraggingId] = useState<string | null>(null)
   /** A failed move is a state, not a notification: the toast is gone in four
@@ -277,6 +300,10 @@ export function Board({
     [groups],
   )
 
+  // A stable id for dnd-kit's screen-reader hints. Without it dnd-kit numbers
+  // them from a module counter (DndDescribedBy-0 on the server, -12 in the
+  // browser), and every draggable logs a hydration mismatch.
+  const dndId = useId()
   const sensors = useSensors(
     useSensor(PointerSensor, {
       // Require a small drag distance before activating: without this, a
@@ -492,6 +519,7 @@ export function Board({
       ) : null}
 
       <DndContext
+        id={dndId}
         sensors={sensors}
         // Corners, not the default rectangle-intersection: on a board of tall
         // columns the pointer is often over no card at all (the gap between
@@ -557,7 +585,12 @@ export function Board({
 
       <TaskDialog
         task={editingTask}
+        appId={appId}
+        appSlug={appSlug}
+        boardSprintId={sprintId}
         team={team}
+        otherPeople={otherPeople}
+        mentionUsers={mentionUsers}
         role={currentUser.role}
         canManageTasks={canManageTasks}
         canDeleteTasks={canDeleteTasks}
@@ -566,7 +599,15 @@ export function Board({
         sprintOptionsFailed={sprintOptionsFailed}
         onNeedSprintOptions={ensureSprintOptions}
         onOpenChange={(open) => {
-          if (!open) setEditingTask(null)
+          if (open) return
+          setEditingTask(null)
+          // Drop the ?task= the Backlog tree opened us with, so a reload or a
+          // shared link doesn't keep reopening a dialog the user closed.
+          const url = new URL(window.location.href)
+          if (url.searchParams.has('task')) {
+            url.searchParams.delete('task')
+            window.history.replaceState(window.history.state, '', url)
+          }
         }}
       />
     </div>

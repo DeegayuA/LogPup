@@ -23,7 +23,7 @@
  * is late.
  */
 
-import { isTerminal } from '@/features/sprints/board-view'
+import { isTerminal, statusBucket, type TaskStatus } from '@/features/sprints/board-view'
 import type { CheckinGap } from '@/features/sprints/checkins'
 
 /** The columns every rule below reads off a task. `PlanTaskRow` satisfies it
@@ -32,7 +32,7 @@ export type AskTaskRow = {
   appId: string
   sprintId: string | null
   assigneeId: string | null
-  status: 'todo' | 'in_progress' | 'done'
+  status: TaskStatus
   dueDate: string | null
 }
 
@@ -97,12 +97,15 @@ export function overdueAskText(count: number, appName: string): string {
 /**
  * Work that started, went past its date, and still has not finished.
  *
- * The honest stand-in for "blocked": task_status is ('todo','in_progress',
- * 'done') — there IS no blocked state in this schema, and inventing one from a
- * title keyword would put a word on screen no row can back.
+ * Broader than the explicit 'blocked' status (migration 0079): a task can be
+ * stuck without anyone marking it so, and the date is the evidence every row
+ * carries. Blocked tasks count too — they are in the in-flight bucket. Never
+ * infer a blocker from a title keyword; that puts a word on screen no row backs.
  */
 export function stalledCount(tasks: readonly AskTaskRow[], todayIso: string): number {
-  return tasks.filter((task) => task.status === 'in_progress' && isPastDue(task, todayIso)).length
+  // Any state between started and done (review, QA, rework, blocked…) is
+  // work in flight that can stall, not just the literal 'in_progress'.
+  return tasks.filter((task) => statusBucket(task.status) === 'in_progress' && isPastDue(task, todayIso)).length
 }
 
 export function stalledAskText(count: number, sprintName: string): string {

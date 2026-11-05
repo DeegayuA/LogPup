@@ -1,0 +1,30 @@
+/*
+ * Message Markdown on the viewer's own bubble (bg-primary). MarkdownView's
+ * prose (docs/markdown.module.css) colours links, mentions, inline code and
+ * quotes from --primary / --accent / --muted, which on a primary ground are
+ * invisible or clash. Instead of fighting its (unlayered, hashed) rules, this
+ * wrapper REDEFINES those tokens for its subtree, so the same rules resolve
+ * to readable colours — light and dark alike, since every value derives from
+ * --primary-foreground.
+ *
+ * Code blocks go back to a card surface with card text: highlighted code needs
+ * its normal token colours to stay legible.
+ */
+
+.onPrimary {
+  --foreground: var(--primary-foreground);
+  --primary: var(--primary-foreground);
+  --accent: color-mix(in oklch, var(--primary-foreground) 20%, transparent);
+  --accent-foreground: var(--primary-foreground);
+  --muted: color-mix(in oklch, var(--primary-foreground) 16%, transparent);
+  --muted-foreground: color-mix(in oklch, var(--primary-foreground) 80%, transparent);
+  --border: color-mix(in oklch, var(--primary-foreground) 35%, transparent);
+  --ring: var(--primary-foreground);
+}
+
+.onPrimary pre {
+  --muted: var(--card);
+  --muted-foreground: var(--card-foreground);
+  --primary: var(--card-foreground);
+  color: var(--card-foreground);
+}

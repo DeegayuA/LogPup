@@ -41,6 +41,7 @@ import {
   type DueStatus,
 } from '@/features/meetings/components/meeting-notes-model'
 import { getMeetingIntel, type MeetingIntel, type TaskSuggestionView } from '@/features/meetings/ai-actions'
+import { STATUS_LABEL, isTerminal } from '@/features/sprints/board-view'
 
 /**
  * A meeting's write-up, read from the calendar without leaving it.
@@ -352,9 +353,15 @@ function summaryBlocks(en: string, si: string, raw: string): { lang: 'en' | 'si'
 
 /** What became of a suggested action — always a word, colour only doubling it. */
 function suggestionState(suggestion: TaskSuggestionView): { label: string; tone: ChipTone } | null {
-  if (suggestion.taskStatus === 'done') return { label: 'Done', tone: 'success' }
-  if (suggestion.taskStatus === 'in_progress') return { label: 'In progress', tone: 'neutral' }
-  if (suggestion.taskStatus === 'todo') return { label: 'Task added', tone: 'neutral' }
+  const taskStatus = suggestion.taskStatus
+  // 'todo' keeps its own wording: the fact worth saying about an untouched
+  // task is that the suggestion became one, not that nobody has started it.
+  if (taskStatus === 'todo') return { label: 'Task added', tone: 'neutral' }
+  // Every other state by its board label — listing statuses here by hand
+  // dropped the ones the workflow added later (review, QA, blocked…).
+  if (taskStatus) {
+    return { label: STATUS_LABEL[taskStatus], tone: isTerminal(taskStatus) ? 'success' : 'neutral' }
+  }
   if (suggestion.status === 'accepted') return { label: 'Accepted', tone: 'neutral' }
   return null
 }

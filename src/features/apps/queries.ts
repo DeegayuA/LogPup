@@ -15,7 +15,7 @@ import {
   type AppTaskCounts,
 } from '@/features/apps/app-health'
 import { buildRoleTimeline, type AppRoleKind } from '@/features/apps/role-history'
-import { OPEN_STATUSES } from '@/features/sprints/board-view'
+import { IN_FLIGHT_STATUSES, NOT_STARTED_STATUSES, OPEN_STATUSES } from '@/features/sprints/board-view'
 
 export type AppMember = {
   userId: string
@@ -43,7 +43,9 @@ export type AppStats = {
   lastActivityAt: Date | null
 }
 
-export type AppPortfolioEntry = typeof apps.$inferSelect & {
+// Minus nextTaskNumber: the tasks_assign_number trigger's private counter, not
+// a fact about the project any page shows (liveAppColumns does not carry it).
+export type AppPortfolioEntry = Omit<typeof apps.$inferSelect, 'nextTaskNumber'> & {
   leadName: string | null
   leadAvatarUrl: string | null
   // Left-joined the same way as lead, even though pm_id is NOT NULL at the
@@ -148,8 +150,8 @@ export const listApps = cache(async function listApps(): Promise<AppPortfolioEnt
       db
         .select({
           appId: liveTasks.appId,
-          todo: countWhere(eq(liveTasks.status, 'todo')),
-          inProgress: countWhere(eq(liveTasks.status, 'in_progress')),
+          todo: countWhere(inArray(liveTasks.status, NOT_STARTED_STATUSES)),
+          inProgress: countWhere(inArray(liveTasks.status, IN_FLIGHT_STATUSES)),
           done: countWhere(notInArray(liveTasks.status, [...OPEN_STATUSES])),
           // An overdue task is one that is NOT done and whose due date has
           // already passed. `tasks.due_date` is a plain calendar day, so this
@@ -423,8 +425,8 @@ export async function getAppCounts(appId: string): Promise<AppCounts> {
   const [taskRows, meetingRows, commentRows] = await Promise.all([
     db
       .select({
-        todo: countWhere(eq(liveTasks.status, 'todo')),
-        inProgress: countWhere(eq(liveTasks.status, 'in_progress')),
+        todo: countWhere(inArray(liveTasks.status, NOT_STARTED_STATUSES)),
+        inProgress: countWhere(inArray(liveTasks.status, IN_FLIGHT_STATUSES)),
         done: countWhere(notInArray(liveTasks.status, [...OPEN_STATUSES])),
         overdue: countWhere(
           and(inArray(liveTasks.status, OPEN_STATUSES), isNotNull(liveTasks.dueDate), lt(liveTasks.dueDate, today)),

@@ -1,8 +1,8 @@
 import Link from 'next/link'
-import { ChevronsUpDown, LogOut, User } from 'lucide-react'
-import { signOut } from '@/lib/auth'
+import { ChevronsUpDown, User } from 'lucide-react'
 import { roleLabel, type UserRole } from '@/features/auth/capabilities'
 import { cn } from '@/lib/utils'
+import { SignOutItem } from '@/components/shell/sign-out-item'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import {
   DropdownMenu,
@@ -28,8 +28,9 @@ export type AccountUser = {
  * sidebar is hidden below `md`). Exactly one instance is visible at any width;
  * the menu itself is identical in both.
  *
- * A server component so `signOut` can stay an inline server action — which is
- * why the client Sidebar takes it as a prop rather than importing it.
+ * A server component (the client Sidebar takes it as a prop rather than
+ * importing it). Sign out is the client SignOutItem, NOT an inline server
+ * action: see sign-out-item.tsx for why an action failed on a dead session.
  */
 export function AccountMenu({
   user,
@@ -133,21 +134,7 @@ export function AccountMenu({
           <User /> Profile
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <form
-          action={async () => {
-            'use server'
-            await signOut({ redirectTo: '/sign-in' })
-          }}
-        >
-          <DropdownMenuItem
-            nativeButton
-            closeOnClick={false}
-            variant="destructive"
-            render={<button type="submit" className="w-full" />}
-          >
-            <LogOut /> Sign out
-          </DropdownMenuItem>
-        </form>
+        <SignOutItem />
       </DropdownMenuContent>
     </DropdownMenu>
   )

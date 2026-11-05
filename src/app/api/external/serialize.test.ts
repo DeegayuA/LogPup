@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseTaskListParams, serializeTask, type ExternalTaskRow } from './serialize'
+import { bridgeStatusIsNoop, parseTaskListParams, serializeTask, type ExternalTaskRow } from './serialize'
 
 const row = (over: Partial<ExternalTaskRow> = {}): ExternalTaskRow => ({
   id: 't1',
@@ -47,6 +47,41 @@ describe('serializeTask', () => {
 
   it('keeps calendar dates as strings', () => {
     expect(serializeTask(row(), 'https://x').dueDate).toBe('2026-10-22')
+  })
+
+  // The documented `status` is three-valued; the widened workflow rides in workflowStatus.
+  it('summarises status to todo / in_progress / done and exposes the raw workflowStatus', () => {
+    const qa = serializeTask(row({ status: 'qa' }), 'https://x')
+    expect(qa.status).toBe('in_progress')
+    expect(qa.workflowStatus).toBe('qa')
+    expect(serializeTask(row({ status: 'deferred' }), 'https://x').status).toBe('todo')
+    expect(serializeTask(row({ status: 'blocked' }), 'https://x').status).toBe('in_progress')
+    const done = serializeTask(row({ status: 'done' }), 'https://x')
+    expect(done.status).toBe('done')
+    expect(done.workflowStatus).toBe('done')
+  })
+})
+
+describe('bridgeStatusIsNoop', () => {
+  it('does not drag a task further along the workflow back to plain in_progress', () => {
+    expect(bridgeStatusIsNoop('qa', 'in_progress')).toBe(true)
+    expect(bridgeStatusIsNoop('blocked', 'in_progress')).toBe(true)
+    expect(bridgeStatusIsNoop('in_progress', 'in_progress')).toBe(true)
+  })
+
+  it('treats todo as already satisfied by a deferred task', () => {
+    expect(bridgeStatusIsNoop('deferred', 'todo')).toBe(true)
+  })
+
+  it('still writes a real bucket change', () => {
+    expect(bridgeStatusIsNoop('qa', 'todo')).toBe(false)
+    expect(bridgeStatusIsNoop('todo', 'in_progress')).toBe(false)
+    expect(bridgeStatusIsNoop('done', 'in_progress')).toBe(false)
+  })
+
+  it('never short-circuits done — the single writer owns that transition', () => {
+    expect(bridgeStatusIsNoop('qa', 'done')).toBe(false)
+    expect(bridgeStatusIsNoop('done', 'done')).toBe(false)
   })
 })
 
